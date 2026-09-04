@@ -4,8 +4,9 @@ Merged by the v2.8.x test reorganisation from multiple version-named
 test files; see git history for provenance.
 """
 
-
 from __future__ import annotations
+
+
 
 
 
@@ -107,6 +108,13 @@ class TestMigrateEntryV1ToV2:
                 with patch(
                     "homeassistant.helpers.entity_registry.async_get",
                     return_value=fake_reg,
+                ), patch(
+                    # HA 2026.x: migrations reach the device registry as
+                    # well, and it raises rather than returning None when
+                    # no hass has set it up. Older versions tolerated the
+                    # bare MagicMock hass these tests use.
+                    "homeassistant.helpers.device_registry.async_get",
+                    return_value=MagicMock(devices={}),
                 ):
                     result = loop.run_until_complete(async_migrate_entry(hass, entry))
         finally:
@@ -160,6 +168,9 @@ class TestMigrateEntryV1ToV2:
             with patch(
                 "homeassistant.helpers.entity_registry.async_get",
                 return_value=fake_reg,
+            ), patch(
+                "homeassistant.helpers.device_registry.async_get",
+                return_value=MagicMock(devices={}),
             ):
                 result = loop.run_until_complete(async_migrate_entry(hass, entry))
         finally:
@@ -271,6 +282,9 @@ class TestMigrationV11ToV12:
             with patch(
                 "homeassistant.helpers.entity_registry.async_get",
                 return_value=fake_reg,
+            ), patch(
+                "homeassistant.helpers.device_registry.async_get",
+                return_value=MagicMock(devices={}),
             ):
                 result = loop.run_until_complete(async_migrate_entry(hass, entry))
         finally:
@@ -348,6 +362,9 @@ class TestMigrationV11ToV12SlugFix:
             with patch(
                 "homeassistant.helpers.entity_registry.async_get",
                 return_value=fake_reg,
+            ), patch(
+                "homeassistant.helpers.device_registry.async_get",
+                return_value=MagicMock(devices={}),
             ):
                 loop.run_until_complete(async_migrate_entry(hass, entry))
         finally:
@@ -465,6 +482,9 @@ class TestMigrationV12ToV13:
             with patch(
                 "homeassistant.helpers.entity_registry.async_get",
                 return_value=fake_reg,
+            ), patch(
+                "homeassistant.helpers.device_registry.async_get",
+                return_value=MagicMock(devices={}),
             ):
                 loop.run_until_complete(async_migrate_entry(hass, entry))
         finally:
@@ -1689,3 +1709,137 @@ class TestMigrationV24ToV25MatchesRealEntity:
         config_entry = MagicMock()
         tracker = RoombaDeviceTracker(roomba, "REALBLID123", config_entry)
         assert tracker.suggested_object_id is None
+
+
+class TestMigrationsLiveInTheirOwnModule:
+    """async_migrate_entry moved out of __init__.py into migrations.py
+    (2,145 lines, roughly sixty percent of that file).
+
+    The move is only safe as long as Home Assistant can still find the
+    function where it looks for it: on the integration module itself.
+    A dropped re-export would not fail loudly -- HA would simply
+    conclude the integration has no migrations, and every existing
+    install would silently stop being upgraded. That is the failure
+    this guards."""
+
+    def test_home_assistant_can_still_find_it_on_the_package(self):
+        import custom_components.roomba_plus as pkg
+
+        assert callable(getattr(pkg, "async_migrate_entry", None))
+
+    def test_it_actually_comes_from_the_new_module(self):
+        """Guards the reverse mistake: a copy left behind in __init__.py
+        would pass the test above while diverging from the real one."""
+        import custom_components.roomba_plus as pkg
+
+        assert pkg.async_migrate_entry.__module__.endswith(".migrations")
+
+    def test_the_signature_home_assistant_calls_is_unchanged(self):
+        import inspect
+
+        import custom_components.roomba_plus as pkg
+
+        params = list(inspect.signature(pkg.async_migrate_entry).parameters)
+        assert params == ["hass", "config_entry"]
+
+    def test_the_version_history_travelled_with_it(self):
+        """That docstring is the only record of what each schema version
+        changed -- losing it in a move would be quietly expensive."""
+        from custom_components.roomba_plus.migrations import async_migrate_entry
+
+        doc = async_migrate_entry.__doc__ or ""
+        assert "Version history" in doc
+        assert "1 → 2" in doc
+
+
+# ── from test_migrations.py ──────────────────────────────────────────────
+#
+# Same subject, two files apart: this one held four tests about the jump
+# that skips the early config-entry versions, while everything else about
+# migrating lived here. Splitting a topic across a plural and a singular
+# filename costs a search every time somebody looks for it.
+
+# A byte-for-byte copy of the class below sat in a second file,
+# `test_migrations.py` -- the same name in the plural, holding nothing
+# else. Its four tests ran twice, in two files, proving the same thing
+# each time.
+#
+# Removed August 2026. The surviving file keeps the singular name even
+# though the module is `migrations.py`: renaming it would be the tidier
+# choice, but it is 1,814 lines that nineteen classes and a lot of git
+# history point at, and the plural name is now free rather than
+# confusing.
+
+
+class TestEarlyVersionsAreSkipped:
+    """Versions 3 to 9 jump straight to 10.
+
+    Seven migration steps used to sit there, renaming entity_ids from
+    German slugs to English after a release shipped translation_key set
+    to translated strings. Each was built from the entity registry of ONE
+    installation -- the maintainer's own Roomba 980 -- and the code said
+    so in its own comments.
+
+    All 400 hardcoded entity_ids carried that robot's prefix. On any
+    other installation they matched nothing: 669 lines that walked the
+    registry and changed nothing, 31% of the whole migration function.
+
+    That every test still passed after removing them is itself the
+    finding -- none of the seven had a test."""
+
+    def test_the_jump_covers_every_early_version(self):
+        """A collapsed step keyed on `== 3` would strand anyone on 4
+        through 9. The chain runs `if current == N` and each step raises
+        `current`, so an entry with no matching branch never advances and
+        the entry fails to load."""
+        import inspect
+
+        from custom_components.roomba_plus import migrations
+
+        source = inspect.getsource(migrations.async_migrate_entry)
+
+        assert "3 <= current < 10" in source
+
+    def test_it_lands_on_ten_not_on_current_version(self):
+        """Jumping straight to 25 would skip v10 through v24 as well --
+        and those are the generic, suffix-based migrations that apply to
+        every installation."""
+        import inspect
+
+        from custom_components.roomba_plus import migrations
+
+        source = inspect.getsource(migrations.async_migrate_entry)
+
+        assert "current = 10" in source
+
+    def test_no_hardcoded_entity_ids_from_one_robot_remain(self):
+        """The marker of an installation-specific migration: an entity_id
+        with the maintainer's own robot prefix written into the source."""
+        import re
+        from pathlib import Path
+
+        source = (
+            Path(__file__).resolve().parent.parent
+            / "custom_components" / "roomba_plus" / "migrations.py"
+        ).read_text(encoding="utf-8")
+
+        hardcoded = re.findall(
+            r'"(?:sensor|binary_sensor|switch)\.roomba_980_og_[a-z0-9_]+"', source
+        )
+
+        assert len(hardcoded) < 10, (
+            f"{len(hardcoded)} entity_ids from one installation are still "
+            "hardcoded in migrations"
+        )
+
+    def test_later_migrations_are_untouched(self):
+        """v10 onwards match on entity_id suffixes rather than on a
+        registry dump, so they work on any installation and stay."""
+        import inspect
+
+        from custom_components.roomba_plus import migrations
+
+        source = inspect.getsource(migrations.async_migrate_entry)
+
+        assert "# v10 → v11" in source
+        assert "# v12 → v13" in source

@@ -40,6 +40,20 @@ jobs:
         uses: github/codeql-action/init@v4
         with:
           languages: python
+          # SCAN WHAT SHIPS. There is more test code than integration
+          # code here -- 89k lines against 71k -- so without this the
+          # majority of every scan is fixtures.
+          #
+          # Test files legitimately contain things CodeQL flags and
+          # should flag elsewhere: hardcoded sample credentials, test
+          # BLIDs, broad excepts, assert-based control flow. None of it
+          # reaches a user.
+          #
+          # `scripts/` stays in scope on purpose: those run in CI, read
+          # files and shell out, so a finding there is worth seeing.
+          config: |
+            paths-ignore:
+              - tests
 
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@v4

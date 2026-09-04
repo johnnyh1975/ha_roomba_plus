@@ -264,6 +264,201 @@
       },
       "recent_time_30d": {
         "default": "mdi:clock-time-five-outline"
+      },
+      "part_edge_brush": {
+        "default": "mdi:broom"
+      },
+      "part_dirt_bag": {
+        "default": "mdi:trash-can-outline"
+      },
+      "total_energy_consumed": {
+        "default": "mdi:lightning-bolt"
+      },
+      "lifetime_completion_rate": {
+        "default": "mdi:percent"
+      },
+      "battery_cycle_count_bms": {
+        "default": "mdi:battery-sync-outline"
+      },
+      "battery_age_days": {
+        "default": "mdi:battery-clock-outline"
+      },
+      "dock_firmware_version": {
+        "default": "mdi:memory"
+      },
+      "wheel_last_cleaned": {
+        "default": "mdi:wheel"
+      },
+      "contact_last_cleaned": {
+        "default": "mdi:connection"
+      },
+      "bin_last_cleaned": {
+        "default": "mdi:trash-can-outline"
+      },
+      "last_mission_team_id": {
+        "default": "mdi:account-group-outline"
+      },
+      "consecutive_mission_anomalies": {
+        "default": "mdi:alert-outline"
+      },
+      "side_brush_wear_rate": {
+        "default": "mdi:broom"
+      },
+      "clean_base_bag_wear_rate": {
+        "default": "mdi:trash-can-outline"
+      },
+      "side_brush_days_until_due": {
+        "default": "mdi:broom"
+      },
+      "clean_base_bag_days_until_due": {
+        "default": "mdi:trash-can-outline"
+      },
+      "nav_landmark_quality": {
+        "default": "mdi:map-marker-check-outline"
+      },
+      "nav_good_landmarks": {
+        "default": "mdi:map-marker-check"
+      },
+      "optical_dirt_detections": {
+        "default": "mdi:eye"
+      },
+      "piezo_dirt_detections": {
+        "default": "mdi:waveform"
+      },
+      "nav_orientations": {
+        "default": "mdi:compass-outline"
+      },
+      "dock_contact_chatters": {
+        "default": "mdi:connection"
+      },
+      "dock_knockoffs": {
+        "default": "mdi:alert-outline"
+      },
+      "dock_charge_aborts": {
+        "default": "mdi:battery-alert"
+      },
+      "optimal_clean_window": {
+        "default": "mdi:calendar-clock-outline"
+      },
+      "firmware_version": {
+        "default": "mdi:chip"
+      },
+      "integration_health": {
+        "default": "mdi:heart-pulse"
+      },
+      "reset_diagnostics_summary": {
+        "default": "mdi:restart-alert"
+      },
+      "recent_edge_coverage_ratio": {
+        "default": "mdi:border-outside"
+      },
+      "mission_progress": {
+        "default": "mdi:progress-clock"
+      },
+      "map_learning": {
+        "default": "mdi:map-check"
+      },
+      "zone_summary": {
+        "default": "mdi:map-marker-multiple-outline"
+      },
+      "rooms_overdue": {
+        "default": "mdi:home-alert-outline"
+      },
+      "dirt_weather_correlation": {
+        "default": "mdi:chart-scatter-plot"
+      },
+      "last_mission_summary": {
+        "default": "mdi:clipboard-text-clock-outline"
+      },
+      "room_cleaning_history": {
+        "default": "mdi:history"
+      },
+      "room_areas": {
+        "default": "mdi:floor-plan"
+      },
+      "room_accessibility_scores": {
+        "default": "mdi:door-open"
+      },
+      "relocalisation_rate": {
+        "default": "mdi:map-marker-path"
+      },
+      "cleaning_performance": {
+        "default": "mdi:speedometer"
+      },
+      "cleaning_analytics_30d": {
+        "default": "mdi:chart-box-outline"
+      },
+      "wifi_health": {
+        "default": "mdi:wifi-check"
+      },
+      "event_counts_30d": {
+        "default": "mdi:counter"
+      },
+      "robot_health_score": {
+        "default": "mdi:heart-pulse"
+      },
+      "health_score_trend": {
+        "default": "mdi:trending-up"
+      },
+      "wifi_last_channel": {
+        "default": "mdi:wifi-settings"
+      },
+      "wifi_channel_stability": {
+        "default": "mdi:wifi-alert"
+      },
+      "missions_per_charge": {
+        "default": "mdi:battery-charging"
+      },
+      "prime_mission_event": {
+        "default": "mdi:timeline-text-outline"
+      },
+      "prime_connection_health": {
+        "default": "mdi:lan-connect"
+      },
+      "prime_cleaning_mode": {
+        "default": "mdi:auto-mode"
+      },
+      "prime_detected_pad": {
+        "default": "mdi:square-rounded-outline"
+      },
+      "prime_dock_status": {
+        "default": "mdi:dock-window"
+      },
+      "prime_pad_wash_status": {
+        "default": "mdi:wiper-wash"
+      },
+      "prime_pad_dry_status": {
+        "default": "mdi:weather-sunny"
+      },
+      "prime_suction_level": {
+        "default": "mdi:fan-speed-3"
+      },
+      "prime_runtime_hours": {
+        "default": "mdi:timer-outline"
+      },
+      "prime_firmware_version": {
+        "default": "mdi:chip"
+      },
+      "prime_charge_cycles_ok": {
+        "default": "mdi:battery-check"
+      },
+      "prime_charge_cycles_error": {
+        "default": "mdi:battery-alert"
+      },
+      "prime_system_uptime": {
+        "default": "mdi:clock-outline"
+      },
+      "prime_navigation_resets": {
+        "default": "mdi:compass-off-outline"
+      },
+      "prime_serial_number": {
+        "default": "mdi:identifier"
+      },
+      "prime_consumable_part": {
+        "default": "mdi:wrench-outline"
+      },
+      "region_last_cleaned": {
+        "default": "mdi:calendar-check-outline"
       }
     },
     "button": {
@@ -308,6 +503,30 @@
       },
       "favorite": {
         "default": "mdi:star-outline"
+      },
+      "reset_side_brush": {
+        "default": "mdi:broom"
+      },
+      "reset_clean_base_bag": {
+        "default": "mdi:trash-can-outline"
+      },
+      "prime_favorite": {
+        "default": "mdi:star-outline"
+      },
+      "prime_empty_bin": {
+        "default": "mdi:delete-sweep-outline"
+      },
+      "prime_wash_pad": {
+        "default": "mdi:wiper-wash"
+      },
+      "prime_stop_pad_dry": {
+        "default": "mdi:stop-circle-outline"
+      },
+      "prime_start_pad_dry": {
+        "default": "mdi:weather-sunny"
+      },
+      "prime_locate": {
+        "default": "mdi:map-marker-radius-outline"
       }
     },
     "select": {
@@ -331,6 +550,33 @@
       },
       "carpet_boost_select": {
         "default": "mdi:carpet"
+      },
+      "prime_suction_level": {
+        "default": "mdi:fan-speed-3"
+      },
+      "prime_pad_wetness": {
+        "default": "mdi:water-percent"
+      },
+      "prime_pad_dry_duration": {
+        "default": "mdi:timer-outline"
+      },
+      "prime_pad_wash_return": {
+        "default": "mdi:wiper-wash"
+      },
+      "prime_pad_wash_area_interval": {
+        "default": "mdi:vector-square"
+      },
+      "prime_pad_wash_time_interval": {
+        "default": "mdi:timer-outline"
+      },
+      "prime_pad_wash_heat": {
+        "default": "mdi:thermometer-water"
+      },
+      "prime_autoevac_frequency": {
+        "default": "mdi:delete-empty"
+      },
+      "smart_zones_need_naming": {
+        "default": "mdi:map-marker-question-outline"
       }
     },
     "switch": {
@@ -342,6 +588,45 @@
       },
       "schedule_hold": {
         "default": "mdi:calendar-lock-outline"
+      },
+      "child_lock": {
+        "default": "mdi:lock"
+      },
+      "eco_charge": {
+        "default": "mdi:battery-charging"
+      },
+      "gentle_mode": {
+        "default": "mdi:feather"
+      },
+      "prime_carpet_boost": {
+        "default": "mdi:carpet"
+      },
+      "prime_child_lock": {
+        "default": "mdi:lock"
+      },
+      "prime_eco_charge": {
+        "default": "mdi:battery-charging"
+      },
+      "prime_pad_wash_allowed": {
+        "default": "mdi:wiper-wash"
+      },
+      "prime_pad_dry_allowed": {
+        "default": "mdi:weather-sunny"
+      },
+      "prime_two_pass": {
+        "default": "mdi:repeat"
+      },
+      "prime_vac_high": {
+        "default": "mdi:fan-speed-3"
+      },
+      "prime_pad_dry": {
+        "default": "mdi:hair-dryer"
+      },
+      "prime_schedule": {
+        "default": "mdi:calendar-clock"
+      },
+      "prime_not_connected": {
+        "default": "mdi:lan-disconnect"
       }
     },
     "image": {
@@ -350,11 +635,101 @@
       },
       "rooms_map": {
         "default": "mdi:floor-plan"
+      },
+      "raw_map": {
+        "default": "mdi:map-outline"
+      },
+      "map": {
+        "default": "mdi:map-marker-path"
+      },
+      "cleaning_map": {
+        "default": "mdi:map-marker-path"
+      },
+      "zones_need_naming": {
+        "default": "mdi:map-marker-question-outline"
       }
     },
     "binary_sensor": {
       "mission_active": {
         "default": "mdi:robot-vacuum"
+      },
+      "bin_full": {
+        "default": "mdi:delete-alert"
+      },
+      "bin_present": {
+        "default": "mdi:delete-outline"
+      },
+      "connected": {
+        "default": "mdi:lan-connect"
+      },
+      "mop_ready": {
+        "default": "mdi:wiper-wash"
+      },
+      "mop_tank_present": {
+        "default": "mdi:water-check"
+      },
+      "mop_lid_closed": {
+        "default": "mdi:door-closed"
+      },
+      "map_saving": {
+        "default": "mdi:map-outline"
+      },
+      "maintenance_due": {
+        "default": "mdi:tools"
+      },
+      "start_blocked": {
+        "default": "mdi:alert-circle-outline"
+      },
+      "schedule_hold_active": {
+        "default": "mdi:calendar-lock-outline"
+      },
+      "mop_lid_open": {
+        "default": "mdi:door-open"
+      },
+      "mop_tank_present_direct": {
+        "default": "mdi:water-check"
+      },
+      "mid_mission_recharge": {
+        "default": "mdi:battery-charging"
+      },
+      "cloud_connected": {
+        "default": "mdi:cloud-check-outline"
+      },
+      "mqtt_stale": {
+        "default": "mdi:cloud-alert"
+      },
+      "firmware_updated": {
+        "default": "mdi:package-up"
+      },
+      "layout_change_detected": {
+        "default": "mdi:floor-plan"
+      },
+      "prime_dock_error": {
+        "default": "mdi:alert-circle-outline"
+      },
+      "prime_start_blocked": {
+        "default": "mdi:alert-circle-outline"
+      },
+      "demand_clean_blocked": {
+        "default": "mdi:play-box-lock"
+      }
+    },
+    "device_tracker": {
+      "position": {
+        "default": "mdi:map-marker"
+      }
+    },
+    "calendar": {
+      "schedule": {
+        "default": "mdi:calendar-clock"
+      },
+      "calendar_room_not_found": {
+        "default": "mdi:calendar-remove-outline"
+      }
+    },
+    "todo": {
+      "maintenance": {
+        "default": "mdi:clipboard-list-outline"
       }
     }
   }

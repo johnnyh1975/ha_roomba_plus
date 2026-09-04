@@ -21,27 +21,94 @@ _ROOT = Path(__file__).parent.parent / "custom_components" / "roomba_plus"
 _STRINGS = _ROOT / "strings.json"
 _TRANSLATIONS = _ROOT / "translations"
 _TRANSLATION_LOCALES = ["de", "en", "es", "fr", "it", "nl", "pt", "pl"]
-_SOURCE_FILES = [
-    _ROOT / "services.py",
-    _ROOT / "vacuum.py",
-]
+# The modules that raise translated EXCEPTIONS. Not every module, and
+# not a glob: entity modules use translation_key= for entity names,
+# which live in a different block of strings.json entirely, so globbing
+# mixes two unrelated namespaces and reports 190 false positives.
+#
+# room_cleaning.py was added when the Classic send path moved there
+# (this session) -- the list had gone stale the moment a fourth module
+# started raising translated errors, and reported its key as orphaned
+# while it was in active use.
+#
+# Still hand-maintained, and that is a real weakness. The alternative
+# tried here was worse.
+# EVERY MODULE, NOT FOUR NAMED ONES.
+#
+# This was a hardcoded list, and a hardcoded list of source files is a
+# list that goes stale silently: a `ServiceValidationError` raised in
+# any other module made its key look unused, so the orphan check
+# reported a live key as dead. That happened the first time an
+# exception was raised from switch.py.
+#
+# The failure mode is the wrong way round, which is what makes it
+# worth fixing rather than extending: the check fires on correct code
+# and stays quiet about a genuinely orphaned key in an unlisted file.
+_SOURCE_FILES = sorted(_ROOT.glob("*.py"))
+# EVERY MODULE, BUT ONLY EXCEPTION RAISES.
+#
+# This list used to name four files by hand, which made any
+# ServiceValidationError raised elsewhere invisible in BOTH directions:
+# its key counted as undefined when missing from strings.json, and as
+# ORPHANED when present. A correctly translated `prime_not_connected` in
+# switch.py came back as an unused key.
+#
+# Globbing alone is worse, not better: `translation_key=` is what every
+# ENTITY uses too, so a plain regex over all files finds 243 keys and
+# demands they all live in the `exceptions` block. The four-file list
+# was a crude way of restricting the scan to files that raise.
+#
+# So the restriction moves from WHICH FILES to WHICH CALLS: parse each
+# module and take `translation_key` only from arguments to an exception
+# constructor. 19 ms across 78 files, once at collection.
 TRANS_DIR = Path(__file__).parent.parent / "custom_components" / "roomba_plus" / "translations"
 ASCII_KEY_RE = re.compile(r'^[a-z0-9_]+$')
-LANG_NEUTRAL = {"SNR", "Status", "Mission – ID", "{name}"}
+# Words that are genuinely identical across languages. "Filter" is the
+# German, Dutch and English spelling of the same word -- flagging it as
+# untranslated would push someone towards inventing a worse German word
+# to satisfy the check.
+LANG_NEUTRAL = {"SNR", "Status", "Mission – ID", "{name}", "Filter", "Filtro", "Filtr"}
 TRANSLATIONS_DIR = (
     Path(__file__).parent.parent
     / "custom_components" / "roomba_plus" / "translations"
 )
 
 
+#: Which constructors count as "an exception the user will read".
+#:
+#: Kept explicit rather than "anything ending in Error": a list that
+#: matched by suffix would pull in library exceptions this project only
+#: catches, and the point of the check is our own translated messages.
+#:
+#: Two were missing on the first pass and showed up as orphaned keys
+#: that were in fact live -- `ConfigEntryAuthFailed` and `UpdateFailed`
+#: both carry translated messages in cloud_coordinator.py.
+_EXCEPTION_CALLS = {
+    "ServiceValidationError",
+    "HomeAssistantError",
+    "ConfigEntryNotReady",
+    "ConfigEntryAuthFailed",
+    "UpdateFailed",
+}
+
+
 def _collect_used_keys() -> set[str]:
-    """Extract all translation_key= values from ServiceValidationError raises."""
+    """`translation_key` values passed to an exception constructor."""
+    import ast
+
     keys: set[str] = set()
-    pattern = re.compile(r'translation_key\s*=\s*["\']([^"\']+)["\']')
     for src in _SOURCE_FILES:
-        if src.exists():
-            text = src.read_text()
-            keys.update(pattern.findall(text))
+        if not src.exists():
+            continue
+        for node in ast.walk(ast.parse(src.read_text())):
+            if not isinstance(node, ast.Call):
+                continue
+            name = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
+            if name not in _EXCEPTION_CALLS:
+                continue
+            for kw in node.keywords:
+                if kw.arg == "translation_key" and isinstance(kw.value, ast.Constant):
+                    keys.add(kw.value.value)
     return keys
 
 
@@ -593,3 +660,225 @@ class TestLifecycleDoc:
         assert "Replacing or selling your robot" in content
         assert "Factory reset" in content
         assert "format=export" in content
+
+
+class TestLocalesAreActuallyTranslated:
+    """@dixi83 sent a one-line PR fixing a Dutch label. Looking at the
+    file around it turned up **36 long strings still in English** across
+    five locales — config dialogs, service descriptions, and six
+    exception messages a user sees when something goes wrong.
+
+    Nothing caught them, because the key check passes: every locale had
+    every key. Structural completeness and translation are different
+    properties, and only one was being measured.
+    """
+
+    def test_no_locale_leaves_long_strings_in_english(self):
+        import subprocess
+        import sys
+
+        result = subprocess.run(
+            [sys.executable, "scripts/check_translations.py"],
+            capture_output=True, text=True,
+        )
+
+        assert "Untranslated values found" not in result.stdout, result.stdout
+        assert result.returncode == 0
+
+    def test_the_allow_list_stays_short(self):
+        """A long allow-list turns this check off by attrition, which is
+        how the originals survived."""
+        from importlib import util
+        import pathlib
+
+        spec = util.spec_from_file_location(
+            "ct", pathlib.Path("scripts/check_translations.py")
+        )
+        module = util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        assert len(module.IDENTICAL_IS_FINE) <= 20
+
+    def test_the_threshold_is_justified(self):
+        """26 characters, set from the shortest real miss found when
+        this was written — not picked to make the check pass."""
+        from importlib import util
+        import pathlib
+
+        spec = util.spec_from_file_location(
+            "ct", pathlib.Path("scripts/check_translations.py")
+        )
+        module = util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        assert module.UNTRANSLATED_MIN_LENGTH <= 26
+
+
+def _is_tier_pair(keys: list[str]) -> bool:
+    """`x` and `prime_x` may share a name, and should.
+
+    They are the Classic and Prime forms of one concept, and a robot
+    only ever has one of them -- so a user sees a single "Firmware
+    version" either way. Giving them different names would be the bug.
+
+    This is deliberately narrow: it collapses the `prime_` prefix and
+    nothing else, so two genuinely different entities that happen to
+    collide still fail. That is how the Spanish bin/tank pair was
+    found -- `bin_present` and `mop_tank_present_direct` both read
+    "Depósito presente", on Combo robots that carry both.
+    """
+    stripped = {k.removeprefix("prime_") for k in keys}
+    return len(stripped) == 1
+
+
+class TestEntityNamesAreDistinctWithinAPlatform:
+    """Two entities on one platform must not share a display name.
+
+    `image.map` and `image.cleaning_map` were BOTH called "Cleaning
+    map" -- in seven of the eight locales. @pk-1966 reported that "the
+    cleaning map just shows a dot in a blank white space" and was
+    right to call it that: it is the name the interface gave him. He
+    then spent a round trying to work out how it differed from the
+    coverage map, which is a question the names made unanswerable.
+
+    A duplicate name is worse than a bad name. A bad one teaches you
+    something once; a duplicate makes two things indistinguishable in
+    every dropdown, automation picker and dashboard editor.
+    """
+
+    def test_no_platform_has_two_entities_with_the_same_name(self):
+        offenders = []
+        for path in sorted((_ROOT / "translations").glob("*.json")):
+            entities = json.loads(path.read_text(encoding="utf-8")).get("entity", {})
+            for platform, keys in entities.items():
+                names: dict[str, list[str]] = {}
+                for key, value in keys.items():
+                    name = value.get("name") if isinstance(value, dict) else None
+                    if name:
+                        names.setdefault(name, []).append(key)
+                for name, sharing in names.items():
+                    if len(sharing) > 1 and not _is_tier_pair(sharing):
+                        offenders.append(
+                            f"{path.stem}/{platform}: {sharing} all called {name!r}"
+                        )
+
+        assert not offenders, "Duplicate entity names:\n  " + "\n  ".join(offenders)
+
+    def test_every_locale_names_the_same_image_entities(self):
+        """A locale missing one is how a duplicate hides: the entity
+        falls back to its key and looks distinct in English only."""
+        reference = set(
+            json.loads((_ROOT / "translations" / "en.json").read_text(encoding="utf-8"))
+            ["entity"]["image"]
+        )
+        for path in sorted((_ROOT / "translations").glob("*.json")):
+            keys = set(
+                json.loads(path.read_text(encoding="utf-8"))["entity"]["image"]
+            )
+            assert keys == reference, f"{path.stem} image keys differ from en"
+
+
+class TestImageNamesMatchWhatEachTierGets:
+    """The five image keys are not evenly split between the tiers, and
+    a name has to be honest for every tier that uses it.
+
+    Prime (CLOUD_ONLY):  raw_map, rooms_map, cleaning_map
+    Classic:             map, coverage_map, rooms_map
+
+    Only `rooms_map` is shared -- and it does NOT behave the same on
+    both. Classic's is a static room-polygon image; Prime's carries
+    the live coverage/trajectory layers too, because the map card
+    takes one raster source rather than a stack of entities. So it was
+    briefly called "Room layout", which promised a staticness only one
+    tier has.
+    """
+
+    @staticmethod
+    def _names(locale: str = "en") -> dict[str, str]:
+        path = _ROOT / "translations" / f"{locale}.json"
+        return {
+            key: value["name"]
+            for key, value in json.loads(path.read_text(encoding="utf-8"))
+            ["entity"]["image"].items()
+        }
+
+    def test_the_shared_key_does_not_promise_static(self):
+        """`rooms_map` renders on both tiers and is live on one."""
+        for locale in ("en", "de"):
+            name = self._names(locale)["rooms_map"].lower()
+            for promise in ("layout", "static", "aufteilung", "statisch"):
+                assert promise not in name, (
+                    f"{locale}: rooms_map is called {name!r}, which claims a "
+                    "staticness Prime's version does not have"
+                )
+
+    def test_coverage_says_what_it_measures(self):
+        """"Coverage map" read as "which rooms are done". It is a
+        heatmap of driven-over cells -- traffic, not completion --
+        which is what @pk-1966 could not reconcile against the room
+        map. The word has to be in the name."""
+        for locale, word in (("en", "heatmap"), ("de", "heatmap")):
+            assert word in self._names(locale)["coverage_map"].lower()
+
+    def test_the_two_live_images_are_not_called_the_same_thing(self):
+        """`map` (Classic) and `cleaning_map` (Prime) were both
+        "Cleaning map" in seven of eight locales. No robot has both,
+        but every document, dashboard and support answer had to."""
+        for path in sorted((_ROOT / "translations").glob("*.json")):
+            names = self._names(path.stem)
+            assert names["map"] != names["cleaning_map"], path.stem
+
+
+class TestStringsJsonAgreesWithEnglish:
+    """`strings.json` and `translations/en.json` must not disagree.
+
+    Home Assistant serves `translations/en.json` to English users;
+    `strings.json` is the source the other locales are generated from
+    and what a developer reads. When they diverge, the file everyone
+    looks at is not the file anyone sees.
+
+    Found by @mdarocha (PR #100) while settling a naming question: he
+    assumed `prime_part_dirt_bag` and `part_dirt_bag` disagreed with
+    each other. They did not — `strings.json` disagreed with all eight
+    shipped locales, which already said "Dust Bag".
+
+    The duplicate-name check added in a43 could not see this: it
+    compares entities within one platform in one file, and this is the
+    same entity across two files.
+    """
+
+    @staticmethod
+    def _mismatches():
+        import json
+
+        strings = json.loads(_STRINGS.read_text(encoding="utf-8"))
+        english = json.loads(
+            (_ROOT / "translations" / "en.json").read_text(encoding="utf-8")
+        )
+
+        found: list[tuple[str, str, str]] = []
+
+        def walk(a, b, path=""):
+            if isinstance(a, dict) and isinstance(b, dict):
+                for key in a:
+                    if key in b:
+                        walk(a[key], b[key], f"{path}.{key}")
+            elif isinstance(a, str) and isinstance(b, str) and a != b:
+                found.append((path, a, b))
+
+        walk(strings, english)
+        return found
+
+    def test_no_entity_name_disagrees(self):
+        """Names are what a user sees, so a divergence here is visible
+        in a way a description or a flow string is not."""
+        offenders = [
+            (p, a, b) for p, a, b in self._mismatches()
+            if p.endswith(".name") and ".entity." in p
+        ]
+
+        assert not offenders, (
+            "strings.json and translations/en.json give different names:\n"
+            + "\n".join(f"  {p}\n    strings: {a}\n    en:      {b}"
+                        for p, a, b in offenders)
+        )

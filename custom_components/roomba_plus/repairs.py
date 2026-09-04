@@ -18,7 +18,19 @@ from typing import Any
 
 import voluptuous as vol
 
+from homeassistant import data_entry_flow
 from homeassistant.components.repairs import RepairsFlow
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    # ANNOTATION-ONLY, and it was a string with a noqa before. The name
+    # appeared as `"RoombaConfigEntry"` at two call sites with a comment
+    # blaming a ruff scope limitation -- but nothing imported it at all,
+    # so the annotation named something that did not exist in this
+    # module and mypy read it as undefined.
+    from .models import RoombaConfigEntry
+
+
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.util import dt as dt_util
@@ -49,7 +61,7 @@ _LOGGER = logging.getLogger(__name__)
 _event_armed: dict[str, bool] = {}
 
 
-def _fire_once(hass: HomeAssistant, entry_id: str, key: str, event_type: str, data: dict) -> None:
+def _fire_once(hass: HomeAssistant, entry_id: str, key: str, event_type: str, data: dict[str, Any]) -> None:
     """Fire event_type exactly once per sustained occurrence of `key`.
 
     Repeated calls while the underlying condition remains true do not
@@ -103,12 +115,12 @@ class SmartZoneNamingRepairFlow(RepairsFlow):
     step_id is always "init" — HA repair frontend requirement.
     """
 
-    def __init__(self, config_entry) -> None:
+    def __init__(self, config_entry: Any) -> None:
         self._config_entry = config_entry
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
-    ) -> dict:
+    ) -> data_entry_flow.FlowResult:
         """Show zone naming form or process submitted names."""
         if self._config_entry is None:
             return self.async_create_entry(data={})
@@ -127,7 +139,7 @@ class SmartZoneNamingRepairFlow(RepairsFlow):
             discovered = self._collect_from_live_state()
 
         from .const import CONF_SMART_ZONE_HIDDEN
-        hidden_ids: set = set(opts.get(CONF_SMART_ZONE_HIDDEN, []))
+        hidden_ids: set[Any] = set(opts.get(CONF_SMART_ZONE_HIDDEN, []))
         unlabelled = [
             rid for rid in discovered
             if rid not in named and rid not in hidden_ids
@@ -197,7 +209,7 @@ class SmartZoneNamingRepairFlow(RepairsFlow):
             # Must be resolved before the parsed/pmap_id checks below so
             # that pmap_id is always bound (fixes UnboundLocalError).
             from . import roomba_reported_state  # noqa: PLC0415
-            _state: dict = {}
+            _state: dict[str, Any] = {}
             try:
                 runtime = self._config_entry.runtime_data
                 if runtime and runtime.roomba:
@@ -206,7 +218,7 @@ class SmartZoneNamingRepairFlow(RepairsFlow):
                 pass
 
             _last = _state.get("lastCommand", {})
-            _pmaps: list[dict] = _state.get("pmaps", [])
+            _pmaps: list[dict[str, Any]] = _state.get("pmaps", [])
             pmap_id: str = (
                 _last.get("pmap_id")
                 or next(
@@ -317,7 +329,7 @@ class ConfirmRepairFlow(RepairsFlow):
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
-    ) -> dict:
+    ) -> data_entry_flow.FlowResult:
         if user_input is not None:
             return self.async_create_entry(data={})
         return self.async_show_form(step_id="init")
@@ -476,7 +488,7 @@ _CHARGE_PEAK_DECLINE_CYCLES = 3   # consecutive declining peaks to flag a trend
 
 async def async_check_battery_contact_issue(
     hass: HomeAssistant,
-    config_entry: "RoombaConfigEntry",  # noqa: F821 — TYPE_CHECKING forward reference, pyflakes/ruff scope limitation
+    config_entry: "RoombaConfigEntry",
 ) -> None:
     """F6f — fire a Repair Issue on evidence of a battery/dock contact or
     BMS bus-communication problem, via two independent signals:
@@ -645,7 +657,7 @@ async def async_check_mixed_schedule(
 async def async_check_accident_detection(
     hass: HomeAssistant,
     entry: Any,
-    records: list,
+    records: list[Any],
 ) -> None:
     """F6f — fire alert when cloud records show a floor accident signature.
 
@@ -711,7 +723,8 @@ async def async_enrich_drift_issue(
 
     v3.5.0 Repairs redesign: demoted from Repair Issue to event —
     DRIFT-AUTO's own self-healing design already treats this as transient
-    (drift_recovered() re-arms it via _disarm(), see image.py), which fits
+    (drift_recovered() re-arms it via _disarm(), see geometry_store.py),
+    which fits
     an event/Logbook model better than a persistent, must-dismiss Repair.
 
     Called by geometry_store when a new drift event is recorded. Event
@@ -739,7 +752,7 @@ async def async_enrich_drift_issue(
 
 async def async_check_observed_zones(
     hass: HomeAssistant,
-    entry: "RoombaConfigEntry",  # noqa: F821 — TYPE_CHECKING forward reference, pyflakes/ruff scope limitation
+    entry: "RoombaConfigEntry",
 ) -> None:
     """F22a — fire Repair Issue when cloud has obstacle zones but GridStore is empty.
 
@@ -822,7 +835,7 @@ async def async_check_error_recurrence(
     ms = data.mission_store
 
     error_counts: dict[int, int] = {}
-    records: list[dict] = []
+    records: list[dict[str, Any]] = []
     newest_first = False
 
     if archive is not None:
@@ -934,7 +947,7 @@ async def async_check_cancellation_recurrence(
     archive = getattr(data, "mission_archive", None)
     ms = data.mission_store
 
-    records: list[dict] = []
+    records: list[dict[str, Any]] = []
     if archive is not None:
         archive_records = archive.recent_derived(days=30)
         if archive_records:
@@ -974,7 +987,7 @@ async def async_check_cancellation_recurrence(
 
 async def async_check_schedule_optimisation(
     hass: HomeAssistant,
-    config_entry: "RoombaConfigEntry",  # noqa: F821 — TYPE_CHECKING forward reference, pyflakes/ruff scope limitation
+    config_entry: "RoombaConfigEntry",
 ) -> None:
     """F12c — fire schedule_suboptimal event when high-dirt days lack a
     scheduled clean.
@@ -1012,7 +1025,7 @@ async def async_check_schedule_optimisation(
 
     # Build set of days with a completed clean in last 30 days
     by_day = data.mission_store.query_by_day(30)
-    clean_days: set = {
+    clean_days: set[Any] = {
         day for day, summary in by_day.items()
         if summary.completed > 0
     }
@@ -1066,7 +1079,7 @@ _WEEKDAY_NAMES = [
 
 async def async_check_stuck_pattern(
     hass: HomeAssistant,
-    config_entry: "RoombaConfigEntry",  # noqa: F821 — TYPE_CHECKING forward reference, pyflakes/ruff scope limitation
+    config_entry: "RoombaConfigEntry",
 ) -> None:
     """L7 — fire stuck_pattern event when a stuck cell has a dominant time
     pattern.
@@ -1137,7 +1150,7 @@ async def async_check_stuck_pattern(
 
 async def async_check_mission_anomaly(
     hass: HomeAssistant,
-    config_entry: "RoombaConfigEntry",  # noqa: F821 — TYPE_CHECKING forward reference, pyflakes/ruff scope limitation
+    config_entry: "RoombaConfigEntry",
 ) -> None:
     """L3 — fire mission_anomaly event when consecutive missions are
     statistically anomalous.
@@ -1226,7 +1239,7 @@ _DOCK_ABORTS_THRESHOLD = 20      # aborted charging sessions
 
 async def async_check_dock_health(
     hass: HomeAssistant,
-    config_entry: "RoombaConfigEntry",  # noqa: F821 — TYPE_CHECKING forward reference, pyflakes/ruff scope limitation
+    config_entry: "RoombaConfigEntry",
 ) -> None:
     """DOCK-HEALTH (v2.8.0) — Fire or clear the dock_contact_health Repair Issue.
 
@@ -1317,7 +1330,7 @@ async def async_check_dock_health(
 
 async def async_check_cloud_stale(
     hass: HomeAssistant,
-    config_entry: "RoombaConfigEntry",  # noqa: F821 — TYPE_CHECKING forward reference, pyflakes/ruff scope limitation
+    config_entry: "RoombaConfigEntry",
     cloud_coordinator: Any,
 ) -> None:
     """CLOUD-STALE (v2.8.3) — fire cloud_stale event on sustained cloud
@@ -1404,7 +1417,7 @@ async def async_check_cloud_stale(
         _disarm(entry_id, "cloud_stale")
 
 
-# v2.9.0 MAP-RETRAIN-WF — wall-clock timestamp of when notReady&64 ("Smart
+# v2.9.0 MAP-RETRAIN-WF — wall-clock timestamp of when notReady reached 67 ("Smart
 # Map updating") was FIRST observed continuously set for this entry. Not
 # persisted — matches _health_low_since's in-memory pattern; a fresh HA
 # restart simply restarts the duration timer.
@@ -1413,11 +1426,11 @@ _map_updating_since: dict[str, float] = {}
 
 def async_check_map_retrain_workflow(
     hass: HomeAssistant,
-    config_entry: "RoombaConfigEntry",  # noqa: F821 — TYPE_CHECKING forward reference, pyflakes/ruff scope limitation
+    config_entry: "RoombaConfigEntry",
     map_updating: bool,
 ) -> None:
     """MAP-RETRAIN-WF (v2.9.0) — escalating map-retrain-in-progress signal
-    while the robot's Smart Map is updating (cleanMissionStatus.notReady & 64).
+    while the robot's Smart Map is updating (cleanMissionStatus.notReady == 67).
 
     Three stages:
       1. map_updating just turned True — no signal yet. Brief map updates
@@ -1488,7 +1501,7 @@ _maintenance_due_since: dict[str, float] = {}
 
 def async_check_maintenance_due(
     hass: HomeAssistant,
-    config_entry: "RoombaConfigEntry",  # noqa: F821 — TYPE_CHECKING forward reference, pyflakes/ruff scope limitation
+    config_entry: "RoombaConfigEntry",
     due_items: list[str],
 ) -> None:
     """maintenance_due Repair Issue (v2.9.0) — backstop for users without

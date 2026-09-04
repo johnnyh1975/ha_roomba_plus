@@ -12,7 +12,10 @@ from typing import TYPE_CHECKING, Any
 from homeassistant.config_entries import ConfigEntry
 
 if TYPE_CHECKING:
+    from .mission_archive import MissionArchive
     from roombapy import Roomba
+    from roombapy_prime import PrimeRobot
+    from roombapy_prime.models import RobotSerialInfo
     from .blocking_manager import BlockingManager
     from .cloud_coordinator import IrobotCloudCoordinator
     from .const import RobotProfile
@@ -30,6 +33,12 @@ if TYPE_CHECKING:
     from .freeze_snapshot_store import FreezeSnapshotStore        # v3.2.1
     from .robot_profile_store import RobotProfileStore        # v2.6 L4
     from .mission_timer_store import MissionTimerStore        # v2.6 MP1
+    from .prime_coordinator import (  # V4/Prime
+        PrimeCoordinator,
+        PrimePartsCoordinator,
+        PrimeScheduleCoordinator,
+        PrimeStatusCoordinator,
+    )
 
 
 class MapCapability(Enum):
@@ -48,12 +57,177 @@ class MapCapability(Enum):
     SMART = "smart"
 
 
+class ConnectionType(Enum):
+    """How this config entry talks to its robot.
+
+    NEW (V4/Prime prep, July 2026). Orthogonal to MapCapability, which
+    describes map/room richness independent of transport. See
+    ROOMBA_PLUS_VERSION_PLAN_v4_onwards.md for the full architecture
+    context.
+
+    UPDATE: now referenced by RoombaData (below) -- roomba is Optional
+    for exactly this reason (a CLOUD_ONLY entry has no local Roomba
+    object at all). CLOUD_ONLY entries take an entirely separate setup/
+    unload path (_async_setup_entry_prime() in __init__.py) rather than
+    threading through the existing 4-phase LOCAL_PUSH pipeline, which
+    has deep assumptions about a real, disconnectable local roomba
+    object at many points beyond just RoombaData itself.
+
+    LOCAL_PUSH: existing — roombapy, local MQTT (blid+password+IP).
+    CLOUD_ONLY: NEW — roombapy-prime, V4/Prime. No local channel exists.
+    """
+
+    LOCAL_PUSH = "local_push"
+    CLOUD_ONLY = "cloud_only"
+
+
 @dataclass
 class RoombaData:
-    """Runtime data stored in config_entry.runtime_data."""
+    """Runtime data stored in config_entry.runtime_data.
 
-    roomba: Roomba
+    WHAT BELONGS HERE. Ephemeral per-entry state: anything that should
+    start fresh when Home Assistant restarts. Anything that must
+    SURVIVE a restart belongs in a Store instead (MissionStore,
+    MaintenanceStore, RobotProfileStore and the rest), which persists
+    to hass.storage.
+
+    That rule was previously written on two fields that nothing used,
+    and would have been deleted along with them. It is the only thing
+    that makes a container this size decidable, so it lives here now.
+
+    NOT EVERY FIELD APPLIES TO EVERY ROBOT. A Prime (CLOUD_ONLY) entry
+    leaves the Classic health-tracking fields at their defaults and
+    vice versa, because callbacks.py, repairs.py and sensor_cloud.py
+    are Classic-only paths today. Read a default value as "this path
+    never ran", not as "the robot reported nothing" -- the two look
+    identical from here and mean very different things.
+    """
+
     blid: str
+    # NEW (V4/Prime): Optional, not required -- a CLOUD_ONLY entry has no
+    # local Roomba object at all. Moved ahead of `blid` in declaration
+    # order for exactly this reason (dataclass fields without a default
+    # can't follow one that has a default; blid has none and applies to
+    # both connection types, roomba now has a default and doesn't apply
+    # to both).
+    roomba: Roomba | None = None
+    # NEW (V4/Prime): defaults to LOCAL_PUSH so every existing entry
+    # (which predates this field entirely) is treated exactly as before.
+    connection_type: ConnectionType = ConnectionType.LOCAL_PUSH
+    # NEW (V4/Prime): populated only for CLOUD_ONLY entries, by
+    # _async_setup_entry_prime() in __init__.py.
+    prime_robot: "PrimeRobot | None" = None
+    #: Saved favourites as [{id, name}], read once at setup. Exposed as
+    #: a vacuum attribute so automations and the map card can use them
+    #: without an entity each.
+    prime_favorites: list[dict[str, Any]] = field(default_factory=list)
+    #: Live positions from the Prime map stream, as (x_mm, y_mm, deg).
+    #:
+    #: Held here rather than on an entity because the two halves live in
+    #: different places: the stream is watched by PrimeMapImage, which
+    #: shows iRobot's own rendered PNG and has no renderer, while the
+    #: trail belongs on PrimeRoomsImage, which draws its own map.
+    #:
+    #: Bounded, because a long mission would otherwise grow without
+    #: limit -- a tester's single run produced 904 points.
+    prime_positions: list[tuple[float, float, float]] = field(default_factory=list)
+    #: The last `/v1/p2maps/clean-score` response, kept whole.
+    #:
+    #: Two readers want it: demand cleaning uses the scores, the mission
+    #: sensor uses `mission_last_unfinished`. Fetching it twice would
+    #: double a cloud call to answer one question.
+    prime_clean_scores: Any | None = None
+    #: {room_id: name} from the map bundle, which knows names the
+    #: schedule coordinator does not. Filled whenever a floor plan is
+    #: built, and read by the calendar to fill gaps in its own summaries.
+    prime_room_names: dict[str, str] = field(default_factory=dict)
+    #: The HomeAssistant instance, for callers that only hold the config
+    #: entry.
+    #:
+    #: `prime_mission_sync._hass_of()` and `room_cleaning.py` have read
+    #: this field since they were written; **nothing ever assigned it.**
+    #: So every Prime-side store save resolved `hass=None`, the profile
+    #: store was never persisted, and mission records re-imported from
+    #: the cloud on every restart -- "first mission history sync
+    #: imported N missions" on every boot rather than only the first.
+    #:
+    #: Found by @utkjmitch, who traced it from `mission_progress`
+    #: reading `unknown` on a robot with 50 imported missions.
+    hass_ref: Any = None
+    prime_coordinator: "PrimeCoordinator | None" = None
+    prime_status_coordinator: "PrimeStatusCoordinator | None" = None
+    #: Consumable parts (filter, brushes, pads, dirt bag). The only
+    #: POLLING coordinator here -- parts come from REST, nothing pushes
+    #: them. See its own docstring for why it polls rarely.
+    prime_parts_coordinator: "PrimePartsCoordinator | None" = None
+
+    # Cleaning schedules, shared by the calendar and the schedule
+    # switches. Before this existed the switches read their state twice
+    # ever -- at creation and after their own write -- so a schedule
+    # toggled in the iRobot app stayed wrong in Home Assistant until a
+    # reload, and an automation using that switch as a condition acted
+    # on it. See PrimeScheduleCoordinator's docstring.
+    #: Per-room and whole-mission time estimates, fetched once at setup.
+    #:
+    #: FETCHED ONCE, NOT POLLED. These are the robot's own predictions
+    #: from its cleaning history -- they shift over weeks, not minutes,
+    #: and a request per refresh would be a cloud call for something
+    #: that barely moves.
+    #:
+    #: None means never fetched or the fetch failed. Callers fall back
+    #: to whatever they did before rather than showing a zero: an
+    #: estimate is an improvement on a guess, not a prerequisite.
+    prime_time_estimates: "Any | None" = None
+
+    prime_schedule_coordinator: "PrimeScheduleCoordinator | None" = None
+    # NEW: household_id for THIS robot, resolved once via
+    # PrimeRobot.get_household_id() during _async_setup_entry_prime() --
+    # needed for get_schedules()/PrimeScheduleCalendar (calendar.py).
+    # None if it couldn't be resolved (account/response shape edge case,
+    # or genuinely no household found) -- calendar.py's own CLOUD_ONLY
+    # branch treats that as "schedule data unavailable", not an error.
+    #: Which map the Rooms Map shows, when the user has picked one.
+    #:
+    #: None means "follow the robot" -- the map it reports standing on,
+    #: falling back to the first. That is what the image did before a
+    #: choice existed, and it stays the default: a user who never touches
+    #: the select sees no change.
+    #:
+    #: THE CHOICE IS SHARED, and that was decided by the person who would
+    #: live with it. One image entity per map was the other option, and
+    #: it looks better on paper -- two dashboards could show different
+    #: floors. @chairstacker asked for a select instead: he uses one map
+    #: constantly and the other rarely, and an entity per map gives no
+    #: way to keep the rare one off the dashboard at all.
+    #:
+    #: A user with two equally-used floors would answer differently.
+    #: Nobody is asking for that.
+    #: Where the dock was last SEEN, as (x_mm, y_mm), from the position
+    #: stream rather than from the map bundle.
+    #:
+    #: THE BUNDLE REMEMBERS WHERE THE DOCK STOOD WHEN THE MAP WAS BUILT.
+    #: @utkjmitch's map draws it on a spot now occupied by a treadmill,
+    #: while the iRobot app shows it correctly -- so the app sources it
+    #: from something fresher than the `dockPose` feature, which is the
+    #: only dock data the bundle carries.
+    #:
+    #: A docked robot is that fresher source, and we already receive it:
+    #: when the phase reaches `charge`, the last position in the stream
+    #: is the dock, to within the robot's own accuracy.
+    #:
+    #: Not persisted. It re-learns on the first mission after a restart,
+    #: and until then the bundle value stands -- which is the behaviour
+    #: this had all along, so nothing is lost by waiting.
+    prime_observed_dock: tuple[float, float] | None = None
+
+    prime_selected_map_id: str | None = None
+
+    prime_household_id: str | None = None
+    # NEW: model/serial/firmware-adjacent data for a correct DeviceInfo (see
+    # IRobotEntity.__init__'s own docstring for the bug this fixes -- every
+    # Prime entity's device page previously showed no model/serial at all).
+    # Best-effort, same reasoning as prime_household_id above.
+    prime_serial_info: "RobotSerialInfo | None" = None
     map_capability: MapCapability = MapCapability.NONE
     renderer: MapRenderer | None = None
     geometry_store: GeometryStore | None = None
@@ -66,9 +240,15 @@ class RoombaData:
     # degradation (boutXIII field data); persistence would duplicate a
     # reliable source. See MISSION-MAP-ARCHIVE backlog candidate for the
     # opt-in freeze path.
-    mission_map_cache: dict = field(default_factory=dict)
+    mission_map_cache: dict[str, Any] = field(default_factory=dict)
     # Optional blocking manager — None when CONF_BLOCKING_SENSORS not configured
-    blocking_manager: BlockingManager | None = None  # v1.7.0 L5
+    blocking_manager: BlockingManager | None = None
+    # NEW (this session): live-map decode statistics, populated by
+    # PrimeMapImage and read by diagnostics. Lives here rather than on
+    # the entity so diagnostics can reach it without locating the
+    # entity instance -- see PrimeMapImage.__init__ for why it's
+    # tracked at all.
+    live_map_stats: dict[str, Any] | None = None  # v1.7.0 L5
     # v1.8.0 — Mission log, presence scheduling, and error state
     mission_store: MissionStore | None = None
     presence_manager: PresenceManager | None = None
@@ -76,17 +256,17 @@ class RoombaData:
     last_error_at: str | None = None        # ISO datetime string
     last_error_zone: str | None = None      # zone name at last error time
 
-    # F6a/F6b — consecutive-update counters for performance & battery issues.
-    # Stored here (not in MaintenanceStore) because they reset on every HA
-    # restart — they measure run-time sensor trend, not persistent history.
-    consecutive_declining_speed: int = 0
-    consecutive_battery_warn: int = 0
-
-    # F6a/F6b — latest sensor values cached so repair check functions can
-    # read them without importing sensor.py (avoids circular imports).
+    # Latest sensor values cached so repair check functions can read them
+    # without importing sensor.py (avoids circular imports).
+    #
+    # FOUR SIBLINGS REMOVED (this session): consecutive_declining_speed,
+    # consecutive_battery_warn, dirt_density_rising and
+    # recharge_fraction_value were left behind when v3.5.0 removed the
+    # F6a/F6b Repair Issues they fed. Two were never written at all;
+    # two were recomputed on every cloud update -- including a median
+    # over ten mission records, twice over, for a consumer that had not
+    # existed for two minor versions.
     cleaning_speed_trend_value: str | None = None   # "improving"|"stable"|"declining"|"unknown"
-    dirt_density_rising: bool = False
-    recharge_fraction_value: float | None = None
     battery_retention_value: float | None = None
 
     # F6f — battery contact/bus-communication anomaly detection. A real
@@ -96,11 +276,39 @@ class RoombaData:
     # over successive cycles (intermittent contact reduces effective
     # charge transferred each cycle). Both feed the same repair issue —
     # see repairs.py::async_check_battery_contact_issue.
+    # THESE SIX ARE ONE STATE MACHINE, not six independent values.
+    # async_check_battery_contact_issue() is their only reader AND their
+    # only writer, and the invariants between them live nowhere else:
+    #
+    #   - current_charge_cycle_peak belongs to the cycle IN PROGRESS and
+    #     is cleared when that cycle ends
+    #   - charge_cycle_peaks only ever gains an entry at that moment,
+    #     and stays bounded to _CHARGE_PEAK_HISTORY_LEN
+    #   - was_charging is the edge detector the other two depend on --
+    #     set it without the rest and a cycle is silently lost or
+    #     counted twice
+    #   - last_batpct_value and last_batpct_at are a pair; a value with
+    #     a stale timestamp yields a nonsense rate
+    #
+    # Writing any of them from anywhere else would break those
+    # invariants with no error and no obvious symptom -- the counters
+    # would simply drift, and a battery-contact problem would be
+    # detected late or not at all.
+    #
+    # DELIBERATELY NOT extracted into its own object yet. The obvious
+    # argument for extracting -- protecting the invariants from other
+    # modules -- does not apply while exactly one function touches
+    # them. And repairs.py is expected to gain a Prime path, which will
+    # NOT have the same inputs (Prime exposes no equivalent of
+    # bbchg.smberr). Designing the shared shape now would mean
+    # inventing an interface for a caller that does not exist yet,
+    # against a requirement already known to differ. Better done when
+    # the second case is real.
     last_batpct_value: float | None = None
     last_batpct_at: float | None = None   # time.monotonic() of last_batpct_value
     consecutive_battery_contact_anomaly: int = 0
     current_charge_cycle_peak: float | None = None
-    charge_cycle_peaks: list = field(default_factory=list)   # bounded, most-recent-last
+    charge_cycle_peaks: list[Any] = field(default_factory=list)   # bounded, most-recent-last
     was_charging: bool = False   # edge-detect charge-cycle start/end
 
     # v2.2.0 — GridStore for occupancy heatmap and stuck-cell analysis (F9)
@@ -142,6 +350,38 @@ class RoombaData:
     # float reads/writes atomic so no explicit locking is needed.
     # 0.0 = no message received yet (watchdog must not fire until first message).
     last_mqtt_message_ts: float = 0.0
+    #: Wall-clock time this entry was set up. Set once, never updated.
+    #:
+    #: SILENCE HAS TO SURVIVE A RESTART. `last_mqtt_message_ts` lives in
+    #: memory and starts at 0.0, so after a Home Assistant restart a
+    #: robot that was ALREADY silent never gets a timestamp -- nothing
+    #: arrives to set one -- and the staleness check has nothing to
+    #: measure against. @utkjmitch's robot was silent for nine days and
+    #: every restart in that window put it back to a confident `stuck`.
+    #:
+    #: Measuring from setup instead says something true and narrower:
+    #: if this entry has been up for an hour and nothing has arrived,
+    #: that is an hour of silence. It cannot false-positive at startup
+    #: because the elapsed time is zero there.
+    #:
+    #: NOT used by the MQTT watchdog, which relies on 0.0 meaning
+    #: "no message yet" to stay quiet before the first one.
+    setup_ts: float = 0.0
+    #: Extent of the room map's last render, in its own coordinate
+    #: space: (x_min, x_max, y_min, y_max) in mm.
+    #:
+    #: PUBLISHED SO THE CLEANING PATH CAN SHARE IT. Every image auto-fits
+    #: to its own content -- the room map to all rooms, the cleaning path
+    #: to the area one mission covered -- and each then publishes
+    #: `calibration_points` correct for itself and incompatible with the
+    #: other. xiaomi-vacuum-map-card gets two valid, different coordinate
+    #: systems and cannot overlay one on the other (@Thonno).
+    #:
+    #: The two images do not share a renderer: the room map draws
+    #: polygons with Pillow directly, the cleaning path goes through
+    #: MapRenderer. Sharing the extent is the small fix; merging the
+    #: render paths would be a large one.
+    room_map_extent_mm: tuple[float, float, float, float] | None = None
 
     # v3.2.1 — MQTT-watchdog resume grace: wall-clock timestamp of the last
     # observed phase transition INTO "run" from any non-run phase (fresh
@@ -169,7 +409,16 @@ class RoombaData:
         ``or {}`` coerces an explicit null (``{"state": null}``) from a sparse
         MQTT frame to an empty dict; a dict default would only guard a missing
         key, not a present-but-null value.
+
+        NEW (V4/Prime): self.roomba is None for CLOUD_ONLY entries -- returns
+        {} rather than crashing. Honest, not fabricated: there is currently
+        no master_state-shaped translation for V4/Prime data at all (see
+        ConnectionType's docstring) -- any code path that ends up calling
+        this for a CLOUD_ONLY entry should get "no data available", not a
+        guess.
         """
+        if self.roomba is None:
+            return {}
         return (self.roomba.master_state.get("state") or {}).get("reported") or {}
 
     @property
@@ -179,6 +428,39 @@ class RoombaData:
             self.cloud_coordinator is not None
             and self.cloud_coordinator.data is not None
         )
+
+    @property
+    def cloud(self) -> IrobotCloudCoordinator:
+        """The cloud coordinator, for code that has already checked.
+
+        `has_cloud` answers the question and cannot carry the answer: a
+        property narrows nothing, so twelve call sites guarded by
+        `if data.has_cloud:` still read as accesses on an optional.
+
+        Writing `assert` at each of them would scatter runtime checks
+        for a condition the guard above already excluded. This states it
+        once, and raises rather than returning None so a caller that
+        skipped the guard fails loudly instead of carrying a None into
+        an attribute read three frames later.
+
+        NOT ADOPTED AT THOSE TWELVE SITES YET, and the reason is worth
+        recording. Switching them broke fourteen tests at once: their
+        fixtures build `runtime_data` as a bare MagicMock and set
+        `cloud_coordinator` on it, so reading `.cloud` produced a fresh
+        auto-created Mock rather than the coordinator the test
+        configured.
+
+        That is a fixture problem rather than a design one, but fourteen
+        tests is not a change to make in passing while chasing type
+        errors. The property is here for new code; migrating the
+        existing sites needs the fixtures updated in the same pass.
+        """
+        if self.cloud_coordinator is None:
+            raise RuntimeError(
+                "cloud coordinator requested on an entry that has none -- "
+                "check has_cloud first"
+            )
+        return self.cloud_coordinator
 
 
 # Typed config entry — gives full IDE type safety throughout the integration

@@ -310,12 +310,17 @@ class RobotProfileStore:
     lifetime_sqft_last_value: float | None = None
     lifetime_sqft_last_changed_at: str | None = None
 
+    # F12e — floor for total_energy_consumed (TOTAL_INCREASING contract):
+    # estCap/cycle-count can shift downward between polls, so the raw
+    # computed kWh alone isn't safe to report directly.
+    lifetime_energy_kwh_high_water: float = 0.0
+
     # ── Persistence ───────────────────────────────────────────────────────────
 
     async def async_load(self, hass: HomeAssistant, entry_id: str) -> None:
         """Load persisted learned state from hass.storage."""
-        store = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
-        data: dict | None = await store.async_load()
+        store: Store[dict[str, Any]] = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
+        data: dict[str, Any] | None = await store.async_load()
         if not data:
             _LOGGER.debug("RobotProfileStore: no persisted data for %s", entry_id)
             return
@@ -403,6 +408,8 @@ class RobotProfileStore:
             lsv = data.get("lifetime_sqft_last_value")
             self.lifetime_sqft_last_value = float(lsv) if lsv is not None else None
             self.lifetime_sqft_last_changed_at = data.get("lifetime_sqft_last_changed_at")
+            lekw = data.get("lifetime_energy_kwh_high_water")
+            self.lifetime_energy_kwh_high_water = float(lekw) if lekw is not None else 0.0
 
             _LOGGER.debug(
                 "RobotProfileStore: loaded — rooms=%d coverage_baseline=%s",
@@ -414,7 +421,19 @@ class RobotProfileStore:
 
     async def async_save(self, hass: HomeAssistant, entry_id: str) -> None:
         """Persist all learned state to hass.storage."""
-        store = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
+        # `hass=None` IS A DOCUMENTED NO-OP, not an error. Callers that
+        # hold only a config entry resolve hass through
+        # `prime_mission_sync._hass_of()`, whose own docstring says a
+        # None return means "skip persistence, keep memory" -- and that
+        # every caller handles it. This one did not.
+        #
+        # Before this guard the None went straight into Store() and
+        # raised AttributeError inside the caller's except -- the profile
+        # store was never persisted on the Prime path and nothing above
+        # debug level said so.
+        if hass is None:
+            return
+        store: Store[dict[str, Any]] = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
         await store.async_save({
             "learned_filter_hours": self.learned_filter_hours,
             "learned_brush_hours": self.learned_brush_hours,
@@ -443,6 +462,7 @@ class RobotProfileStore:
             "health_score_history": self.health_score_history,
             "lifetime_sqft_last_value": self.lifetime_sqft_last_value,
             "lifetime_sqft_last_changed_at": self.lifetime_sqft_last_changed_at,
+            "lifetime_energy_kwh_high_water": self.lifetime_energy_kwh_high_water,
         })
 
     async def async_reset(self, hass: HomeAssistant, entry_id: str) -> None:
@@ -479,6 +499,7 @@ class RobotProfileStore:
         self.health_score_history = []
         self.lifetime_sqft_last_value = None
         self.lifetime_sqft_last_changed_at = None
+        self.lifetime_energy_kwh_high_water = 0.0
         await self.async_save(hass, entry_id)
         _LOGGER.info("RobotProfileStore: reset for entry %s", entry_id)
 
@@ -678,7 +699,7 @@ class RobotProfileStore:
         observations yet (Welford's M2/(n-1) is undefined for n<2)."""
         if self.estcap_noise_count < 2:
             return None
-        return (self.estcap_noise_m2 / (self.estcap_noise_count - 1)) ** 0.5
+        return float((self.estcap_noise_m2 / (self.estcap_noise_count - 1)) ** 0.5)
 
     @property
     def estcap_noise_ready(self) -> bool:
@@ -730,9 +751,13 @@ class RobotProfileStore:
         if self.dock_theta_count == 0:
             return None
         n = self.dock_theta_count
-        return (
-            (self.dock_theta_sin_sum / n) ** 2 + (self.dock_theta_cos_sum / n) ** 2
-        ) ** 0.5
+        return float(
+            (
+                (self.dock_theta_sin_sum / n) ** 2
+                + (self.dock_theta_cos_sum / n) ** 2
+            )
+            ** 0.5
+        )
 
     @property
     def dock_theta_circular_stdev_deg(self) -> float | None:
@@ -791,7 +816,7 @@ class RobotProfileStore:
             return degradation_rate >= _ESTCAP_FALLBACK_MIN_RATE
         observed_total_drop = degradation_rate * max(cycles, 1)
         expected_noise_drift = stdev * (max(cycles, 1) ** 0.5)
-        return observed_total_drop > expected_noise_drift * _ESTCAP_NOISE_SIGNIFICANCE_MULTIPLIER
+        return bool(observed_total_drop > expected_noise_drift * _ESTCAP_NOISE_SIGNIFICANCE_MULTIPLIER)
 
     @staticmethod
     def cap_remaining_cycles(remaining_cycles: float) -> float | None:
@@ -1058,6 +1083,15 @@ class RobotProfileStore:
         self.lifetime_sqft_last_value = current_sqft
         self.lifetime_sqft_last_changed_at = dt_util.now().isoformat()
         return True
+
+    def update_energy_high_water(self, candidate_kwh: float) -> float:
+        """Floor for total_energy_consumed's TOTAL_INCREASING contract —
+        the raw kWh recomputed from estCap/cycle-count can drop between
+        polls, which would otherwise violate that state_class.
+        """
+        if candidate_kwh > self.lifetime_energy_kwh_high_water:
+            self.lifetime_energy_kwh_high_water = candidate_kwh
+        return self.lifetime_energy_kwh_high_water
 
     @property
     def lifetime_sqft_days_unchanged(self) -> float | None:

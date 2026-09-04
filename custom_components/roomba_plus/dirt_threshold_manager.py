@@ -29,16 +29,27 @@ from __future__ import annotations
 import logging
 import statistics
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
 if TYPE_CHECKING:
+    # ANNOTATION-ONLY, and it was missing entirely. Two annotations
+    # named `Store` with a noqa blaming a ruff scope limitation --
+    # but nothing imported it, so the name did not exist in this
+    # module at all. Same shape as repairs.py earlier today.
+    from homeassistant.helpers.storage import Store
+
     from .cloud_coordinator import IrobotCloudCoordinator
     from .models import RoombaConfigEntry
 
 from .const import SQFT_TO_M2
+
+from .prime_dirt import dirty_rooms
+from .room_cleaning import async_get_room_cleaning_backend
+from .structural_failures import record_failure, record_success
+from .prime_coordinator import prime_mission_cycle
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -69,7 +80,7 @@ CONF_DEMAND_MULTIPLIER         = "demand_clean_multiplier"
 
 # ── Helper ─────────────────────────────────────────────────────────────────────
 
-def _compute_dirt_density(record: dict) -> float | None:
+def _compute_dirt_density(record: dict[str, Any]) -> float | None:
     """Compute dirt events per m² for a single cloud record.
 
     Returns None when the record lacks the required fields (e.g. 600-series).
@@ -106,11 +117,11 @@ class DirtThresholdManager:
         self._entry = config_entry
         self._last_trigger_time: datetime | None = None
         # P2: Store is stateless — construct once and reuse across load/save calls
-        self._store: "Store | None" = None  # noqa: F821 — TYPE_CHECKING forward reference, pyflakes/ruff scope limitation
+        self._store: "Store[dict[str, Any]] | None" = None
         # L1: per-weekday baseline; populated after ≥4 cloud records per weekday
         self._baseline_by_weekday: dict[int, float] = {}
 
-    def _get_store(self, entry_id: str) -> "Store":  # noqa: F821 — TYPE_CHECKING forward reference, pyflakes/ruff scope limitation
+    def _get_store(self, entry_id: str) -> "Store[dict[str, Any]]":
         """Return the cached Store, creating it on first call."""
         if self._store is None:
             from homeassistant.helpers.storage import Store
@@ -172,7 +183,7 @@ class DirtThresholdManager:
         """True when demand cleaning is configured and enabled."""
         return bool(self._entry.options.get(CONF_DEMAND_CLEANING_ENABLED, False))
 
-    def compute_baseline(self, records: list[dict]) -> float | None:
+    def compute_baseline(self, records: list[dict[str, Any]]) -> float | None:
         """Return the median dirt density over the most recent BASELINE_WINDOW records.
 
         Returns None when fewer than MIN_RECORDS usable records exist.
@@ -190,7 +201,7 @@ class DirtThresholdManager:
         return statistics.median(densities)
 
     def _update_weekday_baseline(
-        self, records: list[dict], weekday: int
+        self, records: list[dict[str, Any]], weekday: int
     ) -> None:
         """L1 — Rebuild the baseline for a specific weekday from 12 weeks of records.
 
@@ -229,7 +240,7 @@ class DirtThresholdManager:
 
     def should_trigger(
         self,
-        records: list[dict],
+        records: list[dict[str, Any]],
         multiplier: float | None = None,
     ) -> tuple[bool, str]:
         """Evaluate whether a demand clean should be triggered.
@@ -328,12 +339,103 @@ class DirtThresholdManager:
             return True, "blocking_sensor_queued"
 
         # Gate 4: robot must be docked/idle
-        state = data.roomba_reported_state()
-        cycle = (state.get("cleanMissionStatus") or {}).get("cycle", "none")
+        #
+        # THROUGH THE PRIME FALLBACK. This gate is reused untouched by
+        # async_evaluate_prime(), and `roomba_reported_state()` returns {}
+        # there -- so `cycle` defaulted to "none" and the gate passed on
+        # every Prime robot, cleaning or not. Failing open on a "must be
+        # docked" check is the wrong direction.
+        cycle = prime_mission_cycle(data) or "none"
         if cycle != "none":
             return True, f"robot_busy_{cycle}"
 
         return False, ""
+
+    async def async_evaluate_prime(self, entry_id: str) -> None:
+        """The Prime path: the robot says which rooms are dirty.
+
+        THE GATES ARE THE SAME. Presence, blocking sensors and the
+        enable switch are questions about the household, not about the
+        robot's generation, so `gate_blocked()` is reused untouched.
+
+        WHAT DIFFERS IS EVERYTHING BEFORE THEM. Classic derives dirt
+        density from cloud mission records, builds a weekday baseline
+        from at least four of them, and compares today against it with a
+        user-set multiplier -- three layers of inference. A Prime robot
+        reports a per-room value and the threshold to judge it by, in
+        one response.
+
+        AND WHAT DIFFERS AFTER: Classic starts a whole clean, because a
+        density averaged over a mission cannot say which room was dirty.
+        This starts the rooms that are.
+        """
+        blocked, reason = self.gate_blocked()
+        if blocked:
+            _LOGGER.debug("DirtThresholdManager (Prime): blocked — %s", reason)
+            return
+
+        data = self._entry.runtime_data
+        robot = getattr(data, "prime_robot", None)
+        if robot is None:
+            return
+
+        # THE MAP ID IS REQUIRED. `get_clean_score_raw` takes one, and
+        # scores are per map -- a household with two floors has two.
+        #
+        # Resolved the same way the room map resolves it: the user's
+        # selection when there is one, otherwise the robot's current
+        # map. A first attempt invented `prime_active_p2map_id`, which
+        # exists nowhere -- the second time today a guessed attribute
+        # name got as far as a passing test suite.
+        backend = async_get_room_cleaning_backend(self._entry, self._hass)
+        if backend is None:
+            _LOGGER.debug("DirtThresholdManager (Prime): no room cleaning backend")
+            return
+        p2map_id = getattr(data, "prime_selected_map_id", None)
+        if not p2map_id:
+            try:
+                p2map_id = await backend._current_map_id()  # noqa: SLF001
+            except Exception:  # noqa: BLE001
+                p2map_id = None
+        if not p2map_id:
+            _LOGGER.debug("DirtThresholdManager (Prime): no active map yet")
+            return
+
+        try:
+            response = await robot.get_clean_score_raw(p2map_id)
+        except Exception:  # noqa: BLE001
+            record_failure("prime clean score", "reading per-room dirtiness")
+            _LOGGER.debug(
+                "DirtThresholdManager (Prime): could not read clean score",
+                exc_info=True,
+            )
+            return
+        record_success("prime clean score")
+        # KEPT FOR THE MISSION SENSOR, not only for the decision below.
+        #
+        # The same response says which rooms the last run left undone --
+        # @chairstacker's blocked-door mission that left no trace
+        # anywhere. Fetching it twice for two readers would double a
+        # cloud call to answer one question.
+        data.prime_clean_scores = response
+
+        dirty = dirty_rooms(response)
+        if not dirty:
+            _LOGGER.debug("DirtThresholdManager (Prime): no room past threshold")
+            return
+
+        # ONE ROOM, THE DIRTIEST. Sending the robot to everything above
+        # the line would be a whole-house clean by another name on a bad
+        # week, and the point of a per-room score is to do less than
+        # that. A second room gets its turn at the next evaluation.
+        room_id, score = dirty[0]
+        _LOGGER.info(
+            "DirtThresholdManager (Prime): starting room %s (score %.3f)",
+            room_id, score,
+        )
+        await backend.clean_rooms([room_id])
+        self._last_trigger_time = dt_util.utcnow()
+        await self.async_save(entry_id)
 
     async def async_evaluate(
         self,
@@ -388,7 +490,28 @@ class DirtThresholdManager:
         import time as _time
         data.demand_triggered_ts = _time.monotonic()
 
+        # CLASSIC ONLY, AND THAT IS NOT AN OVERSIGHT.
+        #
+        # This manager is created behind `MapCapability.SMART`, which is
+        # derived from `roomba_reported_state(roomba)` -- and that
+        # returns `{}` when there is no local robot. So a CLOUD_ONLY
+        # entry never reaches SMART, never gets a DirtThresholdManager,
+        # and never arrives here.
+        #
+        # Checked because mypy flagged the unguarded access and the
+        # tester notes carry "demand cleaning on Prime" as never
+        # confirmed. It was never confirmed because it never runs.
+        #
+        # Whether Prime SHOULD have demand cleaning is a separate
+        # question with a real answer available: the per-room dirt data
+        # exists in the map bundle. Nobody has asked for it.
         roomba = data.roomba
+        if roomba is None:  # pragma: no cover - SMART implies a local robot
+            _LOGGER.debug(
+                "DirtThresholdManager: no local robot for %s -- demand "
+                "cleaning is a Classic path", entry_id,
+            )
+            return
         await self._hass.async_add_executor_job(roomba.send_command, "start")
 
         _LOGGER.info("DirtThresholdManager: demand clean sent for %s", entry_id)

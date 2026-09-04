@@ -1,0 +1,792 @@
+"""Create, update and delete Prime cleaning schedules from Home Assistant.
+
+CONTRIBUTED BY @utkjmitch (issue #49), built and field-tested on a real
+Y351020 household -- three full create/update/delete cycles before it
+was offered. Taken close to as written; the changes made on integration
+are marked ON INTEGRATION in the comments. It adds the
+write half of what prime_schedule_switch.py reads: the switches sync and
+toggle schedules; these services create, reshape and remove them.
+
+WHAT IT REUSES, DELIBERATELY. All three services go through
+async_read_schedule_containers() and _container_lock() from
+prime_schedule_switch.py — the same read-modify-write-under-lock that
+toggling has used since the a18 lost-update fix. No new write pattern is
+introduced; the blast radius of any write stays one container.
+
+CREATE DERIVES FROM AN EXISTING SCHEDULE, exactly as the upstream CLI's
+schedule_create_delete does and for the same reason: a schedule built
+from literals says nothing about which robot or what to do, and the
+server 500s on it (the b7–b9 saga). A household with no schedules at all
+cannot create one here — the honest limitation, stated in the error.
+
+SERVER-ASSIGNED FIELDS ARE OMITTED, never null: schedule_id,
+created_time, is_smart_clean_fav (b9, field-confirmed).
+
+PER-ROOM padWetness IS WRITABLE because a field capture proved the
+server stores it: regions[].params.padWetness={"padPlate": N} sent on a
+disabled schedule came back exactly as sent (Y351020, 2026-08-03,
+5/5 regions). Without that capture this parameter would be gated off —
+the a20 AutoWash lesson is that this server also accepts-and-ignores.
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import replace
+from typing import Any
+
+import voluptuous as vol
+
+from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
+from homeassistant.exceptions import ServiceValidationError
+from homeassistant.helpers import config_validation as cv, entity_registry as er
+
+from .const import DOMAIN
+from .prime_schedule_switch import (
+    _container_lock,
+    async_read_schedule_containers,
+)
+
+_LOGGER = logging.getLogger(__name__)
+
+SERVICE_CREATE_SCHEDULE = "create_schedule"
+SERVICE_UPDATE_SCHEDULE = "update_schedule"
+SERVICE_DELETE_SCHEDULE = "delete_schedule"
+
+#: iRobot's own numbering, confirmed live: 0 = Sunday.
+_WEEKDAYS = {"sun": 0, "mon": 1, "tue": 2, "wed": 3, "thu": 4, "fri": 5, "sat": 6}
+
+_FREQUENCIES = ("WEEKLY", "BI_WEEKLY", "MONTHLY", "ONCE")
+
+_CREATE_SCHEMA = vol.Schema({
+    vol.Required("entity_id"): cv.entity_id,
+    vol.Optional("name"): cv.string,
+    vol.Required("days"): vol.All(cv.ensure_list, [vol.In(_WEEKDAYS)]),
+    vol.Required("time"): cv.time,
+    vol.Optional("frequency", default="WEEKLY"): vol.In(_FREQUENCIES),
+    vol.Optional("rooms"): vol.All(cv.ensure_list, [cv.string]),
+    vol.Optional("pad_wetness"): vol.All(vol.Coerce(int), vol.Range(min=1, max=3)),
+    vol.Optional("enabled", default=True): cv.boolean,
+})
+
+_UPDATE_SCHEMA = vol.Schema({
+    vol.Required("entity_id"): cv.entity_id,
+    vol.Optional("name"): cv.string,
+    vol.Optional("days"): vol.All(cv.ensure_list, [vol.In(_WEEKDAYS)]),
+    vol.Optional("time"): cv.time,
+    vol.Optional("frequency"): vol.In(_FREQUENCIES),
+    vol.Optional("rooms"): vol.All(cv.ensure_list, [cv.string]),
+    vol.Optional("pad_wetness"): vol.All(vol.Coerce(int), vol.Range(min=1, max=3)),
+    vol.Optional("enabled"): cv.boolean,
+})
+
+_DELETE_SCHEMA = vol.Schema({
+    vol.Required("entity_id"): cv.entity_id,
+})
+
+
+def _prime_entry_for(hass: HomeAssistant, entity_id: str) -> Any:
+    """The Prime config entry behind an entity, or a legible error."""
+    registry = er.async_get(hass)
+    entry = registry.async_get(entity_id)
+    if entry is None or not entry.config_entry_id:
+        raise ServiceValidationError(f"{entity_id} is not a roomba_plus entity")
+    config_entry = hass.config_entries.async_get_entry(entry.config_entry_id)
+    if config_entry is None or config_entry.domain != DOMAIN:
+        raise ServiceValidationError(f"{entity_id} does not belong to {DOMAIN}")
+    data = config_entry.runtime_data
+    if getattr(data, "prime_robot", None) is None or not getattr(
+        data, "prime_household_id", None
+    ):
+        raise ServiceValidationError(
+            f"{entity_id} is not a Prime (cloud/V4) robot — these services "
+            "manage iRobot cloud schedules and need one"
+        )
+    return config_entry, entry
+
+
+def _schedule_id_from(entry: er.RegistryEntry, blid: str) -> str:
+    """The schedule id a switch entity carries in its unique_id."""
+    prefix = f"{blid}_schedule_"
+    unique_id = str(entry.unique_id or "")
+    if not unique_id.startswith(prefix):
+        raise ServiceValidationError(
+            f"{entry.entity_id} is not a schedule switch — target the "
+            "schedule's own switch entity"
+        )
+    return unique_id[len(prefix):]
+
+
+def _regions_of(command: Any) -> list[dict[str, Any]]:
+    if not isinstance(command, dict):
+        return []
+    inner = command.get("command") if isinstance(command.get("command"), dict) else command
+    regions = inner.get("regions") if isinstance(inner, dict) else None
+    return [r for r in regions if isinstance(r, dict)] if isinstance(regions, list) else []
+
+
+def _resolve_rooms(
+    config_entry: Any, rooms: list[str], containers: list[Any]
+) -> list[dict[str, Any]]:
+    """Room names or region ids → region entries.
+
+    Names resolve through the schedule coordinator's own room_names map
+    (region_id → display name) — the same source the switch labels use,
+    so whatever a label shows is accepted here. Raw region ids pass
+    through for rooms the map hasn't named.
+    """
+    coordinator = getattr(
+        config_entry.runtime_data, "prime_schedule_coordinator", None
+    )
+    room_names: dict[str, str] = dict(getattr(coordinator, "room_names", None) or {})
+    by_name = {name.strip().casefold(): rid for rid, name in room_names.items()}
+
+    # Region entries already known to this household's schedules keep
+    # their stored shape (type, params) rather than being re-invented.
+    known: dict[str, dict[str, Any]] = {}
+    for _cid, schedules in containers:
+        for schedule in schedules:
+            for command in getattr(schedule.options, "commands", None) or []:
+                for region in _regions_of(command):
+                    rid: str | None = str(region.get("region_id", ""))
+                    if rid and rid not in known:
+                        known[rid] = region
+
+    resolved: list[dict[str, Any]] = []
+    unknown: list[str] = []
+    for room in rooms:
+        rid = by_name.get(room.strip().casefold()) or (
+            room if str(room) in known or str(room).isdigit() else None
+        )
+        if rid is None:
+            unknown.append(room)
+            continue
+        import copy  # noqa: PLC0415
+
+        resolved.append(
+            copy.deepcopy(known.get(str(rid)) or {}) or {"region_id": str(rid), "type": "rid"}
+        )
+    if unknown:
+        raise ServiceValidationError(
+            f"Unknown room(s): {', '.join(unknown)}. Known: "
+            f"{', '.join(sorted(room_names.values())) or '(no named rooms yet)'}"
+        )
+    return resolved
+
+
+def _apply_wetness(commands: list[Any], wetness: int) -> list[Any]:
+    import copy  # noqa: PLC0415
+
+    updated = copy.deepcopy([c for c in commands if isinstance(c, dict)])
+    for command in updated:
+        for region in _regions_of(command):
+            region.setdefault("params", {})["padWetness"] = {"padPlate": wetness}
+    return updated
+
+
+def _set_operating_mode(commands: list[Any], mode: int) -> list[Any]:
+    """Template commands with every region's operating mode replaced.
+
+    APPLIED TO EVERY REGION, not just the first. A schedule with mixed
+    modes is possible on paper and has never been seen, and a user who
+    writes "mop" means the whole run -- leaving some rooms on the old
+    mode would be a schedule nobody asked for.
+
+    Regions that carry no `params` at all are given one. A region
+    without params inherits the robot's global settings, and adding a
+    mode there is exactly the intent.
+    """
+    import copy  # noqa: PLC0415
+
+    updated = copy.deepcopy([c for c in commands if isinstance(c, dict)])
+    for command in updated:
+        inner = command.get("command") if isinstance(command.get("command"), dict) else command
+        if not isinstance(inner, dict):
+            continue
+        for region in inner.get("regions") or []:
+            if isinstance(region, dict):
+                params = region.get("params")
+                if not isinstance(params, dict):
+                    params = {}
+                    region["params"] = params
+                params["operatingMode"] = int(mode)
+    return updated
+
+
+def _set_regions(commands: list[Any], regions: list[dict[str, Any]]) -> list[Any]:
+    """Template commands with their regions replaced by the requested ones."""
+    import copy  # noqa: PLC0415
+
+    updated = copy.deepcopy([c for c in commands if isinstance(c, dict)])
+    for command in updated:
+        inner = command.get("command") if isinstance(command.get("command"), dict) else command
+        if isinstance(inner, dict) and "regions" in inner:
+            inner["regions"] = copy.deepcopy(regions)
+    return updated
+
+
+def _reshaped_options(template_options: Any, call_data: dict[str, Any], containers: list[Any],
+                      config_entry: Any) -> Any:
+    """A ScheduleOptions carrying the requested changes on top of a template.
+
+    Works for create (template = an existing schedule, all required
+    fields present in call_data) and update (template = the schedule
+    itself, only provided fields change).
+    """
+    from roombapy_prime.models.schedules_dnd import (  # noqa: PLC0415
+        ScheduleFrequency,
+        ScheduleTime,
+    )
+
+    changes: dict[str, Any] = {}
+    if "name" in call_data:
+        changes["name"] = call_data["name"]
+    if "enabled" in call_data:
+        changes["enabled"] = call_data["enabled"]
+    if "frequency" in call_data:
+        changes["frequency"] = ScheduleFrequency(call_data["frequency"])
+
+    if "days" in call_data or "time" in call_data:
+        start = getattr(template_options, "start", None)
+        days = (
+            sorted({_WEEKDAYS[d] for d in call_data["days"]})
+            if "days" in call_data
+            else list(getattr(start, "day", None) or [])
+        )
+        if "time" in call_data:
+            hour, minute = call_data["time"].hour, call_data["time"].minute
+        else:
+            hour = getattr(start, "hour", None)
+            minute = getattr(start, "min", None)
+        if hour is None:
+            raise ServiceValidationError("A time is required (template has none)")
+        changes["start"] = ScheduleTime(day=days, hour=int(hour), min=int(minute or 0))
+
+    commands = list(getattr(template_options, "commands", None) or [])
+    if "rooms" in call_data:
+        regions = _resolve_rooms(config_entry, call_data["rooms"], containers)
+        commands = _set_regions(commands, regions)
+    # AFTER the regions, because setting regions replaces them wholesale
+    # and would drop a mode applied first. Source order has caused real
+    # bugs in this project before.
+    if call_data.get("operating_mode") is not None:
+        commands = _set_operating_mode(commands, call_data["operating_mode"])
+    if "pad_wetness" in call_data:
+        commands = _apply_wetness(commands, call_data["pad_wetness"])
+    changes["commands"] = commands
+
+    # Server-assigned; must be omitted on write (b9, field-confirmed).
+    changes["created_time"] = None
+    return replace(template_options, **changes)
+
+
+async def _refresh(config_entry: Any) -> None:
+    """The user sees the result now, not at the next 15-minute tick."""
+    coordinator = getattr(
+        config_entry.runtime_data, "prime_schedule_coordinator", None
+    )
+    if coordinator is not None:
+        await coordinator.async_request_refresh()
+
+
+async def _read_containers_or_error(config_entry: Any) -> list[Any]:
+    containers = await async_read_schedule_containers(config_entry)
+    if containers is None:
+        raise ServiceValidationError(
+            "Could not read schedules from the cloud — nothing was written"
+        )
+    return containers
+
+
+async def _async_create(hass: HomeAssistant, call: ServiceCall) -> dict[str, Any]:
+    config_entry, _entry = _prime_entry_for(hass, call.data["entity_id"])
+    data = config_entry.runtime_data
+
+    containers = await _read_containers_or_error(config_entry)
+    template = None
+    for _cid, schedules in containers:
+        for schedule in schedules:
+            if getattr(schedule.options, "enabled", None) is not None:
+                template = schedule.options
+                break
+        if template:
+            break
+    if template is None:
+        raise ServiceValidationError(
+            "This household has no existing schedule to derive from — "
+            "create one in the iRobot app first (a schedule built from "
+            "literals is refused by the server; deriving is the only "
+            "field-proven path)"
+        )
+
+    options = _reshaped_options(template, dict(call.data), containers, config_entry)
+    if "name" not in call.data:
+        options = replace(options, name=f"HA {call.data['time'].strftime('%H:%M')}")
+
+    response = await data.prime_robot.create_schedules(
+        data.prime_household_id, [options]
+    )
+    await _refresh(config_entry)
+    created_id = (response or {}).get("household_schedule_id")
+    _LOGGER.info("roomba_plus: created schedule %s", created_id)
+    return {"household_schedule_id": created_id}
+
+
+# THE ROBOT COUNTS FROM SUNDAY. This table counted from Monday, and a
+# Mon/Tue/Wed schedule edited on a30 came back as Tue/Wed/Thu -- every
+# day shifted by exactly one (@DaRealGuGu, confirmed in the iRobot app
+# and in his diagnostics: `days: [2, 3, 4]` for Tue/Wed/Thu).
+#
+# `_WEEKDAYS` at the top of this module already had it right, with
+# `sun: 0`. Two tables for one concept, disagreeing by one, in the same
+# file -- and the second was only reached once schedule EDITING existed,
+# which is why it survived until now.
+#
+# Derived from the correct one rather than written out again, so they
+# cannot drift apart a second time.
+_WEEKDAY_TO_WIRE = {value: name for name, value in _WEEKDAYS.items()}
+
+
+async def async_create_schedule_from_calendar(
+    hass: HomeAssistant,
+    config_entry: Any,
+    *,
+    name: str | None,
+    weekday: int,
+    hour: int,
+    minute: int,
+    frequency: str,
+    room_ids: list[str],
+    note: str,
+    operating_mode: int | None = None,
+) -> None:
+    """Creates a schedule from the calendar dialog.
+
+    Goes through the same handler as the service rather than building a
+    second write path. That matters more than the small amount of glue
+    it costs: the create path derives from an existing schedule for a
+    reason found over four field rounds, and a parallel implementation
+    would eventually drift from it.
+
+    `note` is what the room matcher understood. It goes to the LOG, not
+    into the event -- calendar events are regenerated from the schedule
+    rather than stored, so the canonical room labels appear by
+    themselves on the next read. This is the record for anyone reading
+    the log, so a
+    mis-read is visible where the user typed it.
+    """
+    from datetime import time as _time  # noqa: PLC0415
+
+    call_data: dict[str, Any] = {
+        "entity_id": "",  # supplied below; _prime_entry_for is bypassed
+        "days": [_WEEKDAY_TO_WIRE[weekday]],
+        "time": _time(hour=hour, minute=minute),
+        "frequency": frequency,
+        "enabled": True,
+    }
+    if name:
+        call_data["name"] = name
+    if room_ids:
+        call_data["rooms"] = room_ids
+    if operating_mode is not None:
+        call_data["operating_mode"] = operating_mode
+
+    data = config_entry.runtime_data
+    containers = await _read_containers_or_error(config_entry)
+    template = None
+    for _cid, schedules in containers:
+        for schedule in schedules:
+            if getattr(schedule.options, "enabled", None) is not None:
+                template = schedule.options
+                break
+        if template:
+            break
+    if template is None:
+        raise ServiceValidationError(
+            "This household has no existing schedule to derive from — create "
+            "one in the iRobot app first. A schedule built from literals is "
+            "refused by the server; deriving is the only field-proven path."
+        )
+
+    options = _reshaped_options(template, call_data, containers, config_entry)
+    if not name:
+        options = replace(options, name=f"HA {hour:02d}:{minute:02d}")
+    await data.prime_robot.create_schedules(data.prime_household_id, [options])
+    await _refresh(config_entry)
+    _LOGGER.info("roomba_plus: created schedule from calendar -- %s", note)
+
+
+def _days_for_update(
+    existing: list[Any] | None, weekday: int, explicit: list[int] | None
+) -> list[Any]:
+    """The day list a schedule should keep after an edit.
+
+    An explicit recurrence wins. Otherwise the schedule's own days are
+    preserved -- editing one occurrence of a repeating event must not
+    silently drop the other days.
+
+    Falls back to the edited occurrence's weekday only when the schedule
+    has no days at all, which is what a brand-new entry looks like.
+    """
+    if explicit:
+        return [_WEEKDAY_TO_WIRE[d] for d in explicit]
+
+    # A SINGLE-DAY SCHEDULE MOVES WITH THE EDIT.
+    #
+    # @chairstacker (#71, twice): he still could not change a weekday
+    # in a40. The preservation rule below is right for a Mon/Wed/Fri
+    # series -- editing one occurrence must not drop the others -- but
+    # Home Assistant sends no BYDAY when you simply drag an entry to
+    # another day, so `existing` won every time and the move was
+    # silently discarded.
+    #
+    # With exactly one stored day there is no series to protect. The
+    # edited occurrence's weekday IS the schedule's weekday, and
+    # keeping the old one means the edit did nothing.
+    if existing and len([d for d in existing if isinstance(d, int)]) == 1:
+        return [_WEEKDAY_TO_WIRE[weekday]]
+
+    if existing:
+        # The schedule stores integers; `call_data` wants the wire
+        # abbreviations. A day outside 0-6 is dropped rather than
+        # crashing the whole edit -- losing one day of a series is
+        # recoverable, losing the edit is not.
+        wire = [
+            _WEEKDAY_TO_WIRE[d] for d in existing
+            if isinstance(d, int) and d in _WEEKDAY_TO_WIRE
+        ]
+        if wire:
+            return wire
+    return [_WEEKDAY_TO_WIRE[weekday]]
+
+
+async def async_update_schedule_from_calendar(
+    hass: HomeAssistant,
+    config_entry: Any,
+    schedule_id: str,
+    *,
+    name: str | None,
+    weekday: int,
+    hour: int,
+    minute: int,
+    frequency: str,
+    room_ids: list[str],
+    note: str,
+    operating_mode: int | None = None,
+    #: The days an explicit recurrence rule named, when the edit
+    #: carried one. None means the edit said nothing about which days --
+    #: and then the schedule keeps its own.
+    explicit_days: list[int] | None = None,
+) -> None:
+    """Rewrites an existing schedule from an edited calendar event.
+
+    THE EDIT IS A REPLACEMENT, NOT A PATCH, and that is the honest
+    reading of what the calendar dialog does: it hands back the whole
+    event, so every field it can express is authoritative. A user who
+    changes only the time still sends the title and description they
+    see, and those are the ones we wrote back after the last edit.
+
+    Which is why round-tripping the description matters. `Küche, Flur`
+    parses to the same two rooms it was written from, so changing the
+    time does not silently drop the room selection -- the failure mode
+    this would otherwise have.
+
+    Shares the read-modify-write discipline with everything else in this
+    file: the container is re-read INSIDE the lock, because
+    `update_schedules()` replaces the whole thing and a list built from
+    a stale read is not a smaller list, it is a deletion.
+    """
+    from datetime import time as _time  # noqa: PLC0415
+
+    data = config_entry.runtime_data
+    call_data = {
+        "entity_id": "",  # supplied below; _prime_entry_for is bypassed
+        "name": name,
+        # THE WHOLE DAY LIST, NOT THE EDITED OCCURRENCE'S DAY.
+        #
+        # Home Assistant hands us one occurrence. @DaRealGuGu edited the
+        # Monday event of a Mon/Tue/Wed schedule and it became
+        # Monday-only -- the series collapsed to whichever day he
+        # happened to click.
+        #
+        # Same principle as the frequency fix one layer up: an edit that
+        # says nothing about recurrence must not change it, and the day
+        # list IS recurrence. Only an explicit rrule may replace it.
+        "days": [_WEEKDAY_TO_WIRE[weekday]],  # replaced below once target is known
+        "time": _time(hour=hour, minute=minute),
+        "frequency": frequency,
+        "operating_mode": operating_mode,
+    }
+    # ONLY WHEN THERE ARE ROOMS. The key's presence is what triggers the
+    # room rewrite, so setting it to None asked _resolve_rooms to
+    # iterate nothing -- the create path already only sets it when
+    # non-empty, and this one did not.
+    if room_ids:
+        call_data["rooms"] = room_ids
+
+    # THE NAME WAS ACCEPTED AND NEVER SENT.
+    #
+    # @chairstacker (#71): editing a calendar entry in Home Assistant
+    # changed the time and nothing else -- not the summary, not the day.
+    # This function takes `name` as a parameter, `_reshaped_options`
+    # handles `call_data["name"]`, and the two were never connected.
+    #
+    # Only when it carries something: an edit that leaves the summary
+    # alone must not blank the schedule's name.
+    if name:
+        call_data["name"] = name
+
+    # THE LOCK IS PER CONTAINER, and the container is not known until
+    # the schedule has been found -- so the read that finds it has to
+    # happen first, and the lock is taken around the decision and the
+    # write, exactly as the service handlers do.
+    #
+    # Calling it without a container id raised TypeError on every
+    # calendar edit (@utkjmitch). The handler existed, was reachable
+    # once events carried a uid, and could not complete.
+    containers = await _read_containers_or_error(config_entry)
+    target = None
+    container_id = None
+    for _cid, _schedules in containers:
+        for _schedule in _schedules:
+            if _schedule.schedule_id == schedule_id:
+                container_id = _cid
+                break
+        if container_id is not None:
+            break
+    if container_id is None:
+        raise ServiceValidationError(
+            "That schedule no longer exists on the robot -- it may have been "
+            "deleted in the iRobot app. Reload the integration to catch up."
+        )
+
+    async with _container_lock(config_entry, container_id):
+        # RE-READ INSIDE THE LOCK. update_schedules() replaces the whole
+        # container, so the list written must come from a read nothing
+        # could have changed since.
+        containers = await _read_containers_or_error(config_entry)
+        target = None
+        for cid, schedules in containers:
+            for schedule in schedules:
+                if schedule.schedule_id == schedule_id:
+                    target, container_id = schedule, cid
+                    break
+            if target is not None:
+                break
+        if target is None:
+            raise ServiceValidationError(
+                "That schedule no longer exists on the robot -- it may have been "
+                "deleted in the iRobot app. Reload the integration to catch up."
+            )
+
+        # THE SERIES' OWN DAYS, not the edited occurrence's.
+        #
+        # Home Assistant hands us one occurrence. @DaRealGuGu edited the
+        # Monday event of a Mon/Tue/Wed schedule and it became
+        # Monday-only -- the series collapsed to whichever day he had
+        # clicked.
+        #
+        # Same principle as the frequency fix one layer up: an edit that
+        # says nothing about recurrence must not change it, and the day
+        # list IS recurrence. Only an explicit rrule may replace it.
+        call_data["days"] = _days_for_update(
+            getattr(getattr(target.options, "start", None), "day", None),
+            weekday,
+            explicit_days,
+        )
+        options = _reshaped_options(
+            target.options, call_data, containers, config_entry
+        )
+        rest = [
+            s for s in dict(containers)[container_id]
+            if s.schedule_id != schedule_id
+        ]
+        await data.prime_robot.update_schedules(
+            data.prime_household_id,
+            container_id,
+            [*rest, replace(target, options=options)],
+        )
+    await _refresh(config_entry)
+    _LOGGER.info("roomba_plus: updated schedule from calendar -- %s", note)
+
+
+async def async_delete_schedule_by_id(
+    hass: HomeAssistant, config_entry: Any, schedule_id: str
+) -> None:
+    """Deletes a schedule by its id, for the calendar's delete action.
+
+    Shares the container lock and the sole-occupant decision with the
+    service handler, including the part that matters most: the decision
+    is made from a read taken INSIDE the lock, because deleting a
+    container that only LOOKED like a single occupant would take a
+    schedule added in between with it.
+    """
+    data = config_entry.runtime_data
+    containers = await _read_containers_or_error(config_entry)
+    container_id = next(
+        (
+            cid for cid, schedules in containers
+            if any(s.schedule_id == schedule_id for s in schedules)
+        ),
+        None,
+    )
+    if container_id is None:
+        raise ServiceValidationError(
+            f"Schedule {schedule_id} no longer exists on the robot"
+        )
+
+    async with _container_lock(config_entry.entry_id, container_id):
+        containers = await _read_containers_or_error(config_entry)
+        remaining = [
+            s
+            for cid, schedules in containers if cid == container_id
+            for s in schedules if s.schedule_id != schedule_id
+        ]
+        if remaining:
+            await data.prime_robot.update_schedules(
+                data.prime_household_id, container_id, remaining
+            )
+        else:
+            await data.prime_robot.delete_schedule(
+                data.prime_household_id, container_id
+            )
+    await _refresh(config_entry)
+
+
+async def _async_update(hass: HomeAssistant, call: ServiceCall) -> dict[str, Any]:
+    config_entry, entry = _prime_entry_for(hass, call.data["entity_id"])
+    data = config_entry.runtime_data
+    schedule_id = _schedule_id_from(entry, data.blid)
+
+    # Same lock discipline as toggling: the read and the write stay
+    # inseparable per container.
+    containers = await _read_containers_or_error(config_entry)
+    container_id = next(
+        (
+            cid for cid, schedules in containers
+            if any(s.schedule_id == schedule_id for s in schedules)
+        ),
+        None,
+    )
+    if container_id is None:
+        raise ServiceValidationError(
+            f"Schedule {schedule_id} no longer exists on the robot"
+        )
+
+    async with _container_lock(config_entry.entry_id, container_id):
+        containers = await _read_containers_or_error(config_entry)
+        for cid, schedules in containers:
+            if cid != container_id:
+                continue
+            updated: list[Any] = []
+            found = False
+            for schedule in schedules:
+                if schedule.schedule_id == schedule_id:
+                    options = _reshaped_options(
+                        schedule.options, dict(call.data), containers, config_entry
+                    )
+                    updated.append(replace(schedule, options=options))
+                    found = True
+                else:
+                    updated.append(schedule)
+            if not found:
+                raise ServiceValidationError(
+                    f"Schedule {schedule_id} vanished between read and write"
+                )
+            await data.prime_robot.update_schedules(
+                data.prime_household_id, container_id, updated
+            )
+            await _refresh(config_entry)
+            return {"updated": schedule_id}
+    raise ServiceValidationError(f"Container for {schedule_id} not found")
+
+
+async def _async_delete(hass: HomeAssistant, call: ServiceCall) -> dict[str, Any]:
+    config_entry, entry = _prime_entry_for(hass, call.data["entity_id"])
+    data = config_entry.runtime_data
+    schedule_id = _schedule_id_from(entry, data.blid)
+
+    containers = await _read_containers_or_error(config_entry)
+    target = next(
+        (
+            (cid, schedules) for cid, schedules in containers
+            if any(s.schedule_id == schedule_id for s in schedules)
+        ),
+        None,
+    )
+    if target is None:
+        raise ServiceValidationError(
+            f"Schedule {schedule_id} no longer exists on the robot"
+        )
+    container_id, _schedules = target
+
+    async with _container_lock(config_entry.entry_id, container_id):
+        # CHANGED ON INTEGRATION: the sole-occupant decision is made from
+        # a read taken INSIDE the lock.
+        #
+        # It used the pre-lock read, and that is the one place in this
+        # file where the read and the write came apart. A schedule added
+        # to the container between the two would have been deleted along
+        # with the requested one, because the whole container goes when
+        # it looks like a single occupant.
+        #
+        # Vanishingly unlikely -- every container observed so far holds
+        # exactly one schedule -- and it is the same lost-update shape the
+        # a18 fix exists for. Update already re-read inside the lock; this
+        # brings delete in line.
+        fresh = await _read_containers_or_error(config_entry)
+        current = [
+            s
+            for cid, sched in fresh
+            if cid == container_id
+            for s in sched
+        ]
+        if not any(s.schedule_id == schedule_id for s in current):
+            raise ServiceValidationError(
+                f"Schedule {schedule_id} vanished between read and write"
+            )
+        if len(current) == 1:
+            # Sole occupant: the per-container DELETE endpoint — the
+            # field-proven path (the CLI's create/delete round-trip).
+            await data.prime_robot.delete_schedule(
+                data.prime_household_id, container_id
+            )
+        else:
+            # Shared container: rewrite it without this schedule. Never
+            # seen in the field (containers observed 1:1 so far), handled
+            # so the first multi-schedule container isn't the first bug.
+            remaining = [s for s in current if s.schedule_id != schedule_id]
+            await data.prime_robot.update_schedules(
+                data.prime_household_id, container_id, remaining
+            )
+    await _refresh(config_entry)
+    _LOGGER.info("roomba_plus: deleted schedule %s", schedule_id)
+    return {"deleted": schedule_id}
+
+
+def async_register_prime_schedule_services(hass: HomeAssistant) -> None:
+    """Registered from async_register_services(), removed with the rest."""
+
+    async def handle_create(call: ServiceCall) -> dict[str, Any]:
+        return await _async_create(hass, call)
+
+    async def handle_update(call: ServiceCall) -> dict[str, Any]:
+        return await _async_update(hass, call)
+
+    async def handle_delete(call: ServiceCall) -> dict[str, Any]:
+        return await _async_delete(hass, call)
+
+    for name, handler, schema in (
+        (SERVICE_CREATE_SCHEDULE, handle_create, _CREATE_SCHEMA),
+        (SERVICE_UPDATE_SCHEDULE, handle_update, _UPDATE_SCHEMA),
+        (SERVICE_DELETE_SCHEDULE, handle_delete, _DELETE_SCHEMA),
+    ):
+        if not hass.services.has_service(DOMAIN, name):
+            hass.services.async_register(
+                DOMAIN,
+                name,
+                handler,
+                schema=schema,
+                supports_response=SupportsResponse.OPTIONAL,
+            )
+            _LOGGER.debug("Registered %s.%s action", DOMAIN, name)

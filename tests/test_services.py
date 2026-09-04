@@ -66,6 +66,10 @@ class TestServicesRegistration:
 
         expected = {
             (DOMAIN, "clean_room"),
+            # @chairstacker: zone-on-demand, replacing the zone
+            # favourites the app removed.
+            (DOMAIN, "clean_zone"),
+            (DOMAIN, "set_quiet_hours"),
             (DOMAIN, "smart_start"),
             (DOMAIN, "clean_sequence"),
             (DOMAIN, "reset_filter"),
@@ -79,6 +83,7 @@ class TestServicesRegistration:
             (DOMAIN, "reset_robot_profile"),
             # ADVANCE-ROOM-V2 (v2.8.0)
             (DOMAIN, "advance_room"),
+            (DOMAIN, "run_favorite"),
             # v3.2.0 ANOMALY-EXPLAIN
             (DOMAIN, "explain_mission"),
             # v3.3.0 ROOM-SCHED
@@ -88,6 +93,13 @@ class TestServicesRegistration:
             # v3.5.0 FULL-BACKUP
             (DOMAIN, "create_backup"),
             (DOMAIN, "restore_backup"),
+            # v4.0.0a23 -- Prime schedule writes, contributed in #49.
+            # Registered from prime_schedule_services.py rather than
+            # here: they share the read-modify-write-under-lock
+            # discipline with prime_schedule_switch.py.
+            (DOMAIN, "create_schedule"),
+            (DOMAIN, "update_schedule"),
+            (DOMAIN, "delete_schedule"),
         }
         assert expected == set(registered.keys())
 
@@ -102,7 +114,7 @@ class TestServicesRegistration:
         async_register_services(hass)
         # Handler not replaced on second call
         assert registered[(DOMAIN, "clean_room")] is first_handler
-        assert len(registered) == 17
+        assert len(registered) == 23
 
     def test_removes_all_registered_services(self):
         from custom_components.roomba_plus.services import (
@@ -113,7 +125,8 @@ class TestServicesRegistration:
 
         hass, registered = self._make_hass()
         async_register_services(hass)
-        assert len(registered) == 17
+        # 18 + the three Prime schedule write services (#49).
+        assert len(registered) == 23
 
         async_remove_services(hass)
         assert len(registered) == 0
@@ -249,6 +262,131 @@ class TestFireMaintenanceResetEvent:
         assert payload["component"] == "wheel"
 
 
+class TestHandleSmartStartConnectionTypeBranching:
+    """NEW (this session) -- async_handle_smart_start() used to
+    unconditionally call data.roomba.start whenever no blocking_manager
+    was configured for the entry, regardless of tier -- a real crash
+    (AttributeError) for any Prime entry with no CONF_BLOCKING_SENSORS
+    set, which is the common case (blocking sensors are opt-in)."""
+
+    def _make_call(self, hass, rooms=None, override=False):
+        call = MagicMock()
+        call.hass = hass
+        call.data = {"entity_id": ["vacuum.test"]}
+        if rooms is not None:
+            call.data["rooms"] = rooms
+        if override:
+            call.data["override_blocking"] = override
+        return call
+
+    def _patch_entity_registry(self, config_entry_id="entry1"):
+        ent_reg = MagicMock()
+        ent_reg.async_get.return_value = _make_entity_registry_entry(config_entry_id)
+        return patch(
+            "custom_components.roomba_plus.services.er.async_get",
+            return_value=ent_reg,
+        )
+
+    @pytest.mark.asyncio
+    async def test_prime_no_blocking_manager_calls_send_simple_command(self):
+        """THE crash fix itself."""
+        from custom_components.roomba_plus.services import async_handle_smart_start
+        from custom_components.roomba_plus.models import ConnectionType
+
+        hass = MagicMock()
+        entry = _make_config_entry(entry_id="entry1")
+        entry.runtime_data.connection_type = ConnectionType.CLOUD_ONLY
+        entry.runtime_data.blocking_manager = None
+        entry.runtime_data.prime_robot = AsyncMock()
+        hass.config_entries.async_get_entry.return_value = entry
+
+        with self._patch_entity_registry("entry1"):
+            await async_handle_smart_start(self._make_call(hass))
+
+        entry.runtime_data.prime_robot.send_simple_command.assert_awaited_once_with("start")
+
+    @pytest.mark.asyncio
+    async def test_classic_no_blocking_manager_still_calls_roomba_start(self):
+        """Unaffected by the fix -- the pre-existing Classic path."""
+        from custom_components.roomba_plus.services import async_handle_smart_start
+        from custom_components.roomba_plus.models import ConnectionType
+
+        hass = MagicMock()
+        entry = _make_config_entry(entry_id="entry1")
+        entry.runtime_data.connection_type = ConnectionType.LOCAL_PUSH
+        entry.runtime_data.blocking_manager = None
+        started = []
+        # `send_command("start")`, because that is what roombapy has.
+        # This fixture used to set `.start` on the mock -- an attribute
+        # `roombapy.Roomba` does not define -- so the test supplied the
+        # very thing the production path was missing.
+        entry.runtime_data.roomba.send_command = (
+            lambda cmd: started.append(cmd)
+        )
+        hass.config_entries.async_get_entry.return_value = entry
+        hass.async_add_executor_job = AsyncMock(
+            side_effect=lambda fn, *a: fn(*a)
+        )
+
+        with self._patch_entity_registry("entry1"):
+            await async_handle_smart_start(self._make_call(hass))
+
+        assert started == ["start"]
+
+    @pytest.mark.asyncio
+    async def test_prime_with_rooms_now_delegates_instead_of_refusing(self):
+        """REVERSED (this session). This test used to assert a
+        Prime-specific refusal whose stated reason was that region
+        commands "have had zero effect in two live field tests".
+
+        That was true when written and is not any more: region cleaning
+        is confirmed working on real Prime hardware, from a saved
+        favorite and built from scratch. The blocker was a missing
+        `initiator` field and two wrong wire keys, not the transport.
+
+        A refusal justified by a finding is only as good as the finding.
+        A Prime robot with a backend now goes through to clean_room like
+        any other."""
+        from custom_components.roomba_plus.services import async_handle_smart_start
+        from custom_components.roomba_plus.models import ConnectionType
+        from homeassistant.exceptions import ServiceValidationError
+
+        hass = MagicMock()
+        entry = _make_config_entry(entry_id="entry1")
+        entry.runtime_data.connection_type = ConnectionType.CLOUD_ONLY
+        entry.runtime_data.prime_robot = MagicMock()
+        # No blocking manager: sends smart_start down the delegating
+        # branch, which is the one this test is about.
+        entry.runtime_data.blocking_manager = None
+        hass.config_entries.async_get_entry.return_value = entry
+        hass.services.async_call = AsyncMock()
+
+        with self._patch_entity_registry("entry1"):
+            await async_handle_smart_start(self._make_call(hass, rooms=["Kitchen"]))
+
+        # Delegated to clean_room rather than refused. What happens
+        # after that is clean_room's business, and it has its own tests.
+        assert hass.services.async_call.await_args is not None
+
+    @pytest.mark.asyncio
+    async def test_blocking_manager_present_delegates_regardless_of_tier(self):
+        """Untouched by this session's fix -- confirms the existing
+        blocking_manager delegation path still works exactly as before."""
+        from custom_components.roomba_plus.services import async_handle_smart_start
+        from custom_components.roomba_plus.models import ConnectionType
+
+        hass = MagicMock()
+        entry = _make_config_entry(entry_id="entry1")
+        entry.runtime_data.connection_type = ConnectionType.CLOUD_ONLY
+        entry.runtime_data.blocking_manager = AsyncMock()
+        hass.config_entries.async_get_entry.return_value = entry
+
+        with self._patch_entity_registry("entry1"):
+            await async_handle_smart_start(self._make_call(hass, override=True))
+
+        entry.runtime_data.blocking_manager.check_and_start.assert_awaited_once_with(None, True)
+
+
 class TestHandleResetServiceFiresEvent:
     """v2.9.0 LOGBOOK — _handle_reset_service() fires maintenance_reset."""
 
@@ -269,6 +407,7 @@ class TestHandleResetServiceFiresEvent:
             "custom_components.roomba_plus.services._async_signal_entities",
         ):
             call = MagicMock()
+            call.hass = hass
             call.data = {"entity_id": ["sensor.x_filter_remaining_hours"]}
             await _handle_reset_service(hass, call, part)
 
@@ -313,6 +452,7 @@ class TestHandleInspectResetServiceFiresEvent:
             "custom_components.roomba_plus.services._async_signal_entities",
         ):
             call = MagicMock()
+            call.hass = hass
             call.data = {"entity_id": ["sensor.x_wheel_last_cleaned"]}
             await _handle_inspect_reset_service(hass, call, "wheel")
 
@@ -906,28 +1046,28 @@ class TestResolveRoomsProduction:
     """
 
     def test_stored_pmap_used(self):
-        from custom_components.roomba_plus.services import _resolve_rooms
+        from custom_components.roomba_plus.room_cleaning import _resolve_rooms
         data = {"3": {"name": "Kitchen", "pmap_id": "map_a"}}
         state = {"pmaps": [{"map_a": "ts1"}]}
         result = _resolve_rooms(data, ["Kitchen"], state)
         assert result == [("3", "map_a")]
 
     def test_empty_pmap_resolved_from_state(self):
-        from custom_components.roomba_plus.services import _resolve_rooms
+        from custom_components.roomba_plus.room_cleaning import _resolve_rooms
         data = {"21": {"name": "Corridor", "pmap_id": ""}}
         state = {"pmaps": [{"abc123": "v42"}]}
         result = _resolve_rooms(data, ["Corridor"], state)
         assert result == [("21", "abc123")]
 
     def test_empty_pmap_no_state_raises(self):
-        from custom_components.roomba_plus.services import _resolve_rooms
+        from custom_components.roomba_plus.room_cleaning import _resolve_rooms
         from homeassistant.exceptions import ServiceValidationError
         data = {"21": {"name": "Corridor", "pmap_id": ""}}
         with pytest.raises(ServiceValidationError):
             _resolve_rooms(data, ["Corridor"], {})
 
     def test_unknown_room_raises(self):
-        from custom_components.roomba_plus.services import _resolve_rooms
+        from custom_components.roomba_plus.room_cleaning import _resolve_rooms
         from homeassistant.exceptions import ServiceValidationError
         data = {"3": {"name": "Kitchen", "pmap_id": "map_a"}}
         state = {"pmaps": [{"map_a": "ts1"}]}
@@ -935,7 +1075,7 @@ class TestResolveRoomsProduction:
             _resolve_rooms(data, ["Bathroom"], state)
 
     def test_mixed_pmap_resolves(self):
-        from custom_components.roomba_plus.services import _resolve_rooms
+        from custom_components.roomba_plus.room_cleaning import _resolve_rooms
         data = {
             "21": {"name": "Corridor", "pmap_id": ""},
             "22": {"name": "Kitchen",  "pmap_id": "abc123"},
@@ -946,7 +1086,7 @@ class TestResolveRoomsProduction:
         assert result[1] == ("22", "abc123")
 
     def test_cross_floor_raises(self):
-        from custom_components.roomba_plus.services import _resolve_rooms
+        from custom_components.roomba_plus.room_cleaning import _resolve_rooms
         from homeassistant.exceptions import ServiceValidationError
         data = {
             "3": {"name": "Kitchen", "pmap_id": "floor1"},
@@ -1378,6 +1518,14 @@ class TestAutoCleanDirtyRooms:
         entry = MagicMock()
         entry.options = {}
         data = entry.runtime_data
+        # A CLASSIC entry: `prime_robot` is None, not a MagicMock.
+        #
+        # These tests assert on `roomba.start`, so they describe a local
+        # robot -- but a bare MagicMock() answers truthy to every
+        # attribute, so `if data.prime_robot is not None` took the Prime
+        # branch and awaited a Mock. The fixture was describing a robot
+        # that is both generations at once.
+        data.prime_robot = None
         data.map_capability = MapCapability.SMART
         ms = MissionStore(); ms._records = records
         data.mission_store = ms
@@ -1443,7 +1591,7 @@ class TestAutoCleanDirtyRooms:
         with patch("custom_components.roomba_plus.services.er.async_get") as er_m:
             er_m.return_value.async_get.return_value = ent
             await async_handle_auto_clean_dirty_rooms(call)
-        entry.runtime_data.roomba.start.assert_called_once()
+        entry.runtime_data.roomba.send_command.assert_called_once_with("start")
         hass.services.async_call.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -1641,6 +1789,12 @@ def _wire_entity_lookup(hass, config_entry):
 
 
 class TestCreateBackup:
+    """These handlers take `call` alone and read `call.hass`, like the
+    other eleven. They used to take `(hass, call)` — which Home
+    Assistant never passes, so the actions raised TypeError on every
+    invocation. These tests called them directly with both arguments
+    and so never went through the registry that would have failed."""
+
     @pytest.mark.asyncio
     async def test_writes_zip_with_available_stores(self, tmp_path):
         from custom_components.roomba_plus.services import async_handle_create_backup
@@ -1660,8 +1814,9 @@ class TestCreateBackup:
             "custom_components.roomba_plus.services.Store.async_load", fake_load
         ):
             call = MagicMock()
+            call.hass = hass
             call.data = {"entity_id": "vacuum.test"}
-            result = await async_handle_create_backup(hass, call)
+            result = await async_handle_create_backup(call)
 
         assert "mission_store" in result["included_stores"]
         assert "grid_store" in result["included_stores"]
@@ -1688,9 +1843,10 @@ class TestCreateBackup:
             return_value=MagicMock(async_get=MagicMock(return_value=None)),
         ):
             call = MagicMock()
+            call.hass = hass
             call.data = {"entity_id": "vacuum.nonexistent"}
             with pytest.raises(ServiceValidationError):
-                await async_handle_create_backup(hass, call)
+                await async_handle_create_backup(call)
 
 
 class TestRestoreBackup:
@@ -1720,18 +1876,20 @@ class TestRestoreBackup:
             "custom_components.roomba_plus.services.Store.async_save", fake_save
         ):
             create_call = MagicMock()
+            create_call.hass = hass
             create_call.data = {"entity_id": "vacuum.test"}
-            created = await async_handle_create_backup(hass, create_call)
+            created = await async_handle_create_backup(create_call)
 
             entry.runtime_data.mission_store = MagicMock()
             entry.runtime_data.mission_store.async_load = AsyncMock()
 
             restore_call = MagicMock()
+            restore_call.hass = hass
             restore_call.data = {
                 "entity_id": "vacuum.test",
                 "path": created["path"],
             }
-            result = await async_handle_restore_backup(hass, restore_call)
+            result = await async_handle_restore_backup(restore_call)
 
         assert "mission_store" in result["restored_stores"]
         assert "roomba_plus_missions_e1" in saved
@@ -1749,12 +1907,13 @@ class TestRestoreBackup:
         entry = _make_backup_config_entry()
         with _wire_entity_lookup(hass, entry):
             call = MagicMock()
+            call.hass = hass
             call.data = {
                 "entity_id": "vacuum.test",
                 "path": str(tmp_path / "does_not_exist.zip"),
             }
             with pytest.raises(HomeAssistantError):
-                await async_handle_restore_backup(hass, call)
+                await async_handle_restore_backup(call)
 
     @pytest.mark.asyncio
     async def test_corrupt_zip_raises(self, tmp_path):
@@ -1768,6 +1927,516 @@ class TestRestoreBackup:
         entry = _make_backup_config_entry()
         with _wire_entity_lookup(hass, entry):
             call = MagicMock()
+            call.hass = hass
             call.data = {"entity_id": "vacuum.test", "path": str(bad_zip)}
             with pytest.raises(HomeAssistantError):
-                await async_handle_restore_backup(hass, call)
+                await async_handle_restore_backup(call)
+
+
+class TestTheRemovalListMatchesWhatIsRegistered:
+    """The comment beside async_remove_services says "a test asserts that
+    the two lists agree". None did, in the direction that matters.
+
+    `test_removes_all_registered_services` checks that removal empties
+    the registry -- it says nothing about names in the removal list that
+    were never registered. Three of them sat there unnoticed:
+    create_schedule, update_schedule and delete_schedule, from a feature
+    proposal, with no handler, no schema and no services.yaml entry.
+
+    A name that is only ever removed is either a leftover or a feature
+    someone forgot to finish, and both are worth a failing test.
+    """
+
+    def _names(self, source: str, function: str) -> set[str]:
+        import ast
+
+        tree = ast.parse(source)
+        found: set[str] = set()
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.FunctionDef) or node.name != function:
+                continue
+            for inner in ast.walk(node):
+                if isinstance(inner, ast.Constant) and isinstance(inner.value, str):
+                    found.add(inner.value)
+        return found
+
+    def test_every_removed_service_is_also_registered(self):
+        import inspect
+
+        from custom_components.roomba_plus import services
+
+        source = inspect.getsource(services)
+        hass, registered = TestServicesRegistration()._make_hass()
+        services.async_register_services(hass)
+        live = {name for _domain, name in registered}
+
+        removed = self._names(source, "async_remove_services")
+        # The removal list holds bare strings and constants alike; only
+        # compare the ones that look like service names.
+        candidates = {n for n in removed if n.replace("_", "").isalnum()}
+
+        orphans = {n for n in candidates if n in live or "_" in n} - live
+        assert not orphans, (
+            f"named in async_remove_services but never registered: {sorted(orphans)}"
+        )
+
+
+class TestPrimeBackupsCaptureTheCloud:
+    """Prime keeps its data in iRobot's cloud, so the local stores find
+    almost nothing and a backup would be an empty promise.
+
+    "It is already in the cloud" is not a reason to skip it. A cloud can
+    change its API, retire a version, or lose an account -- this project
+    has spent weeks reverse-engineering one that did exactly the first.
+    """
+
+    def _entry(self, robot=None, household="HH"):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        entry = MagicMock()
+        entry.runtime_data = SimpleNamespace(
+            prime_robot=robot, prime_household_id=household
+        )
+        return entry
+
+    def _robot(self, **overrides):
+        from unittest.mock import AsyncMock
+
+        robot = AsyncMock()
+        robot.get_active_map_versions.return_value = [{"p2map_id": "M1"}]
+        robot.get_favorites_raw.return_value = [{"favoriteid": "F1"}]
+        robot.get_schedules.return_value = {"schedules": []}
+        for name, value in overrides.items():
+            getattr(robot, name).side_effect = value
+        return robot
+
+    @pytest.mark.asyncio
+    async def test_a_classic_robot_snapshots_nothing(self):
+        from custom_components.roomba_plus.services import _async_prime_snapshot
+
+        assert await _async_prime_snapshot(self._entry()) == {}
+
+    @pytest.mark.asyncio
+    async def test_all_three_pieces_are_captured(self):
+        from custom_components.roomba_plus.services import _async_prime_snapshot
+
+        snapshot = await _async_prime_snapshot(self._entry(self._robot()))
+
+        assert set(snapshot) == {"map_versions", "favorites", "schedules"}
+
+    @pytest.mark.asyncio
+    async def test_one_failure_does_not_cost_the_others(self):
+        """A schedule list that could not be read should not cost the
+        room names that could."""
+        from custom_components.roomba_plus.services import _async_prime_snapshot
+
+        robot = self._robot(get_schedules=RuntimeError("cloud down"))
+        snapshot = await _async_prime_snapshot(self._entry(robot))
+
+        assert "map_versions" in snapshot
+        assert snapshot["incomplete"] == ["schedules"]
+
+    @pytest.mark.asyncio
+    async def test_what_is_missing_is_named_in_the_file(self):
+        """So a restore knows what it does not have, rather than
+        discovering it as an absence."""
+        from custom_components.roomba_plus.services import _async_prime_snapshot
+
+        robot = self._robot(
+            get_favorites_raw=RuntimeError("x"), get_schedules=RuntimeError("y")
+        )
+        snapshot = await _async_prime_snapshot(self._entry(robot))
+
+        assert snapshot["incomplete"] == ["favorites", "schedules"]
+
+    @pytest.mark.asyncio
+    async def test_without_a_household_schedules_are_skipped_silently(self):
+        """No household id is not a failure -- there is nothing to ask
+        for, and listing it as incomplete would suggest one."""
+        from custom_components.roomba_plus.services import _async_prime_snapshot
+
+        snapshot = await _async_prime_snapshot(
+            self._entry(self._robot(), household=None)
+        )
+
+        assert "schedules" not in snapshot
+        assert "incomplete" not in snapshot
+
+
+class TestEveryHandlerMatchesWhatHomeAssistantCalls:
+    """`ServiceRegistry._execute_service` calls `await
+    target(service_call)` — one argument.
+
+    Three handlers took `(hass, call)`: clean_sequence, create_backup
+    and restore_backup. Invoking any of those actions raised TypeError,
+    for as long as they had existed.
+
+    Nothing caught it. The tests called them directly with both
+    arguments, so they never went through the registry that would have
+    failed — and mypy flagged the registration as an `arg-type` error
+    that nobody had run mypy to see.
+    """
+
+    def test_no_registered_handler_takes_hass(self):
+        import inspect
+
+        from custom_components.roomba_plus import services
+
+        offenders = []
+        for name in dir(services):
+            if not name.startswith("async_handle_"):
+                continue
+            func = getattr(services, name)
+            if not inspect.iscoroutinefunction(func):
+                continue
+            params = list(inspect.signature(func).parameters)
+            if params[:1] != ["call"]:
+                offenders.append(f"{name}{tuple(params)}")
+
+        assert not offenders, (
+            f"handlers Home Assistant cannot call: {offenders} -- it "
+            f"passes the ServiceCall alone, so read hass from call.hass"
+        )
+
+    def test_there_are_handlers_to_check(self):
+        """A guard that silently checks nothing is worse than none."""
+        import inspect
+
+        from custom_components.roomba_plus import services
+
+        found = [
+            n for n in dir(services)
+            if n.startswith("async_handle_")
+            and inspect.iscoroutinefunction(getattr(services, n))
+        ]
+
+        assert len(found) >= 10
+
+
+class TestCleanZoneService:
+    """@chairstacker: the app stopped allowing zone favourites, leaving
+    no way to send the robot to a zone on demand. He was about to build
+    a calendar workaround for it.
+
+    The backend has sent zones since v2.7.0 -- `clean_rooms` recognises
+    the `zid_` prefix. Nothing exposed it.
+    """
+
+    def _setup(self, zone_names=None):
+        """A hass/entry pair wired the way the handler walks it."""
+        backend = MagicMock()
+        backend.clean_rooms = AsyncMock()
+
+        runtime = MagicMock()
+        runtime.prime_room_names = zone_names or {}
+
+        config_entry = MagicMock()
+        config_entry.runtime_data = runtime
+
+        hass = MagicMock()
+        hass.config_entries.async_get_entry.return_value = config_entry
+        return hass, backend
+
+    def _call(self, hass, **data):
+        call = MagicMock()
+        call.hass = hass
+        call.data = {"entity_id": ["vacuum.x"], **data}
+        return call
+
+    @pytest.mark.asyncio
+    async def test_zone_ids_are_prefixed_for_the_backend(self):
+        """`clean_rooms` splits rooms from zones on the `zid_` prefix.
+        A bare id would clean the ROOM with that number instead."""
+        from custom_components.roomba_plus.services import async_handle_clean_zone
+
+        hass, backend = self._setup()
+        with patch(
+            "custom_components.roomba_plus.services.async_get_room_cleaning_backend",
+            return_value=backend,
+        ), patch("custom_components.roomba_plus.services.er.async_get"):
+            await async_handle_clean_zone(self._call(hass, zone_id=["100", "101"]))
+
+        assert backend.clean_rooms.await_args.args[0] == ["zid_100", "zid_101"]
+
+    @pytest.mark.asyncio
+    async def test_a_name_resolves_to_its_id(self):
+        """Names come from the bundle's cleanZones layer -- where
+        @chairstacker's turned out to live after five rounds."""
+        from custom_components.roomba_plus.services import async_handle_clean_zone
+
+        hass, backend = self._setup({"100": "Clean Kitchen"})
+        with patch(
+            "custom_components.roomba_plus.services.async_get_room_cleaning_backend",
+            return_value=backend,
+        ), patch("custom_components.roomba_plus.services.er.async_get"):
+            await async_handle_clean_zone(self._call(hass, zone_name=["Clean Kitchen"]))
+
+        assert backend.clean_rooms.await_args.args[0] == ["zid_100"]
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_name_refuses_rather_than_dropping_it(self):
+        """A partial clean looks like success. Silently skipping a
+        misspelled zone is worse than refusing the call."""
+        from custom_components.roomba_plus.services import async_handle_clean_zone
+
+        hass, backend = self._setup({"100": "Clean Kitchen"})
+        with patch(
+            "custom_components.roomba_plus.services.async_get_room_cleaning_backend",
+            return_value=backend,
+        ), patch("custom_components.roomba_plus.services.er.async_get"), pytest.raises(
+            Exception
+        ) as exc_info:
+            await async_handle_clean_zone(self._call(hass, zone_name=["Kitchen"]))
+
+        assert "zone_name_not_found" in str(
+            getattr(exc_info.value, "translation_key", "")
+        )
+        backend.clean_rooms.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_both_arguments_is_an_error(self):
+        from custom_components.roomba_plus.services import async_handle_clean_zone
+
+        hass, _ = self._setup()
+        with pytest.raises(Exception) as exc_info:
+            await async_handle_clean_zone(
+                self._call(hass, zone_name=["A"], zone_id=["100"])
+            )
+        assert "zone_name_and_zone_id_conflict" in str(
+            getattr(exc_info.value, "translation_key", "")
+        )
+
+    @pytest.mark.asyncio
+    async def test_neither_argument_is_an_error(self):
+        from custom_components.roomba_plus.services import async_handle_clean_zone
+
+        hass, _ = self._setup()
+        with pytest.raises(Exception) as exc_info:
+            await async_handle_clean_zone(self._call(hass))
+        assert "zone_name_or_zone_id_required" in str(
+            getattr(exc_info.value, "translation_key", "")
+        )
+
+
+class TestCleanZoneCleaningMode:
+    """@chairstacker asked for vac-only / mop-only / vac & mop /
+    vac-then-mop on a zone, so he can build the few ad-hoc scripts he
+    wants instead of getting a button per zone per mode.
+
+    Every piece already existed: `clean_rooms` takes `operating_mode`
+    and `clean_room` has passed it for a long time. `clean_zone` simply
+    never did.
+    """
+
+    @staticmethod
+    def _setup(names=None):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from custom_components.roomba_plus.models import ConnectionType
+
+        backend = MagicMock()
+        backend.clean_rooms = AsyncMock()
+        backend.available_zones = AsyncMock(return_value=names or {})
+        # EXPLICIT TIER. The mode table differs by generation, so a
+        # test that leaves it to a MagicMock is asserting whichever
+        # branch the mock happens to fall into.
+        backend._data.connection_type = ConnectionType.CLOUD_ONLY
+        config_entry = MagicMock()
+        config_entry.runtime_data.prime_room_names = names or {}
+        hass = MagicMock()
+        hass.config_entries.async_get_entry.return_value = config_entry
+        return hass, backend
+
+    @staticmethod
+    def _call(hass, **data):
+        from unittest.mock import MagicMock
+
+        call = MagicMock()
+        call.hass = hass
+        call.data = {"entity_id": "vacuum.robot", **data}
+        return call
+
+    async def _run(self, **data):
+        from unittest.mock import patch
+
+        from custom_components.roomba_plus.services import async_handle_clean_zone
+
+        hass, backend = self._setup()
+        with patch(
+            "custom_components.roomba_plus.services.async_get_room_cleaning_backend",
+            return_value=backend,
+        ), patch("custom_components.roomba_plus.services.er.async_get"):
+            await async_handle_clean_zone(self._call(hass, **data))
+        return backend
+
+    @pytest.mark.asyncio
+    async def test_each_mode_reaches_the_backend(self):
+        """The four values are confirmed twice: observed in captures
+        (2=vacuum, 4=mop) and recorded from the robot's own answer
+        before the select shipped (32 -> status 6, 512 -> status 4)."""
+        for name, value in (
+            ("vacuum", 2), ("mop", 4),
+            ("vacuum_and_mop", 32), ("vacuum_then_mop", 512),
+        ):
+            backend = await self._run(zone_id=["100"], cleaning_mode=name)
+            assert backend.clean_rooms.await_args.kwargs["operating_mode"] == [value], name
+
+    @pytest.mark.asyncio
+    async def test_no_mode_leaves_the_selector_in_charge(self):
+        """Omitting the field must not override the everyday default --
+        that is the whole point of it being optional."""
+        backend = await self._run(zone_id=["100"])
+
+        assert backend.clean_rooms.await_args.kwargs["operating_mode"] is None
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_mode_name_is_ignored_not_guessed(self):
+        """A typo must not become a mode. Falling back to the selector
+        beats sending a number nobody asked for."""
+        backend = await self._run(zone_id=["100"], cleaning_mode="scrub")
+
+        assert backend.clean_rooms.await_args.kwargs["operating_mode"] is None
+
+
+class TestCleaningModeIsTierAware:
+    """"Vacuum and mop" is 32 on Prime and 6 on Classic.
+
+    32 is field-verified on Prime -- the robot answered `command 32 ->
+    status 6`. 6 is what the iRobot app itself sends on a mopping
+    Classic robot (@ia74's capture, `operatingMode: 6` alongside
+    `padWetness`). Resolving against the wrong table would send a value
+    that generation has never been seen to accept, on the field that
+    decides whether water goes on the floor.
+    """
+
+    @staticmethod
+    def _backend(cloud_only: bool):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.models import ConnectionType
+
+        backend = MagicMock()
+        backend._data.connection_type = (
+            ConnectionType.CLOUD_ONLY if cloud_only else ConnectionType.LOCAL_PUSH
+        )
+        return backend
+
+    def test_prime_uses_32_for_vacuum_and_mop(self):
+        from custom_components.roomba_plus.services import _modes_for_backend
+
+        assert _modes_for_backend(self._backend(True))["vacuum_and_mop"] == 32
+
+    def test_classic_uses_6_for_vacuum_and_mop(self):
+        from custom_components.roomba_plus.services import _modes_for_backend
+
+        assert _modes_for_backend(self._backend(False))["vacuum_and_mop"] == 6
+
+    def test_the_other_three_agree(self):
+        """Only the combined mode differs; treating the tables as
+        wholly separate would invite them drifting apart."""
+        from custom_components.roomba_plus.services import _modes_for_backend
+
+        prime = _modes_for_backend(self._backend(True))
+        classic = _modes_for_backend(self._backend(False))
+
+        for name in ("vacuum", "mop", "vacuum_then_mop"):
+            assert prime[name] == classic[name], name
+
+    def test_both_offer_the_same_four_names(self):
+        """A mode a user can pick on one generation and not the other
+        would be a worse surprise than a value difference they never
+        see."""
+        from custom_components.roomba_plus.services import _modes_for_backend
+
+        assert set(_modes_for_backend(self._backend(True))) == set(
+            _modes_for_backend(self._backend(False))
+        )
+
+
+class TestASwallowedCommandIsReported:
+    """@Young9898 documented three routes to the same signature on one
+    i3+ in a single day: a command accepted into `lastCommand`, with
+    `notReady: 0` and `error: 0`, and nothing happening.
+
+    A stale `user_pmapv_id`. A region start sent off the dock — 6/6
+    from the dock, 0/2 mid-floor. And `notReady: 1` after a false cliff
+    reading on a dark rug, which swallows every motion command until
+    the robot is physically moved.
+
+    Enumerating causes does not scale: the first was diagnosed and
+    written down, and the other two are indistinguishable from it
+    without a capture. Watching for the symptom covers all three.
+    """
+
+    @staticmethod
+    async def _run(status, caplog):
+        from unittest.mock import MagicMock, patch
+
+        from custom_components.roomba_plus.services import (
+            _async_warn_if_swallowed,
+        )
+
+        entry = MagicMock()
+        entry.runtime_data.roomba = MagicMock()
+        with patch(
+            "custom_components.roomba_plus.roomba_reported_state",
+            return_value={"cleanMissionStatus": status},
+        ), patch(
+            "custom_components.roomba_plus.services."
+            "_SWALLOWED_COMMAND_GRACE_SEC",
+            0,
+        ):
+            await _async_warn_if_swallowed(MagicMock(), entry, "clean_room")
+        return caplog.text
+
+    @pytest.mark.asyncio
+    async def test_no_cycle_after_the_grace_window_warns(self, caplog):
+        text = await self._run(
+            {"cycle": "none", "phase": "stop", "notReady": 0, "error": 0},
+            caplog,
+        )
+
+        assert "no mission started" in text
+
+    @pytest.mark.asyncio
+    async def test_a_running_cycle_says_nothing(self, caplog):
+        """The command worked. Silence is the whole point."""
+        text = await self._run(
+            {"cycle": "clean", "phase": "run", "notReady": 0}, caplog
+        )
+
+        assert "no mission started" not in text
+
+    @pytest.mark.asyncio
+    async def test_the_readiness_value_is_in_the_message(self, caplog):
+        """His cliff case: notReady 1 is the answer, and a user reading
+        the log should not have to go looking for it."""
+        text = await self._run(
+            {"cycle": "none", "phase": "stop", "notReady": 1, "error": 0},
+            caplog,
+        )
+
+        assert "notReady=1" in text
+
+    @pytest.mark.asyncio
+    async def test_an_unreadable_state_does_not_raise(self, caplog):
+        """This runs in a background task after the service returned.
+        Anything it raises surfaces as an unretrieved task exception
+        pointing at nothing the user can act on."""
+        from unittest.mock import MagicMock, patch
+
+        from custom_components.roomba_plus.services import (
+            _async_warn_if_swallowed,
+        )
+
+        entry = MagicMock()
+        with patch(
+            "custom_components.roomba_plus.roomba_reported_state",
+            side_effect=RuntimeError("no state"),
+        ), patch(
+            "custom_components.roomba_plus.services."
+            "_SWALLOWED_COMMAND_GRACE_SEC",
+            0,
+        ):
+            await _async_warn_if_swallowed(MagicMock(), entry, "clean_room")

@@ -37,12 +37,21 @@ from typing import Any
 
 from homeassistant.components.button import ButtonEntity, ButtonEntityDescription
 from homeassistant.const import EntityCategory
-from homeassistant.core import HomeAssistant
+from homeassistant.const import Platform
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import roomba_reported_state
+from .entity_cleanup import async_remove_stale_entities
+from .const import (
+    IROBOT_PART_ROLE_CLEAN_BASE_BAG,
+    IROBOT_PART_ROLE_SIDE_BRUSH,
+    IROBOT_PART_ROLE_TO_STORE_SLOT,
+    MAP_UPDATING_NOT_READY,
+)
 from .entity import IRobotEntity
-from .models import RoombaConfigEntry
+from .models import ConnectionType, RoombaConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
 PARALLEL_UPDATES = 0
@@ -134,17 +143,154 @@ COMMAND_BUTTONS: tuple[RoombaButtonDescription, ...] = (
 
 # ── Setup ─────────────────────────────────────────────────────────────────────
 
+
+def _cloud_part_reset_buttons(
+    roomba: Any, blid: str, config_entry: RoombaConfigEntry
+) -> list[ButtonEntity]:
+    """Reset buttons for consumables that only exist cloud-side.
+
+    Gated on the account actually reporting the part, so a robot without a
+    Clean Base gets no bag button and a Braava gets no side-brush button —
+    rather than a button that silently does nothing when pressed.
+    """
+    store = config_entry.runtime_data.maintenance_store
+    if store is None or config_entry.runtime_data.cloud_coordinator is None:
+        return []
+    buttons: list[ButtonEntity] = []
+    if store.cloud_part_by_role(IROBOT_PART_ROLE_SIDE_BRUSH) is not None:
+        buttons.append(SideBrushResetButton(roomba, blid, config_entry))
+    if store.cloud_part_by_role(IROBOT_PART_ROLE_CLEAN_BASE_BAG) is not None:
+        buttons.append(CleanBaseBagResetButton(roomba, blid, config_entry))
+    return buttons
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     config_entry: RoombaConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up all button entities for this Roomba."""
+    data = config_entry.runtime_data
+
+    # PRIME BRANCH. Everything below is Classic: the buttons act through
+    # roomba.send_command() on a local MQTT connection Prime does not
+    # have, and most have no identified Prime equivalent at all.
+    if data.connection_type is ConnectionType.CLOUD_ONLY:
+        from .button_prime import async_build_prime_buttons  # noqa: PLC0415
+
+        entities = await async_build_prime_buttons(config_entry)
+        if entities:
+            async_add_entities(entities)
+
+        # FAVOURITE BUTTONS FOLLOW THE LIST, and until now they did not.
+        #
+        # Buttons were built exactly once, here. A favourite created in
+        # the iRobot app never got one, and a deleted favourite left its
+        # button behind pointing at an id the server no longer knows.
+        #
+        # This is @DaRealGuGu's schedule-switch problem with a different
+        # entity type -- see switch.py's `_sync_entities`, whose comments
+        # carry the two lessons this reuses: match on the id rather than
+        # the content, and read the REGISTRY rather than a set of what
+        # this session added, or an orphan from before the upgrade can
+        # never be reached.
+        coordinator = getattr(
+            config_entry.runtime_data, "prime_schedule_coordinator", None
+        )
+        if coordinator is None:
+            return
+
+        # THE PREFIX IS `roomba_plus_{blid}_favorite_`, NOT
+        # `{blid}_favorite_`.
+        #
+        # `IRobotEntity.robot_unique_id` returns
+        # `f"roomba_plus_{blid}"`, and the favourite button's unique id
+        # is built from it. The first version of this sync used the bare
+        # blid, so the prefix matched nothing.
+        #
+        # THE TWO HALVES FAILED DIFFERENTLY, which is what made it look
+        # like a timing problem. Adding compares against `wanted` and
+        # never touches the prefix, so a new favourite got its button
+        # immediately. Removing scans the registry BY prefix, so it
+        # matched nothing and no button was ever removed.
+        #
+        # @chairstacker described exactly that asymmetry: "Creating a
+        # favorite in the app makes it show up in HA within a reasonable
+        # amount of time. Deleting it in the app has not yet removed
+        # it." He put it down to the six-hour refresh; it would not have
+        # gone away after any amount of waiting.
+        favorite_prefix = f"roomba_plus_{config_entry.runtime_data.blid}_favorite_"
+
+        known: set[str] = {
+            str(entity.unique_id) for entity in entities
+            if str(entity.unique_id).startswith(favorite_prefix)
+        }
+
+        @callback
+        def _sync_favorite_buttons() -> None:
+            from .button_prime import build_prime_favorite_buttons  # noqa: PLC0415
+
+            wanted = {
+                str(button.unique_id): button
+                for button in build_prime_favorite_buttons(config_entry)
+            }
+
+            new = [b for uid, b in wanted.items() if uid not in known]
+            if new:
+                known.update(str(b.unique_id) for b in new)
+                async_add_entities(new)
+
+            # A favourite deleted in the iRobot app leaves its entity
+            # behind forever -- @ScenicSystemsLLC found five stale ones
+            # on each of three robots, needing manual removal.
+            #
+            # `wanted` is what the cloud just reported. Nothing is
+            # removed when it is empty: a robot with no favourites and
+            # a failed fetch look identical from here.
+
+            removed = async_remove_stale_entities(
+                hass,
+                config_entry,
+                prefix="_favorite_",
+                live_unique_ids=set(wanted),
+            )
+            if removed:
+                known.difference_update(
+                    uid for uid in list(known) if uid not in wanted
+                )
+
+            # REMOVAL ONLY AFTER A READ THAT SUCCEEDED. A refresh that
+            # failed leaves the previous list standing, so nothing would
+            # vanish in practice -- but tying deletion to a flag that
+            # says "this is current" is the difference between a rule and
+            # a coincidence.
+            if not getattr(coordinator, "last_update_success", True):
+                return
+
+            registry = er.async_get(hass)
+            prefix = favorite_prefix
+            for entry in er.async_entries_for_config_entry(
+                registry, config_entry.entry_id
+            ):
+                if entry.domain != Platform.BUTTON:
+                    continue
+                if not entry.unique_id.startswith(prefix):
+                    continue
+                if entry.unique_id in wanted:
+                    continue
+                known.discard(entry.unique_id)
+                registry.async_remove(entry.entity_id)
+
+        config_entry.async_on_unload(
+            coordinator.async_add_listener(_sync_favorite_buttons)
+        )
+        return
+
     roomba = config_entry.runtime_data.roomba
     blid = config_entry.runtime_data.blid
     state = roomba_reported_state(roomba)
 
-    entities: list[IRobotEntity] = []
+    entities = []
 
     # Command buttons (capability-gated)
     entities.extend(
@@ -158,6 +304,7 @@ async def async_setup_entry(
         FilterResetButton(roomba, blid, config_entry),
         BrushResetButton(roomba, blid, config_entry),
         BatteryResetButton(roomba, blid, config_entry),
+        *_cloud_part_reset_buttons(roomba, blid, config_entry),
     ])
 
     # v3.2.1 REMOVED — ZoneCleanButton used to be created for EPHEMERAL
@@ -187,6 +334,28 @@ async def async_setup_entry(
     if data.has_cloud:
         favorites = data.cloud_coordinator.data.get("favorites", [])  # type: ignore[union-attr]
         for fav in favorites:
+            # PER ROBOT, NOT PER ACCOUNT.
+            #
+            # @scenicsystemsllc (#80) has three Classic robots and saw
+            # the same favourites on all of them -- including "Vacuum
+            # Everywhere" on a mop-only Braava.
+            #
+            # `/user/favorites` is an ACCOUNT endpoint: it returns
+            # every favourite in the household, and this loop built a
+            # button for each one on every robot.
+            #
+            # #80 was fixed once, in the Prime path, and this one was
+            # never touched -- so a fix that looked complete covered
+            # neither of the two paths that create his entities.
+            #
+            # Fails open on a favourite with no attribution at all,
+            # matching the Prime rule: only an explicit non-matching
+            # id excludes.
+            from .button_prime import _raw_favorite_is_for  # noqa: PLC0415
+
+            if not _raw_favorite_is_for(fav, data.blid):
+                continue
+
             entities.append(FavoriteButton(data.roomba, data.blid, config_entry, fav))
             from .repairs import async_check_favorite_multi_command
 
@@ -240,7 +409,10 @@ class _MaintenanceResetButton(IRobotEntity, ButtonEntity):
     will update on the next bbrun MQTT message.
     """
 
-    _attr_entity_category = EntityCategory.CONFIG
+    # Annotated because two subclasses set None to make their button
+    # a primary action -- without the Optional, that reads as narrowing
+    # the base class's type.
+    _attr_entity_category: EntityCategory | None = EntityCategory.CONFIG
 
     def __init__(
         self,
@@ -248,12 +420,11 @@ class _MaintenanceResetButton(IRobotEntity, ButtonEntity):
         blid: str,
         config_entry: RoombaConfigEntry,
     ) -> None:
-        super().__init__(roomba, blid)
-        self._config_entry = config_entry
+        super().__init__(roomba, blid, config_entry)
 
     def _current_hr(self) -> int:
         """Return current bbrun.hr (lifetime operating hours)."""
-        return (self.vacuum_state.get("bbrun") or {}).get("hr", 0)
+        return int((self.vacuum_state.get("bbrun") or {}).get("hr", 0))
 
     def _maintenance_store(self) -> Any:
         """Return the MaintenanceStore from runtime_data."""
@@ -284,8 +455,14 @@ class FilterResetButton(_MaintenanceResetButton):
         if store:
             store.reset_filter(hr)
             await self._save()
-            from .services import _fire_maintenance_reset_event
+            from .services import (
+                _async_push_part_reset_to_cloud,
+                _fire_maintenance_reset_event,
+            )
             _fire_maintenance_reset_event(self.hass, self._config_entry, "filter", hr)
+            await _async_push_part_reset_to_cloud(
+                self._config_entry, self._config_entry.runtime_data, "filter"
+            )
 
 
 class BrushResetButton(_MaintenanceResetButton):
@@ -304,8 +481,85 @@ class BrushResetButton(_MaintenanceResetButton):
         if store:
             store.reset_brush(hr)
             await self._save()
-            from .services import _fire_maintenance_reset_event
+            from .services import (
+                _async_push_part_reset_to_cloud,
+                _fire_maintenance_reset_event,
+            )
             _fire_maintenance_reset_event(self.hass, self._config_entry, "brush", hr)
+            await _async_push_part_reset_to_cloud(
+                self._config_entry, self._config_entry.runtime_data, "brush"
+            )
+
+
+class _CloudPartResetButton(_MaintenanceResetButton):
+    """Base for consumables that exist only as an iRobot cloud counter.
+
+    The cloud counter is the authoritative state; a successful press also
+    writes MaintenanceStore's own local slot for this role (mirroring
+    FilterResetButton/BrushResetButton), so wear-rate/days-until-due keep
+    a baseline through a later cloud outage instead of depending on the
+    next successful poll to re-hydrate it. Created only when the account
+    actually reports the part — see async_setup_entry.
+    """
+
+    _cloud_role: str = ""
+
+    async def async_press(self) -> None:
+        data = self._config_entry.runtime_data
+        store = self._maintenance_store()
+        cc = data.cloud_coordinator
+        if store is None or cc is None:
+            return
+        record = store.cloud_part_by_role(self._cloud_role)
+        if record is None:
+            return
+        part_id = record.get("part_id")
+        if not part_id:
+            return
+        try:
+            result = await cc.api.set_robot_part_counter(data.blid, str(part_id), 0)
+        except Exception:  # noqa: BLE001
+            _LOGGER.warning(
+                "%s: could not record replacement with iRobot for part %s",
+                type(self).__name__, part_id, exc_info=True,
+            )
+            return
+        if not result.get("num_parts"):
+            _LOGGER.warning(
+                "%s: iRobot accepted the call but applied no part (part_id=%s)",
+                type(self).__name__, part_id,
+            )
+            return
+        _LOGGER.info(
+            "%s: recorded replacement with iRobot (part_id=%s)",
+            type(self).__name__, part_id,
+        )
+        slot = IROBOT_PART_ROLE_TO_STORE_SLOT[self._cloud_role]
+        getattr(store, f"reset_{slot}")(self._current_hr())
+        await self._save()
+        await cc.async_request_refresh()
+
+
+class SideBrushResetButton(_CloudPartResetButton):
+    """Button: mark the side brush as replaced, cloud-side."""
+
+    _attr_translation_key = "reset_side_brush"
+    _cloud_role = IROBOT_PART_ROLE_SIDE_BRUSH
+
+    def __init__(self, roomba: Any, blid: str, config_entry: RoombaConfigEntry) -> None:
+        super().__init__(roomba, blid, config_entry)
+        self._attr_unique_id = f"{self.robot_unique_id}_reset_side_brush"
+
+
+class CleanBaseBagResetButton(_CloudPartResetButton):
+    """Button: mark the Clean Base bag as replaced, cloud-side."""
+
+    _attr_translation_key = "reset_clean_base_bag"
+    _cloud_role = IROBOT_PART_ROLE_CLEAN_BASE_BAG
+
+    def __init__(self, roomba: Any, blid: str, config_entry: RoombaConfigEntry) -> None:
+        super().__init__(roomba, blid, config_entry)
+        self._attr_unique_id = f"{self.robot_unique_id}_reset_clean_base_bag"
 
 
 class BatteryResetButton(_MaintenanceResetButton):
@@ -424,7 +678,7 @@ class RepeatLastMissionButton(IRobotEntity, ButtonEntity):
         command = last.get("command", "start")
 
         # Build params from lastCommand — include Smart Map fields if present
-        params: dict = {}
+        params: dict[str, Any] = {}
         for key in ("pmap_id", "user_pmapv_id", "regions", "ordered", "params"):
             if key in last:
                 params[key] = last[key]
@@ -432,7 +686,7 @@ class RepeatLastMissionButton(IRobotEntity, ButtonEntity):
         # If a pmap_id is present, refresh user_pmapv_id from live state.pmaps
         # to avoid silent failures after a map retrain.
         if params.get("pmap_id"):
-            from .services import _resolve_pmapv_id
+            from .room_cleaning import _resolve_pmapv_id
             fresh = _resolve_pmapv_id(self.vacuum_state, params["pmap_id"])
             if fresh:
                 params["user_pmapv_id"] = fresh
@@ -449,7 +703,7 @@ class RepeatLastMissionButton(IRobotEntity, ButtonEntity):
             self.vacuum.send_command, command, params or {}
         )
 
-    def new_state_filter(self, new_state: dict) -> bool:
+    def new_state_filter(self, new_state: dict[str, Any]) -> bool:
         return "lastCommand" in new_state
 
 
@@ -479,7 +733,7 @@ class SmartZoneButton(IRobotEntity, ButtonEntity):
         never from lastCommand, to avoid stale-map silent failures.
         """
         from homeassistant.helpers import entity_platform as ep
-        from .services import _resolve_pmapv_id
+        from .room_cleaning import _resolve_pmapv_id
 
         region_id: str | None = None
         pmap_id: str | None = None
@@ -516,7 +770,7 @@ class SmartZoneButton(IRobotEntity, ButtonEntity):
         #   2. Stored in smart_zone_data options (MQTT-only path)
         #   3. lastCommand fallback (least reliable)
         if region_id and not pmap_id:
-            zone_data: dict = self._config_entry.options.get("smart_zone_data", {})
+            zone_data: dict[str, Any] = self._config_entry.options.get("smart_zone_data", {})
             pmap_id = zone_data.get(str(region_id), {}).get("pmap_id") or None
 
         # Fallback: extract pmap/region from lastCommand when smart_zone_data
@@ -538,12 +792,17 @@ class SmartZoneButton(IRobotEntity, ButtonEntity):
             return
 
         # Guard: reject if the robot is currently updating its Smart Map.
-        # notReady bit 6 (64) = map save/upload in progress — same guard as
-        # the clean_room service action.
+        #
+        # EQUALITY, not a bit test -- notReady is a scalar index into a
+        # readiness enum, and 67 is the value that means DownloadingMap.
+        # This carried a bare 64, which is why the first sweep for the
+        # named constant missed it: eight unrelated states share that
+        # bit, so an expired subscription blocked a zone clean with a
+        # message about a map update. See const.MAP_UPDATING_NOT_READY.
         not_ready: int = self.vacuum_state.get(
             "cleanMissionStatus", {}
         ).get("notReady", 0)
-        if not_ready & 64:
+        if not_ready == MAP_UPDATING_NOT_READY:
             _LOGGER.warning(
                 "SmartZoneButton: robot is updating Smart Map (notReady=%d) — "
                 "wait for map update to complete before starting a zone clean",

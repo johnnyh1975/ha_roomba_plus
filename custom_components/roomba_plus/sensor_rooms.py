@@ -28,6 +28,7 @@ from homeassistant.util import dt as dt_util
 from .const import CONF_ROOM_SCHEDULE
 from .entity import IRobotEntity
 from .models import RoombaConfigEntry
+from .prime_coordinator import prime_current_state, prime_last_command
 
 _LOGGER = logging.getLogger("custom_components.roomba_plus.sensor")
 
@@ -38,7 +39,7 @@ class RoombaEdgeCoverageSensor(IRobotEntity, SensorEntity):
     F12d (v2.4.0) — a low ratio with high total coverage indicates the robot
     is over-cleaning the centre and under-covering room edges/walls.
 
-    State: float 0.0–1.0 (edge cells / total cells), or None when < 10 cells.
+    State: float 0.0–1.0 from the current grid or its last valid measurement.
     entity_category: DIAGNOSTIC.
     Unit: None (dimensionless ratio).
     """
@@ -55,13 +56,12 @@ class RoombaEdgeCoverageSensor(IRobotEntity, SensorEntity):
     _attr_suggested_display_precision = 3
 
     def __init__(self, roomba: Any, blid: str, config_entry: Any) -> None:
-        super().__init__(roomba, blid)
-        self._config_entry = config_entry
+        super().__init__(roomba, blid, config_entry)
         self._attr_unique_id = f"{self.robot_unique_id}_recent_edge_coverage_ratio"
 
     @property
     def native_value(self) -> float | None:
-        """Return edge_coverage_ratio from GridStore, or None when insufficient data."""
+        """Return the current or retained edge_coverage_ratio from GridStore."""
         gs = self._config_entry.runtime_data.grid_store
         if gs is None:
             return None
@@ -163,6 +163,65 @@ def _get_planned_room_order(data: Any) -> list[str]:
     return result
 
 
+def _prime_room_time_estimates(
+    config_entry: Any, planned_order: list[str]
+) -> list[int | None]:
+    """Per-room estimates in seconds, from the Prime time-estimates call.
+
+    MATCHED BY ROOM NAME, because the planned order is names and the
+    estimates are keyed by region id. The schedule coordinator already
+    keeps that mapping for the switch labels, so this reuses it rather
+    than building a second one that could disagree.
+
+    A room with no usable estimate contributes None rather than a
+    substitute, and the caller already knows what to do with that: the
+    progress sensor treats an incomplete plan as no answer, which is the
+    right outcome. A percentage built on half the rooms would be
+    confidently wrong.
+    """
+    estimates = getattr(config_entry.runtime_data, "prime_time_estimates", None)
+    if not isinstance(getattr(estimates, "by_region", None), dict):
+        return [None] * len(planned_order)
+
+    coordinator = getattr(
+        config_entry.runtime_data, "prime_schedule_coordinator", None
+    )
+    # REGION IDS FIRST, NAMES ONLY AS A FALLBACK.
+    #
+    # The estimates are indexed by region id and so are the schedules --
+    # matching them through names was a detour that fails on a room
+    # without one. @DaRealGuGu's region 11 has no name in its map
+    # metadata while the other three do, and one room without an
+    # estimate discards the whole calculation, so a single nameless room
+    # would have left mission progress permanently blank.
+    room_names = getattr(coordinator, "room_names", None) or {}
+    by_name = {
+        str(name).lower(): str(rid) for rid, name in room_names.items() if name
+    }
+
+    from roombapy_prime.models import TimeEstimates  # noqa: PLC0415
+
+    out: list[int | None] = []
+    for room_name in planned_order:
+        # The planned order may already be ids; if it is, use them
+        # directly rather than looking for a name that will not match.
+        key = str(room_name or "")
+        # `estimates` is Optional -- a robot the cloud has no timing for
+        # yields no per-room estimate, which is the same answer an
+        # unmatched name gives.
+        by_region = estimates.by_region if estimates is not None else {}
+        rid = key if key in by_region else by_name.get(key.lower())
+        best = (
+            TimeEstimates.best(by_region.get(rid) or [])
+            if rid else None
+        )
+        if best is None or not best.is_confident or best.seconds is None:
+            out.append(None)
+            continue
+        out.append(int(best.seconds))
+    return out
+
+
 def _compute_room_time_estimates(
     config_entry: Any, planned_order: list[str]
 ) -> list[int | None]:
@@ -178,7 +237,15 @@ def _compute_room_time_estimates(
     """
     cc = config_entry.runtime_data.cloud_coordinator
     if cc is None:
-        return [None] * len(planned_order)
+        # PRIME HAS ITS OWN SOURCE, and having none was why
+        # mission_progress read "unknown" on every Prime robot: this
+        # returned nothing but a list of Nones, and the sensor has no
+        # percentage to compute without estimates.
+        #
+        # `/v1/time-estimates` is the Prime equivalent of what the cloud
+        # coordinator provides on Classic -- per-room predictions from
+        # the robot's own history, fetched once at setup.
+        return _prime_room_time_estimates(config_entry, planned_order)
 
     # v2.7.5 (TP-EST-FIX): per-room params in lastCommand.regions take
     # priority over cleanMissionStatus global fields. cleanMissionStatus
@@ -186,8 +253,21 @@ def _compute_room_time_estimates(
     # setting even when a room-clean mission is started with explicit per-
     # region twoPass/noAutoPasses params. Reading from the wrong source
     # caused two-pass missions to be estimated at one-pass durations.
+    # THROUGH THE PRIME FALLBACK -- and it recovers less than it looks.
+    #
+    # The comment above records a fix from the Classic side: per-room
+    # params must win over the global default, or a two-pass mission is
+    # estimated at one-pass durations. On a Prime entry
+    # `roomba_reported_state()` returns {}, so `last_regions` was empty
+    # and that fix was inert -- the same wrong estimate, reached a
+    # different way.
+    #
+    # Prime carries `lastCommand` on rw-software with three scalar
+    # fields and NO `regions`. So this yields an honest empty answer
+    # rather than a wrong one; per-room pass counts stay unavailable on
+    # Prime until something carries them.
     reported = config_entry.runtime_data.roomba_reported_state()
-    last_cmd = reported.get("lastCommand") or {}
+    last_cmd = prime_last_command(config_entry.runtime_data)
     last_regions = [
         r for r in (last_cmd.get("regions") or [])
         if isinstance(r, dict) and r.get("params")
@@ -202,10 +282,38 @@ def _compute_room_time_estimates(
         else:
             pass_key = "one_pass_sec"
     else:
-        # Fallback: read from cleanMissionStatus global fields
-        _cms = reported.get("cleanMissionStatus") or {}
-        noap = _cms.get("noAutoPasses", True)
-        two_pass = _cms.get("twoPass", False)
+        # Fallback: read from cleanMissionStatus global fields.
+        #
+        # ALSO THROUGH THE PRIME SHADOW. This is the branch a Prime robot
+        # always lands in, since its lastCommand carries no regions -- so
+        # reading the global defaults from a dict that is empty by design
+        # meant every Prime estimate used the hardcoded fallbacks below,
+        # not the robot's own settings.
+        # TOP LEVEL FIRST -- that is where these actually live.
+        #
+        # Every diagnostics download we have carries `noAutoPasses` and
+        # `twoPass` as top-level keys of `reported`, never inside
+        # `cleanMissionStatus`: three robots, three generations, none
+        # nested. `button.py` and `room_cleaning.py` both read them from
+        # the top level; this was the only place that did not.
+        #
+        # The effect was silent: the lookup missed, the defaults said
+        # single-pass, and every two-pass mission got estimates roughly
+        # half the size it needed -- but only once `lastCommand` had
+        # been overwritten by a later command, so it looked intermittent.
+        # @Thonno's mission had `lastCommand: querydock` by the time it
+        # mattered.
+        #
+        # cleanMissionStatus is kept as a second place to look rather
+        # than dropped: no robot has been seen carrying them there, and
+        # removing a lookup nobody has disproved would be a guess in the
+        # other direction.
+        _cms = (reported.get("cleanMissionStatus") or {}) or _prime_pass_settings(
+            config_entry.runtime_data
+        )
+        _passes = reported if "noAutoPasses" in reported else _cms
+        noap = _passes.get("noAutoPasses", True)
+        two_pass = _passes.get("twoPass", False)
         if not noap:
             pass_key = None
         elif two_pass:
@@ -214,7 +322,7 @@ def _compute_room_time_estimates(
             pass_key = "one_pass_sec"
 
     # Build name→estimates map from coordinator
-    region_map: dict[str, dict] = {}
+    region_map: dict[str, dict[str, Any]] = {}
     for region in cc.regions:
         name = region.get("name", "")
         if name:
@@ -237,6 +345,76 @@ def _compute_room_time_estimates(
 
 # ── MP1 — Mission Progress sensor ─────────────────────────────────────────────
 
+def _prime_pass_settings(data: Any) -> dict[str, Any]:
+    """The global two-pass settings, in the wire shape the caller reads.
+
+    NOT FROM `cleanMissionStatus`. The first draft of this helper read
+    them there, mirroring the Classic shape -- and the library's
+    `CleanMissionStatus` has no such fields, so it returned two Nones
+    and would have looked like "the robot reports nothing".
+
+    On Prime they live in `rw-settings` as `noAutoPasses` and `twoPass`,
+    which is also where the six settings controls read them. Confirmed
+    from a real dump.
+
+    Returned as wire keys rather than model attributes because the
+    caller reads wire keys, and translating twice is one more place for
+    the two to drift apart."""
+    coordinator = getattr(data, "prime_status_coordinator", None)
+    if coordinator is None or coordinator.data is None:
+        return {}
+    raw = coordinator.data.get("rw-settings")
+    if not isinstance(raw, dict):
+        return {}
+    reported = raw.get("state", {}).get("reported") if "state" in raw else raw
+    if not isinstance(reported, dict):
+        return {}
+    return {
+        key: reported[key]
+        for key in ("noAutoPasses", "twoPass")
+        if key in reported
+    }
+
+
+def _mission_phase(data: Any) -> str:
+    """The mission phase, from whichever tier is actually reporting one.
+
+    Classic robots report it in master_state. CLOUD_ONLY/Prime entries
+    return ``{}`` from ``roomba_reported_state()`` BY DESIGN (see its
+    docstring: no master_state-shaped translation exists for V4) -- so a
+    phase read through the Classic shape is ``""`` for the life of the
+    entry, and every caller that GATES on it is closed on Prime forever.
+
+    THAT WAS `mission_progress` ON A ROBOT WHERE EVERYTHING ELSE WORKED.
+    @utkjmitch's Y351020 mid-mission: timer store with `mission_id`,
+    `elapsed_run_min` 10.7, `estimated_remaining_min` 42 against a
+    persisted 52.2-minute mean -- all three rendering as attributes, and
+    the state `unknown` for fifty minutes. Zero `mission_progress:`
+    debug lines in the log, because `native_value` returned at the phase
+    gate before its first debug call. The attributes read the same dead
+    phase and simply did not gate on it.
+
+    Three fixes were needed and this was the third: storage (a32),
+    the estimates fetch (a32), and the gate.
+
+    The fallback reads ``ro-currentstate`` -- the same shadow document
+    the prime coordinator feeds the mission timer store from, so the gate
+    and the data it guards move together. Classic is read FIRST and
+    returned when non-empty: a LOCAL entry never reaches the fallback and
+    behaves exactly as before.
+
+    SEVEN OTHER SITES READ THE PHASE THIS WAY. Two are fixed here; see
+    services.py's advance_room guard for the one that fails OPEN rather
+    than closed.
+    """
+    state = data.roomba_reported_state()
+    phase = (state.get("cleanMissionStatus") or {}).get("phase", "")
+    if phase:
+        return str(phase)
+    status = getattr(prime_current_state(data), "clean_mission_status", None)
+    return str(getattr(status, "phase", None) or "")
+
+
 def _resolve_smart_tier_room_state(config_entry: Any) -> dict[str, Any]:
     """Resolve current_room/next_room/elapsed/estimated_remaining_min for a
     SMART-tier robot's active mission.
@@ -257,8 +435,7 @@ def _resolve_smart_tier_room_state(config_entry: Any) -> dict[str, Any]:
     it used to be).
     """
     data = config_entry.runtime_data
-    state = data.roomba_reported_state()
-    phase = (state.get("cleanMissionStatus") or {}).get("phase", "")
+    phase = _mission_phase(data)
     mts = data.mission_timer_store
     if mts is None or mts.mission_id is None:
         return {}
@@ -286,16 +463,22 @@ def _resolve_smart_tier_room_state(config_entry: Any) -> dict[str, Any]:
     next_room: str | None = None
     estimated_remaining_min: int | None = None
 
-    if planned_order and estimates and all(e is not None for e in estimates):
+    # Filtered rather than checked -- ninth instance of this shape
+    # today. `all(e is not None ...)` proves the list is clean without
+    # narrowing it, so every read below still saw Optionals.
+    known = [e for e in (estimates or []) if e is not None]
+    if planned_order and estimates and len(known) == len(estimates):
         cumulative = 0
         for i, est in enumerate(estimates):
             assert est is not None
             if elapsed < cumulative + est:
                 current_room = planned_order[i]
                 next_room = planned_order[i + 1] if i + 1 < len(planned_order) else None
+                # `known` is the narrowed list built above; `estimates`
+                # still reads as holding Optionals.
                 remaining_sec = (cumulative + est - elapsed) + sum(
-                    estimates[j]  # type: ignore[arg-type]
-                    for j in range(i + 1, len(estimates))
+                    known[j]
+                    for j in range(i + 1, len(known))
                 )
                 estimated_remaining_min = max(0, round(remaining_sec / 60))
                 break
@@ -327,6 +510,23 @@ def _resolve_smart_tier_room_state(config_entry: Any) -> dict[str, Any]:
         # for when no per-room estimates exist.
         "current_room": current_room if current_room is not None else mts.current_room,
         "next_room":    next_room    if current_room is not None else mts.next_room,
+        # HOW THIS ROOM WAS ARRIVED AT, since it is not a measurement.
+        #
+        # `current_room` comes from elapsed mission time against per-room
+        # estimates. It never checks where the robot is -- so a room that
+        # takes longer or shorter than estimated moves the value on while
+        # the robot has not, and the error persists for the rest of the
+        # run (@ScenicSystemsLLC, reported twice, once early-mission and
+        # once late).
+        #
+        # A position-based resolver is the obvious fix and would produce
+        # nothing on his S9+: `cap.pose` reads 2 and no position has ever
+        # arrived. So the estimate is the ceiling on that hardware, and
+        # the honest thing is to say so rather than assert a room nobody
+        # verified. His framing, and it is the right one.
+        "current_room_source": (
+            "estimate" if current_room is not None else "mission_timer"
+        ),
         "elapsed_run_min": round(elapsed / 60, 1),
         "estimated_remaining_min": estimated_remaining_min,
         "room_sequence": planned_order,
@@ -360,8 +560,13 @@ class RoombaMissionProgress(IRobotEntity, SensorEntity):
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_entity_category = None  # main entity — visible on device page
 
+    #: Held so a finished mission reads 100% rather than Unknown.
+    #: Cleared when a new mission id appears. See native_value().
+    _last_progress: int | None = None
+    _last_mission_id: str | None = None
+
     def __init__(self, roomba: Any, blid: str, config_entry: Any) -> None:
-        super().__init__(roomba, blid)
+        super().__init__(roomba, blid, config_entry)
         self._config_entry = config_entry
         self._attr_unique_id = f"{self.robot_unique_id}_mission_progress"
 
@@ -392,7 +597,7 @@ class RoombaMissionProgress(IRobotEntity, SensorEntity):
             live_delta = int(_time_mod.monotonic() - mts.last_phase_ts)
             if 0 < live_delta < 7200:   # cap at 2 h; restart/long-pause guard
                 elapsed += live_delta
-        return elapsed
+        return float(elapsed)
 
     # ── Sensor state ──────────────────────────────────────────────────────────
 
@@ -420,15 +625,76 @@ class RoombaMissionProgress(IRobotEntity, SensorEntity):
     def native_value(self) -> StateType:
         """Return completion % (0–100) or None when inactive."""
         data = self._config_entry.runtime_data
-        state = data.roomba_reported_state()
-        phase = (state.get("cleanMissionStatus") or {}).get("phase", "")
+        phase = _mission_phase(data)
         mts = data.mission_timer_store
 
-        # Not in a cleaning phase → not active
-        if phase not in ("run", "hmMidMsn", "evac"):
-            return None
+        # THE LAST VALUE SURVIVES THE MISSION END.
+        #
+        # @chairstacker (#72): this dropped to "Unknown" the moment a
+        # mission finished, so the graph of a completed clean ended in a
+        # gap rather than at 100%. Returning None is right for "no
+        # mission has run"; it is wrong for "the mission just ended".
+        #
+        # The last figure is held until the next mission starts, which
+        # is also the useful answer for an aborted run: whatever it had
+        # reached when it stopped.
+        # THE GUARD IS FOR AFTER THE MISSION, NOT DURING IT.
+        #
+        # Holding the cached value whenever the phase is not one of the
+        # three active ones assumes the phase is current. On lewis it is
+        # not: that firmware sends `cleanMissionStatus` only on state
+        # changes, so between rooms the sensor reads whatever arrived
+        # last -- and if that is not `run`, the percentage freezes while
+        # elapsed_run_min and estimated_remaining_min keep moving
+        # (@Thonno: 20% held against 32.7 minutes elapsed, the two
+        # implying mission averages of 164 and 56 minutes).
+        #
+        # An active mission is known independently of the phase: the
+        # timer store holds a mission_id until the mission ends. So the
+        # cache is now only consulted once that is gone, which is the
+        # case it was built for.
+        # TERMINAL PHASES STILL COMPLETE THE MISSION. `charge` and
+        # `hmPostMsn` mean the robot went home -- that is the case this
+        # guard was built for, and the timer store can still be holding
+        # a mission_id at that moment.
+        #
+        # Everything else that is not an active phase is the lewis
+        # reporting gap, and there the cached value is wrong.
+        _terminal = phase in ("charge", "hmPostMsn", "stop", "cancelled")
+        _mission_active = mts is not None and mts.mission_id is not None
+        if _terminal or (
+            not _mission_active and phase not in ("run", "hmMidMsn", "evac")
+        ):
+            # A FINISHED MISSION IS 100%, NOT WHATEVER THE CLOCK SAID.
+            #
+            # @chairstacker (#72 follow-up): a favourite that completed
+            # successfully -- 4 minutes, 20 sq ft, app header "Cleaning
+            # Completed" -- froze at **34%**. The percentage is elapsed
+            # time against a per-room estimate, and the estimate was
+            # three times the real duration, so the run ended a third
+            # of the way through a clock that was simply wrong.
+            #
+            # Holding the last value (a38) was right for an aborted
+            # run and wrong for a completed one. Completion is known:
+            # the robot went home and docked.
+            #
+            # `hmPostMsn` and `charge` are the return after work.
+            # `stop` is not -- a mission stopped where it stood keeps
+            # whatever it had reached, which is the honest figure there.
+            if (
+                self._last_progress is not None
+                and phase in ("hmPostMsn", "charge")
+            ):
+                self._last_progress = 100
+            return self._last_progress
         if mts is None or mts.mission_id is None:
-            return None
+            return self._last_progress
+
+        # A new mission clears the held value rather than carrying the
+        # previous one into it.
+        if mts.mission_id != self._last_mission_id:
+            self._last_mission_id = mts.mission_id
+            self._last_progress = None
 
         # v2.9.0 — elapsed is now wall-clock mission duration minus
         # robot-confirmed recharge_min (F4e), not the old gap-clamped
@@ -455,14 +721,31 @@ class RoombaMissionProgress(IRobotEntity, SensorEntity):
         )
 
         if not planned_order:
-            # No room sequence — use elapsed vs. rolling mean as fallback
+            # NO ROOM SEQUENCE -> ELAPSED TIME AGAINST THE ROLLING MEAN.
+            #
+            # This is a duration estimate, not coverage, and it is
+            # convincing enough to be mistaken for one. @ratpic83
+            # watched it climb at a near-constant 1% per minute
+            # (88 -> 93 -> 96 -> 99) while `area_cleaned_today` stayed
+            # at 0.0 m² for the same job -- a reading that looks like
+            # measured progress and is arithmetic on the clock.
+            #
+            # THE 99 CEILING IS DELIBERATE and is the other half of what
+            # he saw: this never returns 100, because "finished" is a
+            # phase transition rather than a percentage. A stuck phase
+            # therefore parks it at 99 indefinitely, and his did.
+            #
+            # Kept because the alternative is no percentage at all on a
+            # robot with no planned room order -- but it is an estimate,
+            # and the release notes and the feature docs now say so.
             rps = getattr(data, "robot_profile_store", None)
             mean_sec = (
                 round((rps.mission_duration_mean or 0) * 60)
                 if rps is not None else 0
             )
             if mean_sec > 0:
-                return min(99, round(elapsed / mean_sec * 100))
+                self._last_progress = min(99, round(elapsed / mean_sec * 100))
+                return self._last_progress
             return None
 
         estimates = self._room_estimates(planned_order)
@@ -485,7 +768,8 @@ class RoombaMissionProgress(IRobotEntity, SensorEntity):
                     total_rooms, avg_sec, completed_rooms,
                     min(99, round(completed_rooms / total_rooms * 100)),
                 )
-                return min(99, round(completed_rooms / total_rooms * 100))
+                self._last_progress = min(99, round(completed_rooms / total_rooms * 100))
+                return self._last_progress
             # v2.9.0 — known_count==0 here (ALL per-room estimates are None,
             # e.g. Auto pass mode — TE1 cloud data has no per-room times for
             # that mode at all, confirmed via Thonno's field report). Falls
@@ -500,13 +784,15 @@ class RoombaMissionProgress(IRobotEntity, SensorEntity):
                 if rps is not None else 0
             )
             if mean_sec > 0:
-                return min(99, round(elapsed / mean_sec * 100))
+                self._last_progress = min(99, round(elapsed / mean_sec * 100))
+                return self._last_progress
             return None
 
         total_sec = sum(estimates)  # type: ignore[arg-type]
         if total_sec == 0:
             return None
-        return min(99, round(elapsed / total_sec * 100))
+        self._last_progress = min(99, round(elapsed / total_sec * 100))
+        return self._last_progress
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -539,8 +825,7 @@ class RoombaLearningPercentageSensor(IRobotEntity, SensorEntity):
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, roomba: Any, blid: str, config_entry: Any) -> None:
-        super().__init__(roomba, blid)
-        self._config_entry = config_entry
+        super().__init__(roomba, blid, config_entry)
         self._attr_unique_id = f"{self.robot_unique_id}_map_learning"
 
     @property
@@ -589,8 +874,7 @@ class RoombaZoneSummarySensor(IRobotEntity, SensorEntity):
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, roomba: Any, blid: str, config_entry: Any) -> None:
-        super().__init__(roomba, blid)
-        self._config_entry = config_entry
+        super().__init__(roomba, blid, config_entry)
         self._attr_unique_id = f"{self.robot_unique_id}_zone_summary"
 
     @property
@@ -658,8 +942,7 @@ class RoombaRoomsOverdueSensor(IRobotEntity, SensorEntity):
     _attr_state_class = SensorStateClass.MEASUREMENT
 
     def __init__(self, roomba: Any, blid: str, config_entry: Any) -> None:
-        super().__init__(roomba, blid)
-        self._config_entry = config_entry
+        super().__init__(roomba, blid, config_entry)
         self._attr_unique_id = f"{self.robot_unique_id}_rooms_overdue"
 
     def _merged(self) -> dict[str, dict[str, Any]]:
@@ -672,6 +955,7 @@ class RoombaRoomsOverdueSensor(IRobotEntity, SensorEntity):
         return ms.rooms_overdue_merged(
             config, dt_util.now().isoformat(),
             region_map=region_map, umf_regions=umf_regions,
+            regions_by_pmap=_regions_by_pmap_for(data),
         )
 
     @property
@@ -698,8 +982,27 @@ class RoombaRoomsOverdueSensor(IRobotEntity, SensorEntity):
         if rps is not None:
             suggested_by_rid = rps.suggested_cleaning_interval_days()
             if suggested_by_rid:
+                # EVERY MAP, NOT THE ACTIVE ONE.
+                #
+                # @dduff617 (#94): the history fix landed and this
+                # neighbour kept raw ids 1, 2 and 5, because it still
+                # resolved through `_region_maps_for` -- the active-map
+                # view, deliberately filtered so a room COMMAND cannot
+                # go to the wrong floor.
+                #
+                # A suggested interval is not a command. It is a
+                # statement about a room that exists somewhere, and on a
+                # four-map household most of them are not on whichever
+                # map happens to be active. Same distinction the history
+                # fix rested on: naming a room is not deciding where to
+                # send the robot.
                 region_map, umf_regions = _region_maps_for(data)
-                name_of = region_map or (umf_regions or {})
+                name_of = dict(region_map or (umf_regions or {}))
+                for per_map in (_regions_by_pmap_for(data) or {}).values():
+                    for rid, name in per_map.items():
+                        # The active map wins a collision -- it is the
+                        # one the user is looking at.
+                        name_of.setdefault(rid, name)
                 suggested = {
                     name_of.get(rid, rid): days
                     for rid, days in suggested_by_rid.items()
@@ -749,15 +1052,14 @@ class RoombaDirtCorrelationSensor(IRobotEntity, SensorEntity):
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, roomba: Any, blid: str, config_entry: Any) -> None:
-        super().__init__(roomba, blid)
-        self._config_entry = config_entry
+        super().__init__(roomba, blid, config_entry)
         self._attr_unique_id = f"{self.robot_unique_id}_dirt_weather_correlation"
 
     def _results(self) -> dict[str, dict[str, Any]]:
         rps = getattr(self._config_entry.runtime_data, "robot_profile_store", None)
         if rps is None:
             return {}
-        return rps.correlation_results()
+        return dict(rps.correlation_results())
 
     @staticmethod
     def _passing(results: dict[str, dict[str, Any]]) -> list[tuple[str, float]]:
@@ -965,7 +1267,16 @@ class RoombaRoomCleaningHistorySensor(IRobotEntity, SensorEntity):
         # v3.3.0 ROOM-SCHED foundation fix — pass the name-resolution
         # maps: live records derive rooms from timeline.finEvents now.
         region_map, umf_regions = _region_maps_for(self._entry.runtime_data)
-        return store.room_cleaning_history(region_map, umf_regions)
+        # AND THE PER-MAP VIEW, so a mission run on another Smart Map
+        # resolves against ITS map. @dduff617 (S9+, four maps) saw rooms
+        # from other floors rendered as raw ids -- `"2"`, `"5"` -- next
+        # to correctly named ones, because every record was resolved
+        # against whichever map is active now.
+        data = self._entry.runtime_data
+        by_pmap: dict[str, dict[str, str]] | None = None
+        if data.has_cloud and data.cloud_coordinator is not None:
+            by_pmap = data.cloud_coordinator.regions_by_pmap
+        return store.room_cleaning_history(region_map, umf_regions, by_pmap)
 
     @property
     def native_value(self) -> int:
@@ -978,17 +1289,56 @@ class RoombaRoomCleaningHistorySensor(IRobotEntity, SensorEntity):
         return self._history
 
 
+def _regions_by_pmap_for(runtime_data: Any) -> dict[str, dict[str, str]] | None:
+    """{pmap_id: {region_id: name}} for every map, or None.
+
+    The per-map companion to `_region_maps_for`, which returns the
+    ACTIVE map only. @dduff617 (S9+, four Smart Maps) showed that
+    resolving history against the active map alone leaves rooms from
+    other floors as raw ids -- and a raw id then counts as its own
+    never-cleaned "room", inflating every overdue and visit-count
+    figure on a multi-map account.
+    """
+    if runtime_data.has_cloud and runtime_data.cloud_coordinator is not None:
+        by_pmap = runtime_data.cloud_coordinator.regions_by_pmap
+        # Checked rather than cast: runtime_data is untyped here, and a
+        # cast would let a future shape change through silently.
+        if isinstance(by_pmap, dict):
+            return by_pmap
+    return None
+
+
 def _region_maps_for(runtime_data: Any) -> tuple[dict[str, str], dict[str, str] | None]:
     """v3.3.0 ROOM-SCHED foundation fix — module-level twin of
     RoombaLastMissionSummarySensor._region_map_and_umf so the
     room-history/overdue sensors resolve names the same way."""
     region_map: dict[str, str] = {}
     if runtime_data.has_cloud and runtime_data.cloud_coordinator is not None:
+        # ROOMS **AND** ZONES. `regions` holds rooms; the coordinator
+        # keeps clean zones in a separate `zones` property, and reading
+        # only the first left every zone out of the overdue sensor's
+        # `rooms` attribute -- the one place a template can enumerate
+        # them from (@ibernstone asked how).
+        #
+        # Sixth instance of this shape: a better-populated source
+        # appeared later and the places reading the older one were never
+        # revisited. See `scripts/check_prime_sources.py`.
         region_map = {
             r["id"]: r["name"]
-            for r in runtime_data.cloud_coordinator.regions
-            if r.get("id")
+            for source in (
+                runtime_data.cloud_coordinator.regions or [],
+                runtime_data.cloud_coordinator.zones or [],
+            )
+            for r in source
+            if r.get("id") and r.get("name")
         }
+    # PRIME HAS NO CLOUD COORDINATOR AT ALL. `prime_room_names` is flat
+    # and holds rooms and zones together, so a Prime robot's template
+    # gets the same list a Classic one does.
+    for rid, name in (
+        getattr(runtime_data, "prime_room_names", None) or {}
+    ).items():
+        region_map.setdefault(str(rid), name)
     umf_regions: dict[str, str] | None = None
     if not region_map and runtime_data.umf_aligner and runtime_data.umf_aligner.aligned:
         umf_regions = runtime_data.umf_aligner.rid_to_name()
@@ -1242,7 +1592,7 @@ class RoombaRelocalisationRateSensor(IRobotEntity, SensorEntity):
             return None
         if not rps.recent_relocs:
             return None
-        return round(sum(rps.recent_relocs) / len(rps.recent_relocs), 2)
+        return float(round(sum(rps.recent_relocs) / len(rps.recent_relocs), 2))
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -1260,3 +1610,94 @@ class RoombaRelocalisationRateSensor(IRobotEntity, SensorEntity):
             "recent_window": list(rps.recent_relocs),
             "percentile_rank": rps.reloc_percentile_rank(),
         }
+
+
+class PrimeRoomsOverdueSensor(RoombaRoomsOverdueSensor):
+    """The overdue-rooms count for V4/Prime robots.
+
+    A SUBCLASS RATHER THAN A COPY. Everything the Classic sensor does
+    here is tier-neutral already: `_merged()` reads `mission_store` and
+    `runtime_data`, never the local robot object, and
+    `new_state_filter` returns False because room data only ever
+    arrives through cloud enrichment. Only two things differ, and both
+    are below.
+
+    IT MATTERS MORE ON PRIME, not less. Prime robots have zones as well
+    as rooms -- @chairstacker has seven rooms and twelve zones -- so
+    there is more to fall behind, and his stated use for the
+    integration is exactly this: watch, and notify when something has
+    not been cleaned.
+    """
+
+    def __init__(self, blid: str, config_entry: Any) -> None:
+        # No local robot object exists on a CLOUD_ONLY entry; every
+        # Prime entity passes None here.
+        super().__init__(None, blid, config_entry)
+        self._config_entry = config_entry
+        # A DISTINCT unique_id, so a robot that somehow had both would
+        # not collide -- and so this one is recognisable in a registry.
+        self._attr_unique_id = f"{self.robot_unique_id}_prime_rooms_overdue"
+
+    async def async_added_to_hass(self) -> None:
+        """Follow the coordinator that drives the history sync.
+
+        The Classic sensor is refreshed by the local state push. Prime
+        has none, so without this the count would be read once at
+        start-up and never move -- the same omission that would have
+        frozen the per-region "last cleaned" sensors.
+        """
+        await super().async_added_to_hass()
+        coordinator = getattr(
+            self._config_entry.runtime_data, "prime_status_coordinator", None
+        )
+        if coordinator is not None:
+            self.async_on_remove(
+                coordinator.async_add_listener(self.schedule_update_ha_state)
+            )
+
+
+class PrimeRoomCleaningHistorySensor(RoombaRoomCleaningHistorySensor):
+    """Per-room last-clean timestamps for V4/Prime robots.
+
+    THE SAME SHAPE CLASSIC HAS ALWAYS SHIPPED: one entity, with
+    `{region_name: timestamp}` as attributes. Prime had none of this at
+    all -- not a decision, just the order things were built in.
+
+    Built as the DEFAULT after counting what the alternative costs: a
+    per-region entity for @chairstacker's seven rooms and twelve zones
+    is twenty new entities for data Classic delivers in one. Whoever
+    wants the entities can turn on CONF_REGION_SENSORS, on either tier.
+
+    `_history` is already tier-neutral -- it reads the mission store
+    and the cloud coordinator, never the local robot object -- so only
+    the two Prime differences are below.
+    """
+
+    def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:
+        # NOT super().__init__(): the Classic parent calls
+        # `IRobotEntity.__init__(roomba, blid)` WITHOUT the config
+        # entry, which is fine there -- model and serial come off the
+        # local robot object. A Prime entry has no such object, so
+        # those fields come only from the config entry, and going
+        # through the parent produced `model=None` on the device.
+        # Caught by the device-info guard, which exists for this.
+        IRobotEntity.__init__(self, None, blid, config_entry)
+        self._entry = config_entry
+        self._config_entry = config_entry
+        self._attr_unique_id = f"{self.robot_unique_id}_prime_room_cleaning_history"
+
+    async def async_added_to_hass(self) -> None:
+        """Follow the coordinator that drives the history sync.
+
+        Classic is refreshed by the local state push; Prime has none.
+        Without this the attributes would be read once at start-up and
+        never move.
+        """
+        await super().async_added_to_hass()
+        coordinator = getattr(
+            self._config_entry.runtime_data, "prime_status_coordinator", None
+        )
+        if coordinator is not None:
+            self.async_on_remove(
+                coordinator.async_add_listener(self.schedule_update_ha_state)
+            )

@@ -30,10 +30,13 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    CLEANING_PHASES,
     CONF_AWAY_DELAY_MIN,
+    CONF_CLEAN_DELAY_MIN,
     CONF_PRESENCE_ENTITIES,
     CONF_PRESENCE_MODE,
     DEFAULT_AWAY_DELAY_MIN,
+    DEFAULT_CLEAN_DELAY_MIN,
     DEFAULT_PRESENCE_MODE,
     EVENT_ALL_AWAY,
     EVENT_PERSON_DETECTED_DURING_CLEAN,
@@ -48,17 +51,23 @@ _LOGGER = logging.getLogger(__name__)
 _HOME_STATES = frozenset({"home", "on", "true"})
 # States where the person entity is unreliable — treat as "might be home" (safe default)
 _PRESENCE_UNUSABLE = frozenset({"unavailable", "unknown"})
-# Mission phases that indicate an active clean in progress
-_ACTIVE_CLEANING_PHASES = frozenset({"run", "hmMidMsn", "evac"})
+# Mission phases that indicate an active clean in progress.
+#
+# IMPORTED, not repeated: const.py owns this set and carries the reason
+# `evac` is in it. Two copies drifting apart would mean presence logic
+# and mission logic disagreeing about whether the robot is cleaning.
+_ACTIVE_CLEANING_PHASES = CLEANING_PHASES
 
 
-def _event_dt(item: object) -> object:
+def _event_dt(item: datetime | tuple[datetime, bool]) -> datetime:
     """Return the datetime from a _clean_events entry.
 
     Handles both the v2.5.0 format (plain datetime) and the v2.6.0 format
     ((datetime, was_all_away) tuple). Backward-compat for pre-existing data
     seeded by tests or migrated from storage.
     """
+    # Both stored shapes yield a datetime -- v2.5.0 wrote one
+    # directly, v2.6.0 writes `(datetime, was_all_away)`.
     return item[0] if isinstance(item, tuple) else item
 
 
@@ -69,14 +78,22 @@ class PresenceManager:
         self._hass = hass
         self._entry = config_entry
         self._cancel_listeners: list[Any] = []
-        self._away_task: asyncio.Task | None = None
+        self._away_task: asyncio.Task[None] | None = None
         # True when THIS manager set schedHold=False (unfreeze).
         # Used by is_managed_hold so the binary sensor can distinguish
         # presence-managed holds from manual ScheduleHoldSwitch toggles.
         self._managed_hold: bool = False
         self._did_unfreeze: bool = False  # True only when PM actually performed the unfreeze
         # R1: initialised here so record_clean_event/presence_windows never need hasattr
-        self._clean_events: dict[tuple[int, int], list[datetime]] = defaultdict(list)
+        #: Both formats, which `_event_dt` above already handles.
+        #:
+        #: v2.5.0 stored a plain datetime and v2.6.0 stores
+        #: `(datetime, was_all_away)`. The reader was written for both
+        #: on purpose -- seeded or migrated data can still be in the old
+        #: shape -- and this declaration only ever named the old one.
+        self._clean_events: dict[
+            tuple[int, int], list[datetime | tuple[datetime, bool]]
+        ] = defaultdict(list)
 
     # ── Setup ─────────────────────────────────────────────────────────────────
 
@@ -151,15 +168,42 @@ class PresenceManager:
         except asyncio.CancelledError:
             return
 
+        # THE SECOND DELAY, which existed as an option and was never
+        # read. The two answer different questions: the away delay waits
+        # to be sure everyone has really gone -- somebody walking to the
+        # postbox should not start a mission -- and this one waits before
+        # cleaning, because a car still on the drive is not a reason to
+        # send the robot out.
+        #
+        # Somebody who set both got only the first, and the dialog said
+        # nothing about it.
+        clean_delay: int = self._entry.options.get(
+            CONF_CLEAN_DELAY_MIN, DEFAULT_CLEAN_DELAY_MIN
+        )
+        if clean_delay > 0:
+            _LOGGER.debug(
+                "PresenceManager: away confirmed, %d min before cleaning",
+                clean_delay,
+            )
+            try:
+                await asyncio.sleep(clean_delay * 60)
+            except asyncio.CancelledError:
+                # An arrival during this window cancels the whole task,
+                # and cleaning must not start after it.
+                return
+
         mode = self._entry.options.get(CONF_PRESENCE_MODE, DEFAULT_PRESENCE_MODE)
         if mode == "away_only":
-            await self._set_sched_hold(False)
+            await self._set_schedules_paused(False)
             self._managed_hold = False
             self._did_unfreeze = True  # remember we performed the unfreeze
         else:
             # always_ask: fire event and let user automation handle it
             self._hass.bus.async_fire(EVENT_ALL_AWAY, {})
         self._away_task = None
+        #: Which schedules WE switched off, so a resume does not enable
+        #: one the user had turned off themselves.
+        self._paused_schedule_ids: set[str] = set()
 
     async def _handle_someone_home(self) -> None:
         """A person arrived — cancel delay and re-freeze if WE unfroze it."""
@@ -170,6 +214,34 @@ class PresenceManager:
             return
 
         data = self._entry.runtime_data
+
+        # PRIME HAS NO LOCAL ROBOT TO READ, and this reached past that.
+        #
+        # `_set_schedules_paused` branches on `prime_robot` correctly and
+        # never touches `data.roomba` on a Prime entry. This function did
+        # not: it read `data.roomba.master_state` to decide whether to
+        # re-freeze, before the branch that would have protected it.
+        #
+        # `data.roomba` is None on every CLOUD_ONLY entry by design, so a
+        # Prime user who switched on presence scheduling got an
+        # AttributeError the first time somebody came home. Nothing
+        # caught it -- no test builds a Prime entry with presence
+        # enabled, and the field question about presence on Prime has
+        # been open in the tester notes for a week with no answer.
+        #
+        # Found by mypy, not by a report.
+        #
+        # On Prime the decision is made from the schedules themselves:
+        # `_did_unfreeze` records that WE paused them, which is the same
+        # ownership check `schedHold` provides on Classic, without a
+        # shadow field to read.
+        if data.roomba is None:
+            if self._did_unfreeze:
+                await self._set_schedules_paused(True)
+                self._managed_hold = True
+                self._did_unfreeze = False
+            return
+
         state = data.roomba.master_state.get("state", {}).get("reported", {})
 
         if "schedHold" not in state:
@@ -182,7 +254,7 @@ class PresenceManager:
         # _did_unfreeze is set True only when _away_delay calls _set_sched_hold(False).
         # This prevents the PM from claiming ownership of a manual hold.
         if not state.get("schedHold", False) and self._did_unfreeze:
-            await self._set_sched_hold(True)
+            await self._set_schedules_paused(True)
             self._managed_hold = True
             self._did_unfreeze = False
 
@@ -190,6 +262,74 @@ class PresenceManager:
             phase = (state.get("cleanMissionStatus") or {}).get("phase", "")
             if phase in _ACTIVE_CLEANING_PHASES:
                 self._hass.bus.async_fire(EVENT_PERSON_DETECTED_DURING_CLEAN, {})
+
+    async def _set_schedules_paused(self, paused: bool) -> None:
+        """Pauses or resumes the robot's schedules, either generation.
+
+        CLASSIC HAS A FIELD FOR THIS AND PRIME DOES NOT. `schedHold` is
+        Classic's way of holding a schedule without changing it -- the
+        entry stays visible in the app and simply does not run.
+
+        A Prime robot carries `schedHold` in its shadow, accepts a write
+        to it, reads it back changed, **and runs anyway**. APK research
+        10 explains why: the field appears once in the Prime app, with no
+        serialisation annotation and no consumer across 3801 classes. It
+        is inherited plumbing, not a control.
+
+        What Prime offers instead is `enabled` per schedule, which the
+        app itself uses. So this disables and re-enables them.
+
+        **ONE VISIBLE DIFFERENCE, and it is worth knowing:** a paused
+        Classic schedule still looks scheduled in the iRobot app; a
+        paused Prime one looks switched off. Somebody checking the app
+        while the house is empty will see their schedules off. That is
+        honest -- they are -- but it is not what Classic does.
+        """
+        data = self._entry.runtime_data
+        if getattr(data, "prime_robot", None) is None:
+            await self._set_sched_hold(paused)
+            return
+
+        # LATE ON PURPOSE: prime_schedule_switch imports back into the
+        # presence chain, so a module-level import here is a real cycle.
+        from .prime_schedule_switch import (  # noqa: PLC0415
+            async_read_schedule_containers,
+        )
+
+        containers = await async_read_schedule_containers(self._entry)
+        if not containers:
+            return
+
+        # ONLY SCHEDULES WE PAUSED GET RESUMED. Turning everything back
+        # on would enable a schedule the user had deliberately switched
+        # off before leaving -- the robot would then run on a day they
+        # had opted out of, and nothing in Home Assistant would explain
+        # why.
+        for container_id, schedules in containers:
+            changed = False
+            for schedule in schedules or []:
+                options = getattr(schedule, "options", None)
+                if options is None or getattr(options, "deleted", None):
+                    continue
+                sid = getattr(schedule, "schedule_id", None)
+                if paused:
+                    if getattr(options, "enabled", None) is not True:
+                        continue
+                    if sid is not None:
+                        self._paused_schedule_ids.add(sid)
+                    options.enabled = False
+                    changed = True
+                elif sid in self._paused_schedule_ids:
+                    options.enabled = True
+                    self._paused_schedule_ids.discard(sid)
+                    changed = True
+            if changed:
+                assert data.prime_robot is not None  # noqa: S101 - branched above
+                await data.prime_robot.update_schedules(
+                    # `prime_household_id` is Optional; the API needs a
+                    # string. No household means no schedules to pause.
+                    data.prime_household_id or "", container_id, schedules
+                )
 
     async def _set_sched_hold(self, value: bool) -> None:
         """Write schedHold preference to the robot.
@@ -199,14 +339,33 @@ class PresenceManager:
         synchronous (MQTT publish).
         """
         data = self._entry.runtime_data
-        state = data.roomba.master_state.get("state", {}).get("reported", {})
+
+        # CLASSIC ONLY. `_set_schedules_paused` branches on
+        # `prime_robot` and calls this in the else -- Prime disables the
+        # schedules themselves instead, because a Prime robot accepts a
+        # write to `schedHold`, reads it back changed, and runs anyway.
+        #
+        # The sibling that reaches this from the arrival side had the
+        # same shape and no such branch, which is how a Prime user got
+        # an AttributeError the first time somebody came home. That one
+        # is fixed; this states the invariant for the path that was
+        # always correct.
+        roomba = data.roomba
+        if roomba is None:
+            _LOGGER.debug(
+                "PresenceManager: schedHold is a Classic field and there "
+                "is no local robot -- schedules are paused directly"
+            )
+            return
+
+        state = roomba.master_state.get("state", {}).get("reported", {})
         if "schedHold" not in state:
             _LOGGER.warning(
                 "PresenceManager: schedHold not in robot state — cannot write"
             )
             return
         await self._hass.async_add_executor_job(
-            data.roomba.set_preference, "schedHold", value
+            roomba.set_preference, "schedHold", value
         )
         _LOGGER.info("PresenceManager: schedHold set to %s", value)
 

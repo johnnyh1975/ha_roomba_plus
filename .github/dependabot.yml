@@ -4,13 +4,50 @@ updates:
   # automated way currently to notice a security patch landing upstream.
   # Weekly (not daily) — this is test tooling, not runtime dependencies
   # shipped to users; no urgency that justifies daily PR noise.
+  #
+  # No `labels:` here, deliberately: Dependabot requires labels to already
+  # exist in the repo before it can apply them to a PR, and neither
+  # "dependencies" nor "ci" exist yet (see the GitHub error this was
+  # written in response to). Create both under Settings → Labels first if
+  # you want the categorization back, then re-add `labels: ["dependencies"]`
+  # / `labels: ["dependencies", "ci"]` to the two entries below.
   - package-ecosystem: "pip"
     directory: "/"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
-    labels:
-      - "dependencies"
+    # ONLY WHAT THIS PROJECT ACTUALLY CHOOSES.
+    #
+    # requirements-test-frozen.txt holds 133 pins, and about a dozen of
+    # them are ours. The rest are Home Assistant's transitive tree --
+    # `acme`, `aiodns`, `aiodhcpwatcher` and so on. Dependabot treated
+    # every line as equally ours and opened PRs for all of them.
+    #
+    # Bumping a transitive pin is not just noise, it is wrong: those
+    # versions are HA's choice, and raising one independently can break
+    # against the HA version we pin.
+    #
+    # The allow-list is what we import by name in tests, scripts or the
+    # integration itself, plus the two runtime requirements from
+    # manifest.json. Anything not listed still gets updated -- by
+    # regenerating the frozen file against a new HA release, which is
+    # the only correct way to move them.
+    allow:
+      # Runtime, from manifest.json
+      - dependency-name: "roombapy"
+      - dependency-name: "roombapy-prime"
+      - dependency-name: "Pillow"
+      # The platform we build against
+      - dependency-name: "homeassistant"
+      # Test and lint tooling we invoke directly
+      - dependency-name: "pytest"
+      - dependency-name: "pytest-*"
+      - dependency-name: "ruff"
+      - dependency-name: "mypy"
+      - dependency-name: "freezegun"
+      # Imported by name in tests or scripts
+      - dependency-name: "aiohttp"
+      - dependency-name: "PyYAML"
 
   # The workflow files themselves (actions/checkout, actions/setup-python,
   # hacs/action, home-assistant/actions, softprops/action-gh-release, etc.)
@@ -19,6 +56,3 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
-    labels:
-      - "dependencies"
-      - "ci"

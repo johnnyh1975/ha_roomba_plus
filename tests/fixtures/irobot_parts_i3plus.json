@@ -1,0 +1,49 @@
+{
+  "robot_id": "9A37307A20804F0CABE9B6011B82DDBE",
+  "num_parts": 4,
+  "parts": [
+    {
+      "part_id": "139",
+      "counter": 60,
+      "minutes_remaining": 720,
+      "last_updated_ts": 1782324116,
+      "count_type": "minutes",
+      "count_remaining": 720,
+      "count_used": 1001,
+      "counter_category": "replacement",
+      "reset_by": "user"
+    },
+    {
+      "part_id": "35",
+      "counter": 43,
+      "minutes_remaining": 1800,
+      "last_updated_ts": 1780665041,
+      "count_type": "minutes",
+      "count_remaining": 1800,
+      "count_used": 1344,
+      "counter_category": "replacement",
+      "reset_by": "user"
+    },
+    {
+      "part_id": "36",
+      "counter": 37,
+      "minutes_remaining": 5940,
+      "last_updated_ts": 1773995679,
+      "count_type": "minutes",
+      "count_remaining": 5940,
+      "count_used": 3450,
+      "counter_category": "replacement",
+      "reset_by": "user"
+    },
+    {
+      "part_id": "37",
+      "counter": 94,
+      "minutes_remaining": 1080,
+      "count_type": "minutes",
+      "count_remaining": 1080,
+      "count_used": 17662,
+      "counter_category": "replacement",
+      "reset_by": "user"
+    }
+  ]
+}

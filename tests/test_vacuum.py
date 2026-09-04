@@ -21,7 +21,7 @@ from custom_components.roomba_plus.vacuum import BraavaJet
 from custom_components.roomba_plus.vacuum import IRobotVacuum
 from custom_components.roomba_plus.vacuum import RoombaVacuum
 from custom_components.roomba_plus.vacuum import RoombaVacuumCarpetBoost
-from custom_components.roomba_plus.models import MapCapability
+from custom_components.roomba_plus.models import ConnectionType, MapCapability
 from homeassistant.components.vacuum import VacuumEntityFeature
 from homeassistant.exceptions import ServiceValidationError
 import asyncio
@@ -105,12 +105,24 @@ def _make_vacuum_entity(state: dict | None = None, runtime_data=None):
         entry.runtime_data = runtime_data
     else:
         entry.runtime_data = _make_smart_data()
-    v = object.__new__(IRobotVacuum)
+    # HA 2026.x made `last_seen_segments` a @final @property with no
+    # setter. The integration only ever READS it -- assigning to it is
+    # what broke every vacuum entity in a38 -- but these tests need to
+    # control the value, so the subclass gives them somewhere to put it.
+    class _Settable(IRobotVacuum):  # noqa: N801
+        last_seen_segments = None
+
+    v = object.__new__(_Settable)
     v.vacuum = roomba
     v.vacuum_state = state or {}
     v._config_entry = entry
     v._cap_position = False
     v._segment_mismatch_streak = 0
+    # NEW (V4/Prime): defaults match __init__'s own LOCAL_PUSH defaults --
+    # every existing test using this bypass-construction helper predates
+    # ConnectionType and implicitly assumes classic/local behavior.
+    v._connection_type = ConnectionType.LOCAL_PUSH
+    v._prime_robot = None
     return v
 
 
@@ -135,6 +147,13 @@ def _make_vacuum_entity_v270_ia74_zone(coordinator=None, vacuum_state=None):
     entry = MagicMock()
     data = MagicMock()
     data.has_cloud = True
+    # SMART is now required for segment cleaning, where the old code
+    # checked only has_cloud. Not a new restriction in practice: HA only
+    # ever offers Clean Area when a backend exists, and a backend
+    # requires SMART -- so a non-SMART robot never had segments to clean
+    # in the first place. The gate is simply consistent now instead of
+    # differing between the produce and consume sides.
+    data.map_capability = MapCapability.SMART
     data.cloud_coordinator = coordinator or _make_coordinator()
     data.cloud_coordinator.regions = coordinator.regions if coordinator else []
     entry.runtime_data = data
@@ -1162,3 +1181,1567 @@ class TestNullRegressionExplicitNulls:
         b = object.__new__(BraavaJet)
         b.vacuum_state = {"rankOverlap": OVERLAP_STANDARD, "padWetness": None}
         assert b.fan_speed is None  # must not raise
+
+
+# =========================================================================
+# CLOUD_ONLY (V4/Prime) vacuum action branches (this session).
+# =========================================================================
+
+
+def _make_prime_vacuum_entity() -> IRobotVacuum:
+    """Build a bare IRobotVacuum wired for CLOUD_ONLY -- roomba=None,
+    vacuum_state={} (no master_state-shaped translation exists yet, see
+    RobotStatusV2 blocker), self._prime_robot an AsyncMock so command
+    calls can be asserted on directly."""
+    v = object.__new__(IRobotVacuum)
+    v.vacuum = None
+    v.vacuum_state = {}
+    v._config_entry = MagicMock()
+    v._cap_position = False
+    v._segment_mismatch_streak = 0
+    v._connection_type = ConnectionType.CLOUD_ONLY
+    v._prime_robot = MagicMock()
+    v._prime_robot.send_simple_command = AsyncMock()
+    v._prime_robot.poll_echo_value = AsyncMock()
+    return v
+
+
+class TestCloudOnlyVacuumActions:
+    """v4.0.0a0 MVP: start/pause/stop/dock/locate via roombapy-prime,
+    never touching self.vacuum (None for CLOUD_ONLY) or
+    self.hass.async_add_executor_job at all."""
+
+    @pytest.mark.asyncio
+    async def test_async_added_to_hass_does_not_crash(self):
+        """Regression test for a real bug found in the bug-hunt round:
+        async_added_to_hass() is called unconditionally by HA for every
+        entity -- it called self.vacuum.register_on_message_callback()
+        with no guard, crashing immediately for a CLOUD_ONLY entity
+        (self.vacuum is None) the very first time HA's own entity
+        lifecycle touched it."""
+        v = _make_prime_vacuum_entity()
+        v.hass = MagicMock()
+        with patch.object(v, "_async_update_device_name", new=AsyncMock()):
+            with patch.object(v, "schedule_update_ha_state"):
+                await v.async_added_to_hass()  # must not raise
+
+    def test_extra_state_attributes_does_not_crash(self):
+        """Regression test for a second real bug in the same round: this
+        property reads self.vacuum.current_state/error_code/error_message
+        unconditionally -- worse than async_added_to_hass() since HA
+        evaluates this on every single state write, not just once at
+        setup."""
+        v = _make_prime_vacuum_entity()
+
+        attrs = v.extra_state_attributes
+
+        # `idle`, not None. A Prime entry has no local robot and so no
+        # `current_state`, and this attribute used to report nothing at
+        # all for every V4 robot -- an automation templating on `status`
+        # got None. @jouwdan (#88) pointed the fallback at `activity`,
+        # which is derived from the mission phase and always answers.
+        assert attrs["status"] == "idle"
+        assert "error" not in attrs
+        assert "error_code" not in attrs
+
+    @pytest.mark.asyncio
+    async def test_start_always_sends_start_command(self):
+        """NEW (V4/Prime): unlike the classic path, never checks
+        self.activity for PAUSED first -- that property isn't reliable
+        yet for Prime (empty vacuum_state, no RobotStatusV2 translation)."""
+        v = _make_prime_vacuum_entity()
+
+        await v.async_start()
+
+        v._prime_robot.send_simple_command.assert_awaited_once_with("start")
+
+    @pytest.mark.asyncio
+    async def test_stop_sends_stop_command(self):
+        v = _make_prime_vacuum_entity()
+
+        await v.async_stop()
+
+        v._prime_robot.send_simple_command.assert_awaited_once_with("stop")
+
+    @pytest.mark.asyncio
+    async def test_pause_sends_pause_command(self):
+        v = _make_prime_vacuum_entity()
+
+        await v.async_pause()
+
+        v._prime_robot.send_simple_command.assert_awaited_once_with("pause")
+
+    @pytest.mark.asyncio
+    async def test_return_to_base_sends_dock_directly(self):
+        """NEW (V4/Prime): sends "dock" immediately, skipping the
+        pause-then-wait-for-confirmation dance the classic path does --
+        self.activity would never report PAUSED for Prime, so that
+        loop would only ever hit its 10s timeout."""
+        v = _make_prime_vacuum_entity()
+
+        await v.async_return_to_base()
+
+        v._prime_robot.send_simple_command.assert_awaited_once_with("dock")
+
+    @pytest.mark.asyncio
+    async def test_locate_uses_send_simple_command_find_confirmed_working(self):
+        """RESOLVED (jayjay, real device test): send_simple_command("find")
+        is CONFIRMED WORKING -- a genuine, audible chime with no robot
+        movement. poll_echo_value() (the earlier hypothesis) was tried
+        first and confirmed NOT working."""
+        v = _make_prime_vacuum_entity()
+
+        await v.async_locate()
+
+        v._prime_robot.send_simple_command.assert_awaited_once_with("find")
+        v._prime_robot.poll_echo_value.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_send_command_raises_service_validation_error(self):
+        """NEW (V4/Prime): not supported yet -- must raise a clear error
+        rather than crashing on self.vacuum being None."""
+        v = _make_prime_vacuum_entity()
+
+        with pytest.raises(ServiceValidationError, match="not yet supported"):
+            await v.async_send_command("start", params={"regions": ["10"]})
+
+        v._prime_robot.send_simple_command.assert_not_called()
+
+
+class TestLocalPushVacuumActionsUnaffected:
+    """Regression guard: the classic LOCAL_PUSH path (the default
+    ConnectionType) must be completely unaffected by the CLOUD_ONLY
+    branches added above -- these exercise the actual action methods
+    directly, which no test in this file did before this session."""
+
+    def _make_local_entity(self) -> IRobotVacuum:
+        v = _make_vacuum_entity()
+        v.hass = MagicMock()
+        v.hass.async_add_executor_job = AsyncMock()
+        v.vacuum.send_command = MagicMock()
+        return v
+
+    @pytest.mark.asyncio
+    async def test_start_uses_executor_job_with_roomba_send_command(self):
+        v = self._make_local_entity()
+
+        await v.async_start()
+
+        v.hass.async_add_executor_job.assert_awaited_once_with(
+            v.vacuum.send_command, "start"
+        )
+
+    @pytest.mark.asyncio
+    async def test_locate_uses_executor_job_with_find_command(self):
+        v = self._make_local_entity()
+
+        await v.async_locate()
+
+        v.hass.async_add_executor_job.assert_awaited_once_with(
+            v.vacuum.send_command, "find"
+        )
+
+
+# =========================================================================
+# CLOUD_ONLY activity/extra_state_attributes derived from PrimeCoordinator
+# (this session) -- see PrimeCoordinator's own module docstring and
+# MISSION_EVENT_TYPE_TO_ACTIVITY's docstring (const.py) for the full
+# evidence trail and per-event-type confidence breakdown.
+# =========================================================================
+
+
+def _make_mission_timeline_report(event_type: str, **event_kwargs):
+    from roombapy_prime.models import MissionTimelineEvent, MissionTimelineReport
+
+    event_data = {"type": event_type, "ts": 1, **event_kwargs}
+    return MissionTimelineReport(
+        mission_id="m1", event=[MissionTimelineEvent.from_json(event_data)],
+    )
+
+
+class TestCloudOnlyActivityFromMissionTimeline:
+    @pytest.mark.parametrize(
+        "event_type,expected",
+        [
+            ("start", "cleaning"),
+            ("reloc", "cleaning"),
+            ("travel", "cleaning"),
+            ("room", "cleaning"),
+            ("traversal", "cleaning"),
+            ("zone", "cleaning"),
+            ("pause", "paused"),
+            ("charge", "docked"),
+            ("evac", "returning"),
+            ("padWash", "docked"),
+            ("fin", "idle"),
+            ("error", "error"),
+        ],
+    )
+    def test_activity_maps_confirmed_event_types(self, event_type, expected):
+        from homeassistant.components.vacuum import VacuumActivity
+
+        v = _make_prime_vacuum_entity()
+        v._config_entry.runtime_data.prime_coordinator.data = _make_mission_timeline_report(event_type)
+
+        assert v.activity == VacuumActivity(expected)
+
+    def test_activity_falls_back_to_idle_for_unknown_event_type(self):
+        """Deliberately IDLE, not ERROR, for an unrecognized type here --
+        unlike the classic phase-map path, an unmapped mission-timeline
+        event type is far more likely to be one of the several
+        known-but-not-yet-mapped MissionTimelineEvent sub-types than a
+        genuine fault."""
+        from homeassistant.components.vacuum import VacuumActivity
+
+        v = _make_prime_vacuum_entity()
+        v._config_entry.runtime_data.prime_coordinator.data = _make_mission_timeline_report("waypoint")
+
+        assert v.activity == VacuumActivity.IDLE
+
+    def test_activity_falls_back_to_idle_when_no_coordinator_data_yet(self):
+        from homeassistant.components.vacuum import VacuumActivity
+
+        v = _make_prime_vacuum_entity()
+        v._config_entry.runtime_data.prime_coordinator.data = None
+
+        assert v.activity == VacuumActivity.IDLE
+
+
+class TestCloudOnlyExtraStateAttributesFromMissionTimeline:
+    def test_room_event_populates_room_attributes(self):
+        v = _make_prime_vacuum_entity()
+        v._config_entry.runtime_data.prime_coordinator.data = _make_mission_timeline_report(
+            "room", room={"rid": "11", "area": 354, "passCount": 0},
+        )
+
+        attrs = v.extra_state_attributes
+
+        assert attrs["mission_id"] == "m1"
+        assert attrs["mission_event_type"] == "room"
+        assert attrs["current_room_id"] == "11"
+        assert attrs["current_room_area"] == 354
+        assert attrs["current_room_pass_count"] == 0
+
+    def test_travel_event_populates_room_id_only(self):
+        """TravelEvent has no area/pass_count -- only RoomEvent does."""
+        v = _make_prime_vacuum_entity()
+        v._config_entry.runtime_data.prime_coordinator.data = _make_mission_timeline_report(
+            "travel", travel={"dest": "room", "rid": "11"},
+        )
+
+        attrs = v.extra_state_attributes
+
+        assert attrs["current_room_id"] == "11"
+        assert "current_room_area" not in attrs
+
+    def test_start_event_has_no_room_id(self):
+        """The "start" event carries no nested room/travel sub-object at
+        all -- must not crash, must simply omit current_room_id."""
+        v = _make_prime_vacuum_entity()
+        v._config_entry.runtime_data.prime_coordinator.data = _make_mission_timeline_report("start")
+
+        attrs = v.extra_state_attributes
+
+        assert attrs["mission_event_type"] == "start"
+        assert "current_room_id" not in attrs
+
+    def test_no_coordinator_data_yet_does_not_crash(self):
+        v = _make_prime_vacuum_entity()
+        v._config_entry.runtime_data.prime_coordinator.data = None
+
+        attrs = v.extra_state_attributes
+
+        assert "mission_event_type" not in attrs
+
+
+class TestPrimeCoordinatorListenerRegistration:
+    @pytest.mark.asyncio
+    async def test_async_added_to_hass_registers_prime_coordinator_listener(self):
+        v = _make_prime_vacuum_entity()
+        v.hass = MagicMock()
+        v._config_entry.runtime_data.cloud_coordinator = None
+        pc = v._config_entry.runtime_data.prime_coordinator
+        with patch.object(v, "_async_update_device_name", new=AsyncMock()):
+            with patch.object(v, "schedule_update_ha_state"):
+                await v.async_added_to_hass()
+
+        pc.async_add_listener.assert_called_once_with(v._handle_prime_coordinator_update)
+
+    def test_handle_prime_coordinator_update_schedules_state_update(self):
+        v = _make_prime_vacuum_entity()
+        with patch.object(v, "schedule_update_ha_state") as mock_schedule:
+            v._handle_prime_coordinator_update()
+        mock_schedule.assert_called_once()
+
+
+class TestPrimeActivityPrefersCleanMissionStatusPhase:
+    """NEW (this session, real field report -- chairstacker): the
+    mission-timeline event type alone cannot express "heading home".
+    His own log showed "travel" firing both for room-to-room travel
+    mid-mission AND for the trip back to the dock, so a completed
+    mission still reported CLEANING all the way home. phase
+    (cleanMissionStatus, ro-currentstate) is CONFIRMED LIVE for Prime
+    and draws exactly that distinction."""
+
+    def _entity_with(self, *, phase=None, event_type=None, cycle="clean"):
+        from homeassistant.components.vacuum import VacuumActivity  # noqa: F401
+
+        v = _make_prime_vacuum_entity()
+        status_coordinator = MagicMock()
+        status_coordinator.data = (
+            {"ro-currentstate": {"cleanMissionStatus": {"phase": phase, "cycle": cycle}}}
+            if phase is not None else {}
+        )
+        v._config_entry.runtime_data.prime_status_coordinator = status_coordinator
+
+        coordinator = MagicMock()
+        if event_type is not None:
+            coordinator.data = MagicMock(event=[MagicMock(event_type=event_type)])
+        else:
+            coordinator.data = None
+        v._config_entry.runtime_data.prime_coordinator = coordinator
+        return v
+
+    def test_hm_post_msn_reports_returning_not_cleaning(self):
+        """THE actual reported bug: mission done, robot heading home --
+        with an active cycle, i.e. genuinely still travelling back."""
+        from homeassistant.components.vacuum import VacuumActivity
+
+        v = self._entity_with(phase="hmPostMsn", event_type="travel", cycle="clean")
+
+        assert v.activity == VacuumActivity.RETURNING
+
+    def test_hm_mid_msn_still_reports_cleaning(self):
+        """Heading home to RECHARGE mid-mission is genuinely still an
+        active mission -- must NOT be reported as returning."""
+        from homeassistant.components.vacuum import VacuumActivity
+
+        v = self._entity_with(phase="hmMidMsn", event_type="travel")
+
+        assert v.activity == VacuumActivity.CLEANING
+
+    def test_run_phase_reports_cleaning(self):
+        from homeassistant.components.vacuum import VacuumActivity
+
+        v = self._entity_with(phase="run", event_type="travel")
+
+        assert v.activity == VacuumActivity.CLEANING
+
+    def test_falls_back_to_event_map_when_phase_absent(self):
+        from homeassistant.components.vacuum import VacuumActivity
+
+        v = self._entity_with(phase=None, event_type="zone")
+
+        assert v.activity == VacuumActivity.CLEANING
+
+    def test_falls_back_to_event_map_when_phase_unrecognized(self):
+        """An unknown phase must not swallow the event stream -- the
+        event map stays the safety net."""
+        from homeassistant.components.vacuum import VacuumActivity
+
+        v = self._entity_with(phase="somethingNewFromFirmware", event_type="pause")
+
+        assert v.activity == VacuumActivity.PAUSED
+
+    def test_idle_when_neither_source_has_anything(self):
+        from homeassistant.components.vacuum import VacuumActivity
+
+        v = self._entity_with(phase=None, event_type=None)
+
+        assert v.activity == VacuumActivity.IDLE
+
+
+class TestPrimeActivityStuckOnReturning:
+    """FIELD REPORT (DaRealGuGu): the vacuum's activity stayed on
+    "Returning to dock" for several minutes after the robot had
+    genuinely finished -- while the SEPARATE dock-status sensor, read
+    from the same coordinator's ro-currentstate, had already gone
+    emptying -> ready. Ruling out stale coordinator data: if the dock
+    sensor updated, this coordinator's data updated too.
+
+    UNCONFIRMED ROOT CAUSE. No real capture yet shows the exact stuck
+    phase/cycle combination -- this applies the same corroboration this
+    project already learned the hard way for cleanMissionStatus.error
+    (see PrimeErrorSensor's own docstring): the firmware may not always
+    flip `phase` to a rest value once a mission genuinely ends, and
+    `cycle` dropping to "none" is the same corroborating signal used
+    there. This correction can only turn a wrong RETURNING into DOCKED,
+    never the reverse, so it cannot make a real in-progress return
+    disappear."""
+
+    def _prime_vacuum(self, ro_currentstate: dict):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.models import ConnectionType
+        from custom_components.roomba_plus.vacuum import IRobotVacuum
+
+        v = object.__new__(IRobotVacuum)
+        v._connection_type = ConnectionType.CLOUD_ONLY
+        entry = MagicMock()
+        entry.runtime_data.prime_status_coordinator.data = {"ro-currentstate": ro_currentstate}
+        entry.runtime_data.prime_coordinator.data = None
+        v._config_entry = entry
+        return v
+
+    def test_returning_with_an_active_cycle_is_left_alone(self):
+        """The common, correct case: genuinely still heading home mid or
+        post mission with cycle active must NOT be touched."""
+        from homeassistant.components.vacuum import VacuumActivity
+
+        v = self._prime_vacuum({"cleanMissionStatus": {"phase": "hmPostMsn", "cycle": "clean"}})
+
+        assert v.activity == VacuumActivity.RETURNING
+
+    def test_returning_with_no_active_cycle_corrects_to_docked(self):
+        """The reported bug: phase stuck on a returning value with cycle
+        already back to none -- consistent with the mission actually
+        being over."""
+        from homeassistant.components.vacuum import VacuumActivity
+
+        v = self._prime_vacuum({"cleanMissionStatus": {"phase": "evac", "cycle": "none"}})
+
+        assert v.activity == VacuumActivity.DOCKED
+
+    def test_a_missing_cycle_field_is_NOT_treated_as_idle(self):
+        """REVERSED (this session). a9 defaulted a missing cycle to
+        "none", which made an absent field indistinguishable from a
+        finished mission.
+
+        Consolidating both branches onto _prime_cycle_is_idle() adopted
+        its stricter rule instead: absent means UNKNOWN, and unknown
+        must not be read as idle -- otherwise a robot genuinely on its
+        way home, whose status shadow happens to be sparse, would be
+        reported as already docked.
+
+        The correction may only ever turn a wrong RETURNING into
+        DOCKED. Guessing on missing data is how it would start doing
+        the reverse."""
+        from homeassistant.components.vacuum import VacuumActivity
+
+        v = self._prime_vacuum({"cleanMissionStatus": {"phase": "hmPostMsn"}})
+
+        assert v.activity == VacuumActivity.RETURNING
+
+    def test_non_returning_phases_are_never_touched_by_this_check(self):
+        """The correction is scoped to RETURNING specifically -- it must
+        not become a general override for other phases."""
+        from homeassistant.components.vacuum import VacuumActivity
+
+        v = self._prime_vacuum({"cleanMissionStatus": {"phase": "run", "cycle": "none"}})
+
+        assert v.activity == VacuumActivity.CLEANING
+
+
+class TestSendVerbIsSharedByTheUniformActions:
+    """Four methods -- stop, pause, locate and the Prime side of start
+    -- each carried an identical copy of the same transport branch.
+
+    Four copies of one decision is four chances to update three of
+    them, and that is not hypothetical: a fix belonging in one of these
+    branches has already been put in the wrong one once in this
+    project's history.
+
+    Deliberately NOT solved with an IRobotVacuumPrime subclass, which
+    an earlier architecture note had proposed. The entity class is
+    chosen by device capability (BraavaJet / RoombaVacuumCarpetBoost /
+    RoombaVacuum) and connection type is orthogonal to it -- a Prime
+    robot can be any of the three, so subclassing would need
+    BraavaJetPrime, RoombaVacuumCarpetBoostPrime and so on. A
+    combinatorial explosion to remove one if-statement."""
+
+    def _vacuum(self, connection_type):
+        from custom_components.roomba_plus.vacuum import IRobotVacuum
+
+        v = object.__new__(IRobotVacuum)
+        v._connection_type = connection_type
+        v._prime_robot = AsyncMock()
+        v.vacuum = MagicMock()
+        v.hass = MagicMock()
+        v.hass.async_add_executor_job = AsyncMock()
+        return v
+
+    @pytest.mark.asyncio
+    async def test_prime_goes_through_the_prime_robot(self):
+        from custom_components.roomba_plus.models import ConnectionType
+
+        v = self._vacuum(ConnectionType.CLOUD_ONLY)
+
+        await v._async_send_verb("stop")
+
+        v._prime_robot.send_simple_command.assert_awaited_once_with("stop")
+        v.hass.async_add_executor_job.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_classic_goes_through_the_local_connection(self):
+        from custom_components.roomba_plus.models import ConnectionType
+
+        v = self._vacuum(ConnectionType.LOCAL_PUSH)
+
+        await v._async_send_verb("stop")
+
+        v.hass.async_add_executor_job.assert_awaited_once()
+        v._prime_robot.send_simple_command.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_the_three_uniform_actions_all_route_through_it(self):
+        """If one of these ever stops using the shared helper, the
+        duplication is back and this test is the only thing that would
+        notice."""
+        from custom_components.roomba_plus.models import ConnectionType
+
+        for method, verb in (("async_stop", "stop"), ("async_pause", "pause"),
+                             ("async_locate", "find")):
+            v = self._vacuum(ConnectionType.CLOUD_ONLY)
+            await getattr(v, method)()
+            v._prime_robot.send_simple_command.assert_awaited_once_with(verb)
+
+    def test_the_remaining_branches_are_genuinely_different(self):
+        """return_to_base and send_command keep their own checks on
+        purpose: their two paths differ in behaviour, not just in
+        transport. This records that as intent rather than oversight."""
+        import inspect
+
+        from custom_components.roomba_plus.vacuum import IRobotVacuum
+
+        dock = inspect.getsource(IRobotVacuum.async_return_to_base)
+        send = inspect.getsource(IRobotVacuum.async_send_command)
+
+        assert "CLOUD_ONLY" in dock, "dock skips the classic pause-then-wait dance"
+        assert "CLOUD_ONLY" in send, "send_command is refused entirely for Prime"
+
+
+class TestReturningCorrectionCoversBothBranches:
+    """a9 added the stale-RETURNING correction to the phase branch only.
+    A field report came back saying the status still stuck at "returning
+    to dock" while the robot sat on it.
+
+    The reason: when the phase branch does not resolve, the EVENT branch
+    takes over, and that one had no corroboration at all. It also maps
+    `evac` to RETURNING -- and evacuation happens AT the dock. The robot
+    has arrived, not still travelling.
+
+    The tester's sequence produces exactly that: mission stopped ->
+    returns -> docks -> evacuates. Last event `evac`, RETURNING forever.
+
+    The original reasoning for evac -> RETURNING was that a
+    self-emptying base can evac mid-mission, so the robot is "not
+    reliably docked". That conflates *where the robot is* with *whether
+    the mission is over*. `cycle` answers the second properly."""
+
+    def _vacuum(self, *, phase=None, cycle="none", event_type=None):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.models import ConnectionType
+        from custom_components.roomba_plus.vacuum import IRobotVacuum
+
+        v = object.__new__(IRobotVacuum)
+        v._connection_type = ConnectionType.CLOUD_ONLY
+        entry = MagicMock()
+        # The status shadow is ALWAYS seeded here, even when no phase is
+        # set. That matters: _prime_cycle_is_idle() deliberately returns
+        # False when the shadow is missing -- unknown must not be read as
+        # idle, or a genuine trip home would be reported as docked. A
+        # test that omits the shadow therefore exercises "we don't know",
+        # not the reported scenario, where the shadow is present and the
+        # cycle is genuinely finished.
+        status: dict[str, object] = {"cycle": cycle}
+        if phase is not None:
+            status["phase"] = phase
+        entry.runtime_data.prime_status_coordinator.data = {
+            "ro-currentstate": {"cleanMissionStatus": status}
+        }
+        if event_type is not None:
+            entry.runtime_data.prime_coordinator.data = MagicMock(
+                event=[MagicMock(event_type=event_type)]
+            )
+        else:
+            entry.runtime_data.prime_coordinator.data = None
+        v._config_entry = entry
+        return v
+
+    def test_evac_at_the_dock_after_a_finished_mission_reads_docked(self):
+        """THE reported symptom, via the branch a9 missed."""
+        from homeassistant.components.vacuum import VacuumActivity
+
+        v = self._vacuum(event_type="evac")
+
+        assert v.activity == VacuumActivity.DOCKED
+
+    def test_evac_mid_mission_still_reads_returning(self):
+        """The case the original mapping was protecting: a self-emptying
+        base can empty partway through, and the robot really will go out
+        again. An active cycle is what distinguishes the two."""
+        from homeassistant.components.vacuum import VacuumActivity
+
+        v = self._vacuum(cycle="clean", event_type="evac")
+
+        assert v.activity == VacuumActivity.RETURNING
+
+    def test_the_phase_branch_still_works(self):
+        """a9's original fix must survive the move into a shared method."""
+        from homeassistant.components.vacuum import VacuumActivity
+
+        v = self._vacuum(phase="hmPostMsn", cycle="none")
+
+        assert v.activity == VacuumActivity.DOCKED
+
+    def test_an_unknown_cycle_is_not_treated_as_idle(self):
+        """The helper returns False when the status shadow is missing.
+        Reading unknown as idle would report a robot genuinely on its
+        way home as already docked -- the one direction this correction
+        must never take."""
+        from homeassistant.components.vacuum import VacuumActivity
+
+        v = self._vacuum(event_type="evac")
+        v._config_entry.runtime_data.prime_status_coordinator.data = {}
+
+        assert v.activity == VacuumActivity.RETURNING
+
+    def test_a_genuine_return_is_never_turned_into_docked(self):
+        """The asymmetry that makes this safe: an active cycle always
+        wins, so a real trip home cannot vanish."""
+        from homeassistant.components.vacuum import VacuumActivity
+
+        v = self._vacuum(phase="hmPostMsn", cycle="clean")
+
+        assert v.activity == VacuumActivity.RETURNING
+
+    def test_non_returning_activities_are_untouched(self):
+        from homeassistant.components.vacuum import VacuumActivity
+
+        assert self._vacuum(phase="run", cycle="none").activity == VacuumActivity.CLEANING
+        assert self._vacuum(event_type="pause").activity == VacuumActivity.PAUSED
+
+    def test_both_branches_go_through_the_same_correction(self):
+        """Guards against the a9 mistake recurring: fixing one branch and
+        forgetting its sibling.
+
+        WAS A SOURCE-TEXT COUNT of `_prime_cycle_is_idle()` calls,
+        pinned at two. That broke the moment a third correct use was
+        added -- at a change, not at a fault -- and it never verified
+        that either branch behaved. This exercises both.
+        """
+        from homeassistant.components.vacuum import VacuumActivity
+
+        # Phase branch: a stale RETURNING with no cycle is really docked.
+        assert (
+            self._vacuum(phase="hmUsrDock", cycle="none").activity
+            == VacuumActivity.DOCKED
+        )
+
+        # Event branch: same correction, reached a different way.
+        assert (
+            self._vacuum(event_type="evac", cycle="none").activity
+            == VacuumActivity.DOCKED
+        )
+
+        # And with a live cycle neither branch may claim docked.
+        for kwargs in ({"phase": "hmUsrDock"}, {"event_type": "evac"}):
+            assert (
+                self._vacuum(cycle="clean", **kwargs).activity
+                != VacuumActivity.DOCKED
+            ), kwargs
+
+
+class TestVacuumSubscribesToTheStatusCoordinator:
+    """ROOT CAUSE of a report that survived two attempted fixes.
+
+    A tester's vacuum showed "Returning to dock" while the robot sat on
+    it. His diagnostics download then showed `phase: "charge"`,
+    `cycle: "none"` -- data that maps cleanly to DOCKED. The data was
+    correct the whole time. Nothing ever asked the entity to look at it
+    again.
+
+    `activity` reads cleanMissionStatus.phase from the STATUS
+    coordinator, but the entity only subscribed to the cloud and
+    mission-event coordinators. So it re-rendered when a mission event
+    arrived and never when the phase changed -- and a phase settling to
+    "charge" after the last event was simply never displayed.
+
+    Both earlier attempts corrected the MAPPING instead. That was the
+    wrong layer: no mapping fix helps an entity that is not re-reading
+    its source. Worth remembering as a diagnostic habit -- when the
+    data is right and the display is wrong, the bug is in the
+    subscription, not the logic."""
+
+    def _added_listeners(self):
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        import asyncio
+
+        from custom_components.roomba_plus.vacuum import IRobotVacuum
+
+        v = object.__new__(IRobotVacuum)
+        entry = MagicMock()
+        subscribed = []
+        for name in ("cloud_coordinator", "prime_coordinator", "prime_status_coordinator"):
+            coord = MagicMock()
+            coord.async_add_listener = (
+                lambda _cb, _n=name: subscribed.append(_n) or (lambda: None)
+            )
+            setattr(entry.runtime_data, name, coord)
+        v._config_entry = entry
+        v.async_on_remove = MagicMock()
+
+        with patch.object(IRobotVacuum.__bases__[0], "async_added_to_hass", AsyncMock()):
+            asyncio.run(v.async_added_to_hass())
+        return subscribed
+
+    def test_the_status_coordinator_is_subscribed(self):
+        """THE fix. activity's data comes from here."""
+        assert "prime_status_coordinator" in self._added_listeners()
+
+    def test_the_other_two_are_still_subscribed(self):
+        """Adding one subscription must not drop the existing ones."""
+        listeners = self._added_listeners()
+
+        assert "cloud_coordinator" in listeners
+        assert "prime_coordinator" in listeners
+
+    def test_a_missing_coordinator_is_survivable(self):
+        """Classic entries have no Prime coordinators at all."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        import asyncio
+
+        from custom_components.roomba_plus.vacuum import IRobotVacuum
+
+        v = object.__new__(IRobotVacuum)
+        entry = MagicMock()
+        entry.runtime_data.cloud_coordinator = None
+        entry.runtime_data.prime_coordinator = None
+        entry.runtime_data.prime_status_coordinator = None
+        v._config_entry = entry
+        v.async_on_remove = MagicMock()
+
+        with patch.object(IRobotVacuum.__bases__[0], "async_added_to_hass", AsyncMock()):
+            asyncio.run(v.async_added_to_hass())
+
+
+class TestDockActivityAttribute:
+    """What the dock is doing, alongside the vacuum's own state.
+
+    Requested by @DaRealGuGu: a robot having its pad washed shows as
+    "docked", which is true and unhelpful -- the dock is busy and he
+    wants that visible on the entity people look at.
+
+    AN ATTRIBUTE, NOT A STATE. VacuumActivity has exactly six members --
+    cleaning, docked, idle, paused, returning, error -- and a vacuum
+    entity reporting anything else is broken rather than extended. So
+    "pad washing" cannot be a state however much it deserves to be one.
+
+    As an attribute it feeds a template sensor, a card's secondary line
+    or an automation condition, which is what the request is for."""
+
+    def _activity(self, dock):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.models import ConnectionType
+        from custom_components.roomba_plus.vacuum import IRobotVacuum
+
+        vacuum = object.__new__(IRobotVacuum)
+        entry = MagicMock()
+        entry.runtime_data.connection_type = ConnectionType.CLOUD_ONLY
+        entry.runtime_data.prime_status_coordinator.data = {
+            "ro-currentstate": {"dock": dock}
+        }
+        vacuum._config_entry = entry
+        return vacuum._prime_dock_activity()
+
+    def test_pad_washing_is_reported(self):
+        assert self._activity({"pwState": 602}) == "pad_washing"
+
+    def test_pad_drying_is_reported(self):
+        assert self._activity({"pdState": 702}) == "pad_drying"
+
+    def test_evacuating_is_reported(self):
+        assert self._activity({"state": 302}) == "evacuating"
+
+    def test_an_idle_dock_reports_nothing(self):
+        """601/701/301 are the "okay" states -- the dock is well and
+        doing nothing, which the vacuum's own "docked" already says.
+        Repeating it as an attribute would be noise."""
+        assert self._activity({"pwState": 601, "pdState": 701, "state": 301}) is None
+
+    def test_a_classic_robot_gets_no_attribute(self):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.models import ConnectionType
+        from custom_components.roomba_plus.vacuum import IRobotVacuum
+
+        vacuum = object.__new__(IRobotVacuum)
+        entry = MagicMock()
+        entry.runtime_data.connection_type = ConnectionType.LOCAL_PUSH
+        vacuum._config_entry = entry
+
+        assert vacuum._prime_dock_activity() is None
+
+    def test_the_values_are_slugs_not_prose(self):
+        """An attribute is read by templates and automations. A value
+        that changes with the user's language breaks both."""
+        for dock, expected in (
+            ({"pwState": 602}, "pad_washing"),
+            ({"pdState": 702}, "pad_drying"),
+            ({"state": 302}, "evacuating"),
+        ):
+            value = self._activity(dock)
+            assert value == expected
+            assert value == value.lower()
+            assert " " not in value
+
+
+class TestCleaningModeAttribute:
+    """Vacuuming or mopping, from cleanMissionStatus.operatingMode.
+
+    `cycle` stays "clean" for an entire vacuum-then-mop job, so this is
+    the only field that distinguishes the two halves.
+
+    CONFIRMED across four captures from one Combo (@DaRealGuGu),
+    including the mopping half of a scheduled vacuum-then-mop run --
+    which is the capture that had been missing for two days:
+
+        docked          2   vacuum
+        combo running   6   2|4, both together
+        mopping half    4   mop only
+
+    THE COMMAND USES THE SAME NAME FOR DIFFERENT NUMBERS. A command asks
+    for 512 (vacuum then mop) or 32 (combined); neither appears in the
+    status. Reading one table against the other made 6 look impossible
+    for two days."""
+
+    def _mode(self, status):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.models import ConnectionType
+        from custom_components.roomba_plus.vacuum import IRobotVacuum
+
+        vacuum = object.__new__(IRobotVacuum)
+        entry = MagicMock()
+        entry.runtime_data.connection_type = ConnectionType.CLOUD_ONLY
+        entry.runtime_data.prime_status_coordinator.data = {
+            "ro-currentstate": {"cleanMissionStatus": status}
+        }
+        vacuum._config_entry = entry
+        return vacuum._prime_cleaning_mode()
+
+    def test_vacuuming(self):
+        assert self._mode({"cycle": "clean", "operatingMode": 2}) == "vacuuming"
+
+    def test_mopping(self):
+        """The value from the capture that settled this."""
+        assert self._mode({"cycle": "clean", "operatingMode": 4}) == "mopping"
+
+    def test_both_at_once(self):
+        assert (
+            self._mode({"cycle": "clean", "operatingMode": 6})
+            == "vacuuming_and_mopping"
+        )
+
+    def test_a_docked_robot_reports_nothing(self):
+        """A docked robot still carries a mode, describing the last or
+        next job. Reporting that as current activity would be worse than
+        reporting nothing -- and it is what made an earlier reading of
+        this field look static."""
+        assert self._mode({"cycle": "none", "operatingMode": 2}) is None
+
+    def test_a_command_number_is_not_reported(self):
+        """512 and 32 are command values. If one ever turned up in the
+        status field, guessing at it would put a wrong word in front of
+        the user."""
+        assert self._mode({"cycle": "clean", "operatingMode": 512}) is None
+        assert self._mode({"cycle": "clean", "operatingMode": 32}) is None
+
+
+class TestCommandsAreRefusedWhileTheDockWorks:
+    """From the iRobot app's own res/raw availability spec.
+
+    While a mission is under way AND the dock is emptying, refilling,
+    washing or drying, the app offers NO robot controls at all -- an
+    empty button list, not a greyed-out one. A command sent then is one
+    the robot will not act on.
+    """
+
+    def _vacuum(self, *, cycle="clean", dock=None, cloud=True):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.models import ConnectionType
+        from custom_components.roomba_plus.vacuum import IRobotVacuum
+
+        entity = object.__new__(IRobotVacuum)
+        entity._connection_type = (
+            ConnectionType.CLOUD_ONLY if cloud else ConnectionType.LOCAL_PUSH
+        )
+        entry = MagicMock()
+        coordinator = MagicMock()
+        coordinator.data = {"ro-currentstate": {}}
+        entry.runtime_data.prime_status_coordinator = coordinator
+        entity._config_entry = entry
+        entity._shadow = SimpleNamespace(
+            clean_mission_status=SimpleNamespace(cycle=cycle),
+            dock=SimpleNamespace(**dock) if dock is not None else None,
+        )
+        return entity
+
+    def _busy(self, **kwargs):
+        from unittest.mock import patch
+
+        entity = self._vacuum(**kwargs)
+        with patch(
+            "roombapy_prime.models.CurrentStateShadow.from_json",
+            return_value=entity._shadow,
+        ):
+            return entity._dock_operation_in_progress()
+
+    _IDLE = {"state": 301, "pw_state": 601, "pd_state": 701}
+
+    def test_each_running_dock_operation_is_named(self):
+        """The refusal says WHICH operation is in the way. "Try again
+        later" without a reason is what this project had to correct when
+        eight unrelated readiness states all reported a map update."""
+        assert "bin" in self._busy(dock={**self._IDLE, "state": 302})
+        assert "washing" in self._busy(dock={**self._IDLE, "pw_state": 602})
+        assert "drying" in self._busy(dock={**self._IDLE, "pd_state": 702})
+
+    def test_an_idle_dock_blocks_nothing(self):
+        assert self._busy(dock=self._IDLE) is None
+
+    def test_no_mission_means_no_block(self):
+        """The rule is scoped to clean and spot. A dock washing a pad
+        while the robot is parked must not lock the controls."""
+        for cycle in ("none", "dock", "evac"):
+            assert self._busy(cycle=cycle, dock={**self._IDLE, "pw_state": 602}) is None
+
+    def test_classic_robots_are_untouched(self):
+        """These rules come from the Prime app. The Classic app was not
+        checked, so a Classic robot keeps every control it has rather
+        than inheriting a rule from evidence that does not cover it."""
+        assert self._busy(cloud=False, dock={**self._IDLE, "pw_state": 602}) is None
+
+    def test_a_missing_config_entry_does_not_raise(self):
+        """Some tests build this entity without running __init__, so the
+        attribute is absent rather than None -- and a command path is the
+        wrong place to discover that."""
+        from custom_components.roomba_plus.models import ConnectionType
+        from custom_components.roomba_plus.vacuum import IRobotVacuum
+
+        entity = object.__new__(IRobotVacuum)
+        entity._connection_type = ConnectionType.CLOUD_ONLY
+
+        assert entity._dock_operation_in_progress() is None
+
+    def test_locate_is_deliberately_not_guarded(self):
+        """Refusing to help someone find their robot has no upside, and
+        the app's spec covers mission controls rather than locate."""
+        from custom_components.roomba_plus.vacuum import IRobotVacuum
+
+        assert "find" not in IRobotVacuum._DOCK_GUARDED_VERBS
+        assert {"start", "stop", "pause", "dock"} <= IRobotVacuum._DOCK_GUARDED_VERBS
+
+
+class TestReturnToBaseGoesThroughTheDockGuard:
+    """"dock" was listed in _DOCK_GUARDED_VERBS and never reached it.
+
+    The Prime branch of async_return_to_base called send_simple_command()
+    directly, so Return to base was the one control that still fired
+    while the dock was mid-cycle -- exactly the case the guard exists
+    for. The app's own spec shows NO buttons at all during an
+    evacuation, refill, pad wash or pad dry.
+    """
+
+    def _entity(self, *, dock, cycle="clean"):
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, MagicMock
+
+        from custom_components.roomba_plus.models import ConnectionType
+        from custom_components.roomba_plus.vacuum import IRobotVacuum
+
+        entity = object.__new__(IRobotVacuum)
+        entity._connection_type = ConnectionType.CLOUD_ONLY
+        entity._prime_robot = AsyncMock()
+        entry = MagicMock()
+        coordinator = MagicMock()
+        coordinator.data = {"ro-currentstate": {}}
+        entry.runtime_data.prime_status_coordinator = coordinator
+        entity._config_entry = entry
+        entity._shadow = SimpleNamespace(
+            clean_mission_status=SimpleNamespace(cycle=cycle),
+            dock=SimpleNamespace(**dock),
+        )
+        return entity
+
+    _IDLE = {"state": 301, "pw_state": 601, "pd_state": 701}
+
+    async def _dock(self, entity):
+        from unittest.mock import patch
+
+        with patch(
+            "roombapy_prime.models.CurrentStateShadow.from_json",
+            return_value=entity._shadow,
+        ):
+            await entity.async_return_to_base()
+
+    @pytest.mark.asyncio
+    async def test_refused_while_the_pad_is_washing(self):
+        from homeassistant.exceptions import ServiceValidationError
+
+        entity = self._entity(dock={**self._IDLE, "pw_state": 602})
+
+        with pytest.raises(ServiceValidationError):
+            await self._dock(entity)
+        entity._prime_robot.send_simple_command.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_refused_during_an_evacuation(self):
+        from homeassistant.exceptions import ServiceValidationError
+
+        entity = self._entity(dock={**self._IDLE, "state": 302})
+
+        with pytest.raises(ServiceValidationError):
+            await self._dock(entity)
+
+    @pytest.mark.asyncio
+    async def test_allowed_when_the_dock_is_idle(self):
+        entity = self._entity(dock=self._IDLE)
+
+        await self._dock(entity)
+
+        entity._prime_robot.send_simple_command.assert_awaited_once_with("dock")
+
+    @pytest.mark.asyncio
+    async def test_allowed_when_no_mission_is_running(self):
+        """The rules only apply during a clean or spot cycle -- a dock
+        that is washing while the robot sits idle blocks nothing."""
+        entity = self._entity(dock={**self._IDLE, "pw_state": 602}, cycle="none")
+
+        await self._dock(entity)
+
+        entity._prime_robot.send_simple_command.assert_awaited_once_with("dock")
+
+
+class TestUndeliveredCommandsAreReported:
+    """`send_simple_command()` returns whether the broker acknowledged
+    the publish, and every call site threw that away.
+
+    A command that never reached iRobot looked exactly like one the robot
+    chose to ignore: the press succeeded, the service returned, nothing
+    happened. A field report described it as "no reaction from the logo"
+    for start, locate and dry pad alike -- three controls, one silent
+    transport, four days spent looking at the controls.
+    """
+
+    @pytest.mark.asyncio
+    async def test_an_unacknowledged_command_raises(self):
+        from unittest.mock import AsyncMock
+
+        from homeassistant.exceptions import HomeAssistantError
+
+        from custom_components.roomba_plus.prime_commands import _send_confirmed
+
+        robot = AsyncMock()
+        robot.send_simple_command.return_value = False
+
+        with pytest.raises(HomeAssistantError, match="never reached"):
+            await _send_confirmed(robot, "start")
+
+    @pytest.mark.asyncio
+    async def test_an_acknowledged_command_is_silent(self):
+        from unittest.mock import AsyncMock
+
+        from custom_components.roomba_plus.prime_commands import _send_confirmed
+
+        robot = AsyncMock()
+        robot.send_simple_command.return_value = True
+
+        await _send_confirmed(robot, "start")
+
+    @pytest.mark.asyncio
+    async def test_none_is_not_treated_as_failure(self):
+        """Only an explicit False means "not delivered". A library that
+        returns None has not reported a failure, and turning that into
+        one would break every command against an older version."""
+        from unittest.mock import AsyncMock
+
+        from custom_components.roomba_plus.prime_commands import _send_confirmed
+
+        robot = AsyncMock()
+        robot.send_simple_command.return_value = None
+
+        await _send_confirmed(robot, "start")
+
+    def test_no_call_site_bypasses_it(self):
+        """The point is that ALL of them go through the check -- one
+        forgotten call site puts the silent failure back."""
+        import inspect
+
+        from custom_components.roomba_plus import button_prime, vacuum
+
+        for module in (vacuum, button_prime):
+            source = inspect.getsource(module)
+            for line in source.splitlines():
+                stripped = line.strip()
+                # Only actual calls. The name appears in comments and
+                # docstrings all over these modules, and matching those
+                # would make the test fail for prose.
+                if not stripped.startswith("await ") or (
+                    "send_simple_command(" not in stripped
+                ):
+                    continue
+                assert "_send_confirmed" in stripped, f"{module.__name__}: {stripped}"
+
+
+class TestACombosRoomCleaningIsNotTakenAway:
+    """`is_mop()` answers "can it mop" by looking for `detectedPad`. A
+    Combo has a pad AND brushes AND stable region ids, so gating
+    CLEAN_AREA on `not is_mop()` excluded it as though it were a Braava.
+
+    @connormxy's j7+ Combo advertised no CLEAN_AREA, Home Assistant
+    filtered the entity out of its own service picker, and he reinstalled
+    three integrations looking for the cause. His diagnostics show the
+    cloud coordinator holding twelve regions the whole time.
+
+    The fourteenth site of this same mistake, and `is_mop`'s own
+    docstring already said which one to use.
+
+    THE FLAG ITSELF CANNOT BE ASSERTED HERE: this test environment runs
+    Home Assistant 2025.1, where `VacuumEntityFeature.CLEAN_AREA` does
+    not exist. So these check the predicate that decides it, which is
+    where the bug was.
+    """
+
+    def _excluded(self, state):
+        from custom_components.roomba_plus.const import is_braava
+
+        return is_braava(state)
+
+    def test_a_combo_is_not_excluded(self):
+        """A pad and brushes -- rooms are addressable by region id."""
+        # His actual sku. `is_braava` reads the first letter, and falls
+        # back to `is_mop` only when there is none -- which is why the
+        # sku belongs in the fixture rather than being left out.
+        combo = {"sku": "c755020", "detectedPad": "reusableWet"}
+
+        assert not self._excluded(combo)
+
+    def test_a_plain_vacuum_is_not_excluded(self):
+        assert not self._excluded({"sku": "i755840"})
+
+    def test_a_braava_is_excluded(self):
+        """A Braava targets rooms through padWetness rather than region
+        segments -- the exclusion this gate was always meant to
+        express."""
+        assert self._excluded({"sku": "m613840", "detectedPad": "reusableWet"})
+
+    def test_the_old_predicate_would_have_excluded_the_combo(self):
+        """Pinning why this was wrong, not only that it changed."""
+        from custom_components.roomba_plus.const import is_mop
+
+        combo = {"sku": "c755020", "detectedPad": "reusableWet"}
+
+        from custom_components.roomba_plus.const import is_braava as _b
+
+        assert is_mop(combo) is True
+        assert _b(combo) is False
+
+    def test_the_gate_asks_about_braavas_not_about_pads(self):
+        import inspect
+
+        from custom_components.roomba_plus import vacuum
+
+        source = inspect.getsource(vacuum.IRobotVacuum.supported_features.fget)
+        assert "not is_braava(" in source
+        assert "not is_mop(" not in source
+
+
+class TestOnlyARealBraavaGetsTheBraavaClass:
+    """`BraavaJet.supported_features` deliberately excludes CLEAN_AREA —
+    a Braava has no regions to clean, and that is right.
+
+    **The class was being chosen by `is_mop()`**, which is true for
+    anything with a pad, so every Combo was built as a Braava and
+    inherited an exclusion meant for a different robot.
+
+    The same `is_mop`/`is_braava` substitution was corrected inside the
+    base class weeks ago for @connormxy. It was the right condition in a
+    place his robot never reached: the class was already wrong.
+
+    His a30 diagnostics said so and it was misread — `withheld_features`
+    came back **empty**, meaning the base class considered the feature
+    offered. It did. Nothing asked it.
+    """
+
+    def _selection(self):
+        import inspect
+
+        from custom_components.roomba_plus import vacuum
+
+        return inspect.getsource(vacuum.async_setup_entry)
+
+    def test_the_class_is_chosen_by_being_a_braava(self):
+        source = self._selection()
+
+        assert "if is_braava(state):" in source
+        assert "if is_mop(state):" not in source
+
+    def test_the_braava_exclusion_itself_is_left_alone(self):
+        """It is correct for the robot it was written for. The bug was
+        which robots reached it, not what it does."""
+        import inspect
+
+        from custom_components.roomba_plus.vacuum import BraavaJet
+
+        doc = inspect.getdoc(BraavaJet.supported_features)
+
+        assert "never CLEAN_AREA" in doc
+
+    def test_a_combo_is_not_a_braava(self):
+        """c755020 starts with "c". The whole substitution turns on
+        that one letter."""
+        from custom_components.roomba_plus.const import is_braava, is_mop
+
+        combo = {"sku": "c755020", "detectedPad": "reusableDry"}
+
+        assert not is_braava(combo)
+        assert is_mop(combo)
+
+
+class TestWeDoNotAssignToHomeAssistantsProperties:
+    """a38 declared `self.last_seen_segments = None` in `__init__`,
+    on a code comment saying `StateVacuumEntity` does not provide it.
+
+    That was true of the HA pinned here (2025.1.4, the newest
+    installable on Python 3.12). On HA 2026.7 and later it is a
+    `@final @property` with no setter — so the assignment raised
+    `property has no setter` and took **vacuum setup down entirely**.
+    @ScenicSystemsLLC lost all three robots on upgrade; @utkjmitch
+    confirmed from source that it is `@final` back through 2026.7.4, so
+    no HA version would have accepted it.
+
+    The general shape: mypy against an old pinned HA reports a newer
+    HA's API as missing, and "fixing" that by declaring it locally
+    turns a type-checker complaint into a runtime crash.
+    """
+
+    #: Names that belong to Home Assistant's vacuum platform on versions
+    #: newer than the one pinned here. Reading them is correct;
+    #: declaring or assigning them is not.
+    HA_OWNED = ("last_seen_segments", "async_create_segments_issue")
+
+    def test_nothing_assigns_to_them(self):
+        import ast
+        import inspect
+
+        from custom_components.roomba_plus import vacuum
+
+        tree = ast.parse(inspect.getsource(vacuum))
+        offenders = []
+        for node in ast.walk(tree):
+            targets = []
+            if isinstance(node, ast.Assign):
+                targets = node.targets
+            elif isinstance(node, ast.AnnAssign):
+                targets = [node.target]
+            for t in targets:
+                if (
+                    isinstance(t, ast.Attribute)
+                    and t.attr in self.HA_OWNED
+                    and isinstance(t.value, ast.Name)
+                    and t.value.id == "self"
+                ):
+                    offenders.append(f"{t.attr} at line {node.lineno}")
+
+        assert not offenders, (
+            f"assigning to Home Assistant's own vacuum properties: "
+            f"{offenders} -- `last_seen_segments` is @final with no "
+            f"setter on HA 2026.7+, and assignment crashes setup"
+        )
+
+    def test_nothing_defines_them_either(self):
+        """Defining a method HA owns overrides its implementation with
+        ours, silently, on the versions that have it."""
+        import ast
+        import inspect
+
+        from custom_components.roomba_plus import vacuum
+
+        tree = ast.parse(inspect.getsource(vacuum))
+        offenders = [
+            n.name for n in ast.walk(tree)
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and n.name in self.HA_OWNED
+        ]
+
+        assert not offenders, (
+            f"{offenders} are Home Assistant's, not ours to define"
+        )
+
+    def test_the_guard_names_something_the_module_uses(self):
+        """A guard listing names nothing touches passes vacuously."""
+        import inspect
+
+        from custom_components.roomba_plus import vacuum
+
+        source = inspect.getsource(vacuum)
+
+        assert all(name in source for name in self.HA_OWNED)
+
+
+class TestWeDoNotAssignToHomeAssistantProperties:
+    """a38 declared `self.last_seen_segments = None` in `__init__`,
+    because mypy against the pinned HA (2025.1.4 — the newest
+    installable on Python 3.12) reported the name as undefined.
+
+    On HA 2026.7 and later it is a `@final @property` with no setter.
+    The assignment raised `property has no setter` and took **vacuum
+    setup down entirely** — @ScenicSystemsLLC lost all three robots on
+    upgrade, @utkjmitch confirmed from source that it is `@final` back
+    through 2026.7.4.
+
+    The lesson is not about this one name: a symbol missing from the
+    pinned HA is not a symbol that does not exist. This integration is
+    written against a newer HA than it can install here, and three
+    other names already carry that caveat.
+    """
+
+    #: Names Home Assistant owns on the vacuum entity. Assigning to any
+    #: of these in `__init__` breaks setup on the HA versions users
+    #: actually run, whatever the pinned one reports.
+    #:
+    #: VERIFIED AGAINST THE VERSIONS USERS RUN, not against the pinned
+    #: one -- which is the check a38 skipped:
+    #:
+    #:     2025.1.4  neither name exists      <- pinned here
+    #:     2026.7.4  both exist, property is @final
+    #:     2026.8.1  both exist, property is @final
+    #:
+    #: `async_create_segments_issue` is HA's own and documented for
+    #: exactly this case: "Integrations should call this method when
+    #: the vacuum reports different segments than what was previously
+    #: mapped to areas." So reading both names is correct; only
+    #: assigning to them is not.
+    #:
+    #: Thirty seconds of
+    #: `curl raw.githubusercontent.com/home-assistant/core/<tag>/...`
+    #: would have caught this before release. `hasattr` against the
+    #: local install answers a different question.
+    HA_OWNED = ("last_seen_segments", "async_create_segments_issue")
+
+    def test_the_constructor_assigns_to_none_of_them(self):
+        import ast
+        import pathlib
+
+        source = pathlib.Path(
+            "custom_components/roomba_plus/vacuum.py"
+        ).read_text()
+
+        offenders = []
+        for node in ast.walk(ast.parse(source)):
+            if not isinstance(node, ast.Assign):
+                continue
+            for target in node.targets:
+                if (
+                    isinstance(target, ast.Attribute)
+                    and isinstance(target.value, ast.Name)
+                    and target.value.id == "self"
+                    and target.attr in self.HA_OWNED
+                ):
+                    offenders.append(f"{target.attr}:{node.lineno}")
+
+        assert not offenders, (
+            f"{offenders} are Home Assistant's own attributes on the "
+            f"vacuum entity. Assigning to them raises 'property has no "
+            f"setter' on HA 2026.7+ and fails platform setup, even "
+            f"though the pinned HA here reports them as absent."
+        )
+
+    def test_annotated_assignment_counts_too(self):
+        """`self.x: T = None` is `AnnAssign`, not `Assign` — and it is
+        exactly the form a38 used."""
+        import ast
+        import pathlib
+
+        source = pathlib.Path(
+            "custom_components/roomba_plus/vacuum.py"
+        ).read_text()
+
+        offenders = [
+            f"{node.target.attr}:{node.lineno}"
+            for node in ast.walk(ast.parse(source))
+            if isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Attribute)
+            and isinstance(node.target.value, ast.Name)
+            and node.target.value.id == "self"
+            and node.target.attr in self.HA_OWNED
+        ]
+
+        assert not offenders, (
+            f"{offenders} are Home Assistant's own -- see the sibling "
+            f"test for why this fails platform setup"
+        )
+
+
+class TestPrimeMissionPhases:
+    """Phase names from the firmware 3.8.126 `cleanMissionStatus.phase`
+    enum, mapped to activities.
+
+    The list came from a firmware image, not from watching a robot --
+    an external source, so it is trusted the way this project trusts
+    external sources: cross-checked where it can be. `room`, `zone` and
+    `refill` were already confirmed from real data before the enum
+    existed, which is the evidence that the rest name real phases and
+    not a decoder's invention.
+    """
+
+    def test_cleaning_sub_phases_all_read_as_cleaning(self):
+        from custom_components.roomba_plus.const import PHASE_TO_ACTIVITY
+        from homeassistant.components.vacuum import VacuumActivity
+
+        for phase in ("oClean", "room", "zone", "polygon", "explore",
+                      "disc", "travel", "traversal", "plan", "reloc"):
+            assert PHASE_TO_ACTIVITY[phase] == VacuumActivity.CLEANING, phase
+
+    def test_the_error_phases_are_not_cleaning(self):
+        """tankEmpty and binFull mean the robot has stopped and needs a
+        person; mapping them to CLEANING would hide that."""
+        from custom_components.roomba_plus.const import PHASE_TO_ACTIVITY
+        from homeassistant.components.vacuum import VacuumActivity
+
+        for phase in ("tankEmpty", "binFull", "kidnap", "error"):
+            assert PHASE_TO_ACTIVITY[phase] == VacuumActivity.ERROR, phase
+
+    def test_unmodelled_phases_are_left_out_on_purpose(self):
+        """`virtual` and `cmd` are in the firmware enum but not mapped:
+        their activity is unclear from the name, and falling through
+        safely beats guessing. This test documents that the omission is
+        deliberate, so nobody 'completes' the map from the enum alone."""
+        from custom_components.roomba_plus.const import PHASE_TO_ACTIVITY
+
+        assert "virtual" not in PHASE_TO_ACTIVITY
+        assert "cmd" not in PHASE_TO_ACTIVITY
+
+    def test_every_mapped_phase_has_a_label(self):
+        """A phase the vacuum entity understands but the phase sensor
+        cannot name would show a raw wire string like 'traversal'."""
+        from custom_components.roomba_plus.const import (
+            PHASE_LABELS,
+            PHASE_TO_ACTIVITY,
+        )
+
+        # The home/stop/pause housekeeping phases have their own labels
+        # elsewhere; this checks the Prime cleaning enum specifically.
+        prime_phases = {
+            "oClean", "room", "zone", "polygon", "explore", "disc",
+            "travel", "traversal", "plan", "reloc", "tankEmpty",
+            "binFull", "kidnap", "refill",
+        }
+        missing = {p for p in prime_phases if p not in PHASE_LABELS}
+        assert not missing, f"phases with no readable label: {missing}"
+
+
+class TestPhaseEvidenceIsLabelled:
+    """Comments must distinguish measured from assumed.
+
+    Three Prime phases were seen in real data; the other eleven come
+    from a firmware image and no robot in this project has been
+    observed reporting them. Both are mapped, and that is fine -- but a
+    reader who cannot tell which is which has no way to know where to
+    start when one behaves oddly.
+    """
+
+    @staticmethod
+    def _phase_block() -> str:
+        from pathlib import Path
+
+        source = Path("custom_components/roomba_plus/const.py").read_text()
+        start = source.index("PHASE_TO_ACTIVITY")
+        return source[start:source.index("\n}", start)]
+
+    def test_the_observed_three_are_labelled_as_such(self):
+        block = self._phase_block()
+        for phase in ("room", "zone", "refill"):
+            line = next(
+                line for line in block.splitlines() if f'"{phase}"' in line
+            )
+            assert "OBSERVED" in line, f"{phase} was seen in real data; say so"
+
+    def test_the_firmware_only_ones_are_labelled_assumed(self):
+        """If one of these is ever confirmed on a real robot, move it
+        to the OBSERVED group -- do not just delete the tag."""
+        block = self._phase_block()
+        for phase in ("oClean", "polygon", "traversal", "reloc", "kidnap"):
+            line = next(
+                line for line in block.splitlines() if f'"{phase}"' in line
+            )
+            assert "ASSUMED" in line, (
+                f"{phase} comes from the firmware enum only -- an unlabelled "
+                "entry reads as though somebody watched a robot do it"
+            )
+
+
+class TestAPrimeRobotToppingUpIsNotDocked:
+    """@chairstacker (#71): his activity timeline read Cleaning, then
+    Docked for about 70 seconds, then Cleaning again — three times over
+    one morning. It looks like the mission ended and a new one started.
+
+    `charge` maps to DOCKED, but a robot returning to top up mid-run is
+    not finished: its cycle is still `clean`. The Classic path has had
+    this rule for a long time — an active cycle while idle or docked
+    means paused — and only the Prime branch checked the cycle in one
+    direction (RETURNING) and not the other.
+
+    Worse than cosmetic: an automation reacting to "docked" fires
+    mid-clean, and one reacting to "cleaning" fires several times per
+    run.
+    """
+
+    @staticmethod
+    def _activity(phase, cycle):
+        from unittest.mock import MagicMock, patch
+
+        from custom_components.roomba_plus.models import ConnectionType
+        from custom_components.roomba_plus.vacuum import RoombaVacuum
+
+        vac = RoombaVacuum.__new__(RoombaVacuum)
+        entry = MagicMock()
+        entry.runtime_data.connection_type = ConnectionType.CLOUD_ONLY
+        vac._config_entry = entry
+        vac._connection_type = ConnectionType.CLOUD_ONLY
+
+        # Read straight off the status coordinator, which is where the
+        # Prime branch looks.
+        coordinator = MagicMock()
+        coordinator.data = {
+            "ro-currentstate": {
+                "cleanMissionStatus": {"phase": phase, "cycle": cycle}
+            }
+        }
+        entry.runtime_data.prime_status_coordinator = coordinator
+
+        with patch.object(
+            RoombaVacuum, "_prime_cycle_is_idle",
+            lambda self: cycle == "none",
+        ):
+            return vac.activity
+
+    def test_charging_mid_mission_is_paused(self):
+        from homeassistant.components.vacuum import VacuumActivity
+
+        assert self._activity("charge", "clean") == VacuumActivity.PAUSED
+
+    def test_charging_with_no_mission_is_docked(self):
+        """The ordinary case must not change: charging between runs is
+        exactly what docked means."""
+        from homeassistant.components.vacuum import VacuumActivity
+
+        assert self._activity("charge", "none") == VacuumActivity.DOCKED
+
+    def test_cleaning_is_untouched(self):
+        from homeassistant.components.vacuum import VacuumActivity
+
+        assert self._activity("run", "clean") == VacuumActivity.CLEANING
+
+    def test_returning_with_an_idle_cycle_still_reads_docked(self):
+        """The rule that already existed, in the other direction."""
+        from homeassistant.components.vacuum import VacuumActivity
+
+        assert self._activity("hmUsrDock", "none") == VacuumActivity.DOCKED

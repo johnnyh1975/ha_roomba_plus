@@ -16,7 +16,7 @@ from typing import Any
 from unittest.mock import MagicMock
 import pytest
 from custom_components.roomba_plus.umf_aligner import UmfAligner
-from custom_components.roomba_plus.umf_aligner import _point_in_polygon
+from custom_components.roomba_plus.geometry_utils import point_in_polygon
 from custom_components.roomba_plus.umf_aligner import _DOOR_GAP_MIN
 from custom_components.roomba_plus.umf_aligner import _DOOR_GAP_MAX
 from custom_components.roomba_plus.umf_aligner import _DOOR_MATCH_TOLERANCE
@@ -142,32 +142,44 @@ class TestPointInPolygon:
         return [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]
 
     def test_inside_centre(self):
-        assert _point_in_polygon(5, 5, self._square()) is True
+        assert point_in_polygon(5, 5, self._square()) is True
 
     def test_outside_right(self):
-        assert _point_in_polygon(15, 5, self._square()) is False
+        assert point_in_polygon(15, 5, self._square()) is False
 
     def test_outside_above(self):
-        assert _point_in_polygon(5, 15, self._square()) is False
+        assert point_in_polygon(5, 15, self._square()) is False
 
     def test_outside_below(self):
-        assert _point_in_polygon(5, -1, self._square()) is False
+        assert point_in_polygon(5, -1, self._square()) is False
 
     def test_outside_left(self):
-        assert _point_in_polygon(-1, 5, self._square()) is False
+        assert point_in_polygon(-1, 5, self._square()) is False
 
-    def test_corner_outside(self):
-        # Corners are edge cases; we just want no crash
-        _point_in_polygon(0, 0, self._square())
+    def test_corners_are_decided_and_not_symmetric(self):
+        """The name of this test used to promise a result -- "corner
+        outside" -- while the body only checked that nothing crashed.
+        Two different claims, and the weaker one was the one tested.
+
+        The behaviour is decidable, and worth pinning precisely because
+        it is NOT symmetric: the origin corner counts as inside, the
+        opposite one does not. That is the usual consequence of a
+        ray-casting rule, harmless in itself, and exactly the sort of
+        thing that changes silently when the algorithm is touched.
+        """
+        square = self._square()
+
+        assert point_in_polygon(0, 0, square) is True
+        assert point_in_polygon(10, 10, square) is False
 
     def test_triangle(self):
         tri = [(0.0, 0.0), (10.0, 0.0), (5.0, 10.0)]
-        assert _point_in_polygon(5, 4, tri) is True
-        assert _point_in_polygon(5, 11, tri) is False
+        assert point_in_polygon(5, 4, tri) is True
+        assert point_in_polygon(5, 11, tri) is False
 
     def test_two_vertex_polygon_no_crash(self):
         # Degenerate polygon — should not raise
-        _point_in_polygon(0, 0, [(0.0, 0.0), (1.0, 0.0)])
+        point_in_polygon(0, 0, [(0.0, 0.0), (1.0, 0.0)])
 
 
 class TestBuildCoordLookup:

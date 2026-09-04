@@ -10,7 +10,7 @@ this is a straight move, not a rewrite.
 from __future__ import annotations
 
 from collections import Counter
-from typing import Any
+from typing import Any, cast
 import datetime
 import time as _time_mod
 
@@ -21,20 +21,17 @@ from homeassistant.util import dt as dt_util
 from .const import (
     CARPET_BOOST_LABELS,
     CLEAN_MODE_LABELS,
-    CONF_BRUSH_HOURS,
-    CONF_FILTER_HOURS,
-    DEFAULT_BRUSH_HOURS,
-    DEFAULT_FILTER_HOURS,
     DOMAIN,
     ERROR_CODE_LABELS,
     INTEGRATION_HEALTH_ARC1_STALE_HOURS,
     INTEGRATION_HEALTH_GOOD_THRESHOLD,
     INTEGRATION_HEALTH_LOW_THRESHOLD,
     INTEGRATION_HEALTH_MQTT_STALE_HOURS,
-    NOT_READY_LABELS,
     PHASE_LABELS,
+    READINESS_STATE_LABELS,
     SQFT_TO_M2,
     active_charge_cycles,
+    decode_not_ready,
 )
 from .entity import IRobotEntity
 
@@ -67,41 +64,78 @@ _ACTIVE_PHASES = {"run", "hmMidMsn", "hmPostMsn", "hmUsrDock", "new", "resume"}
 
 
 # notReady bitmask — individual bit meanings for i7/s9/j-series
-_NOT_READY_BITS: dict[int, str] = {
-    1:   "Low battery",
-    2:   "Bin full",
-    4:   "Map not ready",
-    8:   "Not on dock",
-    16:  "Lid open",
-    32:  "Tank empty",
-    64:  "Updating map",
-    128: "Pending task",
-}
 
 
 def _not_ready_value(entity: "IRobotEntity") -> str:
-    """Decode notReady bitmask into a human-readable label.
+    """The readiness state the robot is reporting.
 
-    NOT_READY_LABELS covers exact combined values seen in the wild.
-    For unlisted combinations, decode bit by bit so any value is readable
-    rather than falling back to a raw integer.
+    REWRITTEN against the iRobot Home app's own decode. This used to
+    treat notReady as a bitmask -- a nine-entry table of exact values
+    plus a bit-by-bit fallback that assembled labels like "Updating map,
+    Pending task" out of a premise that does not hold.
+
+    The app reads it as a scalar index into a 73-state enum:
+
+        mReadyState = jsonInt <= 10 ? values()[jsonInt] : values()[jsonInt - 3]
+
+    Six of the nine table entries were wrong against that -- 2 was
+    "Uneven ground" where the app says WheelDropBoth, 48 was "Path
+    blocked" where it says SafetyFaultHardware. Only 0 and 15 held up.
+
+    A value with no name keeps its number rather than being decomposed
+    into invented parts: an unlisted state is one this project does not
+    know, and saying so is more use than a plausible sentence.
     """
-    nr: int = entity.clean_mission_status.get("notReady", 0)
-    if nr in NOT_READY_LABELS:
-        return NOT_READY_LABELS[nr]
-    if nr == 0:
+    raw = entity.clean_mission_status.get("notReady", 0)
+    index = decode_not_ready(raw)
+    if index is None:
+        return "Ready" if not raw else f"Not ready ({raw})"
+    if index == 0:
         return "Ready"
-    # Decode individual bits for unknown combinations.
-    parts = [label for bit, label in sorted(_NOT_READY_BITS.items()) if nr & bit]
-    return ", ".join(parts) if parts else f"Not ready ({nr})"
+    label = READINESS_STATE_LABELS.get(index)
+    return label if label else f"Not ready ({raw})"
 
 
-def _error_value(entity: "IRobotEntity") -> str:
+def recent_pause_reasons(entity: "IRobotEntity") -> list[int]:
+    """The robot's own list of what stopped its last ten runs.
+
+    `bbpause.pauses` is a rolling ten-entry history of abort reasons,
+    and nothing read it. @utkjmitch's Y351020 carried
+    `[1010, 1010, 46, 1010, 1010, 46, 46, 33, 33, 48]` -- four docking
+    failures in ten runs -- while he experienced each as a one-off.
+
+    TWO SHAPES. Some robots nest it (`bbpause.bbpause.pauses`), others
+    do not (`bbpause.pauses`). Both appear in field captures from the
+    same week, so both are read rather than one being called correct.
+
+    Deliberately raw codes and no interpretation: nobody knows yet what
+    counts as a lot. Four 1010s on a robot that spent a week at an
+    unpowered dock is probably normal, and a threshold picked without
+    field values would be a guess dressed as a warning.
+    """
+    raw = entity.vacuum_state.get("bbpause")
+    if not isinstance(raw, dict):
+        return []
+    inner = raw.get("bbpause")
+    if isinstance(inner, dict) and isinstance(inner.get("pauses"), list):
+        nested = [v for v in inner["pauses"] if isinstance(v, int) and v >= 0]
+    else:
+        nested = []
+    flat = raw.get("pauses")
+    outer = (
+        [v for v in flat if isinstance(v, int) and v >= 0]
+        if isinstance(flat, list) else []
+    )
+    # The outer list is the longer one where both exist.
+    return outer or nested
+
+
+def _error_value(entity: "IRobotEntity") -> str | None:
     """Error label — suppressed when the robot is docked/idle after a mission.
 
     cleanMissionStatus.error persists across missions: the firmware does not
     reset it to 0 when the robot docks after a failure. Showing the stale error
-    while the robot charges would be misleading, so we return "None" whenever
+    while the robot charges would be misleading, so we return None whenever
     cycle is "none" (no active or queued mission) and phase indicates rest.
     """
     status = entity.clean_mission_status
@@ -111,22 +145,82 @@ def _error_value(entity: "IRobotEntity") -> str:
 
     # No active mission and robot is resting — suppress stale error.
     if cycle == "none" and phase in ("charge", "stop", "idle", ""):
-        return "None"
+        return None
 
-    return ERROR_CODE_LABELS.get(error, entity.vacuum.error_message or "None")
+    label = ERROR_CODE_LABELS.get(error, entity.vacuum.error_message or None)
+    return label if label and label != "None" else None
+
+
+#: How long a robot may go quiet before the status says so rather than
+#: repeating its last phase.
+#:
+#: Deliberately far above the five minutes the MQTT watchdog uses. That
+#: sensor answers "is the link healthy"; this answers "should you still
+#: believe what this says", and a brief dropout must not rewrite the
+#: status for anyone watching a mission.
+_SILENCE_BEFORE_STATUS_SAYS_SO_SEC = 3600
 
 
 def _phase_value(entity: "IRobotEntity") -> str:
-    """Phase label with Idle and Stopped detection."""
+    """Phase label with Idle, Stopped and silence detection."""
+    # A ROBOT THAT STOPPED TALKING IS NOT STILL DOING THE LAST THING.
+    #
+    # @utkjmitch's Combo (Y3-series) went `stuck`, drained for six hours off its dock,
+    # and stopped transmitting at 36% battery. Nine days later every
+    # entity still read its final value -- the status said "Stuck" as if
+    # it had just arrived, because the last value any entity receives
+    # simply stays until a new one comes.
+    #
+    # The information existed: `RoombaMqttStale` had been on the whole
+    # time. It just lived in a separate binary sensor, so knowing the
+    # status was nine days old required already suspecting it.
+    # getattr on the ENTITY too: this runs for every status read, and
+    # not every caller carries a config entry -- a lighter test double
+    # or a partially built entity must not raise out of a value
+    # function.
+    _entry = getattr(entity, "_config_entry", None)
+    _data = getattr(_entry, "runtime_data", None)
+    _last = getattr(_data, "last_mqtt_message_ts", 0.0) or 0.0
+    if not _last:
+        # NOTHING SINCE SETUP -- measure from then. `last_mqtt_message_ts`
+        # is in-memory and starts at zero, so a robot that was already
+        # silent before a Home Assistant restart never gets one and this
+        # check could not fire at all. @utkjmitch's robot was quiet for
+        # nine days and every restart put it back to a confident phase.
+        #
+        # An hour of uptime with no message is an hour of silence. It
+        # cannot false-positive at startup, where the elapsed time is
+        # zero.
+        _last = getattr(_data, "setup_ts", 0.0) or 0.0
+    if _last:
+        _quiet = _time_mod.time() - _last
+        if _quiet > _SILENCE_BEFORE_STATUS_SAYS_SO_SEC:
+            return "no_contact"
+
     status = entity.clean_mission_status
     phase = status.get("phase", "")
     cycle = status.get("cycle", "")
     battery = entity.vacuum_state.get("batPct")
     if phase == "charge" and battery == 100:
-        return "Idle"
+        return "idle"
     if cycle == "none" and phase == "stop":
-        return "Stopped"
-    return PHASE_LABELS.get(phase, phase or "Unknown")
+        return "stopped"
+
+    # CHARGING WITH A LIVE CYCLE IS NOT THE SAME AS CHARGING.
+    #
+    # A robot that returns to top up mid-run reports `charge` while its
+    # cycle stays `clean`. Reported as plain "Charging" that is
+    # indistinguishable from a finished mission, and an automation
+    # reacting to it fires mid-clean.
+    #
+    # The distinction already existed as its own binary sensor
+    # (`mid_mission_recharge`), which meant anyone wanting it had to
+    # know to look for a second entity beside the one that says what
+    # the robot is doing.
+    if phase == "charge" and cycle not in ("", "none"):
+        return "charging_mid_mission"
+
+    return PHASE_LABELS.get(phase, "unknown")
 
 
 def _mission_elapsed_value(entity: "IRobotEntity") -> float | None:
@@ -211,56 +305,58 @@ def _expire_minutes_remaining(mission: dict[str, Any]) -> StateType:
 
 # ── v1.9.0 L4 — Wear Intelligence helpers ────────────────────────────────────
 
-def _filter_wear_rate(entity: "IRobotEntity") -> float | None:
-    """Filter wear rate in bbrun hours/day since last reset."""
-    store = entity._config_entry.runtime_data.mission_store
+def _consumable_wear_rate(entity: "IRobotEntity", role: str) -> float | None:
+    """Consumable wear rate in bbrun hours/day since its last reset."""
+    mission_store = entity._config_entry.runtime_data.mission_store
     maint = entity._config_entry.runtime_data.maintenance_store
-    if store is None or maint is None:
+    if mission_store is None or maint is None:
         return None
     current_hr = entity.run_stats.get("hr", 0)
-    return store.wear_rate_since_reset(
-        maint.filter_reset_hr, maint.filter_reset_at, current_hr
-    )
+    reset_hr, reset_at = maint.reset_baseline_for_role(role)
+    return mission_store.wear_rate_since_reset(reset_hr, reset_at, current_hr)
 
 
-def _brush_wear_rate(entity: "IRobotEntity") -> float | None:
-    """Brush/pad wear rate in bbrun hours/day since last reset."""
-    store = entity._config_entry.runtime_data.mission_store
-    maint = entity._config_entry.runtime_data.maintenance_store
-    if store is None or maint is None:
+def _consumable_days_until_due(
+    entity: "IRobotEntity", role: str
+) -> int | None:
+    """Estimate days until replacement from the shared role lifecycle."""
+    rate = _consumable_wear_rate(entity, role)
+    if rate is None or rate <= 0:
         return None
-    current_hr = entity.run_stats.get("hr", 0)
-    return store.wear_rate_since_reset(
-        maint.brush_reset_hr, maint.brush_reset_at, current_hr
-    )
+    maint = entity._config_entry.runtime_data.maintenance_store
+    if maint is None:
+        return None
+    remaining_hr = maint.cloud_remaining_hours(role)
+    if remaining_hr is None:
+        current_hr = entity.run_stats.get("hr", 0)
+        threshold = maint.threshold_hours(
+            role, entity._config_entry.options
+        )
+        remaining_hr = maint.remaining_hours(role, current_hr, threshold)
+    return int(remaining_hr / rate)
+
+
+def _consumable_max_hours(
+    entity: "IRobotEntity", role: str
+) -> int | None:
+    """Return cloud full life or the role's local learned/default life."""
+    maint = entity._config_entry.runtime_data.maintenance_store
+    if maint is None:
+        return None
+    full_life = maint.cloud_full_life_hours(role)
+    if full_life is not None:
+        return full_life
+    learned = maint.learned_hours(role)
+    threshold = maint.threshold_hours(role, entity._config_entry.options)
+    return round(float(learned if learned is not None else threshold))
 
 
 def _filter_days_until_due(entity: "IRobotEntity") -> int | None:
-    """Estimated days until filter replacement at current wear rate."""
-    rate = _filter_wear_rate(entity)
-    if rate is None or rate <= 0:
-        return None
-    maint = entity._config_entry.runtime_data.maintenance_store
-    if maint is None:
-        return None
-    threshold = entity._config_entry.options.get(CONF_FILTER_HOURS, DEFAULT_FILTER_HOURS)
-    current_hr = entity.run_stats.get("hr", 0)
-    remaining_hr = max(0, threshold - (current_hr - maint.filter_reset_hr))
-    return int(remaining_hr / rate)
+    return _consumable_days_until_due(entity, "filter")
 
 
 def _brush_days_until_due(entity: "IRobotEntity") -> int | None:
-    """Estimated days until brush/pad replacement at current wear rate."""
-    rate = _brush_wear_rate(entity)
-    if rate is None or rate <= 0:
-        return None
-    maint = entity._config_entry.runtime_data.maintenance_store
-    if maint is None:
-        return None
-    threshold = entity._config_entry.options.get(CONF_BRUSH_HOURS, DEFAULT_BRUSH_HOURS)
-    current_hr = entity.run_stats.get("hr", 0)
-    remaining_hr = max(0, threshold - (current_hr - maint.brush_reset_hr))
-    return int(remaining_hr / rate)
+    return _consumable_days_until_due(entity, "main_brush")
 
 
 def _mission_store_last_started_at(entity: "IRobotEntity") -> "datetime.datetime | None":
@@ -296,7 +392,7 @@ def _mission_store_value(entity: "IRobotEntity", fn: Any) -> StateType:
     if store is None:
         return None
     try:
-        return fn(store)
+        return cast('str | int | float | None', fn(store))
     except Exception:  # noqa: BLE001
         return None
 
@@ -323,7 +419,7 @@ def _last_mission_team_id(store: Any) -> StateType:
     latest = store.latest()
     if latest is None:
         return None
-    return latest.get("team_id")
+    return cast('str | int | float | None', latest.get("team_id"))
 
 
 def _area_cleaned_today(store: Any) -> StateType:
@@ -344,14 +440,14 @@ def _last_error_code_value(entity: "IRobotEntity") -> StateType:
     """Live MQTT error code takes priority over persisted value."""
     live = (entity.vacuum_state.get("cleanMissionStatus") or {}).get("error", 0)
     if live:
-        return live
+        return cast('str | int | float | None', live)
     stored = entity._config_entry.runtime_data.last_error_code
     if stored is not None:
         return stored
     return None  # sensor shows Unknown until first error is recorded
 
 
-def _last_error_at_value(entity: "IRobotEntity") -> StateType:
+def _last_error_at_value(entity: "IRobotEntity") -> StateType | datetime.datetime:
     at_str = entity._config_entry.runtime_data.last_error_at
     if not at_str:
         return None
@@ -365,7 +461,7 @@ def _problem_zone_value(entity: "IRobotEntity") -> StateType:
     stuck_records = store.query(30, result=store.STUCK_RESULTS)
     if not stuck_records:
         return None
-    zone_counts: Counter = Counter()
+    zone_counts: Counter[str] = Counter()
     for r in stuck_records:
         for z in (r.get("zones") or []):
             zone_counts[z] += 1
@@ -374,7 +470,7 @@ def _problem_zone_value(entity: "IRobotEntity") -> StateType:
     return zone_counts.most_common(1)[0][0]
 
 
-def _presence_opportunities(entity: "IRobotEntity", days: int) -> StateType:
+def _presence_opportunities(entity: "IRobotEntity", days: int) -> int | None:
     store = entity._config_entry.runtime_data.mission_store
     if store is None:
         return None
@@ -399,23 +495,34 @@ def _presence_utilisation(entity: "IRobotEntity", days: int) -> StateType:
     opportunities = _presence_opportunities(entity, days) or 0
     if opportunities == 0:
         return 0.0
-    used = sum(1 for w in windows if w.resulted_in_clean)
-    return round(used / opportunities * 100, 1)
+    recent = store.query(30, result="completed")
+    avg_duration = (
+        sum(r["duration_min"] for r in recent) / len(recent)
+        if recent else 45
+    )
+    used = sum(
+        1 for w in windows
+        if w.duration_min >= avg_duration and w.resulted_in_clean
+    )
+    return round(min(used / opportunities * 100, 100.0), 1)
 
 
-def _next_likely_clean_window(entity: "IRobotEntity") -> StateType:
+def _next_likely_clean_window(entity: "IRobotEntity") -> StateType | datetime.datetime:
     store = entity._config_entry.runtime_data.mission_store
     if store is None:
         return None
     windows = store.presence_windows(14)
     if len(windows) < 3:
         return None
-    hour_counts: Counter = Counter()
+    # `Counter[int]`, because hours go in -- same mistake as
+    # grid_store's slot counter: a wrong key type that only shows up
+    # when something reads the value back out.
+    hour_counts: Counter[int] = Counter()
     for w in windows:
         hour_counts[w.started_at.hour] += 1
     most_common_hour = hour_counts.most_common(1)[0][0]
     candidate = dt_util.now().replace(
-        hour=most_common_hour, minute=0, second=0, microsecond=0
+        hour=int(most_common_hour), minute=0, second=0, microsecond=0
     )
     if candidate <= dt_util.now():
         candidate = candidate + datetime.timedelta(days=1)
@@ -450,7 +557,7 @@ def _parse_netinfo_addr(addr: object) -> str | None:
     return None
 
 
-def _raw_wifi_floor(records: list[dict]) -> StateType:
+def _raw_wifi_floor(records: list[dict[str, Any]]) -> StateType:
     """Return the weakest WiFi signal bucket present in the most recent mission.
 
     F1 -- wlBars is a 5-element histogram, NOT a time-series.
@@ -478,7 +585,7 @@ def _raw_wifi_floor(records: list[dict]) -> StateType:
     return None
 
 
-def _raw_wifi_quality_pct(records: list[dict]) -> StateType:
+def _raw_wifi_quality_pct(records: list[dict[str, Any]]) -> StateType:
     """Return average WiFi signal quality (%) across the API window.
 
     v2.9.0 — replaces _raw_wifi_floor as RoombaWifiHealthSensor's primary
@@ -857,7 +964,7 @@ def _robot_health_plain_status(
     return text, rec
 
 
-def _raw_wifi_stability(records: list[dict]) -> StateType:
+def _raw_wifi_stability(records: list[dict[str, Any]]) -> StateType:
     """Return mean weighted standard deviation of WiFi signal across the API window.
 
     F1 -- wlBars is a 5-element histogram (index = signal bucket, value = count).
@@ -883,7 +990,7 @@ def _raw_wifi_stability(records: list[dict]) -> StateType:
         stdevs.append(variance ** 0.5)
     if len(stdevs) < 3:
         return None
-    return round(sum(stdevs) / len(stdevs), 2)
+    return cast('str | int | float | None', round(sum(stdevs) / len(stdevs), 2))
 
 
 # ── F2 — Mop clean mode (RoombaSensor value function) ────────────────────────
@@ -1111,6 +1218,10 @@ def _total_energy_consumed_kwh(entity: "IRobotEntity") -> StateType:
     Cycle count is also chemistry-aware: uses nNimhChrg when NiMH is detected
     (nNimhChrg > 0), nLithChrg otherwise — important when the user has replaced
     the OEM Li-ion pack with NiMH aftermarket (nLithChrg stays at the OEM count).
+
+    Clamped to a persisted high-water mark: estCap/cycle-count can shift
+    downward between polls, which would otherwise violate this sensor's
+    declared TOTAL_INCREASING state_class.
     """
     actual_mah = _estcap_to_mah(entity)
     if actual_mah is None:
@@ -1124,7 +1235,17 @@ def _total_energy_consumed_kwh(entity: "IRobotEntity") -> StateType:
         return None
     profile = entity._config_entry.runtime_data.robot_profile
     voltage = profile.battery_voltage if profile is not None else 14.8
-    return round(actual_mah * voltage * int(cycles) / 1_000_000, 3)
+    raw_kwh = round(actual_mah * voltage * int(cycles) / 1_000_000, 3)
+
+    rps = getattr(entity._config_entry.runtime_data, "robot_profile_store", None)
+    if rps is None:
+        return raw_kwh
+    # value_fn stays side-effect-free: the high-water mark is advanced at
+    # mission end (callbacks._async_update_robot_profile_store), never on
+    # a sensor read. Reading the stored floor keeps the TOTAL_INCREASING
+    # contract across HA restarts.
+    stored_floor = cast(float, rps.lifetime_energy_kwh_high_water)
+    return max(raw_kwh, stored_floor)
 
 
 def _estimated_battery_eol(entity: "IRobotEntity") -> StateType:
@@ -1185,7 +1306,7 @@ def _estimated_battery_eol(entity: "IRobotEntity") -> StateType:
         remaining_cycles = rps.cap_remaining_cycles(remaining_cycles)
         if remaining_cycles is None:
             return None
-        return max(0, round(remaining_cycles))
+        return cast('str | int | float | None', max(0, round(remaining_cycles)))
 
     # No RobotProfileStore at all (shouldn't normally happen, but handled
     # defensively) — fall back to the same conservative absolute threshold

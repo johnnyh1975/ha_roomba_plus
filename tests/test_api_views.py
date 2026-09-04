@@ -2481,3 +2481,86 @@ class TestHouseholdSummaryView:
         body = json.loads(resp.body)
 
         assert body["robots"][0]["maintenance_due"] is False
+
+
+class TestZoneInjectionSurvivesARecharge:
+    """@scenicsystemsllc: the 120-second tolerance fails to match cloud
+    and local records when a recharge pushes their `ended` timestamps
+    apart.
+
+    A robot that runs the battery down docks, charges and resumes ends
+    its mission an hour or more after either side first called it over.
+    Two minutes cannot bridge that, and widening the window would start
+    matching neighbouring missions instead.
+
+    His suggested fix was to match on mission id. That is not available
+    — the cloud records this reads carry `startTime`, `timestamp`,
+    `runM`, `durationM`, `doneM` and `pauseId`, and no mission id. But
+    his reasoning gives the answer: **a recharge moves the end, never
+    the start.**
+    """
+
+    def _index(self, records):
+        from custom_components.roomba_plus.api_views import (
+            _build_local_zones_index,
+        )
+        return _build_local_zones_index(records)
+
+    def _inject(self, record, index):
+        from custom_components.roomba_plus.api_views import _inject_zones
+        return _inject_zones(record, index)
+
+    @staticmethod
+    def _iso(ts):
+        import datetime
+        return datetime.datetime.fromtimestamp(
+            ts, tz=datetime.timezone.utc
+        ).isoformat()
+
+    def test_an_hour_apart_at_the_end_still_matches(self):
+        """The case he reported. Same start, ends 90 minutes apart."""
+        start = 1700000000
+        index = self._index([{
+            "id": "local",
+            "started_at": self._iso(start),
+            "ended_at": self._iso(start + 5400),
+            "zones": ["Kitchen"],
+        }])
+        cloud = {
+            "id": "cloud",
+            "started_at": self._iso(start + 30),
+            "ended_at": self._iso(start + 1800),
+            "zones": [],
+        }
+
+        assert self._inject(cloud, index)["zones"] == ["Kitchen"]
+
+    def test_a_neighbouring_mission_is_not_matched(self):
+        """Widening the tolerance was the obvious alternative fix. It
+        would do this — an unrelated mission ten minutes later."""
+        start = 1700000000
+        index = self._index([{
+            "id": "local",
+            "started_at": self._iso(start),
+            "ended_at": self._iso(start + 600),
+            "zones": ["Kitchen"],
+        }])
+        cloud = {
+            "id": "cloud",
+            "started_at": self._iso(start + 600),
+            "ended_at": self._iso(start + 1200),
+            "zones": [],
+        }
+
+        assert self._inject(cloud, index)["zones"] == []
+
+    def test_a_record_with_only_an_end_still_indexes(self):
+        """Older MissionStore records predate `started_at`. Skipping
+        them would trade one failure mode for another and lose zones
+        that used to be injected correctly."""
+        ts = 1700000000
+        index = self._index([{
+            "id": "old", "ended_at": self._iso(ts), "zones": ["Hall"],
+        }])
+
+        assert index == {ts: ["Hall"]}

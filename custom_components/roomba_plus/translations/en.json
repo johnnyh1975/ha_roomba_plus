@@ -1,4 +1,13 @@
 {
+  "common": {
+    "weekday_0": "Sun",
+    "weekday_1": "Mon",
+    "weekday_2": "Tue",
+    "weekday_3": "Wed",
+    "weekday_4": "Thu",
+    "weekday_5": "Fri",
+    "weekday_6": "Sat"
+  },
   "config": {
     "step": {
       "user": {
@@ -63,6 +72,39 @@
           "irobot_username": "The email address used to log into the iRobot app.",
           "irobot_password": "Your current iRobot app password."
         }
+      },
+      "prime_account": {
+        "title": "Sign in with your iRobot account",
+        "description": "Works for any robot. Required for Combo/V4-generation models, which have no local setup — and the way to go for any robot whose password could not be found automatically. Enter your iRobot app email and password; this also discovers other robots on the same account.",
+        "data": {
+          "irobot_username": "iRobot email",
+          "irobot_password": "iRobot password"
+        },
+        "data_description": {
+          "irobot_username": "The email address used to log into the iRobot app.",
+          "irobot_password": "Your iRobot app password."
+        }
+      },
+      "prime_robot_picker": {
+        "title": "Choose a robot",
+        "description": "Robots found on this account. Pick one to set up — add additional robots by starting this setup again.",
+        "data": {
+          "blid": "Robot"
+        }
+      },
+      "prime_classic_ip": {
+        "title": "Local network address",
+        "description": "Could not find {name} automatically on your local network. Enter its local IP address — the login/password already confirmed via your iRobot account will be reused.",
+        "data": {
+          "host": "IP address"
+        }
+      },
+      "prime_classic_analytics": {
+        "title": "Cloud features for {name}",
+        "description": "Keep your iRobot account credentials for this robot too, to enable room names, mission history, and favorites read from the cloud? All commands still run locally over MQTT either way.",
+        "data": {
+          "enable_cloud_analytics": "Enable cloud features for this robot"
+        }
       }
     },
     "error": {
@@ -71,14 +113,24 @@
       "unknown": "Unexpected error. Check the Home Assistant logs for details.",
       "cloud_auth_failed": "Cloud authentication failed. Check your iRobot email and password.",
       "cloud_unavailable": "Could not reach iRobot cloud. Check your internet connection and try again.",
-      "invalid_cloud_credentials": "Cloud authentication failed. Check your iRobot email and password."
+      "invalid_cloud_credentials": "Cloud authentication failed. Check your iRobot email and password.",
+      "cloud_rate_limited": "iRobot's cloud login is temporarily rate-limited. Close the iRobot app on your phone, then try again.",
+      "cloud_ssl_certificate_error": "Could not verify iRobot's cloud server certificate. This is almost always temporary on iRobot's end — try again in a few hours."
     },
     "abort": {
       "already_configured": "This robot is already configured.",
       "not_irobot_device": "The discovered device is not an iRobot device.",
       "short_blid": "A configuration flow for this robot is already in progress.",
       "cannot_connect": "Cannot reach the robot at the specified address.",
-      "reconfigure_successful": "Connection settings updated successfully."
+      "reconfigure_successful": "Connection settings updated successfully.",
+      "no_new_robots_found": "No new robots found on this iRobot account — every robot is already configured.",
+      "prime_classic_password_missing": "This robot's password was not included in the iRobot account response. Please try adding it manually instead.",
+      "demand_cleaning_not_supported": "This robot does not report the dirt-detection data that demand cleaning needs.",
+      "integration_not_loaded": "The integration is not loaded. Restart Home Assistant and try again.",
+      "room_schedule_no_rooms": "No rooms are known for this robot yet. Let it complete a mapping run first.",
+      "room_schedule_not_supported": "Room schedules need a robot that reports room data.",
+      "no_rooms_to_name": "No rooms were found to name. This robot's rooms appear once it has cleaned specific rooms at least once, or once its map is available from your iRobot account.",
+      "all_rooms_named": "Every room already has a name. Rename one from the zone selector on the device page."
     }
   },
   "options": {
@@ -93,6 +145,7 @@
           "map_management": "Zone management",
           "presence_scheduling": "Presence-aware scheduling",
           "demand_cleaning": "Demand cleaning",
+          "room_schedule": "Cleaning frequency per room",
           "rooms": "Rooms & zones",
           "rest980_migrate": "Import rooms from roomba_rest980"
         }
@@ -114,7 +167,15 @@
           "map_size_px": "Map size (pixels)",
           "map_scale_mm_per_px": "Scale (mm/pixel)",
           "floor_label": "Floor label (e.g. Ground Floor)",
-          "correlation_entities": "Correlate dirt with sensors (optional)"
+          "correlation_entities": "Correlate dirt with sensors (optional)",
+          "map_room_labels": "Draw room names on the map image",
+          "prime_favorite_buttons": "Create a button for each saved favorite",
+          "enable_schedule_calendar": "Show cleaning schedules as a calendar",
+          "map_clean_zones": "Draw clean zones",
+          "map_keepout_zones": "Draw keep-out zones",
+          "map_nomop_zones": "Draw no-mop zones",
+          "enable_maintenance_list": "Show maintenance as a to-do list",
+          "region_sensors": "Separate sensor per room and zone"
         },
         "data_description": {
           "continuous": "Keep a persistent MQTT connection to the robot. Recommended.",
@@ -218,7 +279,9 @@
       "invalid_cloud_credentials": "Cloud authentication failed. Check your iRobot email and password.",
       "cannot_connect": "Could not connect. Check your internet connection and try again.",
       "no_valid_ids": "No valid entries found. Use the format id=Name, one per line.",
-      "pmap_not_resolved": "Could not resolve the map ID. Ensure the robot is docked and connected, then try again."
+      "pmap_not_resolved": "Could not resolve the map ID. Ensure the robot is docked and connected, then try again.",
+      "cloud_rate_limited": "iRobot's cloud login is temporarily rate-limited. Close the iRobot app on your phone, then try again.",
+      "cloud_ssl_certificate_error": "Could not verify iRobot's cloud server certificate. This is almost always temporary on iRobot's end — try again in a few hours."
     },
     "abort": {
       "integration_not_loaded": "The integration could not be loaded. Check the logs and reload before opening settings.",
@@ -226,7 +289,9 @@
       "no_rest980_rooms_found": "No rooms found in your roomba_rest980 installation.",
       "rest980_rooms_already_imported": "All rooms from roomba_rest980 are already named in Roomba+.",
       "room_schedule_not_supported": "Per-room frequencies require a Smart Map robot with cloud credentials.",
-      "room_schedule_no_rooms": "No named rooms found on the Smart Map yet."
+      "room_schedule_no_rooms": "No named rooms found on the Smart Map yet.",
+      "no_rooms_to_name": "No rooms were found to name. This robot's rooms appear once it has cleaned specific rooms at least once, or once its map is available from your iRobot account.",
+      "all_rooms_named": "Every room already has a name. Rename one from the zone selector on the device page."
     }
   },
   "entity": {
@@ -259,16 +324,76 @@
         "name": "Missions – Last"
       },
       "phase": {
-        "name": "Status"
+        "name": "Status",
+        "state": {
+          "new_mission": "New mission",
+          "resumed": "Resumed",
+          "recharging": "Recharging",
+          "mission_completed": "Mission completed",
+          "cancelled": "Cancelled",
+          "paused": "Paused",
+          "base_unplugged": "Base unplugged",
+          "charging": "Charging",
+          "running": "Running",
+          "emptying_bin": "Emptying bin",
+          "stopped": "Stopped",
+          "stuck": "Stuck",
+          "sent_home": "Sent home",
+          "sent_to_charge": "Sent to charge",
+          "docking_mid_mission": "Docking mid-mission",
+          "returning_after_mission": "Returning after mission",
+          "updating_map": "Updating map",
+          "refilling_tank": "Refilling tank",
+          "washing_pad": "Washing pad",
+          "drying_pad": "Drying pad",
+          "not_responding": "Not responding",
+          "charging_mid_mission": "Charging mid-mission",
+          "no_contact": "No contact",
+          "idle": "Idle",
+          "unknown": "Unknown"
+        }
       },
       "error": {
         "name": "Status – Error"
       },
       "job_initiator": {
-        "name": "Status – Started by"
+        "name": "Status – Started by",
+        "state": {
+          "schedule": "iRobot schedule",
+          "remote_app": "iRobot app",
+          "manual": "Robot",
+          "local_app": "Home Assistant",
+          "demand": "Demand clean",
+          "none": "None",
+          "dock_button": "Dock button",
+          "alexa": "Alexa",
+          "siri": "Siri",
+          "ifttt": "IFTTT",
+          "homey": "Homey",
+          "openhab": "openHAB",
+          "yonomi": "Yonomi",
+          "bosch": "Bosch",
+          "swisscom": "Swisscom",
+          "alismart": "AliSmart",
+          "teamed_robot": "Teamed robot",
+          "cloud": "iRobot cloud",
+          "remote_automation": "iRobot automation",
+          "local_automation": "Local automation",
+          "simulated_automation": "Simulated automation",
+          "wifi": "Wi-Fi",
+          "shell": "Shell",
+          "internal": "Robot (internal)",
+          "unknown": "Unknown"
+        }
       },
       "clean_mode": {
-        "name": "Setting – Cleaning passes"
+        "name": "Setting – Cleaning passes",
+        "state": {
+          "auto": "Auto",
+          "one_pass": "One pass",
+          "two_passes": "Two passes",
+          "not_available": "Not available"
+        }
       },
       "scrubs_count": {
         "name": "Dirt detect events"
@@ -283,10 +408,28 @@
         "name": "Maintenance – Brushes"
       },
       "carpet_boost_mode": {
-        "name": "Setting – Carpet boost"
+        "name": "Setting – Carpet boost",
+        "state": {
+          "auto": "Auto",
+          "performance": "Performance",
+          "eco": "Eco",
+          "not_available": "Not available"
+        }
       },
       "clean_base_status": {
-        "name": "Clean Base status"
+        "name": "Clean Base status",
+        "state": {
+          "not_available": "Not available",
+          "unknown": "Unknown",
+          "ready": "Ready",
+          "empty": "Empty",
+          "bag_missing": "Bag missing",
+          "clogged": "Clogged",
+          "sealing_problem": "Sealing problem",
+          "bag_full": "Bag full",
+          "ir_comms_problem": "IR comms problem",
+          "bin_full_sensors_not_cleared": "Bin full — sensors not cleared"
+        }
       },
       "dock_tank_level": {
         "name": "Dock tank level"
@@ -295,16 +438,109 @@
         "name": "Tank level"
       },
       "mop_pad": {
-        "name": "Mop pad"
+        "name": "Mop pad",
+        "state": {
+          "reusable_dry": "Dry (reusable)",
+          "reusable_wet": "Wet (reusable)",
+          "disposable_dry": "Dry (disposable)",
+          "disposable_wet": "Wet (disposable)",
+          "plate_fitted": "Plate fitted",
+          "no_plate": "No plate",
+          "no_pad": "No pad",
+          "unknown": "Unknown"
+        }
       },
       "mop_behavior": {
-        "name": "Mop – Clean passes (legacy)"
+        "name": "Mop – Clean passes (legacy)",
+        "state": {
+          "no_mop": "No mop",
+          "extended": "Extended",
+          "standard": "Standard",
+          "deep": "Deep",
+          "unknown": "Unknown"
+        }
       },
       "mop_tank_level": {
         "name": "Mop tank level"
       },
       "readiness": {
-        "name": "Status – Readiness"
+        "name": "Status – Readiness",
+        "state": {
+          "none": "None",
+          "cliff": "Cliff",
+          "wheel_drop_both": "Wheel drop both",
+          "wheel_drop_left": "Wheel drop left",
+          "wheel_drop_right": "Wheel drop right",
+          "final_docking": "Final docking",
+          "brush_stall": "Brush stall",
+          "no_bin": "No bin",
+          "nav_crash": "Nav crash",
+          "misconfigured": "Misconfigured",
+          "in_rcon": "In rcon",
+          "invalid_command": "Invalid command",
+          "insufficient_charge": "Insufficient charge",
+          "bin_full": "Bin full",
+          "nav_comms_down": "Nav comms down",
+          "in_cloud_upgrade": "In cloud upgrade",
+          "charging_sleep": "Charging sleep",
+          "invalid_pad": "Invalid pad",
+          "safety_offline": "Safety offline",
+          "gyro": "Gyro",
+          "lid_open": "Lid open",
+          "bumped": "Bumped",
+          "map_version_mismatch": "Map version mismatch",
+          "tank_low": "Tank low",
+          "no_pad": "No pad",
+          "bumper_offline": "Bumper offline",
+          "power_offline": "Power offline",
+          "new_cleaning_head": "New cleaning head",
+          "schedule_no_clock": "Schedule no clock",
+          "battery_auth_error": "Battery auth error",
+          "mobility_offline": "Mobility offline",
+          "invalid_cal": "Invalid cal",
+          "in_dock_halo": "In dock halo",
+          "pad_detection_timeout": "Pad detection timeout",
+          "auto_evacuation_clogged": "Auto evacuation clogged",
+          "sm_bus_permanent_failure": "SM bus permanent failure",
+          "charge_timeout": "Charge timeout",
+          "saving_map": "Saving map",
+          "dead_camera": "Dead camera",
+          "backup_refused": "Backup refused",
+          "safety_fault_confinement": "Safety fault confinement",
+          "safety_fault_tilt": "Safety fault tilt",
+          "safety_fault_rollover": "Safety fault rollover",
+          "safety_fault_lift": "Safety fault lift",
+          "safety_fault_emergency_stop": "Safety fault emergency stop",
+          "safety_fault_hardware": "Safety fault hardware",
+          "safety_fault_unknown": "Safety fault unknown",
+          "safety_fault_handle_lift": "Safety fault handle lift",
+          "localization_failed": "Localization failed",
+          "low_beacon_count": "Low beacon count",
+          "precheck_refused": "Precheck refused",
+          "safety_fault_drive_stall_left": "Safety fault drive stall left",
+          "safety_fault_drive_stall_right": "Safety fault drive stall right",
+          "not_docked": "Not docked",
+          "bridge_not_confined": "Bridge not confined",
+          "bridge_does_not_reach_dock": "Bridge does not reach dock",
+          "bridge_does_not_reach_yard": "Bridge does not reach yard",
+          "wheel_motor_overtemp": "Wheel motor overtemp",
+          "wheel_motor_undertemp": "Wheel motor undertemp",
+          "blade_motor_overtemp": "Blade motor overtemp",
+          "blade_motor_undertemp": "Blade motor undertemp",
+          "fleet_disabled": "Fleet disabled",
+          "subscription_expired": "Subscription expired",
+          "dead_navigation_board": "Dead navigation board",
+          "downloading_map": "Downloading map",
+          "off_dock": "Off dock",
+          "tank_leaking": "Tank leaking",
+          "robot_fluid_level_sensor_broken": "Robot fluid level sensor broken",
+          "tank_fluid_level_sensor_broken": "Tank fluid level sensor broken",
+          "cleaning_head_hw_mismatch": "Cleaning head hw mismatch",
+          "dead_floor_type_sensor": "Dead floor type sensor",
+          "unknown": "Unknown",
+          "ota_update": "Ota update",
+          "unrecognized": "Unrecognized"
+        }
       },
       "next_clean": {
         "name": "Status – Next clean"
@@ -425,6 +661,18 @@
       },
       "pad_days_until_due": {
         "name": "Maintenance – Pad days until due"
+      },
+      "side_brush_wear_rate": {
+        "name": "Maintenance – Side brush wear rate"
+      },
+      "clean_base_bag_wear_rate": {
+        "name": "Maintenance – Clean Base bag wear rate"
+      },
+      "side_brush_days_until_due": {
+        "name": "Maintenance – Side brush days until due"
+      },
+      "clean_base_bag_days_until_due": {
+        "name": "Maintenance – Clean Base bag days until due"
       },
       "battery_capacity_mah": {
         "name": "Battery capacity"
@@ -585,13 +833,13 @@
         "name": "Robot health score"
       },
       "lifetime_completion_rate": {
-        "name": "Lifetime Completion Rate"
+        "name": "Lifetime completion rate"
       },
       "battery_cycle_count_bms": {
-        "name": "Battery Cycle Count Bms"
+        "name": "Battery BMS cycle count"
       },
       "battery_age_days": {
-        "name": "Battery Age Days"
+        "name": "Battery age"
       },
       "wifi_last_channel": {
         "name": "Wi-Fi last channel"
@@ -638,9 +886,6 @@
       "last_mission_team_id": {
         "name": "Missions – Last mission team ID"
       },
-      "reset_diagnostics": {
-        "name": "Reset diagnostics"
-      },
       "health_score_trend": {
         "name": "Health score trend",
         "state": {
@@ -658,6 +903,391 @@
       },
       "dirt_weather_correlation": {
         "name": "Dirt correlation"
+      },
+      "prime_mission_event": {
+        "name": "Mission event"
+      },
+      "prime_connection_health": {
+        "name": "Connection health",
+        "state": {
+          "ok": "OK",
+          "error": "Error"
+        }
+      },
+      "prime_detected_pad": {
+        "name": "Detected pad",
+        "state": {
+          "pad_plate": "All pads fitted",
+          "no_pad": "Pad missing",
+          "disp_dry": "Single-use dry pad",
+          "disp_wet": "Single-use wet pad",
+          "reusable_dry": "Reusable dry pad",
+          "reusable_wet": "Reusable wet pad",
+          "invalid": "Pad not recognised"
+        }
+      },
+      "prime_runtime_hours": {
+        "name": "Lifetime runtime"
+      },
+      "prime_firmware_version": {
+        "name": "Firmware version"
+      },
+      "prime_dock_status": {
+        "name": "Dock status",
+        "state": {
+          "dock_no_common_error": "Dock no common error",
+          "pad_wash_unheated_water": "Pad wash unheated water",
+          "pad_dry_unheated_air": "Pad dry unheated air",
+          "pad_wash_normal_heated_water": "Pad wash normal heated water",
+          "pad_dry_heated_air": "Pad dry heated air",
+          "pad_wash_max_heated_water": "Pad wash max heated water",
+          "dock_unknown": "Dock unknown",
+          "dock_ready": "Dock ready",
+          "dock_evacuation_in_progress": "Dock evacuation in progress",
+          "dock_evacuation_complete": "Dock evacuation complete",
+          "dock_evacuation_stopping": "Dock evacuation stopping",
+          "dock_evacuation_upgrading": "Dock evacuation upgrading",
+          "dock_bag_missing": "Dock bag missing",
+          "dock_clogged": "Dock clogged",
+          "dock_vacuum_inoperable": "Dock vacuum inoperable",
+          "dock_bag_full": "Dock bag full",
+          "dock_motor_failure": "Dock motor failure",
+          "dock_partial_clog": "Dock partial clog",
+          "dock_communication_failure": "Dock communication failure",
+          "dock_evacuation_report_error": "Dock evacuation report error",
+          "dock_lifetime_data_report_error": "Dock lifetime data report error",
+          "dock_all_reports_error": "Dock all reports error",
+          "dock_hardware_issue_error": "Dock hardware issue error",
+          "fluid_replenishment_unknown": "Fluid replenishment unknown",
+          "fluid_replenishment_okay": "Fluid replenishment OK",
+          "fluid_replenishment_started": "Fluid replenishment started",
+          "fluid_replenishment_in_progress": "Fluid replenishment in progress",
+          "fluid_replenishment_complete": "Fluid replenishment complete",
+          "fluid_replenishment_complete_not_enough_water": "Fluid replenishment complete not enough water",
+          "fluid_replenishment_invalid_dock_state_error": "Fluid replenishment invalid dock state error",
+          "fluid_replenishment_tank_missing_error": "Fluid replenishment tank missing error",
+          "fluid_replenishment_tank_level_too_low_error": "Fluid replenishment tank level too low error",
+          "fluid_replenishment_tank_level_sensor_issue_error": "Fluid replenishment tank level sensor issue error",
+          "fluid_replenishment_couldnt_insert_snorkel_error": "Fluid replenishment couldn't insert snorkel error",
+          "fluid_replenishment_clog_error": "Fluid replenishment clog error",
+          "fluid_replenishment_pump_failure_error": "Fluid replenishment pump failure error",
+          "fluid_replenishment_incorrect_robot_tank_error": "Fluid replenishment incorrect robot tank error",
+          "fluid_replenishment_communication_failure_error": "Fluid replenishment communication failure error",
+          "fluid_replenishment_couldnt_extend_snorkel_error": "Fluid replenishment couldn't extend snorkel error",
+          "fluid_replenishment_couldnt_retract_snorkel_error": "Fluid replenishment couldn't retract snorkel error",
+          "fluid_replenishment_dock_tank_level_not_decreasing_error": "Fluid replenishment dock tank level not decreasing error",
+          "fluid_replenishment_robot_tank_level_not_increasing_error": "Fluid replenishment robot tank level not increasing error",
+          "fluid_replenishment_hardware_issue_error": "Fluid replenishment hardware issue error",
+          "fluid_replenishment_dock_tank_level_decreasing_error": "Fluid replenishment dock tank level decreasing error",
+          "fluid_replenishment_robot_tank_filling_timeout_error": "Fluid replenishment robot tank filling timeout error",
+          "pad_wash_unknown": "Pad wash unknown",
+          "pad_wash_okay": "Pad wash OK",
+          "pad_wash_in_progress": "Pad wash in progress",
+          "pad_wash_complete_with_success": "Pad wash complete with success",
+          "pad_wet_in_progress": "Pad wet in progress",
+          "pad_wet_complete": "Pad wet complete",
+          "pad_wash_not_available_dock_updating": "Pad wash not available dock updating",
+          "pad_wash_flushing_sluice": "Pad wash flushing sluice",
+          "pad_wash_sluice_flush_complete": "Pad wash sluice flush complete",
+          "pad_wash_invalid_dock_state_error": "Pad wash invalid dock state error",
+          "pad_wash_clear_fluid_tank_missing_error": "Pad wash clear fluid tank missing error",
+          "pad_wash_clear_fluid_tank_level_too_low_error": "Pad wash clear fluid tank level too low error",
+          "pad_wash_clear_fluid_tank_level_sensor_issue_error": "Pad wash clear fluid tank level sensor issue error",
+          "pad_wash_grey_water_tank_missing_error": "Pad wash grey water tank missing error",
+          "pad_wash_grey_water_tank_level_too_full_error": "Pad wash grey water tank level too full error",
+          "pad_wash_hardware_error": "Pad wash hardware error",
+          "pad_wash_communication_failure_error": "Pad wash communication failure error",
+          "pad_wash_grey_water_tank_level_not_decreasing_error": "Pad wash grey water tank level not decreasing error",
+          "pad_wash_grey_water_tank_level_not_increasing_error": "Pad wash grey water tank level not increasing error",
+          "pad_wash_clear_fluid_tank_level_decreasing_error": "Pad wash clear fluid tank level decreasing error",
+          "pad_wash_grey_water_tank_level_decreasing_error": "Pad wash grey water tank level decreasing error",
+          "pad_wash_hardware_issue_error": "Pad wash hardware issue error",
+          "pad_wash_no_pad_attached_error": "Pad wash no pad attached error",
+          "pad_wash_pad_actuator_stall_error": "Pad wash pad actuator stall error",
+          "pad_dry_unknown": "Pad dry unknown",
+          "pad_dry_okay": "Pad dry OK",
+          "pad_dry_in_progress": "Pad dry in progress",
+          "pad_dry_complete_with_success": "Pad dry complete with success",
+          "pad_dry_interrupt_by_robot": "Pad dry interrupt by robot",
+          "pad_dry_interrupt_by_mission": "Pad dry interrupt by mission",
+          "pad_dry_interrupt_by_user": "Pad dry interrupt by user",
+          "pad_dry_not_available_dock_updating": "Pad dry not available dock updating",
+          "pad_dry_invalid_state_error": "Pad dry invalid state error",
+          "pad_dry_motor_stall_error": "Pad dry motor stall error",
+          "pad_dry_motor_fail_to_start_error": "Pad dry motor fail to start error",
+          "pad_dry_actuator_stall_error": "Pad dry actuator stall error",
+          "pad_dry_pad_not_washed_error": "Pad dry pad not washed error",
+          "pad_dry_motor_f_e_t_fault_error": "Pad dry motor FET fault error",
+          "pad_dry_hardware_issue_error": "Pad dry hardware issue error",
+          "pad_dry_no_pad_attached_error": "Pad dry no pad attached error",
+          "pad_dry_communication_failure_error": "Pad dry communication failure error",
+          "pad_wash_blocked_check_tanks": "Pad wash blocked — check tanks",
+          "not_reported": "Not reported by this dock",
+          "unrecognized": "Unrecognized"
+        }
+      },
+      "prime_pad_wash_status": {
+        "name": "Pad wash status",
+        "state": {
+          "dock_no_common_error": "Dock no common error",
+          "pad_wash_unheated_water": "Pad wash unheated water",
+          "pad_dry_unheated_air": "Pad dry unheated air",
+          "pad_wash_normal_heated_water": "Pad wash normal heated water",
+          "pad_dry_heated_air": "Pad dry heated air",
+          "pad_wash_max_heated_water": "Pad wash max heated water",
+          "dock_unknown": "Dock unknown",
+          "dock_ready": "Dock ready",
+          "dock_evacuation_in_progress": "Dock evacuation in progress",
+          "dock_evacuation_complete": "Dock evacuation complete",
+          "dock_evacuation_stopping": "Dock evacuation stopping",
+          "dock_evacuation_upgrading": "Dock evacuation upgrading",
+          "dock_bag_missing": "Dock bag missing",
+          "dock_clogged": "Dock clogged",
+          "dock_vacuum_inoperable": "Dock vacuum inoperable",
+          "dock_bag_full": "Dock bag full",
+          "dock_motor_failure": "Dock motor failure",
+          "dock_partial_clog": "Dock partial clog",
+          "dock_communication_failure": "Dock communication failure",
+          "dock_evacuation_report_error": "Dock evacuation report error",
+          "dock_lifetime_data_report_error": "Dock lifetime data report error",
+          "dock_all_reports_error": "Dock all reports error",
+          "dock_hardware_issue_error": "Dock hardware issue error",
+          "fluid_replenishment_unknown": "Fluid replenishment unknown",
+          "fluid_replenishment_okay": "Fluid replenishment OK",
+          "fluid_replenishment_started": "Fluid replenishment started",
+          "fluid_replenishment_in_progress": "Fluid replenishment in progress",
+          "fluid_replenishment_complete": "Fluid replenishment complete",
+          "fluid_replenishment_complete_not_enough_water": "Fluid replenishment complete not enough water",
+          "fluid_replenishment_invalid_dock_state_error": "Fluid replenishment invalid dock state error",
+          "fluid_replenishment_tank_missing_error": "Fluid replenishment tank missing error",
+          "fluid_replenishment_tank_level_too_low_error": "Fluid replenishment tank level too low error",
+          "fluid_replenishment_tank_level_sensor_issue_error": "Fluid replenishment tank level sensor issue error",
+          "fluid_replenishment_couldnt_insert_snorkel_error": "Fluid replenishment couldn't insert snorkel error",
+          "fluid_replenishment_clog_error": "Fluid replenishment clog error",
+          "fluid_replenishment_pump_failure_error": "Fluid replenishment pump failure error",
+          "fluid_replenishment_incorrect_robot_tank_error": "Fluid replenishment incorrect robot tank error",
+          "fluid_replenishment_communication_failure_error": "Fluid replenishment communication failure error",
+          "fluid_replenishment_couldnt_extend_snorkel_error": "Fluid replenishment couldn't extend snorkel error",
+          "fluid_replenishment_couldnt_retract_snorkel_error": "Fluid replenishment couldn't retract snorkel error",
+          "fluid_replenishment_dock_tank_level_not_decreasing_error": "Fluid replenishment dock tank level not decreasing error",
+          "fluid_replenishment_robot_tank_level_not_increasing_error": "Fluid replenishment robot tank level not increasing error",
+          "fluid_replenishment_hardware_issue_error": "Fluid replenishment hardware issue error",
+          "fluid_replenishment_dock_tank_level_decreasing_error": "Fluid replenishment dock tank level decreasing error",
+          "fluid_replenishment_robot_tank_filling_timeout_error": "Fluid replenishment robot tank filling timeout error",
+          "pad_wash_unknown": "Pad wash unknown",
+          "pad_wash_okay": "Pad wash OK",
+          "pad_wash_in_progress": "Pad wash in progress",
+          "pad_wash_complete_with_success": "Pad wash complete with success",
+          "pad_wet_in_progress": "Pad wet in progress",
+          "pad_wet_complete": "Pad wet complete",
+          "pad_wash_not_available_dock_updating": "Pad wash not available dock updating",
+          "pad_wash_flushing_sluice": "Pad wash flushing sluice",
+          "pad_wash_sluice_flush_complete": "Pad wash sluice flush complete",
+          "pad_wash_invalid_dock_state_error": "Pad wash invalid dock state error",
+          "pad_wash_clear_fluid_tank_missing_error": "Pad wash clear fluid tank missing error",
+          "pad_wash_clear_fluid_tank_level_too_low_error": "Pad wash clear fluid tank level too low error",
+          "pad_wash_clear_fluid_tank_level_sensor_issue_error": "Pad wash clear fluid tank level sensor issue error",
+          "pad_wash_grey_water_tank_missing_error": "Pad wash grey water tank missing error",
+          "pad_wash_grey_water_tank_level_too_full_error": "Pad wash grey water tank level too full error",
+          "pad_wash_hardware_error": "Pad wash hardware error",
+          "pad_wash_communication_failure_error": "Pad wash communication failure error",
+          "pad_wash_grey_water_tank_level_not_decreasing_error": "Pad wash grey water tank level not decreasing error",
+          "pad_wash_grey_water_tank_level_not_increasing_error": "Pad wash grey water tank level not increasing error",
+          "pad_wash_clear_fluid_tank_level_decreasing_error": "Pad wash clear fluid tank level decreasing error",
+          "pad_wash_grey_water_tank_level_decreasing_error": "Pad wash grey water tank level decreasing error",
+          "pad_wash_hardware_issue_error": "Pad wash hardware issue error",
+          "pad_wash_no_pad_attached_error": "Pad wash no pad attached error",
+          "pad_wash_pad_actuator_stall_error": "Pad wash pad actuator stall error",
+          "pad_dry_unknown": "Pad dry unknown",
+          "pad_dry_okay": "Pad dry OK",
+          "pad_dry_in_progress": "Pad dry in progress",
+          "pad_dry_complete_with_success": "Pad dry complete with success",
+          "pad_dry_interrupt_by_robot": "Pad dry interrupt by robot",
+          "pad_dry_interrupt_by_mission": "Pad dry interrupt by mission",
+          "pad_dry_interrupt_by_user": "Pad dry interrupt by user",
+          "pad_dry_not_available_dock_updating": "Pad dry not available dock updating",
+          "pad_dry_invalid_state_error": "Pad dry invalid state error",
+          "pad_dry_motor_stall_error": "Pad dry motor stall error",
+          "pad_dry_motor_fail_to_start_error": "Pad dry motor fail to start error",
+          "pad_dry_actuator_stall_error": "Pad dry actuator stall error",
+          "pad_dry_pad_not_washed_error": "Pad dry pad not washed error",
+          "pad_dry_motor_f_e_t_fault_error": "Pad dry motor FET fault error",
+          "pad_dry_hardware_issue_error": "Pad dry hardware issue error",
+          "pad_dry_no_pad_attached_error": "Pad dry no pad attached error",
+          "pad_dry_communication_failure_error": "Pad dry communication failure error",
+          "pad_wash_blocked_check_tanks": "Pad wash blocked — check tanks",
+          "not_reported": "Not reported by this dock",
+          "unrecognized": "Unrecognized"
+        }
+      },
+      "prime_pad_dry_status": {
+        "name": "Pad dry status",
+        "state": {
+          "dock_no_common_error": "Dock no common error",
+          "pad_wash_unheated_water": "Pad wash unheated water",
+          "pad_dry_unheated_air": "Pad dry unheated air",
+          "pad_wash_normal_heated_water": "Pad wash normal heated water",
+          "pad_dry_heated_air": "Pad dry heated air",
+          "pad_wash_max_heated_water": "Pad wash max heated water",
+          "dock_unknown": "Dock unknown",
+          "dock_ready": "Dock ready",
+          "dock_evacuation_in_progress": "Dock evacuation in progress",
+          "dock_evacuation_complete": "Dock evacuation complete",
+          "dock_evacuation_stopping": "Dock evacuation stopping",
+          "dock_evacuation_upgrading": "Dock evacuation upgrading",
+          "dock_bag_missing": "Dock bag missing",
+          "dock_clogged": "Dock clogged",
+          "dock_vacuum_inoperable": "Dock vacuum inoperable",
+          "dock_bag_full": "Dock bag full",
+          "dock_motor_failure": "Dock motor failure",
+          "dock_partial_clog": "Dock partial clog",
+          "dock_communication_failure": "Dock communication failure",
+          "dock_evacuation_report_error": "Dock evacuation report error",
+          "dock_lifetime_data_report_error": "Dock lifetime data report error",
+          "dock_all_reports_error": "Dock all reports error",
+          "dock_hardware_issue_error": "Dock hardware issue error",
+          "fluid_replenishment_unknown": "Fluid replenishment unknown",
+          "fluid_replenishment_okay": "Fluid replenishment OK",
+          "fluid_replenishment_started": "Fluid replenishment started",
+          "fluid_replenishment_in_progress": "Fluid replenishment in progress",
+          "fluid_replenishment_complete": "Fluid replenishment complete",
+          "fluid_replenishment_complete_not_enough_water": "Fluid replenishment complete not enough water",
+          "fluid_replenishment_invalid_dock_state_error": "Fluid replenishment invalid dock state error",
+          "fluid_replenishment_tank_missing_error": "Fluid replenishment tank missing error",
+          "fluid_replenishment_tank_level_too_low_error": "Fluid replenishment tank level too low error",
+          "fluid_replenishment_tank_level_sensor_issue_error": "Fluid replenishment tank level sensor issue error",
+          "fluid_replenishment_couldnt_insert_snorkel_error": "Fluid replenishment couldn't insert snorkel error",
+          "fluid_replenishment_clog_error": "Fluid replenishment clog error",
+          "fluid_replenishment_pump_failure_error": "Fluid replenishment pump failure error",
+          "fluid_replenishment_incorrect_robot_tank_error": "Fluid replenishment incorrect robot tank error",
+          "fluid_replenishment_communication_failure_error": "Fluid replenishment communication failure error",
+          "fluid_replenishment_couldnt_extend_snorkel_error": "Fluid replenishment couldn't extend snorkel error",
+          "fluid_replenishment_couldnt_retract_snorkel_error": "Fluid replenishment couldn't retract snorkel error",
+          "fluid_replenishment_dock_tank_level_not_decreasing_error": "Fluid replenishment dock tank level not decreasing error",
+          "fluid_replenishment_robot_tank_level_not_increasing_error": "Fluid replenishment robot tank level not increasing error",
+          "fluid_replenishment_hardware_issue_error": "Fluid replenishment hardware issue error",
+          "fluid_replenishment_dock_tank_level_decreasing_error": "Fluid replenishment dock tank level decreasing error",
+          "fluid_replenishment_robot_tank_filling_timeout_error": "Fluid replenishment robot tank filling timeout error",
+          "pad_wash_unknown": "Pad wash unknown",
+          "pad_wash_okay": "Pad wash OK",
+          "pad_wash_in_progress": "Pad wash in progress",
+          "pad_wash_complete_with_success": "Pad wash complete with success",
+          "pad_wet_in_progress": "Pad wet in progress",
+          "pad_wet_complete": "Pad wet complete",
+          "pad_wash_not_available_dock_updating": "Pad wash not available dock updating",
+          "pad_wash_flushing_sluice": "Pad wash flushing sluice",
+          "pad_wash_sluice_flush_complete": "Pad wash sluice flush complete",
+          "pad_wash_invalid_dock_state_error": "Pad wash invalid dock state error",
+          "pad_wash_clear_fluid_tank_missing_error": "Pad wash clear fluid tank missing error",
+          "pad_wash_clear_fluid_tank_level_too_low_error": "Pad wash clear fluid tank level too low error",
+          "pad_wash_clear_fluid_tank_level_sensor_issue_error": "Pad wash clear fluid tank level sensor issue error",
+          "pad_wash_grey_water_tank_missing_error": "Pad wash grey water tank missing error",
+          "pad_wash_grey_water_tank_level_too_full_error": "Pad wash grey water tank level too full error",
+          "pad_wash_hardware_error": "Pad wash hardware error",
+          "pad_wash_communication_failure_error": "Pad wash communication failure error",
+          "pad_wash_grey_water_tank_level_not_decreasing_error": "Pad wash grey water tank level not decreasing error",
+          "pad_wash_grey_water_tank_level_not_increasing_error": "Pad wash grey water tank level not increasing error",
+          "pad_wash_clear_fluid_tank_level_decreasing_error": "Pad wash clear fluid tank level decreasing error",
+          "pad_wash_grey_water_tank_level_decreasing_error": "Pad wash grey water tank level decreasing error",
+          "pad_wash_hardware_issue_error": "Pad wash hardware issue error",
+          "pad_wash_no_pad_attached_error": "Pad wash no pad attached error",
+          "pad_wash_pad_actuator_stall_error": "Pad wash pad actuator stall error",
+          "pad_dry_unknown": "Pad dry unknown",
+          "pad_dry_okay": "Pad dry OK",
+          "pad_dry_in_progress": "Pad dry in progress",
+          "pad_dry_complete_with_success": "Pad dry complete with success",
+          "pad_dry_interrupt_by_robot": "Pad dry interrupt by robot",
+          "pad_dry_interrupt_by_mission": "Pad dry interrupt by mission",
+          "pad_dry_interrupt_by_user": "Pad dry interrupt by user",
+          "pad_dry_not_available_dock_updating": "Pad dry not available dock updating",
+          "pad_dry_invalid_state_error": "Pad dry invalid state error",
+          "pad_dry_motor_stall_error": "Pad dry motor stall error",
+          "pad_dry_motor_fail_to_start_error": "Pad dry motor fail to start error",
+          "pad_dry_actuator_stall_error": "Pad dry actuator stall error",
+          "pad_dry_pad_not_washed_error": "Pad dry pad not washed error",
+          "pad_dry_motor_f_e_t_fault_error": "Pad dry motor FET fault error",
+          "pad_dry_hardware_issue_error": "Pad dry hardware issue error",
+          "pad_dry_no_pad_attached_error": "Pad dry no pad attached error",
+          "pad_dry_communication_failure_error": "Pad dry communication failure error",
+          "pad_wash_blocked_check_tanks": "Pad wash blocked — check tanks",
+          "not_reported": "Not reported by this dock",
+          "unrecognized": "Unrecognized"
+        }
+      },
+      "prime_suction_level": {
+        "name": "Suction level",
+        "state": {
+          "invalid": "Invalid",
+          "low": "Low",
+          "medium": "Medium",
+          "high": "High",
+          "turbo": "Turbo"
+        }
+      },
+      "prime_charge_cycles_ok": {
+        "name": "Charge cycles (successful)"
+      },
+      "prime_charge_cycles_error": {
+        "name": "Charge cycles (failed)"
+      },
+      "prime_system_uptime": {
+        "name": "System uptime"
+      },
+      "prime_navigation_resets": {
+        "name": "Navigation resets"
+      },
+      "prime_serial_number": {
+        "name": "Serial number"
+      },
+      "prime_consumable_part": {
+        "name": "Maintenance – {part}"
+      },
+      "prime_part_edge_brush": {
+        "name": "Maintenance – Edge sweeping brush"
+      },
+      "prime_part_multi_surface_brush": {
+        "name": "Maintenance – Main Brush(es)"
+      },
+      "prime_part_filter": {
+        "name": "Maintenance – High-Efficiency Filter"
+      },
+      "prime_part_dirt_bag": {
+        "name": "Maintenance – Dust Bag"
+      },
+      "prime_part_mop_pads": {
+        "name": "Maintenance – DualClean Mop Pads"
+      },
+      "prime_part_cliff_sensors": {
+        "name": "Maintenance – Cliff sensors"
+      },
+      "prime_part_pad_wash_cleaning": {
+        "name": "Maintenance – Dock Washing System"
+      },
+      "prime_part_pad_wash_replacement": {
+        "name": "Maintenance – Washable Mop Pad"
+      },
+      "prime_cleaning_mode": {
+        "name": "Cleaning mode",
+        "state": {
+          "vacuuming": "Vacuuming",
+          "mopping": "Mopping",
+          "vacuuming_and_mopping": "Vacuuming and mopping"
+        }
+      },
+      "region_last_cleaned": {
+        "name": "Last cleaned – {region}"
+      },
+      "part_edge_brush": {
+        "name": "Maintenance – Edge sweeping brush"
+      },
+      "part_dirt_bag": {
+        "name": "Maintenance – Dust Bag"
+      },
+      "last_charge": {
+        "name": "Last charged"
+      },
+      "reset_diagnostics_summary": {
+        "name": "Diagnostics reset counters"
       }
     },
     "binary_sensor": {
@@ -674,7 +1304,10 @@
         "name": "Mop problem"
       },
       "mop_tank_present": {
-        "name": "Mop tank present"
+        "name": "Robot water tank"
+      },
+      "prime_dock_error": {
+        "name": "Dock error"
       },
       "mop_lid_closed": {
         "name": "Mop lid open"
@@ -687,6 +1320,18 @@
         "state": {
           "on": "Due",
           "off": "OK"
+        },
+        "state_attributes": {
+          "required_actions": {
+            "name": "Required actions",
+            "state": {
+              "replace_filter": "Replace the filter.",
+              "replace_main_brushes": "Replace the main brushes.",
+              "replace_mop_pad": "Replace the mop pad.",
+              "replace_side_brush": "Replace the side brush.",
+              "replace_clean_base_bag": "Replace the Clean Base bag."
+            }
+          }
         }
       },
       "start_blocked": {
@@ -734,6 +1379,12 @@
       },
       "layout_change_detected": {
         "name": "Layout change detected"
+      },
+      "prime_start_blocked": {
+        "name": "Start blocked"
+      },
+      "prime_quiet_hours": {
+        "name": "In quiet hours"
       }
     },
     "button": {
@@ -778,6 +1429,30 @@
       },
       "map_training": {
         "name": "Action – Start map training"
+      },
+      "prime_favorite": {
+        "name": "Favourite – {favorite}"
+      },
+      "prime_locate": {
+        "name": "Locate"
+      },
+      "prime_empty_bin": {
+        "name": "Empty bin"
+      },
+      "prime_wash_pad": {
+        "name": "Wash pad"
+      },
+      "prime_stop_pad_dry": {
+        "name": "Stop pad drying"
+      },
+      "prime_start_pad_dry": {
+        "name": "Start pad drying"
+      },
+      "reset_side_brush": {
+        "name": "Maintenance – Confirm side brush replacement"
+      },
+      "reset_clean_base_bag": {
+        "name": "Maintenance – Confirm Clean Base bag replacement"
       }
     },
     "switch": {
@@ -798,6 +1473,36 @@
       },
       "gentle_mode": {
         "name": "Setting – Gentle mode"
+      },
+      "prime_carpet_boost": {
+        "name": "Setting – Carpet boost"
+      },
+      "prime_schedule": {
+        "name": "Schedule – {schedule}"
+      },
+      "prime_child_lock": {
+        "name": "Child lock"
+      },
+      "prime_eco_charge": {
+        "name": "Eco charging"
+      },
+      "prime_pad_dry_allowed": {
+        "name": "Pad drying"
+      },
+      "prime_two_pass": {
+        "name": "Two-pass cleaning"
+      },
+      "prime_vac_high": {
+        "name": "Extra suction power"
+      },
+      "prime_quiet_hours_active": {
+        "name": "Do not disturb"
+      },
+      "prime_pad_wash_allowed": {
+        "name": "Pad washing allowed"
+      },
+      "prime_pad_dry": {
+        "name": "Dry pad now"
       }
     },
     "select": {
@@ -836,17 +1541,133 @@
           "eco": "Eco",
           "performance": "Performance"
         }
+      },
+      "prime_suction_level": {
+        "name": "Suction level",
+        "state": {
+          "light": "Light",
+          "normal": "Normal",
+          "deep": "Deep"
+        }
+      },
+      "prime_map": {
+        "name": "Map",
+        "state": {
+          "follow_robot": "Follow the robot"
+        }
+      },
+      "prime_cleaning_mode": {
+        "name": "Cleaning mode",
+        "state": {
+          "vacuum": "Vacuum",
+          "mop": "Mop",
+          "vacuum_and_mop": "Vacuum and mop",
+          "vacuum_then_mop": "Vacuum, then mop"
+        }
+      },
+      "prime_pad_dry_duration": {
+        "name": "Mop dry duration",
+        "state": {
+          "2_hours": "2 hours",
+          "3_hours": "3 hours",
+          "4_hours": "4 hours",
+          "5_hours": "5 hours",
+          "6_hours": "6 hours"
+        }
+      },
+      "prime_pad_wash_return": {
+        "name": "Mop wash frequency",
+        "state": {
+          "after_each_room": "After each room",
+          "by_time": "By time interval",
+          "by_area": "By area interval",
+          "mission": "Before and after routines",
+          "refill": "Also during refills",
+          "refill_and_room": "Also between rooms"
+        }
+      },
+      "prime_pad_wash_area_interval": {
+        "name": "Mop wash area interval",
+        "state": {
+          "6": "6",
+          "8": "8",
+          "10": "10",
+          "15": "15",
+          "20": "20"
+        }
+      },
+      "prime_pad_wash_time_interval": {
+        "name": "Mop wash time interval",
+        "state": {
+          "10": "10 minutes",
+          "15": "15 minutes",
+          "20": "20 minutes",
+          "25": "25 minutes"
+        }
+      },
+      "prime_pad_wash_heat": {
+        "name": "Heated mop water",
+        "state": {
+          "no_heat": "No heat",
+          "default_heat": "Default heat",
+          "high_heat": "High heat"
+        }
+      },
+      "prime_autoevac_frequency": {
+        "name": "Auto-empty frequency",
+        "state": {
+          "every_routine": "After every routine",
+          "every_2_routines": "After every 2 routines",
+          "every_3_routines": "After every 3 routines",
+          "on_dock_return": "On dock return",
+          "10": "Every 10 units of area",
+          "15": "Every 15 units of area",
+          "25": "Every 25 units of area",
+          "30": "Every 30 units of area",
+          "50": "Every 50 units of area"
+        }
+      },
+      "prime_pad_wetness": {
+        "name": "Pad wetness",
+        "state": {
+          "1": "1",
+          "2": "2",
+          "3": "3",
+          "4": "4",
+          "5": "5",
+          "6": "6",
+          "7": "7",
+          "8": "8",
+          "9": "9",
+          "10": "10",
+          "11": "11",
+          "12": "12",
+          "13": "13",
+          "14": "14",
+          "15": "15",
+          "16": "16",
+          "17": "17",
+          "18": "18",
+          "19": "19",
+          "20": "20"
+        }
       }
     },
     "image": {
       "map": {
-        "name": "Cleaning map"
+        "name": "Cleaning path"
       },
       "coverage_map": {
-        "name": "Coverage map"
+        "name": "Coverage heatmap"
       },
       "rooms_map": {
-        "name": "Rooms Map"
+        "name": "Room map"
+      },
+      "cleaning_map": {
+        "name": "Live cleaning map"
+      },
+      "raw_map": {
+        "name": "Raw live map"
       }
     },
     "device_tracker": {
@@ -964,7 +1785,8 @@
       "health_score_drop": "Health score dropped",
       "map_retrain_started": "Map retrain started",
       "map_retrain_completed": "Map retrain completed",
-      "firmware_updated": "Firmware updated"
+      "firmware_updated": "Firmware updated",
+      "start_blocked": "Start blocked by a fault"
     }
   },
   "services": {
@@ -1031,6 +1853,38 @@
     "restore_backup": {
       "name": "Restore backup",
       "description": "Restore every store in a backup ZIP. Takes effect immediately, no restart required."
+    },
+    "set_quiet_hours": {
+      "name": "Set quiet hours",
+      "description": "Write the household's Do Not Disturb window.",
+      "fields": {
+        "start": {
+          "name": "Start",
+          "description": "When quiet hours begin each day."
+        },
+        "end": {
+          "name": "End",
+          "description": "When quiet hours end each day."
+        },
+        "ends_at": {
+          "name": "Quiet until",
+          "description": "A single moment to stay quiet until, instead of a daily window."
+        }
+      }
+    },
+    "clean_zone": {
+      "name": "Clean zone",
+      "description": "Send a Prime robot to one or more clean zones on demand, by name or by numeric id.",
+      "fields": {
+        "zone_name": {
+          "name": "Zone name",
+          "description": "One or more zone names exactly as they appear on the map. Use this or zone id."
+        },
+        "zone_id": {
+          "name": "Zone ID",
+          "description": "One or more numeric zone ids. Use this or zone name."
+        }
+      }
     }
   },
   "exceptions": {
@@ -1075,6 +1929,51 @@
     },
     "backup_entity_not_found": {
       "message": "The entity \"{entity_id}\" could not be resolved to a Roomba+ robot. Check the entity ID and try again."
+    },
+    "cloud_credentials_invalid": {
+      "message": "iRobot cloud credentials are invalid: {error}"
+    },
+    "cloud_temporarily_unavailable": {
+      "message": "iRobot cloud is temporarily unavailable: {error}"
+    },
+    "unknown_rooms": {
+      "message": "Unknown room(s) for {entity_id}: {rooms}. Known rooms: {known}."
+    },
+    "favorite_prime_only": {
+      "message": "run_favorite is only available for V4/Prime robots"
+    },
+    "favorite_not_found": {
+      "message": "No runnable favorite with id {favorite_id}"
+    },
+    "dock_operation_in_progress": {
+      "message": "The dock is busy {operation}. The robot will not act on commands until it finishes."
+    },
+    "quiet_hours_incomplete": {
+      "message": "Quiet hours need both a start and an end, or neither."
+    },
+    "quiet_hours_ambiguous": {
+      "message": "Give either a daily window (start and end) or a one-off quiet-until moment — the robot accepts exactly one of the two."
+    },
+    "quiet_hours_not_prime": {
+      "message": "{entity} is not a V4/Prime robot with a household."
+    },
+    "prime_not_connected": {
+      "message": "This robot has no cloud connection."
+    },
+    "cloud_required": {
+      "message": "Room targeting needs iRobot cloud credentials on this robot. Add them in the integration options, or clean the whole house instead."
+    },
+    "calendar_room_not_found": {
+      "message": "No room matched \"{text}\". Name a room in the event's summary, description or location — known rooms: {known}. Leave all three free of room names for a whole-house clean."
+    },
+    "zone_name_and_zone_id_conflict": {
+      "message": "Provide either zone_name or zone_id, not both."
+    },
+    "zone_name_or_zone_id_required": {
+      "message": "Provide either zone_name or zone_id."
+    },
+    "zone_name_not_found": {
+      "message": "One or more zone names were not found on the map."
     }
   },
   "selector": {

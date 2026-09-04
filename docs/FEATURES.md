@@ -29,6 +29,16 @@ Every feature below is tagged with which robots support it:
 | `[SMART]` | i/s/j-series or Braava m6 (persistent Smart Map) — cloud not required |
 | `[SMART+CLOUD]` | Smart Map robot **and** iRobot cloud credentials configured |
 | `[BRAAVA]` | Braava m6 (mopping) specific |
+| `[PRIME]` | V4/Prime generation — Roomba Max, Combo 400-series and other robots on iRobot's newer cloud protocol |
+
+**Classic and Prime are different generations, not tiers of one.** A Classic robot
+talks to Home Assistant over your own network and can work with no internet at all;
+EPHEMERAL and SMART describe how much map it keeps. A Prime robot has **no local
+connection** — everything goes through iRobot's cloud — and it is not supported by
+the stable v3.x line at all.
+
+Sections below that carry no tag apply to Classic robots. Prime-only entities are
+marked in their own headings.
 
 ---
 
@@ -66,7 +76,8 @@ Every feature below is tagged with which robots support it:
 |---|---|---|
 | `roomba_plus.smart_start` | All | Start with blocking-sensor gate; optionally targets rooms on SMART robots |
 | `roomba_plus.clean_room` | SMART | Clean one or more named rooms — no HA 2026.3+ required |
-| `vacuum.clean_area` | SMART + cloud + HA 2026.3+ | Clean by HA area — see [Room cleaning setup](#room-cleaning-setup-ha-20263) |
+| `roomba_plus.clean_zone` | PRIME | Clean one or more zones on demand, by name or numeric id |
+| `vacuum.clean_area` | SMART + cloud + HA 2026.3+ | Clean by HA area — see [Room cleaning setup](#room-cleaning-setup--ha-areas-vacuumclean_area-ha-20263) |
 | `roomba_plus.reset_filter` | All | Record filter replacement |
 | `roomba_plus.reset_brush` | All | Record brush / pad replacement |
 | `roomba_plus.reset_battery` | All | Record battery replacement |
@@ -206,6 +217,39 @@ Configure: Settings → Devices & Services → Roomba+ → Configure → **Rooms
 > ☁️ Requires cloud credentials
 
 - Room and zone names come directly from the Smart Map — no manual naming required
+
+**Both map images share one coordinate frame** *(v4.0.0b2)*. The room
+map and the cleaning path render into the same extent and publish the
+same `calibration_points`, so one can be overlaid on the other in
+`xiaomi-vacuum-map-card`. A mission that covered part of the house shows
+as that part, not stretched to fill the image.
+
+**Enumerating rooms and zones in a template.** The *Rooms overdue*
+sensor carries a `rooms` attribute — rooms and zones together, keyed by
+the same names the `clean_room` and `clean_zone` services expect — plus
+`overdue_rooms`, a plain list already sorted worst-first:
+
+```jinja
+{% for name in state_attr('sensor.YOUR_ROBOT_rooms_overdue', 'overdue_rooms') %}
+  {{ name }}
+{% endfor %}
+```
+
+**Zones on the rooms map** *(v4.0.0a47)*. Saved clean zones are drawn as
+outlines rather than filled shapes — a zone sits inside a room, and
+filling it would hide the room it belongs to. Controlled by the
+"Show clean zones on the map" option.
+
+**Zones as Home Assistant areas** *(v4.0.0a47)*. Prime robots now offer
+their zones alongside their rooms in the area-mapping dialog, so a zone
+can be mapped to an area the same way a room can.
+
+**Where the robot is right now.** A `device_tracker` entity reports the
+room or zone being cleaned, and `Docked` when it is on the dock. Zone
+names come from a different source than room names — a room is named in
+the map's own metadata, while a zone is named by whatever the last
+command called it — so a zone you have never cleaned by name may show
+its id instead *(v4.0.0a44)*.
 - One select entity per floor; multiple Smart Maps supported
 - Each saved iRobot app routine appears as a button entity
 - `clean_room` uses cloud names directly; map version changes trigger an immediate refresh
@@ -213,6 +257,10 @@ Configure: Settings → Devices & Services → Roomba+ → Configure → **Rooms
 #### Room detection — 900-series (v2.10.0)
 
 Automatic room segmentation from the same coverage data used for the heatmap (distance-transform + watershed, the same core technique iRobot's own room-segmentation patent describes), not from travel-gap detection — the previous gap-based approach proved unreliable in the field and has been removed. Rooms and the doorways between them are identified from accumulated visit-density data across missions, with identity kept stable as more missions accumulate so a name you've assigned doesn't reset. New rooms surface via a Repair Issue for naming through the Options Flow; renaming also confirms a room so it appears in `select.{name}_select_zone`.
+
+**Rooms are not derived until three missions have completed** *(v4.0.0a43)*. This technique is measurably unstable on incomplete coverage: a threshold the robot has not yet crossed is indistinguishable from a wall, so it splits a room that is not split, and the split disappears once a later mission drives through. On one real archive that showed as 7 rooms after one mission, 6 after four, and 5 once coverage settled — two of the seven were never rooms. Only *completed* missions count, because a run that ended early has no perimeter pass and its mask edges sit further from the real walls.
+
+**What this can and cannot give you.** A room here is the set of cells the robot drove over, so its shape follows coverage rather than walls: furniture leaves holes, edges sit about one robot radius short of the wall, and boundaries fall at narrow points in the coverage rather than at doorways. More missions fix the *count*; they do not fix the shape, because the sofa is in the same place every time. Wall-accurate outlines would need obstacle data the 900-series does not export.
 
 If you're updating from an earlier version and had already named zones, those names are carried over automatically the first time this version starts up — no action needed.
 
@@ -240,6 +288,23 @@ A Repair Issue (`battery_contact_suspect`) fires on two independent signals that
 
 `image.{name}_cleaning_map` — live map rendered as a HA image entity. White background, blue travel path, light-blue cleaned area, dock marker, robot position with direction arrow. Stuck events marked on the map. Map state persists across HA restarts.
 
+**Robots that don't report live position ☁️** — a robot can have persistent Smart Maps and still
+never send pose data over local MQTT. The live renderer has nothing to draw from on those, so this
+entity would otherwise stay blank white indefinitely, with nothing logged to explain it. (Several
+i-series models behave this way — an i3/i3+ on `daredevil` firmware, for instance — but the
+fallback keys off what the robot reports about itself, not off any model list.)
+
+With cloud credentials configured, such a robot falls back to the **last completed mission's
+coverage as recorded by iRobot's cloud** — the same data the official app draws its post-clean map
+from. Nothing changes for a robot that does report position: there, an empty renderer means "this
+mission hasn't started yet", which still renders as it always did.
+
+The cloud map is fetched per mission (verified against that mission's own number, so a stale or
+mismatched map is never served) and cached, then re-rendered when a newer mission appears. Note
+that keep-out and clean-zone overlays are not drawn on the cloud-composited image: those are
+positioned in the local renderer's coordinate space, which doesn't apply to a canvas the cloud
+compositor scaled to its own extent.
+
 ```yaml
 type: picture-entity
 entity: image.roomba_cleaning_map
@@ -260,7 +325,31 @@ Both map entities expose `calibration_points` and `rooms` attributes for xiaomi-
 
 All three are withheld in fallback (not-yet-aligned) mode, since the underlying data is pose-space and would be spatially wrong overlaid on a UMF-space fallback render.
 
-The cleaning map overlays keep-out zones (red, semi-transparent) when the UMF aligner is active. **Observed obstacle zones** (v3.0.0) are also overlaid as orange circles — these represent positions where the robot has repeatedly detected obstacles over time, sourced from the UMF `observed_zones` data.
+### What the colours on the map mean
+
+Four kinds of zone are drawn, and the distinction that matters is not
+visible from the map itself: **two of them you created, two the robot
+worked out on its own.**
+
+| Colour | Zone | Origin |
+|---|---|---|
+| 🟢 green | Clean zones | **You** — created in the iRobot app |
+| 🔴 red | Keep-out zones | **You** — created in the iRobot app |
+| 🟣 purple | Carpet zones | **The robot** — detected while cleaning |
+| 🟠 orange | Observed obstacles | **The robot** — inferred from repeated bumps |
+
+Clean zones and keep-out zones are outlines, because they have shapes
+you drew. **Observed obstacles are circles**, because they arrive as a
+centre point and a radius rather than a polygon — the robot recorded a
+cluster of contacts, not a boundary.
+
+Orange circles often sit on the white, unmapped areas of the raw live
+map. That is the same cause seen twice: an obstacle the robot could not
+get past leaves a hole in the map *and* produces a contact cluster on
+top of it.
+
+Keep-out zones and observed obstacles are drawn when the UMF aligner is
+active; the observed ones come from the UMF `observed_zones` data.
 
 The native **Roomba+ platform was merged into xiaomi-vacuum-map-card in v2.4.1** (June 2026). On that version or newer, pick **Roomba+** as the `vacuum_platform` in the card editor and use the **"Generate Room Configs"** button — it reads the `rooms` attribute and builds the room overlay for you, no manual coordinates:
 
@@ -329,7 +418,68 @@ data:
 
 **Self-calibrating thresholds (v2.5+):** After two or more filter or brush replacements, Roomba+ learns your personal replacement interval from the actual hours between resets. The learned value is visible in diagnostics under `learned_maintenance`.
 
-**First install on an already-used robot:** if this is the first time Roomba+ has seen this robot and it already has significant runtime hours (e.g. installed after months of use via the official app), the remaining-hours countdown assumes maintenance is current as of install time rather than treating the robot's entire prior lifetime as "overdue" — you won't see a false "0h remaining" the moment you add the integration. The countdown then behaves normally from that point on; press the reset buttons whenever you actually replace something to keep it accurate.
+**First install on an already-used robot:** if this is the first time Roomba+ has seen this robot and it already has significant runtime hours (e.g. installed after months of use via the official app), the remaining-hours countdown assumes maintenance is current as of install time rather than treating the robot's entire prior lifetime as "overdue" — you won't see a false "0h remaining" the moment you add the integration. The countdown then behaves normally from that point on; press the reset buttons whenever you actually replace something to keep it accurate. **With cloud credentials configured this assumption is replaced by the real thing** — see cloud consumable counters below.
+
+#### Cloud-synced consumables
+
+> ☁️ Requires cloud credentials. Applies to whichever consumables your robot's account reports.
+
+iRobot's cloud tracks each consumable itself, in robot runtime minutes, and that is what the
+official app's maintenance tiles show. Where a Roomba+ sensor already exists for a part, it now
+reads that counter instead of estimating locally:
+
+| Sensor | Source when cloud is available |
+|---|---|
+| Filter remaining hours | iRobot's own filter counter |
+| Brush remaining hours | iRobot's own **main** brush counter |
+
+Robots or accounts that don't report parts keep the previous behaviour exactly — the local
+threshold estimate, hydrated baseline included — so nothing regresses for them.
+
+Consumables with no local wear signal get their own sensors, created only when the account
+actually reports that part (so a Braava gets no edge-brush sensor, and a robot without a Clean
+Base gets no bag sensor):
+
+| Sensor | Notes |
+|---|---|
+| Edge sweeping brush | The side brush. Wears on its own schedule, so it is not averaged into the main brush sensor |
+| Dust Bag | The Clean Base bag |
+
+**Migrating from the official app:** a part's cloud counter includes replacements you confirmed
+in iRobot's app, so the runtime-hours reading at each replacement is recoverable, and Roomba+
+adopts it as its baseline on the first cloud refresh. That replaces the install-time "assume
+everything is fresh" assumption with your robot's real service history, which is also what gives
+the `*_days_until_due` sensors something real to extrapolate from. Your own confirmed resets keep
+building the self-calibrating history from there; a hydrated baseline is not counted as a
+replacement event and does not skew the learned interval.
+
+**Resets go both ways.** Pressing a reset button or calling `roomba_plus.reset_filter` /
+`reset_brush` now also records the replacement with iRobot, so the app and Home Assistant agree
+about a part you just changed. This is best-effort: the local reset is saved first, and a cloud
+failure is logged without failing the action. The edge brush and bag have their own reset buttons,
+which write to the cloud counter directly since they have no local slot.
+
+**About part identification:** the endpoint returns a numeric `part_id` and no name — the app
+resolves names from a per-SKU catalog it does not serve, and the id space is not the same across
+robot families. `IROBOT_PART_ROLES` in `const.py` records the mapping and the evidence for each
+entry; an id this integration doesn't recognise is left unmapped rather than given an invented
+name, following the same reasoning as the Prime path's `_KNOWN_PARTS`.
+
+#### Status
+
+`sensor.{name}_status` reports what the robot is doing, translated into
+your Home Assistant language. Both robot generations report the same set
+of states *(v4.0.0a46)* — the wording differs from what the robot itself
+sends, and automations should match the state value rather than the
+displayed text.
+
+Two states are worth knowing about:
+
+- **Charging mid-mission** — the robot returned to top up and will
+  resume. Separate from plain charging, because an automation reacting to
+  charging would otherwise fire mid-clean.
+- **No contact** — nothing has been received for over an hour. Every
+  other entity is still showing its last value, which may be days old.
 
 #### Clean Base / dock status
 
@@ -405,6 +555,21 @@ Learns each room's own typical interval between cleans from its cleaning history
 
 ## Mission history & room intelligence
 
+> **A gap in the history is not a failure.** A robot that is stuck or in
+> an error state does not attempt its scheduled missions, and iRobot
+> records nothing for an attempt that never happened — so "no mission
+> recorded" and "no mission attempted" look identical afterwards.
+>
+> @utkjmitch captured this across a 48-hour stall: two scheduled runs
+> passed with no attempt, no failure and nothing in the history. Every
+> entity was correct throughout — `phase` read `stuck` accurately for
+> the whole period — but nothing in the mission history says why those
+> two days are empty.
+>
+> Schedules run on the robot and in iRobot's cloud, not here, so this is
+> vendor behaviour rather than something the integration can change.
+> Worth knowing before reading a gap as a fault.
+
 #### Room rhythms & mission maps (v3.3.0)
 
 - **`sensor.*_rooms_overdue`** (SMART + cloud) — which rooms are due for a clean. Each room's rhythm is learned from its own history; set an explicit frequency per room in the options flow (Daily / Every 2 days / 3× per week / Weekly) to override the learned interval. Attributes include a fully self-calibrated suggested interval per room and a `daily_suggested` list for rooms that re-dirty fast.
@@ -439,7 +604,22 @@ A multi-room mission waits briefly (typically up to ~90 seconds, occasionally le
 
 `sensor.{name}_mission_progress` — live mission completion percentage (0–100 %) using per-room time estimates and effective mission time (wall-clock duration minus robot-confirmed recharge time — see below). The timer persists across HA restarts.
 
-Attributes: `current_room` · `next_room` · `elapsed_run_min` · `estimated_remaining_min` · `room_sequence` · `mission_duration_min` *(v2.9.0)* · `recharge_min` *(v2.9.0)*
+Attributes: `current_room` · `current_room_source` *(v4.0.0b3)* · `next_room` · `elapsed_run_min` · `estimated_remaining_min` · `room_sequence` · `mission_duration_min` *(v2.9.0)* · `recharge_min` *(v2.9.0)*
+
+**`current_room` is derived, not measured.** It comes from elapsed
+mission time against per-room estimates — the robot does not report
+which room it is in. A room that runs longer or shorter than estimated
+moves the value on while the robot has not.
+
+`current_room_source` says which path produced it:
+
+| Value | Meaning |
+|---|---|
+| `estimate` | elapsed time against per-room estimates |
+| `mission_timer` | the mission timer's own value, when no estimates exist |
+
+An automation that should only act on a verified room can check the
+source; one that is happy with an estimate carries on unchanged.
 
 **Time tracking (v2.9.0):** `elapsed_run_min` is now `mission_duration_min` (pure wall-clock time since mission start) minus `recharge_min` (robot-confirmed mid-mission recharge time) — no more fixed time-based cutoff. Navigation and room-to-room transitions correctly count as active mission time even when they take several minutes; only confirmed recharging is excluded. `mission_duration_min` and `recharge_min` are also exposed directly so you can see the breakdown. In **Auto pass mode**, per-room cloud estimates aren't available at all — percentage and `estimated_remaining_min` now fall back to your robot's rolling average mission duration instead of staying "Unknown" for the whole mission.
 
@@ -557,6 +737,29 @@ The `.../mission/{n_mssn}/path` endpoint (v3.2.0) reconstructs a mission's room-
 
 `calendar.{name}_schedule` — your robot's cleaning schedule (`cleanSchedule2` on i/s/j-series, legacy `cleanSchedule` on 900/600-series) as recurring Home Assistant calendar events. Read-only, always created on every tier — an empty calendar just means no schedule is currently set. Each event uses a fixed 60-minute placeholder duration, since iRobot's schedule data carries a start time only, never a planned duration.
 
+Room names in schedule summaries are resolved from **every map on the account**, not just the one
+currently drawn — a schedule that spans maps used to get half its rooms named and half numbered as
+`Zone N`.
+
+**Prime robots can write it, and three services do that directly** — the calendar entity is the
+usual way in, but a script may prefer the service:
+
+| Service | What it does |
+|---|---|
+| `roomba_plus.create_schedule` | adds a schedule: days, time, and optionally which rooms |
+| `roomba_plus.update_schedule` | changes an existing one, identified by its schedule id |
+| `roomba_plus.delete_schedule` | removes one |
+
+**An update replaces the whole schedule**, so anything you leave out keeps its current value rather
+than being cleared — the integration reads the schedule first and changes only what you named. That
+is not politeness: the cloud API has no partial update, and a naive write would silently drop the
+days you did not mention.
+
+Editing through the calendar dialog goes down the same path. Home Assistant sends only the fields
+the user touched, so a time change arrives with no recurrence information at all — which is why both
+the frequency and the day list are preserved rather than rebuilt from the occurrence that was
+clicked.
+
 #### Presence-aware scheduling — i/s/j/Braava
 
 Automatically unfreeze the cleaning schedule when everyone leaves home.
@@ -604,6 +807,217 @@ After each mission, dirt density is compared against the weekday-aware baseline 
 
 ---
 
+#### Mission progress is an estimate, not coverage
+
+`sensor.{name}_mission_progress` has two modes, and neither measures how much
+floor has been cleaned:
+
+- **With a planned room order** — rooms completed against rooms planned
+- **Without one** — elapsed time against this robot's rolling mean duration
+
+The second is the common case on Prime, and it is convincing: it climbs at a
+steady rate and reads exactly like measured progress. It is arithmetic on the
+clock.
+
+**It never reaches 100.** "Finished" is a phase transition, not a percentage,
+so the sensor caps at 99 and the mission ending is what clears it. If the phase
+gets stuck — which can happen cloud-side, see below — it parks at 99
+indefinitely.
+
+`sensor.{name}_area_cleaned_today` is the coverage figure, and on some robots
+it stays at zero while progress climbs. The two are not measuring the same
+thing.
+
+The unit follows **your Home Assistant unit system** — square feet on an
+imperial setup, square metres on a metric one. The iRobot account's own
+"Metric Units" switch has no effect: it is not in the data the robot
+sends, and an integration should not override a Home Assistant
+preference from a vendor account setting.
+
+#### Favourites are per robot
+
+Your iRobot account's favourites are shared across every robot on it, but each
+favourite names the robot it was built for. **Only that robot gets a button.**
+
+A favourite that names no robot is shown under all of them — better visible
+everywhere than hidden from all.
+
+If you have several Prime robots and a button disappeared after upgrading, it
+belonged to a different one. Pressing it would have sent that robot's map
+regions to this one.
+
+#### Pad washing allowed (V4/Prime)
+
+`switch.{name}_pad_wash_allowed` turns pad washing on and off, gated on the
+dock's wash capability. Its sibling — pad **drying** allowed — has been there
+since a20; this one was withheld until iRobot's newer app showed it is written
+on its own rather than as part of a bundle.
+
+#### Pad wash interval: what the numbers mean
+
+`select.{name}_pad_wash_area_interval` carries bare numbers — 6, 8, 10, 15, 20 —
+and the unit is **tens of square feet**:
+
+| Value | Robot cleans before washing |
+|---|---|
+| 6 | 60 ft² ≈ 5 m² |
+| 8 | 80 ft² ≈ 7 m² |
+| 10 | 100 ft² ≈ 9 m² |
+| 15 | 150 ft² ≈ 14 m² |
+| 20 | 200 ft² ≈ 19 m² |
+
+**Smaller means more frequent washing**, which is the opposite of how it reads.
+The iRobot app hides this behind "High / Medium / Low" and shows the area in
+your own units — @chairstacker sees "after every 100 ft²" for value 10, while
+@ratpic83 sees "5 / 10 / 15 m²" for 6, 10 and 15.
+
+The numbers are kept here rather than translated to High/Medium/Low for two
+reasons: **the sets differ per robot series**, so the same word would mean a
+different area on different hardware, and a robot can report a value outside
+its own set — which has no position to name.
+
+#### Pad wetness (V4/Prime, a35)
+
+`select.{name}_pad_wetness` writes `padWetness.padPlate`, gated on
+`cap.ppWetLvl`. A robot reporting `0` there has no wetness control and gets no
+entity — which is a real difference between two robots of the same model with
+different docks.
+
+**The level range is the one value set in this integration with no documented
+source.** The key, its addressing and its gate are all confirmed; the range is
+in no vendor enum, no settings-key type and no locale string. Four is the
+highest anyone has seen, and the picker widens itself to include whatever your
+robot reports, so a guessed ceiling cannot hide a real setting.
+
+#### The mop tank sensor is unreliable on some Combos
+
+`binary_sensor.{name}_mop_tank_present` reads the robot's own `tankPresent`
+field, and on at least one Roomba Combo **that field describes nothing**.
+
+@chairstacker's 405 reports `tankPresent: true` while the robot has no fill
+port, the iRobot app shows no water level for the robot at all, and the value
+does not move when either dock tank is removed. On that hardware the pad is
+wetted at the dock and there is no onboard tank to be present.
+
+**It is kept rather than removed**, because nothing distinguishes a robot with
+a tank from one without: there is no capability flag for it, and `cap.ppWetLvl`
+describes pad wetness the dock applies. Withholding it everywhere on one
+robot's evidence would take a working reading away from any robot where the
+field is real.
+
+**If yours reads `off` when you pull the tank, it works and this note does not
+apply to you** — and that observation is worth reporting, because nobody has
+made it yet.
+
+#### Per-room preferences (V4/Prime)
+
+`image.{name}_rooms_map` carries a `room_preferences` attribute: what each room
+is already set to in the iRobot app.
+
+```
+{ "7": {"profile": "deep", "suction_level": 4, "two_pass": true} }
+```
+
+Keys are room ids. Each value carries only what that room reports — `profile`,
+`suction_level`, `two_pass`, `carpet_boost`, `scrub` — and **an absent key means
+the robot did not report it, which is not the same as a zero.**
+
+The settings are read under the mode the room last ran in, because
+`operating_mode_defaults` stores one set per mode and reading any other would
+report a setting for a mode the room is not in.
+
+Use it to honour a room's own configuration instead of overriding it — see
+[Automations](AUTOMATIONS.md#cleaning-a-room-the-way-it-is-set-up).
+
+**Not confirmed on any robot.** A diagnostics download from a36 onwards
+includes it, and says which of two reasons applies when it is empty.
+
+#### Settings showing an unusual value
+
+A control whose current value is not in the list your robot's series normally
+offers now **shows that value** rather than going unavailable.
+
+@DaRealGuGu's 515 holds a pad wash interval belonging to a different series,
+and the iRobot app renders it as "not set". Selecting it again is a no-op — it
+is the value the robot already has.
+
+#### Started by, on Prime (a35)
+
+`sensor.{name}_job_initiator` says who started the current or most recent
+mission — schedule, iRobot app, dock button, Alexa, Siri, IFTTT, a teamed
+robot, or Home Assistant.
+
+The **last command** is carried as attributes rather than as a second entity:
+`last_command`, `last_command_by`, `last_command_time`. It is a different
+question, and the two can legitimately disagree — a mission started by a
+schedule while the last command came from the app.
+
+#### The third phase category (a35)
+
+The phase sensor carries two attributes:
+
+```
+cleaning    true during run, hmMidMsn, evac
+dock_task   true during padWash, padDry, refill
+```
+
+They are never both true. A combo robot with `pwReturn: 2` washes its pad
+**during** cleaning, and the vendor's own rule says that is not a mission
+phase — it is a dock task. An automation gating on "is it cleaning" will go
+false while the robot is plainly working, and `dock_task` says why.
+
+#### Do Not Disturb (V4/Prime, a34)
+
+Quiet hours are two mechanisms plus a display, and the robot's protocol keeps
+them separate:
+
+| | |
+|---|---|
+| `roomba_plus.set_quiet_hours` | writes the daily window, or a one-off "quiet until" moment |
+| `switch.{name}_do_not_disturb` | turns DND on and off right now |
+| `binary_sensor.{name}_in_quiet_hours` | whether a scheduled window covers this moment |
+
+The action takes **either** a daily window (`start` and `end`) **or** a single
+`ends_at` — the robot's own format is a sealed type with exactly those two
+cases, and sending both returns an error. It is household-wide: every robot on
+the account is affected, and the entity you target is only how the household is
+found.
+
+The switch and the sensor answer different questions and can legitimately
+disagree — DND switched on while no scheduled window covers right now. The
+switch has no shadow field to read back from, so its state is what it last
+sent and restores across a restart; a change made in the iRobot app will not
+show up there.
+
+**Its effect is unproven.** A Prime robot has been observed cleaning inside its
+own quiet-hours window. The setting is accepted and reads back; whether the
+robot honours it is a separate question no field report has answered yes. Keep
+automations that depend on quiet hours in Home Assistant rather than relying on
+the robot.
+
+#### Start blocked (V4/Prime, a34)
+
+`binary_sensor.{name}_start_blocked` turns on when one of four faults would
+stop a mission from starting, and says what still works:
+
+```
+blocked_modes    ["vacuum"]
+available_modes  ["mop"]
+blocking_faults  [287]
+blocked_reason   "Unable to vacuum: remove Pad Plate"
+```
+
+Three of the four do not mean the robot is broken — they mean one half of what
+you would ask is impossible right now. `287` is the pad plate fitted (mop
+works), `290` the plate missing (vacuum works), `234` the plate fitted with no
+cloth on it (vacuum works), `286` the robot off the floor (neither).
+
+**Nothing is refused.** A vacuum command against `287` still goes out; what
+changes is that the robot's refusal is explainable in advance. A device
+trigger, *Start blocked by a fault*, fires when a block appears.
+
+---
+
 ## Connectivity, mop & configuration reference
 
 #### Braava / mop sensors
@@ -642,6 +1056,120 @@ Settings → device → ⋮ → Download diagnostics. Includes map subsystem, zo
 
 ---
 
+## The words on your screen come from iRobot
+
+This integration wrote its own error labels for years. A comparison against the vendor's own app
+found that **two of 126 matched** — and the differences were not stylistic:
+
+| ours | iRobot |
+|---|---|
+| Charging error | Charging Issue: unable to charge |
+| No charge current | Charging Issue: contacts need to be cleaned |
+| Right wheel error | Right wheel sensor issue |
+
+The second column tells somebody what to do. The first tells them something is wrong, which they
+already knew from the robot stopping.
+
+**112 codes now carry iRobot's own title and explanation**, in all eight supported languages, with
+our own catalogue answering for the 75 codes iRobot does not document. A code in neither — error
+236 has turned up on a real robot — shows as its number rather than an invented name.
+
+Part names follow the same rule: **"Maintenance – High-Efficiency Filter"** keeps this integration's
+grouping and takes iRobot's word for the part. So do the maintenance units — `evacs` reads "Dust
+Collection Left" in the app, so it does here too, rather than the obvious translation of the field
+name.
+
+The point is not tidiness. Somebody comparing the two screens should see the same words; a list
+saying "60 evacuations remaining" beside an app saying "Dust Collection Left" reads as two different
+measurements of two different things.
+
+## Every option, and what it costs you to leave it off
+
+Settings → Devices & Services → Roomba+ → **Configure**. Nothing here is required; the defaults are
+what a robot does out of the box.
+
+### The map
+
+| Option | Default | Notes |
+|---|---|---|
+| Enable the live cleaning map | on | Robots with position sensing only (900, i, s, j, Braava m) |
+| Map canvas size in pixels | 600 | 400–1200 |
+| Millimetres per pixel | 10 | 5–30. At 600 px, 10 gives you a 6 m × 6 m room |
+| Draw room names | on | |
+| Draw clean zones | off | |
+| Draw keep-out zones | off | |
+| Draw no-mop zones | off | |
+
+The three zone layers are off by default because they clutter a small canvas. **They no longer need
+a running mission** — earlier versions could only draw them from live mission data, so ticking the
+box and reloading showed nothing.
+
+### Entities you may not want
+
+| Option | Default | Notes |
+|---|---|---|
+| Show cleaning schedules as a calendar | **on** | |
+| Show maintenance as a to-do list | **off** | |
+| Create a button for each saved favorite | off | Prime robots. One button per favourite, which is a lot of buttons on a busy account |
+
+The calendar and the to-do list are the same kind of thing and default differently, which is
+deliberate: the calendar existed before the option did, and switching it off for people already
+using it would have taken something away. The to-do list arrived with its option.
+
+**Both take a place in Home Assistant's sidebar**, which is the user's space rather than an
+integration's — that is why the list has to be asked for.
+
+### Presence and demand cleaning
+
+| Option | Notes |
+|---|---|
+| Enable presence-aware scheduling | Pauses schedules while somebody is home |
+| Person or device_tracker entities | Who counts as "home" |
+| Presence mode | How they combine |
+| Away delay | How long everyone must be gone before schedules resume |
+| Delay before second robot start | Waits after the away delay before actually cleaning |
+| Enable demand cleaning | Starts a clean when the robot reports unusual dirt |
+
+**Both work on Prime robots as of v4.0.0a31.** They were offered and stored but read by nothing
+before that — configured fully, doing nothing, with no error to say so.
+
+### Blocking sensors
+
+| Option | Notes |
+|---|---|
+| Binary sensors that block a start | Door open, motion detected, anything ON that should stop a mission |
+| Blocking behaviour | Queue the start or drop it |
+| Blocking timeout | How long a queued start waits before giving up |
+
+### Multi-robot households
+
+| Option | Notes |
+|---|---|
+| Floor label | Free text, e.g. "Ground Floor". Groups robots in the fleet view |
+
+## Why the floor is getting dirtier
+
+The cleaning performance sensor carries two attributes that only mean something together:
+
+- **`dirt_trend`** — rising, stable or falling, from the median of the five most recent missions
+  against the previous ten.
+- **`dirt_cause`**, present only when the trend is rising:
+  - **`brush_wear`** — rising dirt with *declining* speed. The sensor re-fires on debris the brush
+    is not picking up, and the robot slows down carrying it.
+  - **`floor_dirty`** — rising dirt with steady speed. The floor is genuinely dirtier.
+
+The first cleans after a gap of more than a week are excluded from both: they run on an abnormally
+dirty floor and would otherwise read as brush wear.
+
+Classic robots only — this comes from the cloud mission history.
+
+## What the mission record says went wrong
+
+`error_code` on a mission record now falls back to the first error in that mission's timeline when
+the record itself reports none. On one tester's robot the mission-level field was empty on **all 49
+records** while the timelines held 111 error events — sixteen missions ended stuck and the records
+said nothing was wrong.
+
 ## Events & device triggers
 
 Roomba+ fires events on the HA event bus that automations can react to
@@ -651,6 +1179,11 @@ needed). See **[Automations & dashboards →](AUTOMATIONS.md)** for examples
 using these.
 
 Roomba+ fires events on the HA event bus that automations can react to directly (`platform: event`), and also exposes a curated subset as **device triggers** in the Automation editor (under "Device" — no YAML needed).
+
+**On Prime robots the device triggers arrived in v4.0.0a31**, and needed no trigger code — they
+watch entity state, and Prime was missing the `phase` sensor they all read. Adding one sensor was
+the whole fix. Before that, "when the robot starts cleaning" simply did not appear in the editor
+for Prime users, with no error to explain it.
 
 ### Event bus (v2.8.6+)
 

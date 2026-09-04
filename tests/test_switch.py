@@ -19,6 +19,7 @@ from custom_components.roomba_plus.switch import (
     ChildLockSwitch,
     EcoChargeSwitch,
     GentleModeSwitch,
+    PrimeCarpetBoostSwitch,
     async_setup_entry,
 )
 
@@ -318,3 +319,715 @@ class TestSwitchSetupGating:
         added = self._setup({"gentle": False})
         assert len(added) == 1
         assert isinstance(added[0], GentleModeSwitch)
+
+
+class TestPrimeCarpetBoostSwitch:
+    """PrimeCarpetBoostSwitch: reads/writes RobotSettings.carpet_boost
+    via the named shadow "rw-settings" -- a genuinely different data
+    source and write mechanism from every other switch in this file
+    (those all use roomba.set_preference() over local MQTT)."""
+
+    def _make(self, rw_settings: dict | None) -> "PrimeCarpetBoostSwitch":
+        from custom_components.roomba_plus.switch import PrimeCarpetBoostSwitch
+
+        config_entry = MagicMock()
+        config_entry.runtime_data.prime_status_coordinator.data = (
+            {"rw-settings": rw_settings} if rw_settings is not None else None
+        )
+        config_entry.runtime_data.prime_robot = MagicMock()
+        config_entry.runtime_data.prime_robot.set_setting = AsyncMock()
+        with patch(
+            "custom_components.roomba_plus.switch.IRobotEntity.__init__", return_value=None
+        ), patch(
+            "custom_components.roomba_plus.entity.IRobotEntity.robot_unique_id",
+            new_callable=lambda: property(lambda self: "uid"),
+        ):
+            switch = PrimeCarpetBoostSwitch("BLID123", config_entry)
+        switch._config_entry = config_entry
+        return switch
+
+    def test_is_on_reflects_real_captured_value(self):
+        switch = self._make({"carpetBoost": True})
+        assert switch.is_on is True
+
+    def test_is_on_none_when_no_coordinator_data_yet(self):
+        switch = self._make(None)
+        assert switch.is_on is None
+
+    @pytest.mark.asyncio
+    async def test_turn_on_calls_set_setting_with_carpet_boost_true(self):
+        switch = self._make({"carpetBoost": False})
+        await switch.async_turn_on()
+        switch._prime_robot.set_setting.assert_awaited_once_with("carpetBoost", True)
+
+    @pytest.mark.asyncio
+    async def test_turn_off_calls_set_setting_with_carpet_boost_false(self):
+        switch = self._make({"carpetBoost": True})
+        await switch.async_turn_off()
+        switch._prime_robot.set_setting.assert_awaited_once_with("carpetBoost", False)
+
+
+class TestPrimeCarpetBoostSwitchDeviceInfo:
+    """End-to-end confirmation that config_entry actually flows through
+    to IRobotEntity.__init__ for a real Prime entity class -- the
+    other PrimeCarpetBoostSwitch tests above patch __init__ away
+    entirely, which would not have caught a regression in this
+    specific wiring (config_entry now passed to the base __init__,
+    not just stored separately afterward)."""
+
+    def test_device_info_uses_config_entry_title_and_serial_info(self):
+        from roombapy_prime.models import RobotSerialInfo
+        from custom_components.roomba_plus.switch import PrimeCarpetBoostSwitch
+
+        config_entry = MagicMock()
+        config_entry.title = "Bogdana"
+        config_entry.runtime_data.prime_serial_info = RobotSerialInfo(
+            serial_number="SN1", sku="G185020",
+        )
+        config_entry.runtime_data.prime_status_coordinator.data = {
+            "rw-software": {"softwareVer": "p25-405+9.3.7"},
+        }
+
+        switch = PrimeCarpetBoostSwitch("BLID123", config_entry)
+
+        assert switch._attr_device_info["name"] == "Bogdana"
+        assert switch._attr_device_info["model"] == "G185020"
+        assert switch._attr_device_info["serial_number"] == "SN1"
+        assert switch._attr_device_info["sw_version"] == "p25-405+9.3.7"
+
+
+class TestPrimeSwitchSetupCapabilityGating:
+    """NEW (this session) -- PrimeCarpetBoostSwitch is now capability-
+    gated on cap.carpetBoost. See get_prime_capability_flags()'s own
+    docstring for the "None means unknown, only explicit 0 means
+    absent" contract."""
+
+    def _entry(self, cap: dict | None):
+        from custom_components.roomba_plus.models import ConnectionType
+        from custom_components.roomba_plus.prime_coordinator import PrimeStatusCoordinator
+
+        entry = MagicMock()
+        entry.runtime_data.connection_type = ConnectionType.CLOUD_ONLY
+        entry.runtime_data.blid = "BLID123"
+        entry.runtime_data.prime_status_coordinator.data = (
+            {PrimeStatusCoordinator.CLASSIC_SHADOW_KEY: {"cap": cap}} if cap is not None else None
+        )
+        return entry
+
+    @pytest.mark.asyncio
+    async def test_excluded_when_carpet_boost_is_zero(self):
+        """REWORDED (this session): asserts on carpet boost specifically
+        rather than on an empty list.
+
+        The Prime branch now also creates setting switches -- child lock,
+        eco charging, two-pass, extra suction -- so "nothing was added"
+        stopped meaning "carpet boost was excluded". It fired the moment
+        those arrived, which is the count assertion doing its job."""
+        entry = self._entry({"carpetBoost": 0})
+        added: list = []
+        await async_setup_entry(MagicMock(), entry, lambda e: added.extend(e))
+        assert not any(isinstance(e, PrimeCarpetBoostSwitch) for e in added)
+
+    @pytest.mark.asyncio
+    async def test_included_when_carpet_boost_is_nonzero(self):
+        entry = self._entry({"carpetBoost": 3})
+        added: list = []
+        await async_setup_entry(MagicMock(), entry, lambda e: added.extend(e))
+        assert any(isinstance(e, PrimeCarpetBoostSwitch) for e in added)
+
+    @pytest.mark.asyncio
+    async def test_included_when_capability_unknown(self):
+        """Fail-open default -- no coordinator data yet."""
+        entry = self._entry(None)
+        added: list = []
+        await async_setup_entry(MagicMock(), entry, lambda e: added.extend(e))
+        # Fail-open: unknown capabilities must not cost the user their
+        # switches. Both carpet boost and the setting switches appear.
+        assert any(isinstance(e, PrimeCarpetBoostSwitch) for e in added)
+        assert len(added) > 1
+
+
+class TestPrimeSettingSwitches:
+    """Four rw-settings booleans, exposed as switches.
+
+    All four are recorded in the write-path test status as write ✅ /
+    read-back ✅ -- the robot echoed the new value, which is the proof
+    that it accepted it. childLock additionally has a confirmed physical
+    effect: the robot announced it audibly.
+
+    Built from one description-driven class rather than four copies of
+    PrimeCarpetBoostSwitch, so the shadow name and read path exist in one
+    place."""
+
+    def _descriptions(self):
+        from custom_components.roomba_plus.switch import PRIME_SETTING_SWITCHES
+
+        return PRIME_SETTING_SWITCHES
+
+    def test_only_settings_with_their_own_write_command_are_present(self):
+        """An exact set, not a minimum, so that adding one is a
+        deliberate act with a reason attached.
+
+        padDryAllowed joined the four in a20, as the only AutoWash field
+        with its own `SetPadDryAllowCommand` in app 2.2.4 -- the rest
+        appeared to travel as a bundle, and writing one field of a
+        bundle alone is how schedHold behaves: accepted, ignored.
+
+        padWashAllowed joined after app 3.0.0 inverted that reading. Its
+        settings handler writes 24 keys INDIVIDUALLY and padWashAllowed
+        is among them, while padDryAllowed is not -- the field this
+        project withheld turned out to be the writable one, and the
+        field it shipped is the exception that needs its own command.
+
+        @chairstacker asked for these controls in issue #46. Five
+        shipped as selects in a33; this is the sixth."""
+        assert {d.wire_key for d in self._descriptions()} == {
+            "childLock", "ecoCharge", "noAutoPasses", "vacHigh",
+            "padDryAllowed", "padWashAllowed",
+        }
+
+    def test_the_autowash_settings_are_selects_not_switches(self):
+        """These were once withheld entirely, on the reading that app
+        2.2.4 wrote them as a ten-boolean bundle whose grouping was not
+        statically readable.
+
+        App 3.0.0 settled it the other way: its settings handler writes
+        24 keys individually. Five of the six became SELECTS in a33 —
+        they carry values, not flags — and `padWashAllowed` is the sixth
+        and is a switch.
+
+        This test used to assert all six stayed out. It kept passing
+        after five of them shipped, because they shipped as selects and
+        it only looked at switches.
+        """
+        offered = {d.wire_key for d in self._descriptions()}
+
+        # A flag, and now offered.
+        assert "padWashAllowed" in offered
+
+        # Values, so they belong in select_prime rather than here.
+        for valued in ("padDryDur", "pwAreaInterval", "pwTimeInterval",
+                       "pwReturn", "autoevacFreq"):
+            assert valued not in offered
+
+    def test_the_five_valued_settings_exist_somewhere(self):
+        """The guard the old test could not give: asserting they are not
+        switches says nothing about whether they exist at all."""
+        from custom_components.roomba_plus.select_prime import PRIME_SELECTS
+
+        keys = {d.wire_key for d in PRIME_SELECTS}
+
+        for valued in ("padDryDur", "pwAreaInterval", "pwTimeInterval",
+                       "pwReturn", "autoevacFreq"):
+            assert valued in keys
+
+    def test_sched_hold_is_absent(self):
+        """THE exclusion that matters. schedHold writes and reads back
+        successfully and the robot ignores it entirely -- confirmed in
+        the field. A switch the robot accepts and does nothing about is
+        worse than no switch, because the UI would state something
+        false."""
+        assert "schedHold" not in {d.wire_key for d in self._descriptions()}
+
+    def test_every_model_attribute_exists_on_RobotSettings(self):
+        """The wire key and the read-back attribute differ, and assuming
+        they match has produced false "field missing" reports in this
+        project before -- swScrub/scrub, langs2/languages_raw. A typo
+        here would make the switch permanently unavailable."""
+        import dataclasses
+
+        from roombapy_prime.models import RobotSettings
+
+        fields = {f.name for f in dataclasses.fields(RobotSettings)}
+        for description in self._descriptions():
+            assert description.model_attr in fields, description.key
+
+    def test_entity_id_slugs_are_locale_independent(self):
+        """has_entity_name plus translation_key otherwise makes HA derive
+        the entity_id from the TRANSLATED name."""
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.switch import PrimeSettingSwitch
+
+        for description in self._descriptions():
+            switch = object.__new__(PrimeSettingSwitch)
+            switch.entity_description = description
+            assert switch.suggested_object_id == description.key
+
+    def test_an_unread_setting_is_unavailable_not_off(self):
+        """Rendering unknown as off would have someone believe child lock
+        was disabled when it was on -- and toggling it would then write a
+        value that was already set."""
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.switch import PrimeSettingSwitch
+
+        switch = object.__new__(PrimeSettingSwitch)
+        switch.entity_description = self._descriptions()[0]
+        entry = MagicMock()
+        entry.runtime_data.prime_status_coordinator = None
+        switch._config_entry = entry
+
+        assert switch.is_on is None
+
+    def test_every_switch_is_translated_in_every_locale(self):
+        import json
+        from pathlib import Path
+
+        base = Path(__file__).resolve().parent.parent / "custom_components" / "roomba_plus"
+        for locale_file in sorted((base / "translations").glob("*.json")):
+            switches = json.loads(locale_file.read_text(encoding="utf-8"))["entity"]["switch"]
+            for description in self._descriptions():
+                assert description.translation_key in switches, (
+                    f"{locale_file.name}: {description.translation_key}"
+                )
+
+
+class TestNoPadWetnessControlIsOffered:
+    """Deliberately absent, and the reason is not the obvious one.
+
+    The first reason given was that the robot picks which of the three
+    pad categories applies, so a control would have to guess. An APK
+    pass disproved that: the app reads the whole map, changes one entry
+    and writes all three back -- the same read-modify-write shape as
+    set_virtual_wall. Guessing was never required.
+
+    The real blocker came from the deserializer side. MoppingAsset-
+    Constants holds SEPARATE wetness tables:
+
+        kPadWetnessMap      / kReversePadWetnessMap
+        kPadPlateWetnessMap / kReversePadPlateWetnessMap
+
+    with their own schema constants (kPadWetness,
+    kPadWetnessPadPlateFieldName, kPadPlateWetnessLevel). A `1` under
+    `disposable` may not mean what a `1` under `padPlate` means, and a
+    control writing one level across all three would be wrong for at
+    least one -- silently, because the robot accepts it.
+
+    The tables are BSS constants, so their contents cannot be read
+    statically. What settles it is an rw-settings capture with
+    padWetness populated, which the shadow dump added in this release
+    will produce from the next mopping-robot download."""
+
+    def test_no_pad_wetness_switch(self):
+        from custom_components.roomba_plus.switch import PRIME_SETTING_SWITCHES
+
+        keys = {d.wire_key for d in PRIME_SETTING_SWITCHES}
+
+        assert "padWetness" not in keys
+
+    def test_no_pad_wetness_select(self):
+        from custom_components.roomba_plus.select_prime import PRIME_SELECTS
+
+        keys = {d.wire_key for d in PRIME_SELECTS}
+
+        assert "padWetness" not in keys
+
+    def test_nothing_writes_the_field(self):
+        """Stronger than checking the entity lists: a service or a
+        coordinator could write it without an entity existing."""
+        import re
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parent.parent / "custom_components" / "roomba_plus"
+        for source_file in root.glob("*.py"):
+            source = source_file.read_text(encoding="utf-8")
+            # The Classic select writes disposable/reusable through its
+            # own path and predates all of this; it is not the Prime
+            # set_setting route this guards.
+            assert not re.search(
+                r'set_setting\(\s*["\']padWetness', source
+            ), source_file.name
+
+
+class TestSettingSwitchesGateOnTheDockToo:
+    """`padDryAllowed` had no capability gate at all, so a robot on a
+    plain charge dock was offered a pad-drying setting for a dock that
+    cannot dry.
+
+    The vendor's own gate table puts pad drying under `dock.cap.pd` — a
+    DOCK property. Every description could only name a ROBOT capability
+    until now, and `dock_cap` was already being fetched at the call site
+    and thrown away into `_dock_cap`.
+    """
+
+    @staticmethod
+    def _description(**kwargs):
+        from custom_components.roomba_plus.switch import PrimeSettingSwitchDescription
+
+        base = {
+            "key": "x",
+            "wire_key": "x",
+            "model_attr": "x",
+        }
+        return PrimeSettingSwitchDescription(**{**base, **kwargs})
+
+    def test_an_explicit_zero_on_the_dock_withholds_the_switch(self):
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.switch import _capability_permits
+
+        description = self._description(dock_cap_attr="pad_dry")
+        dock_cap = SimpleNamespace(pad_dry=0)
+
+        assert not _capability_permits(description, None, dock_cap)
+
+    def test_unknown_still_means_offer(self):
+        """The contract this project already had: None is not absent.
+        A robot that has not reported its dock yet keeps the switch."""
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.switch import _capability_permits
+
+        description = self._description(dock_cap_attr="pad_dry")
+
+        assert _capability_permits(description, None, None)
+        assert _capability_permits(description, None, SimpleNamespace())
+
+    def test_a_capable_dock_gets_the_switch(self):
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.switch import _capability_permits
+
+        description = self._description(dock_cap_attr="pad_dry")
+
+        assert _capability_permits(description, None, SimpleNamespace(pad_dry=1))
+
+    def test_the_robot_gate_still_applies(self):
+        """Both objects are consulted; neither replaces the other."""
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.switch import _capability_permits
+
+        description = self._description(cap_attr="multi_pass")
+
+        assert not _capability_permits(description, SimpleNamespace(multi_pass=0), None)
+        assert _capability_permits(description, SimpleNamespace(multi_pass=2), None)
+
+    def test_pad_dry_allowed_is_the_one_that_gained_a_gate(self):
+        from custom_components.roomba_plus.switch import PRIME_SETTING_SWITCHES
+
+        by_key = {d.key: d for d in PRIME_SETTING_SWITCHES}
+
+        assert by_key["prime_pad_dry_allowed"].dock_cap_attr == "pad_dry"
+
+
+class TestSettingSwitchesFollowKeyPresenceToo:
+    """`available` on a setting switch is `is_on is not None`, so a
+    switch whose key the robot does not report is created and then
+    permanently unavailable.
+
+    @ratpic83's `prime_vac_high` has been in that state since setup:
+    `cap.suctionLvl` is 4 so the capability gate passes, and `vacHigh`
+    is simply not among his rw-settings keys.
+
+    The selects have used key presence since the six #46 controls.
+    @utkjmitch's robot is why: `cap.autoevac` 1 with no `autoevacFreq`
+    key. A capability says what the hardware can do; the key set says
+    what this robot lets you configure.
+    """
+
+    @staticmethod
+    def _created(keys):
+        import asyncio
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock, patch
+
+        from custom_components.roomba_plus import switch
+        from custom_components.roomba_plus.models import ConnectionType
+
+        entry = MagicMock()
+        entry.runtime_data.connection_type = ConnectionType.CLOUD_ONLY
+        entry.runtime_data.blid = "BLID123"
+        made: list = []
+
+        with patch.object(
+            switch, "_settings_keys", return_value=keys
+        ), patch.object(
+            switch, "get_prime_capability_flags",
+            return_value=(SimpleNamespace(suction_lvl=4, carpet_boost=3,
+                                          multi_pass=1), None),
+            create=True,
+        ):
+            try:
+                asyncio.run(
+                    switch.async_setup_entry(
+                        MagicMock(), entry, lambda e: made.extend(e)
+                    )
+                )
+            except Exception:  # noqa: BLE001
+                pass
+        return {type(e).__name__ for e in made}
+
+    def test_an_unreported_key_produces_no_switch(self):
+        import inspect
+
+        from custom_components.roomba_plus import switch
+
+        source = inspect.getsource(switch)
+
+        assert "description.wire_key in present" in source
+
+    def test_an_unknown_key_set_still_offers_everything(self):
+        """`None` means the shadow has not arrived. Fail open — the same
+        contract the capability gate uses."""
+        import inspect
+
+        from custom_components.roomba_plus import switch
+
+        source = inspect.getsource(switch)
+
+        assert "present is None or description.wire_key in present" in source
+
+    def test_quiet_hours_is_exempt(self):
+        """It is a household setting with no rw-settings key at all, so
+        a key-presence rule would withhold the one place a user can turn
+        DND off."""
+        import inspect
+
+        from custom_components.roomba_plus import switch
+
+        source = inspect.getsource(switch)
+        idx = source.find("PrimeQuietHoursSwitch(data.blid")
+        assert idx > 0
+        assert "NOT CAPABILITY-GATED" in source[max(0, idx - 400):idx]
+
+
+class TestPrimePadDrySwitch:
+    """@chairstacker: the start/stop pad-dry buttons only ever appear
+    together, and a switch is "one activity/log entry" he can show as a
+    single colour-coded tile.
+
+    The condition that usually blocks turning a button pair into a
+    switch is met here: the dock reports PAD_DRY_IN_PROGRESS, so the
+    switch shows what the dock is DOING rather than remembering what
+    was last pressed.
+    """
+
+    @staticmethod
+    def _switch(dock_state=None, has_dock=True):
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from custom_components.roomba_plus.switch import PrimePadDrySwitch
+
+        entry = MagicMock()
+        coordinator = entry.runtime_data.prime_status_coordinator
+        if has_dock:
+            coordinator.data = {
+                # `pdState` -- the field the switch reads. This helper
+                # set `state` and the tests passed, because the code
+                # read `state` too. Both were wrong the same way, which
+                # is how a switch that could never be on shipped green.
+                "ro-currentstate": {"dock": {"pdState": dock_state}}
+            }
+        else:
+            coordinator.data = {"ro-currentstate": {}}
+        coordinator.async_request_refresh = AsyncMock()
+        entry.runtime_data.prime_robot.send_simple_command = AsyncMock()
+
+        with patch.object(
+            PrimePadDrySwitch, "robot_unique_id", "BLID1"
+        ), patch(
+            "custom_components.roomba_plus.switch.IRobotEntity.__init__",
+            return_value=None,
+        ):
+            sw = PrimePadDrySwitch("BLID1", entry)
+        sw._config_entry = entry
+        return sw
+
+    def test_it_is_on_while_the_dock_is_drying(self):
+        from roombapy_prime.models.robot_info import DockState
+
+        sw = self._switch(dock_state=int(DockState.PAD_DRY_IN_PROGRESS))
+
+        assert sw.is_on is True
+
+    def test_it_is_off_in_another_dock_state(self):
+        sw = self._switch(dock_state=701)  # PAD_DRY_OKAY: idle
+
+        assert sw.is_on is False
+
+    def test_no_dock_report_is_unknown_not_off(self):
+        """"Off" for a dock that might be running is a lie; unknown is
+        the honest answer."""
+        sw = self._switch(has_dock=False)
+
+        assert sw.is_on is None
+
+    @pytest.mark.asyncio
+    async def test_turning_on_sends_drypad(self):
+        sw = self._switch()
+
+        await sw.async_turn_on()
+
+        robot = sw._config_entry.runtime_data.prime_robot
+        robot.send_simple_command.assert_awaited_once_with("drypad")
+
+    @pytest.mark.asyncio
+    async def test_turning_off_sends_stoppaddry(self):
+        """The iRobot app greys out dock controls once a task begins,
+        so it cannot stop a drying cycle. That divergence predates this
+        switch and is deliberate."""
+        sw = self._switch()
+
+        await sw.async_turn_off()
+
+        robot = sw._config_entry.runtime_data.prime_robot
+        robot.send_simple_command.assert_awaited_once_with("stoppaddry")
+
+
+class TestPadDrySwitchDoesNotAskAPushCoordinatorToRefresh:
+    """@chairstacker (#71): every press returned "Failed to perform the
+    action switch/turn_on. Update method not implemented".
+
+    The message came from the refresh request after the send, not from
+    the send. `PrimeStatusCoordinator` is push-driven and has no
+    `_async_update_data`, so `async_request_refresh()` falls through to
+    Home Assistant's default and raises.
+
+    The command had already gone out and the dock had already acted.
+    The switch reported failure for work that succeeded — which is the
+    worst shape a failure can take, because it invites pressing again.
+    """
+
+    @staticmethod
+    def _switch():
+        from unittest.mock import AsyncMock, MagicMock
+
+        from custom_components.roomba_plus.switch import PrimePadDrySwitch
+
+        sw = PrimePadDrySwitch.__new__(PrimePadDrySwitch)
+        entry = MagicMock()
+        robot = MagicMock()
+        robot.send_simple_command = AsyncMock()
+        entry.runtime_data.prime_robot = robot
+
+        coordinator = MagicMock()
+        coordinator.async_request_refresh = AsyncMock(
+            side_effect=NotImplementedError("Update method not implemented")
+        )
+        entry.runtime_data.prime_status_coordinator = coordinator
+        sw._config_entry = entry
+        return sw, robot, coordinator
+
+    @pytest.mark.asyncio
+    async def test_turning_on_does_not_raise(self):
+        sw, robot, _ = self._switch()
+
+        await sw.async_turn_on()
+
+        robot.send_simple_command.assert_awaited_once_with("drypad")
+
+    @pytest.mark.asyncio
+    async def test_turning_off_does_not_raise(self):
+        sw, robot, _ = self._switch()
+
+        await sw.async_turn_off()
+
+        robot.send_simple_command.assert_awaited_once_with("stoppaddry")
+
+    @pytest.mark.asyncio
+    async def test_the_coordinator_is_left_alone(self):
+        """A push coordinator has nothing to be asked for. The dock
+        sends its state and the subscription writes it."""
+        sw, _, coordinator = self._switch()
+
+        await sw.async_turn_on()
+
+        coordinator.async_request_refresh.assert_not_awaited()
+
+    def test_no_entity_asks_this_coordinator_to_refresh(self):
+        """A GUARD FOR THE CLASS. Any caller of
+        `prime_status_coordinator.async_request_refresh()` raises the
+        same way, and the failure surfaces as a broken action rather
+        than as anything pointing at the coordinator.
+        """
+        import pathlib
+        import re
+
+        offenders = []
+        for path in pathlib.Path("custom_components/roomba_plus").glob("*.py"):
+            text = path.read_text()
+            for match in re.finditer(
+                r"prime_status_coordinator[\s\S]{0,200}?async_request_refresh",
+                text,
+            ):
+                offenders.append(f"{path.name}: {match.group()[:40]}")
+
+        assert not offenders, (
+            f"PrimeStatusCoordinator is push-driven and has no "
+            f"_async_update_data -- refreshing it raises: {offenders}"
+        )
+
+
+class TestPadDrySwitchReadsTheRightDockField:
+    """@chairstacker (#71): the switch behaved as a momentary one — on
+    briefly, then off, and turning it off did nothing.
+
+    The dock reports three status fields in separate numeric bands:
+    `state` for the dock itself (301 = DOCK_READY), `pw_state` for pad
+    washing (601), `pd_state` for pad drying (701 = PAD_DRY_OKAY).
+
+    `PAD_DRY_IN_PROGRESS` is 702 — a 700-band value, so it can only
+    appear in `pd_state`. Reading `state` for it meant `is_on` was never
+    true whatever the dock was doing: Home Assistant showed the switch
+    on until the next state write, then it read 301 and reported off.
+
+    The pad-dry status sensor beside it read `pd_state` correctly all
+    along, which is why his screenshot showed "Pad dry in progress"
+    while the switch showed off.
+    """
+
+    @staticmethod
+    def _switch(dock_state=None, pd_state=None):
+        """Raw shadow JSON, because that is what the switch parses."""
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.switch import PrimePadDrySwitch
+
+        sw = PrimePadDrySwitch.__new__(PrimePadDrySwitch)
+        entry = MagicMock()
+        coordinator = MagicMock()
+        coordinator.data = {
+            "ro-currentstate": {
+                "dock": {
+                    "state": int(dock_state) if dock_state is not None else None,
+                    "pdState": int(pd_state) if pd_state is not None else None,
+                }
+            }
+        }
+        entry.runtime_data.prime_status_coordinator = coordinator
+        sw._config_entry = entry
+        return sw, None
+
+    def test_drying_in_pd_state_turns_it_on(self):
+        from roombapy_prime.models.robot_info import DockState
+
+        sw, _ = self._switch(
+            dock_state=DockState.DOCK_READY,
+            pd_state=DockState.PAD_DRY_IN_PROGRESS,
+        )
+
+        assert sw.is_on is True
+
+    def test_an_idle_dock_is_off(self):
+        from roombapy_prime.models.robot_info import DockState
+
+        sw, _ = self._switch(
+            dock_state=DockState.DOCK_READY,
+            pd_state=DockState.PAD_DRY_OKAY,
+        )
+
+        assert sw.is_on is False
+
+    def test_the_dock_state_field_is_not_consulted(self):
+        """The regression itself: 702 in `state` is impossible, and
+        reading it there is what made this a momentary switch."""
+        from roombapy_prime.models.robot_info import DockState
+
+        sw, _ = self._switch(
+            dock_state=DockState.PAD_DRY_IN_PROGRESS,
+            pd_state=DockState.PAD_DRY_OKAY,
+        )
+
+        assert sw.is_on is False, "pd_state decides, not state"

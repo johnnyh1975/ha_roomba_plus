@@ -45,6 +45,76 @@ jobs:
   # changes — same triggers already cover push/PR/nightly/manual for these
   # too.
 
+  # A SECOND COMBINATION, deliberately not a matrix. `requirements-test-frozen.txt`
+  # pins Home Assistant 2025.1.4, which is the newest release that installs
+  # on Python 3.12 -- so the version pair is fixed, not free to vary.
+  #
+  # This job proves the integration still works against a much newer HA
+  # (2026.8 on Python 3.14, about eighteen months ahead of the pin).
+  # Verified locally: the whole suite passes on both.
+  #
+  # A REAL GATE, not advisory. It carried `continue-on-error: true` while
+  # the combination was new and unproven. It no longer is: the full suite
+  # passes here (6145 passed / 4 skipped) on 2026.8.3 and, checked
+  # separately, on 2026.9.0 as well -- the same counts as the pinned
+  # 2025.1.4 job. This is also the ONLY job that runs against the HA
+  # version the field actually runs; the a38 breakage that hit every
+  # installation on HA 2026.7+ is exactly the class of failure it exists
+  # to catch, and an advisory job would have gone unread.
+  #
+  # Tests only. Type checking stays on the pinned version, because the
+  # `type: ignore` comments that bridge the two HA APIs are required by
+  # one and redundant on the other -- mypy cannot be satisfied by both
+  # at once, and `warn_unused_ignores` is worth keeping.
+  test-newer-ha:
+    name: Test Suite (HA 2026.8 / Python 3.14)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+          # This job installs a full Home Assistant and its dependency
+          # tree from scratch, so it is the slowest one here and was
+          # the only large job without a cache.
+          cache: "pip"
+
+      # ONE version number, not two. Every phahc release pins Home
+      # Assistant EXACTLY (0.13.357 -> homeassistant==2026.8.3), so
+      # naming both is redundant -- and worse, naming only HA leaves the
+      # phahc version implicit: pip picks the newest release compatible
+      # with the HA pin, which silently drags pytest, pytest-asyncio and
+      # syrupy along with it. Harmless while this job was advisory; now
+      # that it gates, a new phahc release could break an unrelated PR
+      # with no change to this repo or to HA. Pinning phahc fixes both
+      # halves at once and makes an upgrade a deliberate edit.
+      #
+      # This mirrors what requirements-test-frozen.txt already does for
+      # the 3.12 side (phahc 0.13.205 / HA 2025.1.4).
+      #
+      # aiomqtt is deliberately NOT installed: roombapy 1.9.1 does not
+      # use it (that arrives with roombapy 2.0), and nothing else here
+      # imports it.
+      - name: Install a recent Home Assistant and test tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install "pytest-homeassistant-custom-component==0.13.357" \
+                      "roombapy==1.9.1" aiohttp pillow
+
+      # Unlike the pinned-2025.1.4 jobs, --no-deps is NOT required here:
+      # phahc 0.13.357 allows paho-mqtt 2.x, so roombapy-prime's own
+      # constraint (>=2.0,<3.0) is satisfiable and `pip check` is clean.
+      # Kept anyway, so both test jobs install it identically and the
+      # roombapy-prime pin guard sees the same string in both.
+      - name: Install roombapy-prime (--no-deps, for parity with the pinned job)
+        run: pip install --no-deps --no-cache-dir "roombapy-prime==0.3.1"
+
+      - name: Run full test suite
+        run: python -m pytest tests/ -q -p no:randomly
+
   test:
     name: Test Suite
     runs-on: ubuntu-latest
@@ -63,6 +133,23 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-test-frozen.txt
+
+      # NEW (this session): installed separately from requirements-test-frozen.txt,
+      # deliberately with --no-deps. roombapy-prime's own declared dependency
+      # (paho-mqtt>=2.0,<3.0) is unsatisfiable alongside
+      # pytest-homeassistant-custom-component's hard paho-mqtt==1.6.1 pin (no
+      # newer phahc release exists) -- see the comment next to roombapy in
+      # requirements-test-frozen.txt for the full reasoning and the verification
+      # that this is genuinely safe (not a workaround masking a real
+      # incompatibility): with paho-mqtt forced to 1.6.1, the full test suite
+      # still passes, since PrimeMqttClient is mocked throughout and never
+      # actually constructed against a real paho-mqtt installation in tests.
+      # --no-deps is safe specifically because roombapy-prime's OTHER
+      # dependencies (aiohttp, certifi) are already satisfied by
+      # requirements-test-frozen.txt itself.
+      - name: Install roombapy-prime (--no-deps, see comment above)
+        run: |
+          pip install --no-deps --no-cache-dir "roombapy-prime==0.3.1"
 
       - name: Run full test suite with coverage
         run: |
@@ -108,6 +195,44 @@ jobs:
       # nothing hidden in this workflow or in an external filter.
       - name: Run ruff check
         run: ruff check .
+
+  typing:
+    name: Typing (mypy --strict)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      # mypy needs the same environment as the test suite: it resolves
+      # Home Assistant's own types, and a bare install would report
+      # hundreds of missing-import errors instead of real ones.
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-test-frozen.txt
+          pip install mypy
+
+      # Same --no-deps reasoning as the test suite job above.
+      - name: Install roombapy-prime (--no-deps)
+        run: |
+          pip install --no-deps --no-cache-dir "roombapy-prime==0.3.1"
+
+      # mypy.ini runs --strict with no disabled error codes. The two
+      # per-module exemptions are for Home Assistant itself and are
+      # explained where they are declared.
+      #
+      # The ratchet script rather than a bare `mypy` call: it fails on
+      # an increase AND on an undeclared decrease, so a fix that lowers
+      # the count has to lower the recorded baseline in the same commit
+      # rather than drifting silently. The baseline is 0.
+      - name: Run mypy
+        run: python scripts/check_typing_baseline.py
 
   translations:
     name: Translation Completeness
@@ -164,6 +289,15 @@ jobs:
       - name: Check README badge vs. manifest.json
         run: python3 scripts/check_version_badge.py
 
+      # Directly motivated by real, repeated drift: manifest.json and both
+      # CI workflow files each carry their own literal roombapy-prime pin
+      # string, and these have drifted out of sync from each other more
+      # than once (a version bump touching one or two references but not
+      # all three) -- once leading to CI silently testing a stale
+      # roombapy-prime commit for an entire session before being noticed.
+      - name: Check roombapy-prime pin consistency
+        run: python3 scripts/check_roombapy_prime_pin.py
+
   markdown-links:
     name: Markdown Link Check
     runs-on: ubuntu-latest
@@ -176,14 +310,66 @@ jobs:
         with:
           python-version: "3.12"
 
-      # continue-on-error: true, deliberately — 7 of 8 currently-flagged
-      # links involve emoji/em-dash headings where this script's GitHub-
-      # anchor reimplementation isn't confidently verified (see the
-      # script's own docstring). One confirmed-real broken link (a
-      # "#migration" anchor pointing at a heading that didn't exist) was
-      # found and fixed during this same session. Recommended: manually
-      # click-check the remaining 7 against the live rendered pages, fix
-      # or accept each, then remove continue-on-error here.
+      # A REAL GATE. It ran with `continue-on-error: true` while the
+      # script's GitHub-anchor reimplementation was unverified against
+      # emoji and em-dash headings. It has since been checked against
+      # github-slugger 2.0.0 over all 245 headings in README.md and
+      # docs/*.md: zero divergence.
+      #
+      # Getting there found a real defect. The em-dash suspicion was
+      # unfounded, but six COMPARISON.md anchors WERE broken on the
+      # rendered page -- GitHub keeps the space an emoji leaves behind
+      # and turns it into a leading hyphen. A trim in slugify() had been
+      # added to make the script agree with the already-broken links,
+      # which is why this job stayed green while the docs were wrong.
+      # The emoji were removed from those headings (and from one in
+      # FEATURES.md), the trim was removed, and the two now agree by
+      # construction.
       - name: Check relative markdown links
-        continue-on-error: true
         run: python3 scripts/check_markdown_links.py
+
+      # STAGE 0 GUARDS. Each was written after a real bug of its own
+      # shape, and each found another on its first run.
+      - name: Check generation parity
+        run: python3 scripts/check_generation_parity.py
+
+      - name: Check cloud request budget
+        run: python3 scripts/check_request_budget.py
+
+      # Every late import either guards a real cycle or states another
+      # reason. Established on its first run that NONE of them guards a
+      # cycle -- the opposite of what the refactoring plan assumed.
+      - name: Check late imports
+        run: python3 scripts/check_late_imports.py
+
+      # THE MESSAGE IS THE POINT. All three of these also run inside the
+      # test suite, so coverage is not the reason they are here -- a
+      # failure there reads as "one test in test_quality_scale.py
+      # failed", which says nothing about which files are wrong or why.
+      #
+      # Each of these scripts prints the offending file, the line and an
+      # explanation of the mistake it exists for. That output is half
+      # their value and is invisible behind a pytest assertion.
+      - name: Check Prime code reads Prime sources
+        run: python3 scripts/check_prime_sources.py
+
+      - name: Check runtime data reads are declared
+        run: python3 scripts/check_runtime_data_reads.py
+
+      # This one had drifted: three entries named tables that had since
+      # been renamed -- `CLEAN_BASE_LABELS` to `CLEAN_BASE_STATUS_SLUGS`
+      # and so on, when the values became translation slugs. The guard
+      # reported them as missing and the renamed tables as
+      # undocumented, and exited non-zero.
+      #
+      # Nobody noticed because its own test reads the script's source
+      # rather than running it. Wiring it up here is what makes a rename
+      # like that show up next time.
+      - name: Check vendor value tables
+        run: python3 scripts/check_vendor_value_tables.py
+
+      # An inventory rather than a gate: prints which tests assert on
+      # values nobody has confirmed. Fails only if a marker carries no
+      # reason.
+      - name: List assumed tests
+        run: python3 scripts/list_assumed_tests.py

@@ -37,10 +37,13 @@
   "issue_tracker": "https://github.com/johnnyh1975/ha_roomba_plus/issues",
   "loggers": [
     "paho_mqtt",
-    "roombapy"
+    "roombapy",
+    "roombapy_prime"
   ],
+  "quality_scale": "gold",
   "requirements": [
-    "roombapy==1.9.1"
+    "roombapy==1.9.1",
+    "roombapy-prime[map]==0.3.1"
   ],
   "version": "3.5.2",
   "zeroconf": [

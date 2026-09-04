@@ -186,15 +186,23 @@ class TestEventBasedV290Triggers:
     event_data={"entry_id": ...} exact-match filter."""
 
     @pytest.mark.asyncio
-    async def test_room_completed_filters_by_entry_id(self):
+    async def test_room_completed_filters_by_entry_id(self, hass):
         from custom_components.roomba_plus import device_trigger as dt_mod
         from custom_components.roomba_plus.const import EVENT_ROOM_COMPLETED
 
+        # HA 2026.x refuses to validate an event-trigger schema without a
+        # hass registered in the current context -- `async_attach_trigger`
+        # builds one through `TRIGGER_SCHEMA`. `async_set_hass` is what a
+        # running instance does at startup.
+        from homeassistant.helpers import config_validation as cv
+
+        cv._hass.hass = hass
         with patch.object(dt_mod, "_entry_id_for_device", return_value="entry_abc"), \
              patch.object(dt_mod.event_trigger, "async_attach_trigger") as mock_attach:
             mock_attach.return_value = lambda: None
             await async_attach_trigger(
-                MagicMock(),
+                hass,  # HA 2026.x validates trigger schemas against a
+                # registered hass; a MagicMock is not one.
                 {"device_id": "dev1", "type": TRIGGER_ROOM_COMPLETED},
                 MagicMock(),
                 _trigger_info(),
@@ -205,15 +213,23 @@ class TestEventBasedV290Triggers:
         assert called_config["event_data"] == {"entry_id": "entry_abc"}
 
     @pytest.mark.asyncio
-    async def test_map_retrain_started_filters_by_entry_id(self):
+    async def test_map_retrain_started_filters_by_entry_id(self, hass):
         from custom_components.roomba_plus import device_trigger as dt_mod
         from custom_components.roomba_plus.const import EVENT_MAP_RETRAIN_STARTED
 
+        # HA 2026.x refuses to validate an event-trigger schema without a
+        # hass registered in the current context -- `async_attach_trigger`
+        # builds one through `TRIGGER_SCHEMA`. `async_set_hass` is what a
+        # running instance does at startup.
+        from homeassistant.helpers import config_validation as cv
+
+        cv._hass.hass = hass
         with patch.object(dt_mod, "_entry_id_for_device", return_value="entry_abc"), \
              patch.object(dt_mod.event_trigger, "async_attach_trigger") as mock_attach:
             mock_attach.return_value = lambda: None
             await async_attach_trigger(
-                MagicMock(),
+                hass,  # HA 2026.x validates trigger schemas against a
+                # registered hass; a MagicMock is not one.
                 {"device_id": "dev1", "type": TRIGGER_MAP_RETRAIN_STARTED},
                 MagicMock(),
                 _trigger_info(),
@@ -332,3 +348,115 @@ class TestHealthScoreDropTrigger:
             )
         assert detach() is None
         hass.bus.async_listen.assert_not_called()
+
+
+class TestUnknownTriggerTypeDoesNotCrash:
+    """A stored automation can name a trigger this version does not have.
+
+    `trigger_type` comes from whatever was written when the automation
+    was created. Rename or remove a trigger in a later release and that
+    string arrives here unchanged -- and a KeyError inside the attach
+    step breaks the user's automation with a traceback rather than a
+    message.
+
+    THIS IS THE THIRD INSTANCE of the same shape today. A status lookup
+    in the tooling raised KeyError on "FAIL", then again on "SKIP" after
+    the first was fixed at the call site instead of at the lookup. Found
+    here by grepping for the pattern rather than waiting for it to
+    happen -- and here the other end is somebody's automation."""
+
+    def test_the_lookup_has_a_fallback(self):
+        import inspect
+
+        from custom_components.roomba_plus import device_trigger
+
+        source = inspect.getsource(device_trigger.async_attach_trigger)
+
+        assert "}.get(trigger_type)" in source
+        assert "if event_type is None" in source
+
+    def test_it_warns_rather_than_failing_silently(self):
+        """Returning a no-op detach without a word would leave somebody
+        with an automation that never fires and no way to find out
+        why."""
+        import inspect
+
+        from custom_components.roomba_plus import device_trigger
+
+        source = inspect.getsource(device_trigger.async_attach_trigger)
+
+        assert "_LOGGER.warning" in source
+        assert "unknown trigger type" in source
+
+    def test_the_known_triggers_still_map(self):
+        import inspect
+
+        from custom_components.roomba_plus import device_trigger
+
+        source = inspect.getsource(device_trigger.async_attach_trigger)
+
+        for name in (
+            "TRIGGER_ROOM_COMPLETED",
+            "TRIGGER_MAP_RETRAIN_STARTED",
+            "TRIGGER_MAP_RETRAIN_COMPLETED",
+        ):
+            assert name in source
+
+
+class TestPrimeRobotsCanUseTheDeviceTriggers:
+    """The device triggers do not listen for events — they watch entity
+    STATE, found by `translation_key`. So Prime needed no trigger code at
+    all; it needed the entities the triggers look for.
+
+    **`phase` was the missing one**, and it is the most basic state
+    sensor there is. Without it, "when the robot starts cleaning" had
+    nothing to attach to on a Prime robot, and the trigger simply did not
+    appear in the automation editor — no error, no explanation.
+    """
+
+    def _keys_the_triggers_need(self):
+        import inspect
+        import re
+
+        from custom_components.roomba_plus import device_trigger
+
+        source = inspect.getsource(device_trigger)
+        return set(re.findall(
+            r'_find_entity\(hass, device_id, "([a-z_]+)"\)', source
+        ))
+
+    def _prime_keys(self):
+        import pathlib
+        import re
+
+        base = pathlib.Path("custom_components/roomba_plus")
+        keys: set[str] = set()
+        for name in ("sensor_prime.py", "binary_sensor.py"):
+            keys |= set(re.findall(
+                r'translation_key="([a-z_]+)"', (base / name).read_text()
+            ))
+        return keys
+
+    def test_every_trigger_source_exists_on_prime(self):
+        missing = sorted(self._keys_the_triggers_need() - self._prime_keys())
+
+        assert not missing, (
+            "these device triggers have nothing to watch on a Prime robot, "
+            f"so they will not appear in the automation editor: {missing}"
+        )
+
+    def test_phase_in_particular(self):
+        """Named on its own because it carries four of the triggers —
+        started, finished, docked and stuck all read it."""
+        assert "phase" in self._prime_keys()
+
+    def test_the_triggers_watch_state_rather_than_events(self):
+        """Worth pinning: it is why adding one sensor was the whole fix.
+        A move to events would need Prime to fire them, which it does
+        not."""
+        import inspect
+
+        from custom_components.roomba_plus import device_trigger
+
+        source = inspect.getsource(device_trigger)
+        assert "state_trigger.async_attach_trigger" in source

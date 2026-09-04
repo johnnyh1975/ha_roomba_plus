@@ -185,112 +185,98 @@ class TestAddPose:
         assert r._theta == 135
 
 
-class TestPoseJumpRejectionCascade:
-    """v2.9.0 — confirmed from real field data (2026-06-19, 980 OG): a single
-    rejected jump used to permanently strand the renderer's path tracking
-    behind a stale anchor point, because the rejected call never updated
-    self._points[-1]. Every subsequent real position then also read as
-    "too far from that stale anchor", cascading indefinitely. A real
-    checkpoint mid-mission in a 106 m² home showed only ~0.7m x 0.7m of
-    pose data survive intact because of this. Fixed via
-    _MAX_CONSECUTIVE_REJECTED_JUMPS: a short streak of rejections is still
-    filtered (catches real momentary glitches), but a *sustained* streak of
-    "too large" jumps is accepted as a genuine move/relocalisation.
+class TestDiscontinuityMarking:
+    """v3.2.2 — REPLACES rejection with marking.
+
+    The old contract dropped a suspicious pose. That left _points[-1]
+    as a stale anchor, so every later real position measured against it
+    too — the field-confirmed cascade (2026-06-19, 980 OG): a real
+    mid-mission checkpoint in a 106 m² home had 1413 points stranded
+    inside a ~0.7 m × 0.7 m pocket.
+
+    It was papered over with a rejection streak: after two drops the
+    third pose was taken. That reconnected the path to a position two
+    updates later — a straight line across a room nobody drove.
+
+    The root cause was the threshold itself. 500 mm was borrowed from
+    another project; measured on this robot, poses arrive every ~1.8 s,
+    so full-speed straight-line driving covers up to 542 mm. Ordinary
+    movement sat just over the limit.
+
+    New contract: EVERY pose is stored. A suspicious one records a
+    break index, and only the LINE is split there. The anchor is always
+    the true last position, so the cascade cannot form — not "is
+    handled", cannot form.
     """
 
-    def test_single_isolated_jump_is_still_rejected(self):
-        """One large jump, surrounded by normal small moves, is filtered —
-        this is exactly the momentary-glitch case the guard exists for."""
-        r = _make_renderer()
-        r.add_pose(100, 100, 0)
-        r.add_pose(150, 100, 0)          # normal small move
-        r.add_pose(5000, 5000, 0)        # one bogus jump — rejected
-        assert r.point_count == 2
-        r.add_pose(200, 100, 0)          # back to normal small moves
-        assert r.point_count == 3
+    @staticmethod
+    def _renderer():
+        return MapRenderer(RendererConfig())
 
-    def test_sustained_jump_streak_is_eventually_accepted(self):
-        """A *real* move (robot genuinely traversed far from the last
-        recorded point) must not be permanently stranded — after enough
-        consecutive rejections, the new position is accepted."""
-        r = _make_renderer()
-        r.add_pose(100, 100, 0)
-        assert r.point_count == 1
+    def test_a_jump_no_longer_drops_the_point(self):
+        r = self._renderer()
+        r.add_pose(100.0, 0.0, 0.0)
+        r.add_pose(200.0, 0.0, 0.0)
+        before = len(r._points)
 
-        # Robot really did move ~5m away (e.g. long hallway traverse with a
-        # sparse MQTT update gap). First _MAX_CONSECUTIVE_REJECTED_JUMPS
-        # repeats of essentially the same far-away position are rejected...
-        for _ in range(r._MAX_CONSECUTIVE_REJECTED_JUMPS):
-            r.add_pose(5100, 100, 0)
-            assert r.point_count == 1, "still within the rejection streak"
+        r.add_pose(9000.0, 9000.0, 0.0)
 
-        # ...but the move is real and keeps happening — must now be accepted
-        # rather than cascading forever.
-        r.add_pose(5100, 100, 0)
-        assert r.point_count == 2
-        assert r._robot_px is not None
+        assert len(r._points) == before + 1
+        assert r._points_mm[-1] == (9000.0, 9000.0)
 
-    def test_real_world_scenario_does_not_strand_path_in_small_pocket(self):
-        """Regression test mirroring the actual field-data bug: mission
-        starts normally, one big legitimate jump occurs (e.g. post-recharge
-        relocalisation), then movement continues across a large home. The
-        path must not get stuck recording only the tiny pocket near the
-        stale anchor."""
-        r = _make_renderer()
-        r.add_pose(100, 100, 0)
-        r.add_pose(200, 100, 0)
+    def test_the_anchor_follows_the_jump(self):
+        """The cascade's mechanism, checked directly: after a jump the
+        comparison point must be the NEW position, not the old one."""
+        r = self._renderer()
+        r.add_pose(100.0, 0.0, 0.0)
+        r.add_pose(9000.0, 9000.0, 0.0)
 
-        # A real ~6m jump (e.g. robot resumed on the far side of a 106 m²
-        # home after a recharge cycle).
-        for _ in range(r._MAX_CONSECUTIVE_REJECTED_JUMPS + 1):
-            r.add_pose(6200, 100, 0)
+        # A normal step away from the jumped-to position.
+        r.add_pose(9200.0, 9000.0, 0.0)
 
-        # Movement continues normally from the NEW location — must accumulate,
-        # not get rejected forever relative to the old (100,100) anchor.
-        for i in range(1, 11):
-            r.add_pose(6200 + i * 200, 100, 0)
+        # Only the jump itself is a break; the step after it is not.
+        assert sorted(r._breaks) == [1]
 
-        assert r.point_count > 5, (
-            "path must continue accumulating after the sustained jump, "
-            "not remain stranded at the pre-jump anchor"
-        )
+    def test_a_long_run_after_a_jump_stays_intact(self):
+        """The cascade in full: one jump, then ordinary driving. Under
+        the old contract everything after the jump was measured against
+        a stale anchor and stranded. Here it must all survive."""
+        r = self._renderer()
+        r.add_pose(100.0, 0.0, 0.0)
+        r.add_pose(9000.0, 9000.0, 0.0)
+        for i in range(1, 21):
+            r.add_pose(9000.0 + i * 150.0, 9000.0, 0.0)
 
-    def test_rejection_streak_resets_after_acceptance(self):
-        """Once a sustained jump is accepted, the streak counter must reset
-        so a *future* isolated glitch is filtered normally again, not
-        immediately accepted because the counter was left primed."""
-        r = _make_renderer()
-        r.add_pose(100, 100, 0)
-        for _ in range(r._MAX_CONSECUTIVE_REJECTED_JUMPS + 1):
-            r.add_pose(6000, 100, 0)
-        accepted_count = r.point_count
-        assert r._consecutive_rejected_jumps == 0
+        assert len(r._points) == 22
+        assert sorted(r._breaks) == [1], "only the jump breaks, nothing after it"
 
-        # A fresh isolated glitch right after acceptance must still be
-        # filtered — the streak counter must not carry over.
-        r.add_pose(20000, 20000, 0)
-        assert r.point_count == accepted_count
+    def test_normal_driving_records_no_break(self):
+        r = self._renderer()
+        for i in range(1, 15):
+            r.add_pose(i * 300.0, 0.0, 0.0)
 
-    def test_reset_clears_rejection_streak(self):
-        """A new mission (reset()) must not inherit a rejection streak from
-        the previous mission's unfinished state."""
-        r = _make_renderer()
-        r.add_pose(100, 100, 0)
-        r.add_pose(9000, 100, 0)  # one rejection, streak=1
-        assert r._consecutive_rejected_jumps == 1
+        assert r._breaks == set()
+
+    def test_reset_clears_the_parallel_lists(self):
+        """_breaks indexes into _points. Clearing one without the others
+        would leave breaks pointing at last mission's positions."""
+        r = self._renderer()
+        r.add_pose(100.0, 0.0, 0.0)
+        r.add_pose(9000.0, 9000.0, 0.0)
+        assert r._breaks
 
         r.reset()
-        assert r._consecutive_rejected_jumps == 0
 
-    def test_normal_small_moves_never_increment_streak(self):
-        """Plausible, well within-threshold moves must never touch the
-        rejection-streak counter at all."""
-        r = _make_renderer()
-        r.add_pose(100, 100, 0)
-        for i in range(1, 21):
-            r.add_pose(100 + i * 50, 100, 0)
-        assert r._consecutive_rejected_jumps == 0
-        assert r.point_count == 21
+        assert r._points == [] and r._points_mm == []
+        assert r._point_ts == [] and r._breaks == set()
+
+    def test_the_lists_stay_index_aligned(self):
+        r = self._renderer()
+        for i in range(1, 10):
+            r.add_pose(i * 400.0, 0.0, 0.0)
+        r.add_pose(9000.0, 9000.0, 0.0)
+
+        assert len(r._points) == len(r._points_mm) == len(r._point_ts)
 
 
 class TestAddPoseReturnValue:
@@ -307,19 +293,24 @@ class TestAddPoseReturnValue:
         r.add_pose(100, 100, 0)
         assert r.add_pose(150, 150, 0) is False
 
-    def test_rejected_jump_returns_false(self):
-        r = _make_renderer()
+    def test_a_discontinuity_returns_true(self):
+        """v3.2.2 — the flag now means "a break was recorded here",
+        which is the same signal the dock-anchor correction wants: a
+        point where continuity was lost. Under the old contract a lone
+        jump returned False because the point had been dropped; nothing
+        is dropped now, so the caller is told about every break."""
+        r = MapRenderer(RendererConfig())
         r.add_pose(100, 100, 0)
-        assert r.add_pose(5000, 5000, 0) is False  # single isolated jump — rejected
 
-    def test_accepted_sustained_jump_returns_true(self):
-        r = _make_renderer()
+        assert r.add_pose(5000, 5000, 0) is True
+        assert r._breaks == {1}
+
+    def test_a_normal_step_after_a_break_returns_false(self):
+        r = MapRenderer(RendererConfig())
         r.add_pose(100, 100, 0)
-        results = []
-        for _ in range(r._MAX_CONSECUTIVE_REJECTED_JUMPS + 1):
-            results.append(r.add_pose(5100, 100, 0))
-        assert results[-1] is True
-        assert all(res is False for res in results[:-1])
+        r.add_pose(5000, 5000, 0)
+
+        assert r.add_pose(5150, 5000, 0) is False
 
 
 class TestReplaceRange:
@@ -391,21 +382,28 @@ class TestReplaceRange:
         r = _make_renderer()
         assert r.accepted_jump_log == []
 
-    def test_rejected_jump_does_not_log(self):
+    def test_every_discontinuity_is_logged(self):
+        """v3.2.2 — there is no longer a "rejected" category to exclude.
+        A pose is never dropped, so the only question is whether
+        continuity broke; when it did, the dock-anchor correction wants
+        to know, and the log is how it finds out."""
         r = _make_renderer()
         r.add_pose(100, 100, 0)
-        r.add_pose(5000, 5000, 0)  # single isolated jump — rejected
-        assert r.accepted_jump_log == []
+        r.add_pose(5000, 5000, 0)
 
-    def test_accepted_sustained_jump_is_logged_at_new_position(self):
+        assert len(r.accepted_jump_log) == 1
+
+    def test_the_break_is_logged_at_the_new_position(self):
+        """The position AFTER the discontinuity is the one worth
+        recording — it is where the robot actually is."""
         r = _make_renderer()
         r.add_pose(100, 100, 0)
-        for _ in range(r._MAX_CONSECUTIVE_REJECTED_JUMPS + 1):
-            r.add_pose(5100, 100, 0)
+        r.add_pose(5100, 100, 0)
+
         assert len(r.accepted_jump_log) == 1
         x, y, theta, ts = r.accepted_jump_log[0]
         assert (x, y) == (5100.0, 100.0)
-        assert theta == 0.0  # add_pose called with theta=0 throughout this test
+        assert theta == 0.0
         assert ts > 0
 
     def test_accepted_jump_captures_theta(self):
@@ -415,8 +413,10 @@ class TestReplaceRange:
         'captures theta' from 'always reports 0')."""
         r = _make_renderer()
         r.add_pose(100, 100, 45.0)
-        for _ in range(r._MAX_CONSECUTIVE_REJECTED_JUMPS + 1):
-            r.add_pose(5100, 100, 199.5)
+        # v3.2.2 — one call is enough: a discontinuity is
+        # recorded immediately, with no rejection streak to
+        # outlast first.
+        r.add_pose(5100, 100, 199.5)
         _, _, theta, _ = r.accepted_jump_log[0]
         assert theta == 199.5
 
@@ -432,8 +432,10 @@ class TestReplaceRange:
         missions — reset() must not clear it."""
         r = _make_renderer()
         r.add_pose(100, 100, 0)
-        for _ in range(r._MAX_CONSECUTIVE_REJECTED_JUMPS + 1):
-            r.add_pose(5100, 100, 0)
+        # v3.2.2 — one call is enough: a discontinuity is
+        # recorded immediately, with no rejection streak to
+        # outlast first.
+        r.add_pose(5100, 100, 0)
         assert len(r.accepted_jump_log) == 1
 
         r.reset()
@@ -442,12 +444,16 @@ class TestReplaceRange:
     def test_accumulates_across_multiple_missions(self):
         r = _make_renderer()
         r.add_pose(100, 100, 0)
-        for _ in range(r._MAX_CONSECUTIVE_REJECTED_JUMPS + 1):
-            r.add_pose(5100, 100, 0)
+        # v3.2.2 — one call is enough: a discontinuity is
+        # recorded immediately, with no rejection streak to
+        # outlast first.
+        r.add_pose(5100, 100, 0)
         r.reset()
         r.add_pose(200, 200, 0)
-        for _ in range(r._MAX_CONSECUTIVE_REJECTED_JUMPS + 1):
-            r.add_pose(8100, 200, 0)
+        # v3.2.2 — one call is enough: a discontinuity is
+        # recorded immediately, with no rejection streak to
+        # outlast first.
+        r.add_pose(8100, 200, 0)
         assert len(r.accepted_jump_log) == 2
 
     def test_capped_at_max_length(self):
@@ -456,15 +462,19 @@ class TestReplaceRange:
         for j in range(MAX_ACCEPTED_JUMP_LOG + 10):
             r.reset()
             r.add_pose(100, 100, 0)  # non-(0,0) anchor so the jump check runs
-            for _ in range(r._MAX_CONSECUTIVE_REJECTED_JUMPS + 1):
-                r.add_pose(5000 + j, 100, 0)
+            # v3.2.2 — one call is enough: a discontinuity is
+            # recorded immediately, with no rejection streak to
+            # outlast first.
+            r.add_pose(5000 + j, 100, 0)
         assert len(r.accepted_jump_log) == MAX_ACCEPTED_JUMP_LOG
 
     def test_dump_and_restore_state_roundtrip(self):
         r = _make_renderer()
         r.add_pose(100, 100, 0)
-        for _ in range(r._MAX_CONSECUTIVE_REJECTED_JUMPS + 1):
-            r.add_pose(5100, 100, 0)
+        # v3.2.2 — one call is enough: a discontinuity is
+        # recorded immediately, with no rejection streak to
+        # outlast first.
+        r.add_pose(5100, 100, 0)
         dumped = r.dump_state()
         assert "accepted_jump_log" in dumped
 
@@ -722,8 +732,21 @@ class TestInferenceSuggestionsLayer:
         from custom_components.roomba_plus.room_seg_store import RoomSegStore
 
         def _add_spanning_trail(r):
-            for x, y in [(-900, -900), (900, 900), (-900, 900), (900, -900), (100, 100)]:
-                r.add_pose(x, y, 0)
+            # A DRIVABLE PATH, not four corners. The original jumped
+            # ~2546 mm between opposite corners -- physically impossible
+            # at 350 mm/s between two updates, and with v3.2.2 every
+            # step became a discontinuity, so no polyline had two
+            # connected points and nothing was drawn at all. The
+            # corners are still reached; the robot now travels to them.
+            corners = [(-900, -900), (900, -900), (900, 900), (-900, 900), (100, 100)]
+            prev = corners[0]
+            r.add_pose(*prev, 0)
+            for target in corners[1:]:
+                dx, dy = target[0] - prev[0], target[1] - prev[1]
+                steps = max(1, int(max(abs(dx), abs(dy)) / 300))
+                for i in range(1, steps + 1):
+                    r.add_pose(prev[0] + dx * i / steps, prev[1] + dy * i / steps, 0)
+                prev = target
 
         gs = GeometryStore()
         r_empty = _make_renderer_with_stores(geometry_store=gs, room_seg_store=RoomSegStore())
@@ -1205,3 +1228,152 @@ class TestReplaceRangeAutoFitInteraction:
         assert png_after is not None
         # the corrected point is reflected in the point list used by fit
         assert r._points[-1] == r._mm_to_px(5000.0, 5000.0)
+
+
+class TestSelfCalibratingThreshold:
+    """v3.2.2 — the threshold measures itself from the robot's own stream.
+
+    `_MAX_POSE_JUMP_MM = 500` was borrowed from another project, and the
+    comment justifying it refuted itself: ~300 mm/s with updates every
+    1-5 s is up to 1500 mm. Measured on a real 980, poses arrive every
+    ~1.8 s, so full-speed straight-line driving covers up to 542 mm --
+    just over the limit. That is what the cascade was made of.
+
+    Replacing it with another fixed number would have been the same
+    mistake in a new place, so both terms are measured: the interval
+    floor from the median of recent gaps, the speed ceiling from a high
+    percentile of observed steps.
+
+    BOTH USE A ROBUST STATISTIC, and that is load-bearing. A mean would
+    be dragged upward by exactly the discontinuities these exist to
+    catch: one long stall or one big jump would raise the allowance and
+    wave the next real one through.
+    """
+
+    @staticmethod
+    def _drive(step_mm, interval_s, n=30, jump_at=None):
+        from unittest.mock import patch
+
+        r = MapRenderer(RendererConfig())
+        clock = [1000.0]
+        with patch(
+            "custom_components.roomba_plus.map_renderer._time_mod.time",
+            side_effect=lambda: clock[0],
+        ):
+            x = 0.0
+            for i in range(n):
+                x += 9000.0 if i == jump_at else step_mm
+                r.add_pose(x, 0.0, 0.0)
+                clock[0] += interval_s
+        return r
+
+    def test_a_slow_update_rate_widens_the_allowance(self):
+        """The failure the borrowed constant caused: at a slower rate,
+        ordinary driving covers more ground per message and was read as
+        a jump."""
+        fast = self._drive(300.0, 1.0)
+        slow = self._drive(300.0, 4.0)
+
+        assert slow._allowed_step_mm(4.0) > fast._allowed_step_mm(1.0)
+        assert slow._breaks == set(), "normal driving must never break"
+
+    def test_one_long_stall_does_not_raise_the_interval_floor(self):
+        """A mean would be pulled up by the outlier and let the next
+        real jump through. The median ignores a minority outright."""
+        from unittest.mock import patch
+
+        r = MapRenderer(RendererConfig())
+        clock = [1000.0]
+        with patch(
+            "custom_components.roomba_plus.map_renderer._time_mod.time",
+            side_effect=lambda: clock[0],
+        ):
+            for i in range(20):
+                r.add_pose(i * 200.0, 0.0, 0.0)
+                clock[0] += 30.0 if i == 10 else 1.8
+
+        assert r._typical_dt_s() < 3.0
+
+    def test_a_big_jump_does_not_raise_the_speed_ceiling(self):
+        """Same argument for the other term: if a 9 m jump counted
+        towards the observed speed, the ceiling would climb and the
+        next jump would pass unnoticed."""
+        clean = self._drive(400.0, 1.8)
+        with_jump = self._drive(400.0, 1.8, jump_at=15)
+
+        assert with_jump._observed_speed_mm_s() == clean._observed_speed_mm_s()
+        assert sorted(with_jump._breaks) == [15], "the jump itself still breaks"
+
+    def test_both_terms_fall_back_before_enough_samples(self):
+        """A median or percentile over two points is not robust. The
+        fallbacks are deliberately generous: too high costs a missed
+        break, too low costs an invented one -- and only the second is
+        visible as a wrong gap."""
+        r = MapRenderer(RendererConfig())
+        r.add_pose(100.0, 0.0, 0.0)
+
+        assert r._typical_dt_s() == r._MIN_STEP_DT_S
+        assert r._observed_speed_mm_s() == r._MAX_SPEED_MM_S
+
+    def test_an_idle_stretch_cannot_tighten_the_check(self):
+        """A near-stationary run measures a low speed. Letting that
+        become the ceiling would make the filter stricter than the
+        fixed limit ever was."""
+        idle = self._drive(5.0, 1.8)
+
+        assert idle._observed_speed_mm_s() >= idle._MAX_SPEED_MM_S
+
+
+class TestBothImagesShareOneFrame:
+    """@Thonno wanted to overlay the cleaning path on the room map in
+    xiaomi-vacuum-map-card and found it rendered as a standalone
+    full-canvas image.
+
+    His diagnosis was right: "the shape and proportions correspond, the
+    problem is that the Cleaning Path is rendered independently". Each
+    image auto-fitted to its own content — the room map to all rooms,
+    the cleaning path to one mission's area — so each published
+    `calibration_points` correct for itself and incompatible with the
+    other.
+
+    Not an option. Two views of the same home at different scales is a
+    consequence of them being built separately, not something anyone
+    would choose: it also makes three rooms out of eight look like the
+    whole house.
+    """
+
+    @staticmethod
+    def _renderer(points, bounds=None):
+        from custom_components.roomba_plus.map_renderer import (
+            MapRenderer,
+            RendererConfig,
+        )
+
+        r = MapRenderer(RendererConfig(), None, None)
+        r._points = list(points)
+        r._fit_bounds_px = bounds
+        return r
+
+    def test_a_shared_frame_changes_the_transform(self):
+        """The regression, stated as the difference it makes."""
+        small = [(300, 300), (310, 310)]
+        own = self._renderer(small)._compute_fit()
+        shared = self._renderer(small, bounds=[(0, 0), (600, 600)])._compute_fit()
+
+        assert own != shared
+
+    def test_two_different_contents_in_one_frame_agree(self):
+        """The point of the whole thing: what a card needs to overlay
+        one image on the other."""
+        frame = [(0, 0), (600, 600)]
+        a = self._renderer([(100, 100), (200, 200)], bounds=frame)._compute_fit()
+        b = self._renderer([(400, 400), (500, 500)], bounds=frame)._compute_fit()
+
+        assert a == b
+
+    def test_without_a_frame_they_do_not(self):
+        """Negative control — proves the frame is doing the work."""
+        a = self._renderer([(100, 100), (200, 200)])._compute_fit()
+        b = self._renderer([(400, 400), (500, 500)])._compute_fit()
+
+        assert a != b

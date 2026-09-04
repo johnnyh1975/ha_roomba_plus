@@ -1,0 +1,316 @@
+[
+  {
+    "pauseId": 0,
+    "pmaps": [
+      {
+        "0wOiGRFqRaKPJuVkOdwRtQ": "260824T091539"
+      }
+    ],
+    "done": "ok",
+    "startTime": 1787562322,
+    "runM": 10,
+    "wifiChannel": 11,
+    "softwareVer": "daredevil+2.6.0+daredevil-release+163",
+    "saves": 0,
+    "doneM": 0,
+    "chrgM": 0,
+    "pauseM": 0,
+    "pmaps_robot": [
+      {
+        "0wOiGRFqRaKPJuVkOdwRtQ": "260824T091539"
+      }
+    ],
+    "timeline": {
+      "mission_id": "01M0SG8T2GGQRZE3PP05VF1CRS",
+      "cmd": {
+        "initiator": "localApp",
+        "command": "start",
+        "time": 1787562319
+      },
+      "ver": "2.6.0",
+      "finEvents": [
+        {
+          "ts": 1787562899,
+          "travel": {
+            "reason": 1,
+            "status": 0,
+            "dest": "dock"
+          },
+          "type": "travel",
+          "ets": 1787562931
+        },
+        {
+          "ts": 1787562331,
+          "ets": 1787562898,
+          "type": "disc"
+        },
+        {
+          "type": "start",
+          "ts": 1787562325
+        }
+      ],
+      "nMssn": 434,
+      "event": [
+        {
+          "type": "fin",
+          "ts": 1787562935
+        }
+      ]
+    },
+    "timestamp": 1787562945,
+    "dirt": 0,
+    "eDock": 0,
+    "sqft": 78,
+    "dockedAtStart": false,
+    "nMssn": 434,
+    "flags": 32,
+    "pmaps_info": [
+      {
+        "pmapv_id": "260824T091539",
+        "umf_layer_deltas": {
+          "changelog": {
+            "deletes": {},
+            "changes": {},
+            "adds": {}
+          },
+          "layer_type": "deltas"
+        },
+        "pmap_id": "0wOiGRFqRaKPJuVkOdwRtQ"
+      }
+    ],
+    "evacs": 0,
+    "startEndWlBars": [
+      2,
+      2
+    ],
+    "cmd": {
+      "time": 1787562319,
+      "initiator": "localApp",
+      "command": "start"
+    },
+    "chrgs": 0,
+    "durationM": 10,
+    "initiator": "localApp",
+    "missionId": "01M0SG8T2GGQRZE3PP05VF1CRS",
+    "wlBars": [
+      0,
+      0,
+      75,
+      25,
+      0
+    ],
+    "robot_id": "9A37307A20804F0CABE9B6011B82DDBE",
+    "done_raw": "ok"
+  },
+  {
+    "durationM": 15,
+    "pauseId": 0,
+    "timestamp": 1787561870,
+    "done": "ok",
+    "wifiChannel": 11,
+    "softwareVer": "daredevil+2.6.0+daredevil-release+163",
+    "saves": 0,
+    "doneM": 0,
+    "chrgM": 0,
+    "cmd": {
+      "command": "start",
+      "time": 1787560936,
+      "initiator": "localApp"
+    },
+    "pauseM": 0,
+    "sqft": 112,
+    "dirt": 0,
+    "eDock": 0,
+    "pmaps": [
+      {
+        "eSc2UHnZRL2ybvwjS1xRpg": "260824T085743"
+      }
+    ],
+    "timeline": {
+      "ver": "2.6.0",
+      "cmd": {
+        "initiator": "localApp",
+        "command": "start",
+        "time": 1787560936
+      },
+      "nMssn": 433,
+      "finEvents": [
+        {
+          "ets": 1787561857,
+          "travel": {
+            "dest": "dock",
+            "reason": 1,
+            "status": 0
+          },
+          "type": "travel",
+          "ts": 1787561832
+        },
+        {
+          "type": "disc",
+          "ets": 1787561831,
+          "ts": 1787560948
+        },
+        {
+          "type": "start",
+          "ts": 1787560941
+        }
+      ],
+      "event": [
+        {
+          "type": "fin",
+          "ts": 1787561860
+        }
+      ],
+      "mission_id": "01M0SEYJGGDXVVPEKKPS3HZ3V8"
+    },
+    "startEndWlBars": [
+      1,
+      1
+    ],
+    "dockedAtStart": false,
+    "flags": 32,
+    "evacs": 0,
+    "pmaps_robot": [
+      {
+        "eSc2UHnZRL2ybvwjS1xRpg": "260824T085743"
+      }
+    ],
+    "chrgs": 0,
+    "pmaps_info": [
+      {
+        "umf_layer_deltas": {
+          "layer_type": "deltas",
+          "changelog": {
+            "adds": {},
+            "deletes": {},
+            "changes": {}
+          }
+        },
+        "pmapv_id": "260824T085743",
+        "pmap_id": "eSc2UHnZRL2ybvwjS1xRpg"
+      }
+    ],
+    "runM": 15,
+    "missionId": "01M0SEYJGGDXVVPEKKPS3HZ3V8",
+    "startTime": 1787560938,
+    "initiator": "localApp",
+    "wlBars": [
+      0,
+      0,
+      0,
+      100,
+      0
+    ],
+    "nMssn": 433,
+    "robot_id": "9A37307A20804F0CABE9B6011B82DDBE",
+    "done_raw": "ok"
+  },
+  {
+    "pauseId": 0,
+    "eDock": 1,
+    "cmd": {
+      "initiator": "localApp",
+      "command": "start",
+      "time": 1787553539
+    },
+    "done": "ok",
+    "missionId": "01M0S7WWTRY28WBGRVFJP6F3M7",
+    "startTime": 1787553543,
+    "pmaps": [
+      {
+        "L1M_o6TbQ1m9WOaxG7n2vQ": "260824T071948"
+      }
+    ],
+    "pmaps_robot": [
+      {
+        "L1M_o6TbQ1m9WOaxG7n2vQ": "260824T071947"
+      }
+    ],
+    "durationM": 40,
+    "nMssn": 432,
+    "softwareVer": "daredevil+2.6.0+daredevil-release+163",
+    "saves": 0,
+    "evacs": 1,
+    "doneM": 0,
+    "chrgM": 0,
+    "pauseM": 0,
+    "wlBars": [
+      0,
+      0,
+      92,
+      8,
+      0
+    ],
+    "sqft": 228,
+    "dirt": 0,
+    "wifiChannel": 6,
+    "flags": 32,
+    "startEndWlBars": [
+      2,
+      2
+    ],
+    "chrgs": 0,
+    "timeline": {
+      "nMssn": 432,
+      "ver": "2.6.0",
+      "event": [
+        {
+          "ts": 1787555983,
+          "type": "fin"
+        }
+      ],
+      "mission_id": "01M0S7WWTRY28WBGRVFJP6F3M7",
+      "cmd": {
+        "command": "start",
+        "initiator": "localApp",
+        "time": 1787553539
+      },
+      "finEvents": [
+        {
+          "ts": 1787555967,
+          "ets": 1787555982,
+          "type": "evac"
+        },
+        {
+          "ts": 1787555919,
+          "ets": 1787555966,
+          "type": "travel",
+          "travel": {
+            "reason": 1,
+            "status": 0,
+            "dest": "dock"
+          }
+        },
+        {
+          "ts": 1787553564,
+          "ets": 1787555919,
+          "type": "disc"
+        },
+        {
+          "type": "start",
+          "ts": 1787553546
+        }
+      ]
+    },
+    "timestamp": 1787555997,
+    "initiator": "localApp",
+    "runM": 40,
+    "dockedAtStart": true,
+    "pmaps_info": [
+      {
+        "umf_layer_deltas": {
+          "layer_type": "deltas",
+          "changelog": {
+            "adds": {},
+            "deletes": {},
+            "changes": {}
+          }
+        },
+        "pmap_id": "L1M_o6TbQ1m9WOaxG7n2vQ",
+        "pmapv_id": "260824T071948"
+      }
+    ],
+    "robot_id": "9A37307A20804F0CABE9B6011B82DDBE",
+    "done_raw": "ok"
+  }
+]

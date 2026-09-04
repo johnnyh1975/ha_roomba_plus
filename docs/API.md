@@ -4,6 +4,11 @@
 
 Internal mission history, household aggregates, and obstacle data exposed as HA REST endpoints.
 
+**Both generations.** These endpoints read the integration's own mission store,
+which is filled from the local connection on Classic robots and from iRobot's
+cloud on Prime ones. The response shape is the same either way; a field a
+particular robot never reports is absent rather than zero.
+
 ---
 
 ## Authentication

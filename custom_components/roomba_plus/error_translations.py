@@ -759,13 +759,30 @@ _TRANSLATION_GROUPS: Final[list[tuple[list[int], dict[str, dict[str, str]]]]] = 
         "pt": {"label": "Falha na atualização da Clean Base", "description": "A atualização de software da Clean Base falhou.", "action": "Tente novamente a atualização. Contacte o suporte iRobot se o erro persistir."},
         "nl": {"label": "Update Clean Base mislukt", "description": "De software-update van het Clean Base-station is mislukt.", "action": "Probeer de update opnieuw. Neem contact op met iRobot-support als de fout blijft optreden."},
     }),
+    # 1010 IS A DOCKING FAILURE, not an obstruction -- confirmed by the
+    # robot's own message text (@utkjmitch). The previous wording was a
+    # guess, and it sent people looking for something in the robot's way
+    # when it was standing two inches from its dock.
     ([1010], {
-        "de": {"label": "Weg freimachen", "description": "Der Weg des Roboters ist blockiert.", "action": "Hindernisse aus dem Weg des Roboters entfernen und neu starten."},
-        "fr": {"label": "Dégager le chemin", "description": "Le chemin du robot est obstrué.", "action": "Retirez les obstacles du chemin du robot et redémarrez."},
-        "it": {"label": "Liberare il percorso", "description": "Il percorso del robot è ostruito.", "action": "Rimuovere gli ostacoli dal percorso del robot e riavviare."},
-        "es": {"label": "Despejar camino", "description": "El camino del robot está obstruido.", "action": "Retire los obstáculos del camino del robot y reinicie."},
-        "pt": {"label": "Desobstruir caminho", "description": "O caminho do robô está obstruído.", "action": "Remova os obstáculos do caminho do robô e reinicie."},
-        "nl": {"label": "Pad vrijmaken", "description": "Het pad van de robot is geblokkeerd.", "action": "Verwijder obstakels uit het pad van de robot en start opnieuw."},
+        "de": {"label": "Andocken fehlgeschlagen", "description": "Der Roboter konnte nicht zur Ladestation zurückkehren.", "action": "Den Roboter von Hand auf die Ladestation setzen."},
+        "fr": {"label": "Retour à la base impossible", "description": "Le robot n'a pas pu retourner à sa base.", "action": "Placez le robot sur la base à la main."},
+        "it": {"label": "Rientro alla base non riuscito", "description": "Il robot non è riuscito a tornare alla base.", "action": "Posizionare il robot sulla base manualmente."},
+        "es": {"label": "No pudo volver a la base", "description": "El robot no pudo regresar a su base.", "action": "Coloque el robot en la base a mano."},
+        "pt": {"label": "Não conseguiu voltar à base", "description": "O robô não conseguiu regressar à base.", "action": "Coloque o robô na base manualmente."},
+        "nl": {"label": "Dokken mislukt", "description": "De robot kon niet terugkeren naar het laadstation.", "action": "Plaats de robot met de hand op het laadstation."},
+    }),
+    # FIELD-REPORTED (chairstacker, Combo 405 / V4 Prime). The wording
+    # WIDENED in a19: a second, controlled observation showed 671 with
+    # the tank REMOVED, not empty, so "tank empty" was sending people to
+    # refill a tank that was not in the dock. See const.py's entry for
+    # the full note, including why it stays in this table at all.
+    ([671], {
+        "de": {"label": "Wischtuchwäsche nicht möglich", "description": "Die Station kann das Wischtuch nicht waschen. Beobachtet sowohl bei leerem als auch bei fehlendem Frischwassertank.", "action": "Prüfen, ob beide Tanks eingesetzt sind und der Frischwassertank gefüllt ist."},
+        "fr": {"label": "Lavage de la serpillière impossible", "description": "La station ne peut pas laver la serpillière. Observé avec le réservoir d'eau propre vide comme retiré.", "action": "Vérifiez que les deux réservoirs sont en place et que le réservoir d'eau propre est rempli."},
+        "it": {"label": "Lavaggio del panno non possibile", "description": "La base non può lavare il panno. Osservato sia con il serbatoio dell'acqua pulita vuoto sia rimosso.", "action": "Verificare che entrambi i serbatoi siano inseriti e che quello dell'acqua pulita sia pieno."},
+        "es": {"label": "No se puede lavar la mopa", "description": "La base no puede lavar la mopa. Observado con el depósito de agua limpia vacío y también retirado.", "action": "Compruebe que ambos depósitos estén colocados y que el de agua limpia esté lleno."},
+        "pt": {"label": "Não é possível lavar a mopa", "description": "A base não consegue lavar a mopa. Observado com o depósito de água limpa vazio e também removido.", "action": "Verifique se ambos os depósitos estão colocados e se o de água limpa está cheio."},
+        "nl": {"label": "Dweil wassen niet mogelijk", "description": "Het station kan de dweil niet wassen. Waargenomen met de schoonwatertank zowel leeg als verwijderd.", "action": "Controleer of beide tanks geplaatst zijn en de schoonwatertank gevuld is."},
     }),
 ]
 

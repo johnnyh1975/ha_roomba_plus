@@ -658,15 +658,16 @@ class TestMqttStampCallback:
 
 
 class TestNotReadyConstant:
-    def test_value_is_64(self):
-        assert _NOT_READY_MAP_SAVING == 64
+    def test_value_is_the_map_updating_state(self):
+        assert _NOT_READY_MAP_SAVING == 67
 
 
 # ── is_on ─────────────────────────────────────────────────────────────────────
 
 class TestMapSavingIsOn:
-    def test_on_when_bit_6_set(self):
-        sensor = _make_sensor(not_ready=64)
+    def test_on_for_the_map_updating_state(self):
+        """67 is DownloadingMap. This used to feed 64 and test a bit."""
+        sensor = _make_sensor(not_ready=67)
         assert sensor.is_on is True
 
     def test_off_when_not_ready_is_zero(self):
@@ -679,14 +680,16 @@ class TestMapSavingIsOn:
         sensor = RoombaMapSavingStatus(roomba, "blid")
         assert sensor.is_on is False
 
-    def test_on_when_bit_6_combined_with_others(self):
-        """bit 6 set alongside other bits — still ON."""
-        sensor = _make_sensor(not_ready=64 | 1 | 4)
-        assert sensor.is_on is True
+    def test_off_for_states_that_merely_share_bit_64(self):
+        """The correction. notReady is a scalar index, so 64 through 71
+        are eight distinct states and only 67 is the map one -- 64 is
+        FleetDisabled, 65 SubscriptionExpired, 69 TankLeaking. Under the
+        old bit test every one of them turned this sensor on."""
+        for wire in (64, 65, 66, 68, 69, 70, 71):
+            assert _make_sensor(not_ready=wire).is_on is False, wire
 
-    def test_off_when_other_bits_set_but_not_bit_6(self):
-        """bit 1 + bit 2 + bit 5 — no map saving."""
-        sensor = _make_sensor(not_ready=1 | 2 | 32)
+    def test_off_for_unrelated_states(self):
+        sensor = _make_sensor(not_ready=35)
         assert sensor.is_on is False
 
     def test_off_when_not_ready_is_none(self):
@@ -698,17 +701,21 @@ class TestMapSavingIsOn:
         # None treated as 0 via `or 0` guard — sensor must return False
         assert sensor.is_on is False
 
-    def test_bitmask_values(self):
-        """Exhaustive check: only multiples of 64 within reasonable range trigger ON."""
-        sensor = _make_sensor(not_ready=0)
-        for v in range(256):
+    def test_scalar_values(self):
+        """Exhaustive: exactly one value turns this on.
+
+        The old version asserted `bool(v & 64)` across the same range --
+        128 of 256 values. That is the bug written as a test: it agreed
+        with the implementation and neither was checked against the
+        robot's own app.
+        """
+        for value in range(256):
             roomba = MagicMock()
             roomba.master_state = {
-                "state": {"reported": {"cleanMissionStatus": {"notReady": v}}}
+                "state": {"reported": {"cleanMissionStatus": {"notReady": value}}}
             }
-            sensor2 = RoombaMapSavingStatus(roomba, "blid")
-            expected = bool(v & 64)
-            assert sensor2.is_on == expected, f"Failed for notReady={v}"
+            sensor = RoombaMapSavingStatus(roomba, "blid")
+            assert sensor.is_on == (value == 67), f"notReady={value}"
 
 
 # ── extra_state_attributes ────────────────────────────────────────────────────
@@ -732,7 +739,7 @@ class TestMapSavingAttributes:
 class TestMapSavingStateFilter:
     def test_triggers_on_cleanmissionstatus(self):
         sensor = _make_sensor()
-        assert sensor.new_state_filter({"cleanMissionStatus": {"notReady": 64}}) is True
+        assert sensor.new_state_filter({"cleanMissionStatus": {"notReady": 67}}) is True
 
     def test_ignores_other_fields(self):
         sensor = _make_sensor()
@@ -826,17 +833,20 @@ class TestMapSavingAutomationScenario:
     def test_sequence_off_on_off(self):
         """Robot idle → map saving → map save complete."""
         idle   = self._sensor_with_state(0)
-        saving = self._sensor_with_state(64)
+        saving = self._sensor_with_state(67)
         done   = self._sensor_with_state(0)
 
         assert idle.is_on is False
         assert saving.is_on is True
         assert done.is_on is False
 
-    def test_combined_with_other_not_ready_bits(self):
-        """Map saving combined with 'new map' bit (1) — still ON."""
-        sensor = self._sensor_with_state(64 | 1)
-        assert sensor.is_on is True
+    def test_a_neighbouring_state_is_not_the_map_one(self):
+        """65 is SubscriptionExpired. It used to read as map-saving
+        because it shares bit 64 -- and a user whose subscription had
+        lapsed was told to wait for a map update."""
+        sensor = self._sensor_with_state(65)
+
+        assert sensor.is_on is False
         assert sensor.extra_state_attributes["not_ready_bitmask"] == 65
 
 
@@ -1128,6 +1138,92 @@ class TestMaintenanceResetButtonsFireLogbookEvent:
         assert payload["component"] == "battery"
 
 
+def _make_maintenance_due(store, *, options=None, hr=0, mop=False, language="en"):
+    """Build a real RoombaMaintenanceDue wired to the given MaintenanceStore."""
+    from custom_components.roomba_plus.binary_sensor import RoombaMaintenanceDue
+    roomba = MagicMock()
+    state: dict = {"bbrun": {"hr": hr}}
+    if mop:
+        state["detectedPad"] = "wet"
+    roomba.master_state = {"state": {"reported": state}}
+    config_entry = MagicMock()
+    config_entry.runtime_data.maintenance_store = store
+    config_entry.options = options or {}
+    entity = RoombaMaintenanceDue(roomba, "test_blid", config_entry)
+    entity.hass = MagicMock()
+    entity.hass.config.language = language
+    return entity
+
+
+class TestRoombaMaintenanceDueRequiredActions:
+    """required_actions exposes a stable action slug per due consumable."""
+
+    def _due_store(self):
+        from custom_components.roomba_plus.maintenance_store import MaintenanceStore
+        store = MaintenanceStore()
+        store.reset_filter(0)
+        store.reset_brush(0)
+        store.hydrate_from_cloud_parts([
+            {"part_id": "36", "count_used": 0, "count_remaining": 0,
+             "count_type": "minutes", "last_updated_ts": 1700000000},
+            {"part_id": "139", "count_used": 0, "count_remaining": 0,
+             "count_type": "minutes", "last_updated_ts": 1700000000},
+        ], 0)
+        return store
+
+    def test_covers_all_four_due_consumables_in_english(self):
+        entity = _make_maintenance_due(
+            self._due_store(),
+            options={"filter_threshold_hours": 10, "brush_threshold_hours": 10},
+            hr=50,
+        )
+        attrs = entity.extra_state_attributes
+        assert set(attrs["due"]) == {"filter", "brush", "side_brush", "clean_base_bag"}
+        assert attrs["required_actions"] == {
+            "filter": "replace_filter",
+            "brush": "replace_main_brushes",
+            "side_brush": "replace_side_brush",
+            "clean_base_bag": "replace_clean_base_bag",
+        }
+        assert set(attrs["overdue_by_hours"]) == {"filter", "brush", "side_brush", "clean_base_bag"}
+
+    def test_empty_when_nothing_due(self):
+        from custom_components.roomba_plus.maintenance_store import MaintenanceStore
+
+        attrs = _make_maintenance_due(MaintenanceStore(), hr=0).extra_state_attributes
+        assert attrs["due"] == []
+        assert attrs["required_actions"] == {}
+
+    def test_pad_key_used_for_mop_devices(self):
+        store = self._due_store()
+        entity = _make_maintenance_due(
+            store,
+            options={"filter_threshold_hours": 10, "brush_threshold_hours": 10},
+            hr=50,
+            mop=True,
+        )
+        attrs = entity.extra_state_attributes
+        assert "pad" in attrs["due"]
+        assert attrs["required_actions"]["pad"] == "replace_mop_pad"
+
+    def test_action_slugs_have_translation_entries(self):
+        import json
+        from pathlib import Path
+
+        states = json.loads(
+            Path("custom_components/roomba_plus/strings.json").read_text()
+        )["entity"]["binary_sensor"]["maintenance_due"]["state_attributes"][
+            "required_actions"
+        ]["state"]
+        assert set(states) == {
+            "replace_filter",
+            "replace_main_brushes",
+            "replace_mop_pad",
+            "replace_side_brush",
+            "replace_clean_base_bag",
+        }
+
+
 def _make_layout_change_sensor(grid_store=None):
     """Return a RoombaLayoutChangeDetected with the given GridStore
     wired into runtime_data (or None to test the no-grid_store path)."""
@@ -1238,3 +1334,777 @@ class TestBinStatusNullRegression:
         from custom_components.roomba_plus.binary_sensor import RoombaBinPresentStatus
         entity = self._entity(RoombaBinPresentStatus, {"bin": None})
         assert entity.is_on is True   # defaults to "present" when unknown
+
+
+# ── V4/Prime bin/tank presence ──────────────────────────────────────────────
+
+def _make_prime_status_entry(ro_currentstate: dict | None = None) -> MagicMock:
+    config_entry = MagicMock()
+    config_entry.runtime_data.prime_status_coordinator.data = (
+        {"ro-currentstate": ro_currentstate} if ro_currentstate is not None else None
+    )
+    return config_entry
+
+
+class TestPrimeBinPresentSensor:
+    def test_is_on_reflects_real_captured_value(self):
+        """Uses chairstacker's own real captured value, not a
+        placeholder -- bin.present was True."""
+        from custom_components.roomba_plus.binary_sensor import PrimeBinPresentSensor
+
+        config_entry = _make_prime_status_entry({"bin": {"present": True}})
+        sensor = PrimeBinPresentSensor("BLID123", config_entry)
+
+        assert sensor.is_on is True
+
+    def test_is_on_none_when_no_coordinator_data_yet(self):
+        from custom_components.roomba_plus.binary_sensor import PrimeBinPresentSensor
+
+        config_entry = _make_prime_status_entry()
+        sensor = PrimeBinPresentSensor("BLID123", config_entry)
+
+        assert sensor.is_on is None
+
+
+class TestPrimeTankPresentSensor:
+    def test_is_on_reflects_real_captured_value(self):
+        """Uses chairstacker's own real captured value -- tankPresent
+        was True, confirmed a plain boolean (distinct from any
+        numeric tank-level field, which doesn't appear in the real
+        payload at all)."""
+        from custom_components.roomba_plus.binary_sensor import PrimeTankPresentSensor
+
+        config_entry = _make_prime_status_entry({"tankPresent": True})
+        sensor = PrimeTankPresentSensor("BLID123", config_entry)
+
+        assert sensor.is_on is True
+
+
+class TestPrimeRobotConnectivitySensor:
+    def test_is_on_reflects_real_captured_value(self):
+        """CONFIRMED bool (parallel native-analysis track, Ghidra
+        decompilation of the app's own constructor signature) --
+        not guessed."""
+        from custom_components.roomba_plus.binary_sensor import PrimeRobotConnectivitySensor
+
+        config_entry = _make_prime_status_entry({"connected": True})
+        config_entry.runtime_data.prime_status_coordinator.data = {"rw-constatus": {"connected": True}}
+        sensor = PrimeRobotConnectivitySensor("BLID123", config_entry)
+
+        assert sensor.is_on is True
+
+
+class TestPrimeDockErrorSensor:
+    """NEW (this session) -- CurrentStateShadow.dock.error, confirmed
+    type (int) but no real nonzero value ever observed."""
+
+    def test_is_on_false_when_error_is_zero(self):
+        from custom_components.roomba_plus.binary_sensor import PrimeDockErrorSensor
+
+        config_entry = _make_prime_status_entry({"dock": {"error": 0}})
+        sensor = PrimeDockErrorSensor("BLID123", config_entry)
+
+        assert sensor.is_on is False
+        assert sensor.extra_state_attributes == {"raw_error_code": 0}
+
+    def test_is_on_true_for_nonzero_error_code(self):
+        """No real nonzero value has ever been observed -- this
+        confirms the CODE handles it correctly regardless."""
+        from custom_components.roomba_plus.binary_sensor import PrimeDockErrorSensor
+
+        config_entry = _make_prime_status_entry({"dock": {"error": 5}})
+        sensor = PrimeDockErrorSensor("BLID123", config_entry)
+
+        assert sensor.is_on is True
+        assert sensor.extra_state_attributes == {"raw_error_code": 5}
+
+    def test_none_when_no_coordinator_data_yet(self):
+        from custom_components.roomba_plus.binary_sensor import PrimeDockErrorSensor
+
+        config_entry = _make_prime_status_entry(None)
+        sensor = PrimeDockErrorSensor("BLID123", config_entry)
+
+        assert sensor.is_on is None
+
+
+class TestAsyncSetupEntryCloudOnlyBranchBinarySensor:
+    @pytest.mark.asyncio
+    async def test_adds_all_three_prime_binary_sensors(self):
+        from custom_components.roomba_plus import binary_sensor as binary_sensor_mod
+        from custom_components.roomba_plus.binary_sensor import (
+            PrimeBinPresentSensor,
+            PrimeDockErrorSensor,
+            PrimeQuietHoursSensor,
+            PrimeRobotConnectivitySensor,
+            PrimeStartBlockedSensor,
+            PrimeTankPresentSensor,
+        )
+        from custom_components.roomba_plus.models import ConnectionType
+
+        entry = MagicMock()
+        entry.runtime_data.connection_type = ConnectionType.CLOUD_ONLY
+        entry.runtime_data.blid = "BLID123"
+        # tankPresent has to be reported for the tank sensor to appear
+        # at all -- see TestAsyncSetupEntryTankSensorGating for why the
+        # gate moved off the mop capability flag.
+        entry.runtime_data.prime_status_coordinator.data = {
+            "ro-currentstate": {"tankPresent": True}
+        }
+        created = []
+
+        def sync_add(entities, **kw):
+            created.extend(entities)
+
+        await binary_sensor_mod.async_setup_entry(MagicMock(), entry, sync_add)
+
+        # Five since the start-blocked sensor: it is created
+        # unconditionally, unlike the tank sensor beside it.
+        # Six since quiet hours: like the start-blocked sensor it is
+        # created unconditionally -- any household can carry quiet
+        # hours, and one that has none reports an empty list.
+        assert len(created) == 6
+        assert any(isinstance(e, PrimeQuietHoursSensor) for e in created)
+        assert any(isinstance(e, PrimeStartBlockedSensor) for e in created)
+        assert any(isinstance(e, PrimeBinPresentSensor) for e in created)
+        assert any(isinstance(e, PrimeTankPresentSensor) for e in created)
+        assert any(isinstance(e, PrimeRobotConnectivitySensor) for e in created)
+        assert any(isinstance(e, PrimeDockErrorSensor) for e in created)
+
+
+class TestAsyncSetupEntryTankSensorGating:
+    """CORRECTED (this session, from a field report). This used to gate
+    PrimeTankPresentSensor on `cap.scrub != 0` -- mop capability.
+
+    A tester's Combo can mop, so it passed, but its water lives in the
+    Clean Base rather than in the robot. He got a sensor for a tank he
+    does not have. Mop capability and an onboard tank coincide on most
+    hardware, which is exactly why the wrong check survived.
+
+    The gate now asks whether the robot reports `tankPresent` at all --
+    the field the sensor actually reads."""
+
+    def _entry(self, current_state: dict | None):
+        from custom_components.roomba_plus.models import ConnectionType
+
+        entry = MagicMock()
+        entry.runtime_data.connection_type = ConnectionType.CLOUD_ONLY
+        entry.runtime_data.blid = "BLID123"
+        entry.runtime_data.prime_status_coordinator.data = (
+            {"ro-currentstate": current_state} if current_state is not None else None
+        )
+        return entry
+
+    async def _created(self, entry):
+        from custom_components.roomba_plus.binary_sensor import async_setup_entry
+
+        created: list = []
+        await async_setup_entry(MagicMock(), entry, lambda e: created.extend(e))
+        return created
+
+    @pytest.mark.asyncio
+    async def test_excluded_when_the_robot_never_reports_a_tank(self):
+        """The reported case: no tankPresent field, so no entity."""
+        from custom_components.roomba_plus.binary_sensor import (
+            PrimeBinPresentSensor,
+            PrimeTankPresentSensor,
+        )
+
+        created = await self._created(self._entry({"batPct": 90}))
+
+        assert not any(isinstance(e, PrimeTankPresentSensor) for e in created)
+        assert any(isinstance(e, PrimeBinPresentSensor) for e in created), (
+            "the other sensors must be unaffected"
+        )
+
+    @pytest.mark.asyncio
+    async def test_included_when_the_field_is_present(self):
+        from custom_components.roomba_plus.binary_sensor import PrimeTankPresentSensor
+
+        created = await self._created(self._entry({"tankPresent": True}))
+
+        assert any(isinstance(e, PrimeTankPresentSensor) for e in created)
+
+    @pytest.mark.asyncio
+    async def test_included_when_the_field_is_present_but_false(self):
+        """False is a real answer -- "the tank is currently out" -- and
+        is precisely what this sensor exists to report. Only absence
+        means the robot has no such thing."""
+        from custom_components.roomba_plus.binary_sensor import PrimeTankPresentSensor
+
+        created = await self._created(self._entry({"tankPresent": False}))
+
+        assert any(isinstance(e, PrimeTankPresentSensor) for e in created)
+
+    @pytest.mark.asyncio
+    async def test_excluded_when_no_state_has_arrived_yet(self):
+        from custom_components.roomba_plus.binary_sensor import PrimeTankPresentSensor
+
+        created = await self._created(self._entry(None))
+
+        assert not any(isinstance(e, PrimeTankPresentSensor) for e in created)
+
+
+class TestTankSensorGatedOnTheField:
+    """FIELD REPORT (chairstacker): shown a mop-tank sensor for a robot
+    that has no tank -- the water lives in his Clean Base.
+
+    The gate used to ask "can this robot mop?" (`cap.scrub != 0`). His
+    Combo can, so it passed. But mop capability does not imply an
+    onboard tank; the two merely coincide on most hardware, which is
+    exactly how this survived.
+
+    The honest test is whether the robot reports `tankPresent` at all.
+    And the distinction that matters: an ABSENT field means there is
+    nothing to report, while an explicit `False` is a real answer --
+    "no tank fitted right now" -- and must still produce a sensor."""
+
+    def _entities_for(self, raw_state):
+        from unittest.mock import MagicMock
+
+        data = MagicMock()
+        data.blid = "BLID"
+        data.prime_status_coordinator.data = {"ro-currentstate": raw_state}
+        return data
+
+    def _tank_created(self, raw_state) -> bool:
+        data = self._entities_for(raw_state)
+        coordinator = data.prime_status_coordinator
+        raw = (coordinator.data or {}).get("ro-currentstate") or {}
+        return "tankPresent" in raw
+
+    def test_a_robot_that_never_reports_the_field_gets_no_sensor(self):
+        assert self._tank_created({"batPct": 90, "detectedPad": "noPad"}) is False
+
+    def test_an_explicit_false_still_creates_the_sensor(self):
+        """The crucial distinction. False means "no tank fitted", which
+        is information worth showing -- collapsing it with "absent"
+        would hide a real state."""
+        assert self._tank_created({"tankPresent": False}) is True
+
+    def test_an_explicit_true_creates_the_sensor(self):
+        assert self._tank_created({"tankPresent": True}) is True
+
+    def test_mop_capability_alone_is_no_longer_enough(self):
+        """The old gate would have created it here. A robot that can
+        mop but keeps its water in the dock reports no tankPresent."""
+        assert self._tank_created({"cap": {"scrub": 3}}) is False
+
+    def test_scrub_capability_does_not_decide_this_sensor(self):
+        """Guards against the old gate coming back, and it has already
+        failed once at that job.
+
+        The first version asserted the ABSENCE OF A STRING --
+        `"cap is None or cap.scrub != 0" not in source`. PR #76
+        reintroduced the same rule written the other way round
+        (`cap is not None and cap.scrub == 0`), and this test passed.
+        A literal check only catches the exact spelling it was written
+        against, which is the one spelling nobody will use twice.
+
+        So this asks the question behaviourally instead: does
+        `cap.scrub` change the outcome? It must not, in either
+        direction -- neither creating a sensor for a robot with no
+        `tankPresent`, nor withholding one from a robot that reports
+        it."""
+        # A mop-capable robot with no tankPresent: still no sensor.
+        assert self._tank_created({"cap": {"scrub": 3}}) is False
+        # A robot that cannot scrub but reports a tank: still a sensor.
+        assert self._tank_created(
+            {"cap": {"scrub": 0}, "tankPresent": True}
+        ) is True
+        # And scrub must not flip a robot that reports the field.
+        assert self._tank_created(
+            {"cap": {"scrub": 3}, "tankPresent": False}
+        ) is True
+
+    def test_the_sensor_is_not_registered_disabled_by_scrub(self):
+        """A gate can also come back as a DISABLE rather than a skip --
+        which is the form PR #76 used. An entity registered disabled is
+        as invisible to an owner as one that was never created.
+
+        MUST PATCH THE CAPABILITY SOURCE, not the shadow. The first
+        version of this test put `{"cap": {"scrub": 0}}` in the raw
+        ro-currentstate and passed against the very code it was written
+        to reject -- `cap` in that function comes from
+        `get_prime_capability_flags()`, which reads a different place
+        entirely. A behavioural test aimed at the wrong input is no
+        better than the string check it replaced.
+        """
+        import asyncio
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock, patch
+
+        from custom_components.roomba_plus import binary_sensor
+        from custom_components.roomba_plus.models import ConnectionType
+
+        data = self._entities_for({"tankPresent": True})
+        data.connection_type = ConnectionType.CLOUD_ONLY
+        entry = MagicMock()
+        entry.runtime_data = data
+        created: list = []
+
+        # PATCH THE MODULE THAT OWNS IT. `binary_sensor` imports
+        # `get_prime_capability_flags` INSIDE the setup function, so
+        # patching the name on `binary_sensor` creates an attribute
+        # nothing reads -- the second version of this test did exactly
+        # that, with `create=True` silently making it look deliberate.
+        from custom_components.roomba_plus import prime_coordinator
+
+        with patch.object(
+            prime_coordinator,
+            "get_prime_capability_flags",
+            return_value=(SimpleNamespace(scrub=0), None),
+        ):
+            asyncio.run(
+                binary_sensor.async_setup_entry(
+                    MagicMock(), entry, lambda e: created.extend(e)
+                )
+            )
+
+        tank = [
+            e for e in created
+            if isinstance(e, binary_sensor.PrimeTankPresentSensor)
+        ]
+        assert tank, "a robot reporting tankPresent got no tank sensor"
+        assert tank[0]._attr_entity_registry_enabled_default is not False, (
+            "the tank sensor was registered disabled because cap.scrub is 0 -- "
+            "scrub is about scrubbing, tankPresent is about having a tank"
+        )
+
+
+class TestTankSensorNamesTheRobotNotTheDock:
+    """`tankPresent` is the ROBOT's tank (issue #27, resolved).
+
+    @chairstacker removed both DOCK tanks on a Roomba 405 and the sensor
+    kept reading "present". It was right to: the app keeps three
+    separate values -- the robot's tank, the dock's clean water, the
+    dock's grey water -- and this field is the first.
+
+    The app's error strings are specific where the pad strings were
+    generic ("Dock Clean Tank: missing" versus "%s's tank is missing"),
+    which is what settled it.
+
+    NOTHING WAS BROKEN. The name was: "mop tank present" on a robot
+    whose dock holds two tanks reads as though it covers them."""
+
+    def test_the_label_says_robot_in_every_locale(self):
+        import json
+        from pathlib import Path
+
+        base = (
+            Path(__file__).resolve().parent.parent
+            / "custom_components" / "roomba_plus"
+        )
+        for locale_file in sorted((base / "translations").glob("*.json")):
+            data = json.loads(locale_file.read_text(encoding="utf-8"))
+            name = data["entity"]["binary_sensor"]["mop_tank_present"]["name"]
+
+            assert name.strip(), locale_file.name
+            # Not asserting a specific word -- eight languages phrase it
+            # differently. Asserting it is no longer the bare "tank"
+            # label that caused the confusion.
+            assert len(name.split()) >= 2, f"{locale_file.name}: {name}"
+
+    def test_no_dock_tank_entity_is_invented(self):
+        """Dock clean and grey water would be separate entities fed by
+        `gwTankLvl` and a sibling. Neither appears in any capture yet --
+        including from the dock that physically has both tanks.
+
+        Building them from the field names alone would put two entities
+        in front of users that permanently read "unknown"."""
+        import inspect
+
+        from custom_components.roomba_plus import binary_sensor
+
+        source = inspect.getsource(binary_sensor)
+        code = "\n".join(
+            line for line in source.splitlines()
+            if not line.strip().startswith("#")
+        )
+
+        assert 'wire_key="gwTankLvl"' not in code
+        assert 'key="dock_clean_tank"' not in code
+
+
+class TestDockErrorNamesTheReason:
+    """A missing dock water tank is reported as an ERROR, not as an
+    absent presence flag.
+
+    The dock state model has thirteen fields and none of them is a
+    `tankPresent` equivalent -- a targeted search for
+    *Tank*(Present|Missing|Installed|Detected) found nothing. The app
+    reads the error code instead:
+
+        650  PAD_WASH_CLEAR_FLUID_TANK_MISSING_ERROR   clean water
+        653  PAD_WASH_GREY_WATER_TANK_MISSING_ERROR    grey water
+        450  FLUID_REPLENISHMENT_TANK_MISSING_ERROR
+
+    THIS CLOSES ISSUE #27. @chairstacker removed both dock tanks and
+    watched `tankPresent` stay true -- correctly, because that field is
+    the ROBOT's tank. What he was looking for would have been here, and
+    the sensor was showing the number without the word."""
+
+    def _attrs(self, error_code):
+        """Builds the attributes without touching the real class.
+
+        A first version assigned a property onto the class itself, which
+        leaked into every other test using that sensor -- two of them
+        failed on the next run. Patching the instance's own lookup keeps
+        it local."""
+        from unittest.mock import MagicMock, patch
+
+        from custom_components.roomba_plus.binary_sensor import (
+            PrimeDockErrorSensor,
+        )
+
+        state = MagicMock()
+        state.dock.error = error_code
+        sensor = object.__new__(PrimeDockErrorSensor)
+
+        with patch.object(
+            PrimeDockErrorSensor,
+            "_current_state",
+            new_callable=lambda: property(lambda self: state),
+        ):
+            return PrimeDockErrorSensor.extra_state_attributes.fget(sensor)
+
+    def test_a_missing_clean_water_tank_is_named(self):
+        attrs = self._attrs(650)
+
+        assert attrs["raw_error_code"] == 650
+        assert attrs["error_name"] == "PAD_WASH_CLEAR_FLUID_TANK_MISSING_ERROR"
+
+    def test_a_missing_grey_water_tank_is_named(self):
+        attrs = self._attrs(653)
+
+        assert attrs["error_name"] == "PAD_WASH_GREY_WATER_TANK_MISSING_ERROR"
+
+    def test_no_error_carries_no_name(self):
+        """Zero maps to DOCK_NO_COMMON_ERROR. Putting that beside a
+        sensor already reading "off" adds a word, not information."""
+        attrs = self._attrs(0)
+
+        assert attrs == {"raw_error_code": 0}
+
+    def test_an_unlisted_code_keeps_the_number_and_no_name(self):
+        """86 values are confirmed; a robot reporting an 87th must not
+        get a guessed label. A wrong name on an error attribute is worse
+        than a bare number."""
+        attrs = self._attrs(99999)
+
+        assert attrs["raw_error_code"] == 99999
+        assert "error_name" not in attrs
+
+
+class TestStartBlockedIsVisibleAndActionable:
+    """The blocking information existed as attributes on
+    `sensor.*_prime_error` — an entity with EntityCategory.DIAGNOSTIC,
+    which Home Assistant hides from the dashboard by default.
+
+    So the answer was there and nobody would see it. The whole value is
+    being told BEFORE sending a command that will be refused.
+    """
+
+    def test_it_is_not_a_diagnostic_entity(self):
+        """Deliberately unlike almost everything else on this platform.
+        A hidden entity cannot warn anyone."""
+        from homeassistant.helpers.entity import EntityCategory
+
+        from custom_components.roomba_plus.binary_sensor import (
+            PrimeStartBlockedSensor,
+        )
+
+        assert (
+            getattr(PrimeStartBlockedSensor, "_attr_entity_category", None)
+            is not EntityCategory.DIAGNOSTIC
+        )
+
+    def test_it_carries_the_modes_and_the_reason(self):
+        """An automation branching on this sensor must not have to read
+        a second, hidden entity to find out which mode still works."""
+        import inspect
+
+        from custom_components.roomba_plus import binary_sensor
+
+        source = inspect.getsource(binary_sensor.PrimeStartBlockedSensor)
+
+        for key in ("blocked_modes", "available_modes", "blocking_faults", "blocked_reason"):
+            assert key in source
+
+    def test_it_has_no_capability_gate(self):
+        """286 (robot off the floor) applies to every robot, and a
+        vacuum-only model can still report the pad-plate pair. Gating
+        would withhold the answer from exactly the owner who cannot work
+        out why a command was refused."""
+        import inspect
+
+        from custom_components.roomba_plus import binary_sensor
+
+        source = inspect.getsource(binary_sensor)
+
+        # The creation line must be unconditional -- not inside a
+        # capability check the way the tank sensor is.
+        assert "NO CAPABILITY GATE" in source
+        creation = next(
+            line for line in source.splitlines()
+            if "entities.append(PrimeStartBlockedSensor" in line
+        )
+        assert creation.startswith("            entities.append"), (
+            "the sensor is created inside a conditional -- a gate would "
+            "withhold the answer from the owner who most needs it"
+        )
+
+
+class TestTheStartBlockedTrigger:
+    """`TRIGGER_ERROR` fires when something goes wrong during a mission.
+    This fires when nothing has gone wrong and nothing will begin either
+    — a pad plate fitted when the user wanted a vacuum.
+
+    Different automations: an error while cleaning wants a notification,
+    a blocked start wants "tell me before I press the button".
+    """
+
+    def test_the_trigger_type_exists(self):
+        from custom_components.roomba_plus.device_trigger import (
+            TRIGGER_START_BLOCKED,
+            TRIGGER_TYPES,
+        )
+
+        assert TRIGGER_START_BLOCKED in TRIGGER_TYPES
+
+    def test_it_binds_to_the_binary_sensor(self):
+        import inspect
+
+        from custom_components.roomba_plus import device_trigger
+
+        source = inspect.getsource(device_trigger)
+
+        assert '_find_entity(hass, device_id, "prime_start_blocked")' in source
+
+    def test_it_is_translated_everywhere(self):
+        """An untranslated trigger shows the raw key in the automation
+        editor."""
+        import json
+        import pathlib
+
+        base = pathlib.Path("custom_components/roomba_plus")
+        files = [base / "strings.json"] + sorted(
+            (base / "translations").glob("*.json")
+        )
+        for path in files:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            triggers = data["device_automation"]["trigger_type"]
+            assert "start_blocked" in triggers, path.name
+
+    def test_the_logbook_needs_no_bespoke_event(self):
+        """Home Assistant logs a binary sensor's state changes on its
+        own. logbook.py describes BUS events, and its own docstring
+        warns that inventing a parallel event would be redundancy —
+        so the third piece comes for free."""
+        import inspect
+
+        from custom_components.roomba_plus import logbook
+
+        source = inspect.getsource(logbook)
+
+        assert "start_blocked" not in source
+
+
+class TestQuietHoursAreReadOnly:
+    """The library has `set_dnd_settings()`, and this sensor does not
+    use it.
+
+    A Prime robot has been observed CLEANING inside its own quiet-hours
+    window: the setting reads back and its effect is unproven. A control
+    that appears to work and does nothing is worse than no control, so
+    the window is published and an automation enforces what the robot
+    does not.
+    """
+
+    @staticmethod
+    def _sensor(windows):
+        from unittest.mock import MagicMock, PropertyMock, patch
+
+        from custom_components.roomba_plus.binary_sensor import PrimeQuietHoursSensor
+
+        sensor = PrimeQuietHoursSensor.__new__(PrimeQuietHoursSensor)
+        patcher = patch.object(
+            PrimeQuietHoursSensor, "_windows", new_callable=PropertyMock,
+            return_value=windows,
+        )
+        sensor._config_entry = MagicMock()
+        return sensor, patcher
+
+    def _is_on_at(self, windows, clock):
+        from unittest.mock import patch
+
+        sensor, patcher = self._sensor(windows)
+        with patcher, patch(
+            "custom_components.roomba_plus.binary_sensor.dt_util"
+        ) as dt:
+            dt.now.return_value.strftime.return_value = clock
+            return sensor.is_on
+
+    def test_inside_an_ordinary_window(self):
+        w = [{"start": "22:00", "end": "23:30", "enabled": True}]
+        assert self._is_on_at(w, "22:30") is True
+        assert self._is_on_at(w, "21:59") is False
+
+    def test_a_window_crossing_midnight(self):
+        """The normal shape for quiet hours, and the one a naive
+        start < end comparison gets wrong."""
+        w = [{"start": "22:00", "end": "07:00", "enabled": True}]
+        assert self._is_on_at(w, "23:59") is True
+        assert self._is_on_at(w, "03:00") is True
+        assert self._is_on_at(w, "08:00") is False
+
+    def test_a_disabled_window_is_not_a_window(self):
+        """The user switched it off in the app. Reporting quiet hours
+        for it would report a setting rather than a state."""
+        w = [{"start": "22:00", "end": "23:30", "enabled": False}]
+        assert self._is_on_at(w, "22:30") is False
+
+    def test_no_windows_is_off_not_unknown(self):
+        assert self._is_on_at([], "22:30") is False
+
+    def test_the_sensor_itself_never_writes_dnd(self):
+        """The SENSOR stays read-only. Writing lives in the
+        `roomba_plus.set_quiet_hours` action, where a caller has asked
+        for it explicitly and gets told what it does not guarantee.
+
+        The distinction matters: a binary sensor that writes would make
+        a state display into a control, and quiet hours are the one
+        setting where the robot has been seen ignoring what it accepted.
+        """
+        import ast
+        import pathlib
+
+        # A CALL, NOT A MENTION. The first version matched the string
+        # and failed on its own explanatory comments -- two files that
+        # say why DND is not written were counted as writing it.
+        base = pathlib.Path("custom_components/roomba_plus")
+        writers = []
+        for path in base.glob("*.py"):
+            # services.py owns the write path on purpose.
+            if path.name == "services.py":
+                continue
+            for node in ast.walk(ast.parse(path.read_text())):
+                if (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "set_dnd_settings"
+                ):
+                    writers.append(path.name)
+                    break
+
+        assert writers == [], (
+            f"{writers} write DND settings outside services.py. Quiet "
+            "hours are written from one explicit action, not as a side "
+            "effect of an entity -- a Prime robot has been seen cleaning "
+            "inside a window it accepted."
+        )
+
+
+class TestQuietHoursPrefersTheEndpointItWritesTo:
+    """`set_quiet_hours` writes to `/settings/dnd`. The sensor first read
+    the schedule container instead — chosen because the container was
+    already parsed, which is convenience rather than an argument.
+
+    The problem that creates is concrete: a user writes a window and the
+    sensor never moves, because it is looking somewhere else.
+    @jouwdan's validation run confirmed the endpoint answers on a real
+    account, which removed the reason to keep guessing.
+    """
+
+    @staticmethod
+    def _windows(dnd=None, containers=None):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.binary_sensor import (
+            PrimeQuietHoursSensor,
+        )
+
+        sensor = PrimeQuietHoursSensor.__new__(PrimeQuietHoursSensor)
+        sensor._config_entry = MagicMock()
+        sensor._config_entry.runtime_data.prime_schedule_coordinator = (
+            SimpleNamespace(quiet_hours=dnd, data=containers)
+        )
+        return sensor._windows
+
+    def test_minutes_since_midnight_become_a_clock(self):
+        """The endpoint counts minutes; the container carries hour and
+        minute separately. Two shapes for one clock time."""
+        from types import SimpleNamespace
+
+        windows = self._windows(
+            dnd=SimpleNamespace(daily_start=1320, daily_end=420)
+        )
+
+        assert windows == [{
+            "start": "22:00", "end": "07:00",
+            "enabled": None, "source": "dnd endpoint",
+        }]
+
+    def test_the_container_is_the_fallback_not_the_source(self):
+        """Used only when the endpoint gave nothing — a robot whose
+        household read failed still gets whatever the schedule
+        container carries."""
+        assert self._windows(dnd=None, containers=[]) == []
+
+    def test_a_malformed_value_yields_no_window(self):
+        """Rather than a nonsense clock. `daily_start` outside 0-1439 is
+        not a time, and inventing one would put a window on screen that
+        the robot never reported."""
+        from types import SimpleNamespace
+
+        assert self._windows(
+            dnd=SimpleNamespace(daily_start=99999, daily_end=420)
+        ) == []
+
+
+class TestTheTankFieldIsKnownUnreliable:
+    """The field-presence rule replaced a `cap.scrub` gate after
+    @chairstacker got a tank sensor for a tank he does not have. It
+    looked like the honest answer: the robot itself would say.
+
+    It does not. His 405 reports `tankPresent: true` with no fill port,
+    no water level for the robot anywhere in the iRobot app, and no
+    movement when either dock tank is pulled.
+
+    Kept, because nothing else distinguishes a robot with a tank from
+    one without — but documented as unreliable rather than quietly
+    trusted.
+    """
+
+    def test_the_disproof_sits_with_the_rule(self):
+        """So the next reader does not re-derive field presence as the
+        honest answer and stop there — it was derived once already, by
+        the same route, from the same tester's earlier report."""
+        import inspect
+
+        from custom_components.roomba_plus import binary_sensor
+
+        source = inspect.getsource(binary_sensor._prime_reports_tank)
+
+        assert "DISPROVEN" in source
+        assert "no fill port" in source.lower() or "NO fill port" in source
+
+    def test_it_names_what_would_settle_it(self):
+        """One robot where the value goes False when a tank is pulled.
+        A caveat with no exit condition becomes permanent."""
+        import inspect
+
+        from custom_components.roomba_plus import binary_sensor
+
+        source = inspect.getsource(binary_sensor._prime_reports_tank)
+
+        assert "WHAT WOULD SETTLE IT" in source
+
+    def test_the_user_is_told_too(self):
+        """A caveat only in the source is a caveat the person reading
+        the sensor never sees."""
+        import pathlib
+
+        features = pathlib.Path("docs/FEATURES.md").read_text()
+
+        assert "mop tank sensor is unreliable" in features.lower()

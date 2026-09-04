@@ -46,10 +46,17 @@ data:
 ```
 
 *(Looking for your robot's existing iRobot-app schedule instead of building
-a new HA-side one? That's `calendar.{name}_schedule` — read-only, appears
-automatically, no automation needed. This recipe is for building something
-new, e.g. a schedule the app itself can't express, like room-specific
-timing.)*
+a new HA-side one? That's `calendar.{name}_schedule`, which appears
+automatically. On Prime robots you can create, edit and delete entries
+there and they are written back to the robot; on Classic it is read-only.
+This recipe is for building something the app itself can't express, like
+room-specific timing.)*
+
+**Naming rooms in a calendar entry.** Room names are matched by text
+across the event's **summary, description and location** — write the
+room wherever suits you. Editing a recurring entry has to be done as
+"all events": a robot schedule is one rule, so a single occurrence has
+nothing separate to change.
 
 ### Presence-aware cleaning with full timing control
 
@@ -175,6 +182,151 @@ automation:
 
 ---
 
+## Zone cleaning on demand (Prime)
+
+The iRobot app no longer lets you save a zone as a favourite — only
+rooms. `roomba_plus.clean_zone` is how you send the robot to a zone from
+Home Assistant instead.
+
+```yaml
+# A dashboard button that cleans one zone
+script:
+  clean_the_kitchen_zone:
+    alias: Clean kitchen zone
+    sequence:
+      - action: roomba_plus.clean_zone
+        target:
+          entity_id: vacuum.house_bot
+        data:
+          zone_name: ["Clean Kitchen"]
+```
+
+Zones can be given by name, exactly as they appear on the map, or by
+numeric id:
+
+```yaml
+      - action: roomba_plus.clean_zone
+        target:
+          entity_id: vacuum.house_bot
+        data:
+          zone_id: ["100", "101"]
+```
+
+Provide **either** `zone_name` or `zone_id`, not both. Several zones in
+one call are cleaned in one mission.
+
+A name that does not exist on the map raises an error listing the names
+that do — rather than skipping it, because a partial clean looks like a
+successful one.
+
+**Where do the names come from?** The map bundle's `cleanZones` layer,
+which is what the map card shows. If a zone has no name there, use its
+id.
+
+## Prime robots: what changed for automations
+
+Until v4.0.0a31 a Prime robot had **no `phase` sensor**, and every device trigger that watches
+robot state — "starts cleaning", "finishes cleaning", "docks", "gets stuck" — reads exactly that
+sensor. So those triggers did not appear in the automation editor at all for Prime users, with no
+error and no explanation. They work now.
+
+Two attributes are worth knowing about, both on the mission event sensor:
+
+```yaml
+# Rooms the last run left undone, with the mission that skipped them.
+# A room still waiting looks different from one picked up on the next pass.
+{{ state_attr('sensor.robot_mission_event', 'unfinished_rooms') }}
+# -> {"Kitchen": 61}
+```
+
+`readiness` says why a robot will not start. It matters more on Prime than the name suggests: **a
+Prime robot refuses a start silently**, and this is the only place that says why. An unmapped reason
+shows as its code rather than a blank, so it can be quoted in a report.
+
+### Asking before you send (a34)
+
+Four faults stop a mission before it starts, and three of them leave one half
+of the robot working. `binary_sensor.{name}_start_blocked` says which:
+
+```yaml
+# Mop when the pad plate is fitted, vacuum when it is not, and say why
+# when neither is possible.
+- choose:
+    - conditions: >
+        {{ 'mop' in state_attr('binary_sensor.robot_start_blocked',
+                               'available_modes') | default([], true) }}
+      sequence:
+        - action: roomba_plus.clean_room
+          target: {entity_id: vacuum.robot}
+          data: {room_name: Kitchen}
+    - conditions: "{{ is_state('binary_sensor.robot_start_blocked', 'on') }}"
+      sequence:
+        - action: notify.mobile_app
+          data:
+            message: >
+              {{ state_attr('binary_sensor.robot_start_blocked',
+                            'blocked_reason') }}
+```
+
+`available_modes` is empty when nothing works — a robot off the floor — so the
+first branch falls through to the notification rather than sending a command
+that will be refused.
+
+There is a device trigger for it too, *Start blocked by a fault*, which fires
+when a block appears rather than being polled.
+
+**Nothing is prevented.** The command still goes out if you send it; this only
+lets you ask first.
+
+### Cleaning a room the way it is set up
+
+The Rooms Map image carries a `room_preferences` attribute: the settings each
+room already has in the iRobot app.
+
+```yaml
+# Clean the kitchen with its own suction level rather than a fixed one.
+- variables:
+    prefs: >
+      {{ state_attr('image.robot_rooms_map', 'room_preferences') | default({}, true) }}
+- action: roomba_plus.clean_room
+  target: {entity_id: vacuum.robot}
+  data:
+    room_name: Kitchen
+    two_pass: "{{ prefs.get('7', {}).get('two_pass', false) }}"
+```
+
+Keys are room ids; each value carries whatever that room reports — `profile`,
+`suction_level`, `two_pass`, `carpet_boost`, `scrub`. **An absent key means the
+robot did not report it, which is not the same as a zero**, so read with a
+default rather than assuming.
+
+The point is to honour what somebody configured in the app instead of
+overriding it: *"clean the kitchen the way I set it up"* rather than *"clean
+the kitchen on deep because the automation says so"*.
+
+**Not confirmed on any robot yet.** The settings come from
+`operating_mode_defaults`, and a room only carries them under the mode it last
+ran in. If your `room_preferences` is empty, that is worth reporting — a
+diagnostics download now says which of the two reasons applies.
+
+### Quiet hours (a34)
+
+```yaml
+# Do not start a clean during a scheduled quiet-hours window.
+condition:
+  - condition: state
+    entity_id: binary_sensor.robot_in_quiet_hours
+    state: "off"
+```
+
+`switch.{name}_do_not_disturb` turns DND on and off directly, and
+`roomba_plus.set_quiet_hours` writes the window itself.
+
+**Do the enforcing here rather than trusting the robot.** A Prime robot has
+been observed cleaning inside its own quiet-hours window — the setting is
+accepted and reads back, and whether it is honoured is a separate question no
+field report has answered yes. The condition above is the reliable half.
+
 ## Dashboard example
 
 A minimal dashboard combining the map, vacuum card, key sensors, and the
@@ -235,6 +387,48 @@ https://raw.githubusercontent.com/johnnyh1975/ha_roomba_plus/main/blueprints/aut
 6. For **Battery capacity critical**, pick this robot's `sensor.*_estimated_battery_eol` entity and, optionally, adjust the warning buffer (default: 14 days before the estimate hits zero). This sensor is self-calibrated per robot — it learns your robot's own degradation rate rather than using a fixed capacity percentage, so the same day-count buffer means something similar regardless of your robot's age or usage pattern. It also needs some cleaning history before it reports a value at all; that's expected, not a bug.
 
 One blueprint import covers all your robots — repeat step 1 to create one automation instance per robot, each pointing at that robot's own entities.
+
+## Robot went silent (v4.0.0b4)
+
+Notifies you when the robot stops reporting — **the failure that looks
+like nothing is wrong.**
+
+A robot that goes quiet does not clear its entities. Battery keeps
+showing its last percentage, phase keeps showing its last phase, and
+none of it looks stale. One field tester's robot sat undiscovered for
+nine days that way: off its dock, dock unpowered, battery falling, while
+every entity showed a plausible value from the moment it went silent.
+
+Triggers on the status sensor reaching `no_contact`, which the
+integration sets after an hour with no message. There is no event for
+this — silence is the absence of messages, so nothing fires; the
+integration turns that absence into a state, and the blueprint watches
+it.
+
+Survives a restart: when no message has ever arrived, silence is
+measured from when the config entry came up.
+
+```text
+https://raw.githubusercontent.com/johnnyh1975/ha_roomba_plus/main/blueprints/automation/robot_went_silent.yaml
+```
+
+The extra wait (default 15 minutes, on top of the integration's hour)
+covers a robot carried to another room or a router restart — gaps that
+resolve themselves. Set it to zero to be told immediately.
+
+## Exception notifications (v4.0.0b4)
+
+The opposite of the curated set: **nothing after a normal mission**, and
+a notification only when something is actually wrong.
+
+Covers stuck-and-abandoned missions, consecutive clean skips,
+performance degradation, and possible floor-accident detection. At most
+one notification per event type per day, so a robot having a bad week
+does not become a notification stream.
+
+```text
+https://raw.githubusercontent.com/johnnyh1975/ha_roomba_plus/main/blueprints/automation/roomba_plus_exceptions.yaml
+```
 
 ## Three more blueprints (v3.4.3)
 

@@ -9,7 +9,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from functools import partial
+from typing import Any, cast
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -24,26 +25,36 @@ from homeassistant.const import (
     UnitOfTime,
 )
 from homeassistant.core import callback
-from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.event import (
+    async_track_time_change,
+    async_track_time_interval,
+)
 from homeassistant.helpers.typing import StateType
 import datetime as dt_stdlib
 
 from homeassistant.util import dt as dt_util
 
 from .const import (
-    CLEAN_BASE_LABELS,
-    CONF_BRUSH_HOURS,
-    CONF_FILTER_HOURS,
-    DEFAULT_BRUSH_HOURS,
-    DEFAULT_FILTER_HOURS,
-    JOB_INITIATOR_LABELS,
-    MOP_RANK_LABELS,
-    PAD_LABELS,
+    BBRUN_SQFT_SCALE,
+    ERROR_CATALOGUE,
+    CARPET_BOOST_SLUGS,
+    CLEAN_BASE_STATUS_SLUGS,
+    CLEAN_MODE_SLUGS,
+    CONSUMABLE_ROLES,
+    EVENT_MISSION_COMPLETED,
+    IROBOT_PART_ROLE_CLEAN_BASE_BAG,
+    IROBOT_PART_ROLE_FILTER,
+    IROBOT_PART_ROLE_MAIN_BRUSH,
+    IROBOT_PART_ROLE_SIDE_BRUSH,
+    JOB_INITIATOR_SLUGS,
+    MOP_BEHAVIOR_SLUGS,
+    MOP_PAD_SLUGS,
     SQFT_TO_M2,
     get_localized_error_entry,
     has_carpet_boost,
     has_clean_base,
     has_pose,
+    is_braava,
     is_mop,
 )
 from .entity import IRobotEntity
@@ -54,21 +65,19 @@ from .schedule_parser import (
     parse_schedule_occurrences,
 )
 from .sensor_helpers import (
+    recent_pause_reasons,
     _ACTIVE_PHASES,
     _area_cleaned_today,
     _battery_age_days,
     _battery_capacity_retention,
-    _brush_days_until_due,
-    _brush_wear_rate,
-    _carpet_boost_mode,
-    _clean_mode,
     _completion_rate_30d,
+    _consumable_days_until_due,
+    _consumable_max_hours,
+    _consumable_wear_rate,
     _error_value,
     _estcap_to_mah,
     _estimated_battery_eol,
     _expire_minutes_remaining,
-    _filter_days_until_due,
-    _filter_wear_rate,
     _last_error_at_value,
     _last_error_code_value,
     _last_mission_team_id,
@@ -93,7 +102,15 @@ from .sensor_helpers import (
 
 @dataclass(frozen=True, kw_only=True)
 class RoombaSensorDescription(SensorEntityDescription):
-    value_fn: Callable[[IRobotEntity], StateType]
+    #: DATETIME IS A VALID SENSOR VALUE, and ten of these return one.
+    #:
+    #: `StateType` is `str | int | float | None`. Home Assistant's own
+    #: `SensorEntity.native_value` is wider -- it accepts `date`,
+    #: `datetime` and `Decimal` too, which is how a timestamp sensor
+    #: works at all. This declaration was the narrower of the two and
+    #: the timestamp sensors have been returning datetimes past it
+    #: since they were written.
+    value_fn: Callable[[IRobotEntity], StateType | dt_stdlib.datetime]
     filter_fn: Callable[[dict[str, Any]], bool] = field(
         default_factory=lambda: lambda _: True
     )
@@ -107,11 +124,55 @@ class RoombaSensorDescription(SensorEntityDescription):
     threshold_fn: Callable[[IRobotEntity], int | None] = field(
         default_factory=lambda: lambda _: None
     )
+    # Full-life hours for a consumable, exposed as "max_hours" alongside
+    # threshold_hours — lets the card render remaining/max as a fraction
+    # even for cloud-only consumables that have no threshold_fn.
+    role: str | None = None
+    remaining: bool = False
+    max_hours_fn: Callable[[IRobotEntity], int | None] = field(
+        default_factory=lambda: lambda _: None
+    )
     # v2.7.1 — optional extra attributes beyond what RoombaSensor.extra_state_attributes
     # provides by default. Merged into the default attributes dict when set.
     extra_attributes_fn: Callable[[IRobotEntity], dict[str, Any]] | None = field(
         default=None
     )
+
+def _clean_mode_slug(entity: Any) -> str:
+    """Slug counterpart of sensor_helpers._clean_mode, for translation_key."""
+    no_auto = entity.vacuum_state.get("noAutoPasses")
+    two_pass = entity.vacuum_state.get("twoPass")
+    if no_auto is None or two_pass is None:
+        return CLEAN_MODE_SLUGS["n-a"]
+    if no_auto and two_pass:
+        return CLEAN_MODE_SLUGS["two"]
+    if no_auto and not two_pass:
+        return CLEAN_MODE_SLUGS["one"]
+    return CLEAN_MODE_SLUGS["auto"]
+
+
+def _carpet_boost_mode_slug(entity: Any) -> str:
+    """Slug counterpart of sensor_helpers._carpet_boost_mode, for translation_key."""
+    vac_high = entity.vacuum_state.get("vacHigh")
+    carpet_boost = entity.vacuum_state.get("carpetBoost")
+    if vac_high is None or carpet_boost is None:
+        return CARPET_BOOST_SLUGS["n-a"]
+    if carpet_boost:
+        return CARPET_BOOST_SLUGS["auto"]
+    if vac_high:
+        return CARPET_BOOST_SLUGS["performance"]
+    return CARPET_BOOST_SLUGS["eco"]
+
+
+def _consumable_threshold(entity: "IRobotEntity") -> int | None:
+    description = cast(RoombaSensorDescription, entity.entity_description)
+    role = description.role
+    if role is None:
+        return None
+    store = entity._config_entry.runtime_data.maintenance_store
+    return store.threshold_hours(role, entity._config_entry.options) if store else None
+
+
 SENSORS: tuple[RoombaSensorDescription, ...] = (
 
     RoombaSensorDescription(
@@ -135,6 +196,28 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         name="Status – Error",
         entity_category=None,
         value_fn=_error_value,
+        # THE ROBOT'S OWN ABORT HISTORY, as attributes rather than a
+        # second entity. `bbpause.pauses` is a rolling ten-entry list of
+        # what stopped the last ten runs, and nothing read it --
+        # @utkjmitch's carried four docking failures in ten runs while
+        # he experienced each as a one-off.
+        #
+        # Raw codes, most frequent named, and no judgement about what
+        # counts as a lot: nobody has field values for that yet, and a
+        # threshold picked without them would be a guess dressed as a
+        # warning.
+        extra_attributes_fn=lambda e: (
+            {
+                "recent_pause_reasons": _pauses,
+                "most_frequent_pause_reason": (
+                    ERROR_CATALOGUE.get(
+                        max(set(_pauses), key=_pauses.count), {}
+                    ).get("label")
+                    or max(set(_pauses), key=_pauses.count)
+                ),
+            }
+            if (_pauses := recent_pause_reasons(e)) else {}
+        ),
     ),
 
     # GROUP 2 — Operational (DIAGNOSTIC, enabled)
@@ -151,8 +234,8 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         translation_key="job_initiator",
         name="Status – Started by",
         entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda e: JOB_INITIATOR_LABELS.get(
-            e.clean_mission_status.get("initiator", "none"), "None"
+        value_fn=lambda e: JOB_INITIATOR_SLUGS.get(
+            e.clean_mission_status.get("initiator", "none"), "none"
         ),
     ),
     RoombaSensorDescription(
@@ -160,7 +243,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         translation_key="clean_mode",
         name="Setting – Cleaning passes",
         entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=_clean_mode,
+        value_fn=_clean_mode_slug,
     ),
     RoombaSensorDescription(
         key="carpet_boost_mode",
@@ -168,7 +251,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         name="Setting – Carpet boost",
         entity_category=EntityCategory.DIAGNOSTIC,
         filter_fn=has_carpet_boost,
-        value_fn=_carpet_boost_mode,
+        value_fn=_carpet_boost_mode_slug,
     ),
 
     # GROUP 3 — Maintenance (DIAGNOSTIC, enabled)
@@ -178,18 +261,50 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         translation_key="filter_remaining_hours",
         name="Maintenance – Filter",
         native_unit_of_measurement=UnitOfTime.HOURS,
-        entity_category=None,  # reclassified DIAG→MAIN (v2.6.0)
-        value_fn=lambda e: None,  # computed in RoombaSensor.native_value
-        threshold_fn=lambda e: e._config_entry.options.get(CONF_FILTER_HOURS, DEFAULT_FILTER_HOURS),
+        entity_category=None,
+        role=IROBOT_PART_ROLE_FILTER,
+        value_fn=lambda e: None,
+        remaining=True,
+        threshold_fn=_consumable_threshold,
+        max_hours_fn=partial(_consumable_max_hours, role=IROBOT_PART_ROLE_FILTER),
     ),
     RoombaSensorDescription(
         key="brush_remaining_hours",
         translation_key="brush_remaining_hours",
         name="Maintenance – Brushes",
         native_unit_of_measurement=UnitOfTime.HOURS,
-        entity_category=None,  # reclassified DIAG→MAIN (v2.6.0)
-        value_fn=lambda e: None,  # computed in RoombaSensor.native_value
-        threshold_fn=lambda e: e._config_entry.options.get(CONF_BRUSH_HOURS, DEFAULT_BRUSH_HOURS),
+        entity_category=None,
+        role=IROBOT_PART_ROLE_MAIN_BRUSH,
+        value_fn=lambda e: None,
+        remaining=True,
+        threshold_fn=_consumable_threshold,
+        max_hours_fn=partial(_consumable_max_hours, role=IROBOT_PART_ROLE_MAIN_BRUSH),
+    ),
+    RoombaSensorDescription(
+        key="part_edge_brush",
+        translation_key="part_edge_brush",
+        name="Maintenance – Side brush",
+        native_unit_of_measurement=UnitOfTime.HOURS,
+        entity_category=None,
+        role=IROBOT_PART_ROLE_SIDE_BRUSH,
+        value_fn=lambda e: None,
+        remaining=True,
+        filter_fn=lambda state: not is_braava(state),
+        threshold_fn=_consumable_threshold,
+        max_hours_fn=partial(_consumable_max_hours, role=IROBOT_PART_ROLE_SIDE_BRUSH),
+    ),
+    RoombaSensorDescription(
+        key="part_dirt_bag",
+        translation_key="part_dirt_bag",
+        name="Maintenance – Clean Base bag",
+        native_unit_of_measurement=UnitOfTime.HOURS,
+        entity_category=None,
+        role=IROBOT_PART_ROLE_CLEAN_BASE_BAG,
+        value_fn=lambda e: None,
+        remaining=True,
+        filter_fn=has_clean_base,
+        threshold_fn=_consumable_threshold,
+        max_hours_fn=partial(_consumable_max_hours, role=IROBOT_PART_ROLE_CLEAN_BASE_BAG),
     ),
     RoombaSensorDescription(
         key="battery_cycles",
@@ -347,8 +462,23 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         key="total_cleaned_area",
         translation_key="total_cleaned_area",
         name="Lifetime cleaned area",
+        # WITHOUT device_class HOME ASSISTANT CANNOT CONVERT.
+        #
+        # @chairstacker (#69): his HA is on imperial and his iRobot app
+        # shows square feet, but this read square metres regardless.
+        # The unit was declared and the value converted correctly -- HA
+        # just had nothing to tell it what kind of quantity this is, so
+        # it displayed the native unit as-is.
+        #
+        # With AREA set, HA converts to the user's own unit system. That
+        # is the setting that should win: the iRobot account's "Metric
+        # Units" switch is not in the data we receive, and overriding a
+        # Home Assistant preference from a vendor account setting would
+        # be wrong even if it were.
+        device_class=SensorDeviceClass.AREA,
         native_unit_of_measurement=UnitOfArea.SQUARE_METERS,
         suggested_display_precision=0,
+        state_class=SensorStateClass.TOTAL_INCREASING,
         entity_category=EntityCategory.DIAGNOSTIC,
         # v2.9.0 (J) — same AREA-ZERO-FIX family as v2.8.2's
         # mission.get("sqft") or None fix in callbacks.py: confirmed on the
@@ -430,7 +560,11 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
                     else None
                 ) or 0.0,
                 (
-                    round(sqft * SQFT_TO_M2, 1)
+                    # SCALED. `bbrun.sqft` counts in units of 100 ft²
+                    # -- see BBRUN_SQFT_SCALE for the evidence. The
+                    # archive branch above is NOT scaled: it sums
+                    # per-mission areas, which are genuine square feet.
+                    round(sqft * BBRUN_SQFT_SCALE * SQFT_TO_M2, 1)
                     if (sqft := e.run_stats.get("sqft"))
                     else None
                 ) or 0.0,
@@ -445,7 +579,11 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         extra_attributes_fn=lambda e: (
             lambda rps, arc: {
                 "onboard_counter_m2": (
-                    round(sqft * SQFT_TO_M2, 1)
+                    # Same scaling as the state above -- this attribute
+                    # exists to show the robot's own counter beside our
+                    # archive sum, so it has to be in the same unit or
+                    # the comparison is meaningless.
+                    round(sqft * BBRUN_SQFT_SCALE * SQFT_TO_M2, 1)
                     if (sqft := e.run_stats.get("sqft"))
                     else None
                 ),
@@ -545,7 +683,14 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,
-        filter_fn=has_pose,
+        # THE FIELD IT READS, not a capability flag. `mssnNavStats` and
+        # `cap.pose` are independent: an R980040 reports `cap.pose: 1`
+        # and carries no `mssnNavStats` at all -- 55 state keys, that one
+        # not among them -- so this sensor was created and permanently empty on it.
+        #
+        # And `cap.pose` is a compile-time constant on lewis firmware,
+        # so it could not have gated this correctly in any case.
+        filter_fn=lambda s: bool(s.get("mssnNavStats")),
         value_fn=lambda e: e.vacuum_state.get("mssnNavStats", {}).get("l_squal"),
     ),
 
@@ -678,8 +823,8 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         name="Clean Base status",
         entity_category=EntityCategory.DIAGNOSTIC,
         filter_fn=has_clean_base,
-        value_fn=lambda e: CLEAN_BASE_LABELS.get(
-            (e.vacuum_state.get("dock") or {}).get("state", -2), "Unknown"
+        value_fn=lambda e: CLEAN_BASE_STATUS_SLUGS.get(
+            (e.vacuum_state.get("dock") or {}).get("state", -2), "unknown"
         ),
     ),
     RoombaSensorDescription(
@@ -717,8 +862,8 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         name="Mop pad",
         entity_category=EntityCategory.DIAGNOSTIC,
         filter_fn=lambda s: "detectedPad" in s,
-        value_fn=lambda e: PAD_LABELS.get(
-            e.vacuum_state.get("detectedPad", "invalid"), "Unknown"
+        value_fn=lambda e: MOP_PAD_SLUGS.get(
+            e.vacuum_state.get("detectedPad", "invalid"), "unknown"
         ),
     ),
     RoombaSensorDescription(
@@ -728,8 +873,8 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,  # superseded by mop_ars_behavior (F3b)
         filter_fn=lambda s: "rankOverlap" in s,
-        value_fn=lambda e: MOP_RANK_LABELS.get(
-            e.vacuum_state.get("rankOverlap"), "Unknown"
+        value_fn=lambda e: MOP_BEHAVIOR_SLUGS.get(
+            e.vacuum_state.get("rankOverlap") or 0, "unknown"
         ),
     ),
     RoombaSensorDescription(
@@ -807,6 +952,15 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         name="Maintenance – Brushes last replaced",
         device_class=SensorDeviceClass.TIMESTAMP,
         entity_category=EntityCategory.DIAGNOSTIC,
+        # STILL is_mop, NOT is_braava -- and that is a store limitation,
+        # not an oversight. MaintenanceStore has ONE slot for this
+        # (`brush_*`), used for a brush or a pad depending on the robot.
+        # A Combo has both, so switching this gate would give it two
+        # sensors reading the same number, which is worse than one
+        # sensor that is at least unambiguous.
+        #
+        # The filter gates below DID move: the filter has its own store
+        # slot, and a Combo definitely has a filter.
         filter_fn=lambda s: not is_mop(s),  # Braava uses pad_last_replaced
         value_fn=lambda e: (
             dt_util.parse_datetime(
@@ -933,7 +1087,15 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         key="clean_streak",
         translation_key="clean_streak",
         name="Missions – Clean streak",
-        state_class=SensorStateClass.MEASUREMENT,
+        # A COUNT, NOT A MEASUREMENT.
+        #
+        # @chairstacker's graph showed `9.89725` for a streak of days.
+        # `MEASUREMENT` tells Home Assistant the value is continuous, so
+        # it draws a line between samples and every point on that line
+        # is a value nothing ever reported.
+        #
+        # `TOTAL` states the value stands until it changes.
+        state_class=SensorStateClass.TOTAL,
         entity_category=EntityCategory.DIAGNOSTIC,  # PRIMARY-SLIM (v3.1.0): pure statistic, not daily-use
         value_fn=lambda e: _mission_store_value(e, lambda s: s.clean_streak()),
     ),
@@ -952,7 +1114,18 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda e: _mission_store_value(
-            e, lambda s: len(s.query(30, result="completed"))
+            e,
+            lambda s: len(
+                {
+                    base
+                    for r in s.query(30, result="completed")
+                    if (base := s.base_mission_id(r.get("id")))
+                }
+            )
+            + sum(
+                1 for r in s.query(30, result="completed")
+                if not s.base_mission_id(r.get("id"))
+            ),
         ),
     ),
     RoombaSensorDescription(
@@ -969,11 +1142,34 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         key="area_cleaned_today",
         translation_key="area_cleaned_today",
         name="Missions – Area cleaned today",
+        # WITHOUT device_class HOME ASSISTANT CANNOT CONVERT.
+        #
+        # @chairstacker (#69): his HA is on imperial and his iRobot app
+        # shows square feet, but this read square metres regardless.
+        # The unit was declared and the value converted correctly -- HA
+        # just had nothing to tell it what kind of quantity this is, so
+        # it displayed the native unit as-is.
+        #
+        # With AREA set, HA converts to the user's own unit system. That
+        # is the setting that should win: the iRobot account's "Metric
+        # Units" switch is not in the data we receive, and overriding a
+        # Home Assistant preference from a vendor account setting would
+        # be wrong even if it were.
+        device_class=SensorDeviceClass.AREA,
         native_unit_of_measurement=UnitOfArea.SQUARE_METERS,
         suggested_display_precision=1,
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=None,  # reclassified DIAG→MAIN (v2.6.0)
-        filter_fn=lambda s: has_pose(s),   # 600-series reports no sqft
+        # A MODEL FILTER, not a capability check. `area_cleaned_today`
+        # reads `area_sqft` out of the mission archive and needs no
+        # position at all -- `has_pose` is standing in for "not a
+        # 600-series", which is what the original comment meant.
+        #
+        # It works, and it is not what it says. `cap.pose` is also
+        # unreliable: an S9+ on soho and an i7 on lewis both report 2
+        # and never send a position (@ScenicSystemsLLC, @pk-1966).
+        # Nothing breaks here because this sensor does not use one.
+        filter_fn=lambda s: has_pose(s),
         value_fn=lambda e: _mission_store_value(e, _area_cleaned_today),
     ),
     RoombaSensorDescription(
@@ -1053,7 +1249,10 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         translation_key="problem_zone",
         name="Error – Problem zone",
         entity_category=EntityCategory.DIAGNOSTIC,
-        filter_fn=lambda s: has_pose(s),   # requires zone tracking — excludes 600-series
+        # Same again: `problem_zone` reads stuck records from the
+        # mission store, not positions. `has_pose` excludes the
+        # 600-series, which is the actual intent.
+        filter_fn=lambda s: has_pose(s),
         value_fn=_problem_zone_value,
         available_fn=lambda e: bool(
             e._config_entry.runtime_data.mission_store
@@ -1085,7 +1284,11 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         # an automation) doesn't need to separately query mission history
         # just to find out which mission this count is even about.
         extra_attributes_fn=lambda e: (
-            {"last_mission_id": e._config_entry.runtime_data.mission_store.latest().get("id")}
+            {"last_mission_id": (
+                (e._config_entry.runtime_data.mission_store.latest() or {}).get("id")
+                if e._config_entry.runtime_data.mission_store is not None
+                else None
+            )}
             if e._config_entry.runtime_data.mission_store is not None
             and e._config_entry.runtime_data.mission_store.latest() is not None
             else {}
@@ -1133,8 +1336,9 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         suggested_display_precision=2,
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
-        filter_fn=lambda s: not is_mop(s),
-        value_fn=_filter_wear_rate,
+        role=IROBOT_PART_ROLE_FILTER,
+        filter_fn=lambda s: not is_braava(s),
+        value_fn=partial(_consumable_wear_rate, role=IROBOT_PART_ROLE_FILTER),
     ),
     RoombaSensorDescription(
         key="brush_wear_rate",
@@ -1144,8 +1348,9 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         suggested_display_precision=2,
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
+        role=IROBOT_PART_ROLE_MAIN_BRUSH,
         filter_fn=lambda s: not is_mop(s),
-        value_fn=_brush_wear_rate,
+        value_fn=partial(_consumable_wear_rate, role=IROBOT_PART_ROLE_MAIN_BRUSH),
     ),
     RoombaSensorDescription(
         key="pad_wear_rate",
@@ -1155,8 +1360,9 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         suggested_display_precision=2,
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
+        role=IROBOT_PART_ROLE_MAIN_BRUSH,
         filter_fn=lambda s: is_mop(s),
-        value_fn=_brush_wear_rate,
+        value_fn=partial(_consumable_wear_rate, role=IROBOT_PART_ROLE_MAIN_BRUSH),
     ),
     RoombaSensorDescription(
         key="filter_days_until_due",
@@ -1164,9 +1370,10 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         name="Maintenance – Filter days until due",
         native_unit_of_measurement=UnitOfTime.DAYS,
         state_class=SensorStateClass.MEASUREMENT,
-        entity_category=None,  # reclassified DIAG→MAIN (v2.6.0)
-        filter_fn=lambda s: not is_mop(s),
-        value_fn=_filter_days_until_due,
+        entity_category=None,
+        role=IROBOT_PART_ROLE_FILTER,
+        filter_fn=lambda s: not is_braava(s),
+        value_fn=partial(_consumable_days_until_due, role=IROBOT_PART_ROLE_FILTER),
     ),
     RoombaSensorDescription(
         key="brush_days_until_due",
@@ -1174,9 +1381,10 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         name="Maintenance – Brush days until due",
         native_unit_of_measurement=UnitOfTime.DAYS,
         state_class=SensorStateClass.MEASUREMENT,
-        entity_category=None,  # reclassified DIAG→MAIN (v2.6.0)
+        entity_category=None,
+        role=IROBOT_PART_ROLE_MAIN_BRUSH,
         filter_fn=lambda s: not is_mop(s),
-        value_fn=_brush_days_until_due,
+        value_fn=partial(_consumable_days_until_due, role=IROBOT_PART_ROLE_MAIN_BRUSH),
     ),
     RoombaSensorDescription(
         key="pad_days_until_due",
@@ -1185,8 +1393,57 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         native_unit_of_measurement=UnitOfTime.DAYS,
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
+        role=IROBOT_PART_ROLE_MAIN_BRUSH,
         filter_fn=lambda s: is_mop(s),
-        value_fn=_brush_days_until_due,
+        value_fn=partial(_consumable_days_until_due, role=IROBOT_PART_ROLE_MAIN_BRUSH),
+    ),
+    RoombaSensorDescription(
+        key="side_brush_wear_rate",
+        translation_key="side_brush_wear_rate",
+        name="Maintenance – Side brush wear rate",
+        native_unit_of_measurement="h/day",
+        suggested_display_precision=2,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        role=IROBOT_PART_ROLE_SIDE_BRUSH,
+        filter_fn=lambda s: not is_braava(s),
+        value_fn=partial(_consumable_wear_rate, role=IROBOT_PART_ROLE_SIDE_BRUSH),
+    ),
+    RoombaSensorDescription(
+        key="clean_base_bag_wear_rate",
+        translation_key="clean_base_bag_wear_rate",
+        name="Maintenance – Clean Base bag wear rate",
+        native_unit_of_measurement="h/day",
+        suggested_display_precision=2,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        role=IROBOT_PART_ROLE_CLEAN_BASE_BAG,
+        filter_fn=has_clean_base,
+        value_fn=partial(_consumable_wear_rate, role=IROBOT_PART_ROLE_CLEAN_BASE_BAG),
+    ),
+    RoombaSensorDescription(
+        key="side_brush_days_until_due",
+        translation_key="side_brush_days_until_due",
+        name="Maintenance – Side brush days until due",
+        native_unit_of_measurement=UnitOfTime.DAYS,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=None,
+        role=IROBOT_PART_ROLE_SIDE_BRUSH,
+        filter_fn=lambda s: not is_braava(s),
+        value_fn=partial(_consumable_days_until_due, role=IROBOT_PART_ROLE_SIDE_BRUSH),
+    ),
+    RoombaSensorDescription(
+        key="clean_base_bag_days_until_due",
+        translation_key="clean_base_bag_days_until_due",
+        name="Maintenance – Clean Base bag days until due",
+        native_unit_of_measurement=UnitOfTime.DAYS,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=None,
+        role=IROBOT_PART_ROLE_CLEAN_BASE_BAG,
+        filter_fn=has_clean_base,
+        value_fn=partial(
+            _consumable_days_until_due, role=IROBOT_PART_ROLE_CLEAN_BASE_BAG
+        ),
     ),
     # ── v1.9.0 Device Intelligence ───────────────────────────────────────────
     # opt-in (entity_registry_enabled_default=False): lifetime diagnostic
@@ -1372,7 +1629,15 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         key="consecutive_clean_skips",
         translation_key="consecutive_clean_skips",
         name="Performance – Consecutive clean skips",
-        state_class=SensorStateClass.MEASUREMENT,
+        # A COUNT, NOT A MEASUREMENT.
+        #
+        # @chairstacker's graph showed `9.89725` for a streak of days.
+        # `MEASUREMENT` tells Home Assistant the value is continuous, so
+        # it draws a line between samples and every point on that line
+        # is a value nothing ever reported.
+        #
+        # `TOTAL` states the value stands until it changes.
+        state_class=SensorStateClass.TOTAL,
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,
         value_fn=lambda e: (
@@ -1386,6 +1651,19 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         ),
     ),
 )
+#: Sensors whose value comes from `mission_store` rather than from the
+#: MQTT delta that triggers their recompute.
+#:
+#: Kept as an explicit list rather than derived: the filter above groups
+#: these keys by which delta key wakes them, which is a different
+#: question from where they read.
+_MISSION_STORE_SENSORS: frozenset[str] = frozenset({
+    "clean_streak", "missions_last_30d", "completion_rate_30d",
+    "area_cleaned_today", "last_mission_result", "last_mission_duration",
+    "stuck_count_30d", "problem_zone",
+    "last_error_code", "last_error_at", "last_error_zone",
+})
+
 class RoombaSensor(IRobotEntity, SensorEntity):
     """A sensor entity for Roomba+, driven by the EntityDescription pattern."""
 
@@ -1398,7 +1676,7 @@ class RoombaSensor(IRobotEntity, SensorEntity):
         description: RoombaSensorDescription,
         config_entry: RoombaConfigEntry,
     ) -> None:
-        super().__init__(roomba, blid)
+        super().__init__(roomba, blid, config_entry)
         self.entity_description = description
         self._config_entry = config_entry
         self._attr_unique_id = f"{self.robot_unique_id}_{description.key}"
@@ -1419,9 +1697,79 @@ class RoombaSensor(IRobotEntity, SensorEntity):
 
     _TICK_SENSORS = frozenset({"mission_recharge_minutes", "mission_expire_minutes"})
 
+    #: Sensors whose value depends on what day it is, and therefore go
+    #: stale at midnight without anything happening to the robot.
+    #:
+    #: @chairstacker (#78): "Area cleaned today" kept yesterday's figure
+    #: past midnight, and a reload cleared it. That pairing is the whole
+    #: diagnosis -- the calculation was always right, because it reads
+    #: today's date on every call. Nothing called it. The value comes
+    #: from `mission_store`, which is written at mission end, so between
+    #: the last run of one day and the first of the next there is no
+    #: event to recompute on. A reload recomputes everything, which is
+    #: why that worked.
+    #:
+    #: A 60-second tick like _TICK_SENSORS would also fix it, and would
+    #: mean 1,440 recomputations a day to catch one moment. A single
+    #: scheduled callback at 00:00 local is the same result for the work
+    #: of one.
+    #:
+    #: THREE SENSORS, NOT ONE. `area_cleaned_today` was the reported
+    #: symptom; the other two share the mechanism and nobody had noticed
+    #: because their failure is quieter still:
+    #:
+    #:   clean_streak      After 13 days of daily missions and one day
+    #:                     off, this stays at 13 instead of dropping to
+    #:                     0 -- and then jumps to 1 the moment the next
+    #:                     mission ends, so the break is never visible.
+    #:                     @chairstacker again, and he had to run the
+    #:                     experiment to find it.
+    #:   battery_age_days  Wrong by one from every midnight until the
+    #:                     next unrelated state write. Nobody would ever
+    #:                     report this; it is simply quietly stale.
+    #:
+    #: The pattern is worth naming: a value derived from TODAY'S DATE has
+    #: no event of its own. Everything else here recomputes because
+    #: something happened to the robot. These change because time passed,
+    #: which is not something the robot reports.
+    _MIDNIGHT_SENSORS = frozenset({
+        "area_cleaned_today",
+        "clean_streak",
+        "battery_age_days",
+    })
+
     async def async_added_to_hass(self) -> None:
         """Register MQTT callback and start the 60-second countdown tick."""
         await super().async_added_to_hass()
+
+        # MISSION-STORE SENSORS REFRESH ON THE STORE, NOT ONLY ON A DELTA.
+        #
+        # `new_state_filter` gates these on `cleanMissionStatus` being in
+        # the incoming MQTT delta, but their VALUE comes from
+        # `mission_store` -- and the store is written on mission-end
+        # processing, which is debounced: an ambiguous end phase needs
+        # two consecutive signals plus a minimum hold. So the delta that
+        # triggers a recompute can arrive before the record it should
+        # display exists.
+        #
+        # With a gap between missions the next delta cleans that up. Back
+        # to back, the next delta belongs to the NEXT mission and the
+        # previous one is never shown. That is @scenicsystemsllc's
+        # report, and his framing was right: source-consistent, not
+        # captured.
+        #
+        # He proposed that a fast second mission could arrive on a delta
+        # omitting `cleanMissionStatus`. That is also possible and needs
+        # a captured payload to tell apart. THIS FIX MAKES BOTH MOOT:
+        # `EVENT_MISSION_COMPLETED` fires after the store write, so the
+        # refresh trigger and the value source finally agree.
+        if self.entity_description.key in _MISSION_STORE_SENSORS:
+            self.async_on_remove(
+                self.hass.bus.async_listen(
+                    EVENT_MISSION_COMPLETED, self._async_mission_completed
+                )
+            )
+
         if self.entity_description.key in self._TICK_SENSORS:
             self._unsub_tick = async_track_time_interval(
                 self.hass,
@@ -1429,11 +1777,44 @@ class RoombaSensor(IRobotEntity, SensorEntity):
                 dt_stdlib.timedelta(seconds=60),
             )
 
+        if self.entity_description.key in self._MIDNIGHT_SENSORS:
+            # LOCAL midnight, which is what `dt_util.now().date()` in the
+            # value function rolls over on. Tracking UTC would fire at
+            # the wrong moment for everyone outside it -- and the tester
+            # who found this is on UTC-7.
+            self.async_on_remove(
+                async_track_time_change(
+                    self.hass,
+                    self._async_day_rolled_over,
+                    hour=0,
+                    minute=0,
+                    second=0,
+                )
+            )
+
+    @callback
+    def _async_mission_completed(self, event: Any) -> None:
+        """Recompute when the mission store gains a record.
+
+        Filtered by entry: one household can hold several robots, and a
+        mission ending on one says nothing about the others' counters.
+        """
+        if event.data.get("entry_id") != getattr(
+            self._config_entry, "entry_id", None
+        ):
+            return
+        self.schedule_update_ha_state(force_refresh=True)
+
     async def async_will_remove_from_hass(self) -> None:
         """Cancel the countdown tick when the entity is removed."""
         if self._unsub_tick is not None:
             self._unsub_tick()
             self._unsub_tick = None
+
+    @callback
+    def _async_day_rolled_over(self, _now: dt_stdlib.datetime) -> None:
+        """Recompute a day-scoped sensor when the date changes."""
+        self.async_write_ha_state()
 
     @callback
     def _async_tick(self, _now: dt_stdlib.datetime) -> None:
@@ -1455,24 +1836,34 @@ class RoombaSensor(IRobotEntity, SensorEntity):
         return super().available
 
     @property
-    def native_value(self) -> StateType:
+    def native_value(self) -> StateType | dt_stdlib.datetime:
         key = self.entity_description.key
         options = self._config_entry.options
         store = self._config_entry.runtime_data.maintenance_store
 
-        if key == "filter_remaining_hours":
-            threshold = options.get(CONF_FILTER_HOURS, DEFAULT_FILTER_HOURS)
+        # CLOUD FIRST, WHERE THERE IS CLOUD. iRobot tracks all four
+        # consumables itself, in robot runtime minutes, and the official
+        # app's maintenance tiles read that counter. When it is available
+        # it is simply better than anything derivable locally: it survives
+        # reinstalls, and it already accounts for replacements confirmed
+        # in the app before this integration existed. The local reset
+        # baseline is the fallback for every role alike when the cloud has
+        # nothing to say.
+        role = self.entity_description.role
+        if self.entity_description.remaining is True and role is not None:
+            if store:
+                cloud_hours = store.cloud_remaining_hours(role)
+                if cloud_hours is not None:
+                    return cloud_hours
+            spec = CONSUMABLE_ROLES[role]
+            threshold = (
+                options.get(spec.conf_key, spec.default_hours)
+                if spec.conf_key is not None else spec.default_hours
+            )
             current_hr = self.run_stats.get("hr", 0)
             if store:
-                return store.filter_remaining(current_hr, threshold)
-            return max(0, threshold - current_hr)
-
-        if key == "brush_remaining_hours":
-            threshold = options.get(CONF_BRUSH_HOURS, DEFAULT_BRUSH_HOURS)
-            current_hr = self.run_stats.get("hr", 0)
-            if store:
-                return store.brush_remaining(current_hr, threshold)
-            return max(0, threshold - current_hr)
+                return store.remaining_hours(role, current_hr, threshold)
+            return int(max(0, threshold - current_hr))
 
         if key == "next_clean":
             return self._calc_next_clean()
@@ -1482,7 +1873,9 @@ class RoombaSensor(IRobotEntity, SensorEntity):
         # F6b — cache battery retention value to RoombaData
         if key == "battery_capacity_retention":
             data = self._config_entry.runtime_data
-            data.battery_retention_value = float(value) if value is not None else None
+            data.battery_retention_value = (
+                float(value) if isinstance(value, (int, float, str)) else None
+            )
 
         # F6f — battery contact / bus-communication anomaly check, fed
         # directly from the same batPct value this sensor exposes (no
@@ -1505,16 +1898,27 @@ class RoombaSensor(IRobotEntity, SensorEntity):
         extra_fn = self.entity_description.extra_attributes_fn
         if extra_fn is not None:
             return extra_fn(self)
-        # v1.7.0 L2: threshold_hours for consumable remaining sensors
+        # v1.7.0 L2: threshold_hours/max_hours for consumable remaining
+        # sensors — independent of each other, so a cloud-only role like
+        # side_brush/clean_base_bag can report max_hours with no
+        # threshold_hours at all.
         threshold = self.entity_description.threshold_fn(self)
-        if threshold is not None:
-            return {"threshold_hours": threshold}
+        max_hours = self.entity_description.max_hours_fn(self)
+        if threshold is not None or max_hours is not None:
+            attrs: dict[str, Any] = {}
+            if threshold is not None:
+                attrs["threshold_hours"] = threshold
+            if max_hours is not None:
+                attrs["max_hours"] = max_hours
+            return attrs
         # v1.8.0 L3: description + action for last_error_code
         # v3.4.1: localised via hass.config.language, falls back to English
         if key == "last_error_code":
             code = self.native_value
             if code is not None:
-                catalogue = get_localized_error_entry(int(code), self.hass.config.language)
+                catalogue = get_localized_error_entry(
+                    int(code), self.hass.config.language,  # type: ignore[arg-type]
+                )
                 return {
                     "description": catalogue.get("description", ""),
                     "action": catalogue.get("action", ""),
@@ -1523,16 +1927,17 @@ class RoombaSensor(IRobotEntity, SensorEntity):
         # native_value must stay None (HA requirement for MEASUREMENT sensors)
         # but extra attributes give the user context about why.
         if key in ("filter_wear_rate", "brush_wear_rate", "pad_wear_rate",
-                   "filter_days_until_due", "brush_days_until_due", "pad_days_until_due"):
+                   "filter_days_until_due", "brush_days_until_due", "pad_days_until_due",
+                   "side_brush_wear_rate", "side_brush_days_until_due",
+                   "clean_base_bag_wear_rate", "clean_base_bag_days_until_due"):
             if self.native_value is None:
                 maint = self._config_entry.runtime_data.maintenance_store
                 if maint is None:
                     return {"status": "Maintenance store not available"}
-                reset_at = (
-                    maint.filter_reset_at
-                    if "filter" in key
-                    else maint.brush_reset_at
-                )
+                role = self.entity_description.role
+                if role is None:
+                    return {}
+                _reset_hr, reset_at = maint.reset_baseline_for_role(role)
                 if reset_at is None:
                     return {"status": "Press the replacement confirmation button to start tracking"}
                 return {"status": "Collecting data — available after 3 days"}
@@ -1614,7 +2019,9 @@ class RoombaSensor(IRobotEntity, SensorEntity):
             return "bbrun" in new_state
         # v1.9.0 L4 — Wear Intelligence sensors
         if key in ("filter_wear_rate", "brush_wear_rate", "pad_wear_rate",
-                   "filter_days_until_due", "brush_days_until_due", "pad_days_until_due"):
+                   "filter_days_until_due", "brush_days_until_due", "pad_days_until_due",
+                   "side_brush_wear_rate", "side_brush_days_until_due",
+                   "clean_base_bag_wear_rate", "clean_base_bag_days_until_due"):
             # bbrun: 900-series source for hr; runtimeStats: i/s/j-series source.
             # cleanMissionStatus: triggers recalc at mission end.
             return (
@@ -1625,7 +2032,7 @@ class RoombaSensor(IRobotEntity, SensorEntity):
 
         return len(new_state) > 1 or "signal" not in new_state
 
-    def _calc_next_clean(self) -> StateType:
+    def _calc_next_clean(self) -> StateType | dt_stdlib.datetime:
         """Return next scheduled cleaning time as a timezone-aware datetime.
 
         v3.4.0 CAL — thin wrapper around schedule_parser.py's
@@ -1642,7 +2049,7 @@ class RoombaSensor(IRobotEntity, SensorEntity):
         strictly_future = [start for start, _end in occurrences if start > now]
         return min(strictly_future) if strictly_future else None
 
-    def _next_from_schedule2(self, entries: list) -> StateType:
+    def _next_from_schedule2(self, entries: list[Any]) -> StateType | dt_stdlib.datetime:
         """Back-compat wrapper (v3.4.0 CAL extraction) — the actual
         per-format parsing now lives in schedule_parser.py, shared
         with calendar.py. Kept here, delegating, so existing call
@@ -1656,7 +2063,7 @@ class RoombaSensor(IRobotEntity, SensorEntity):
         future = [o for o in occurrences if o > now]
         return min(future) if future else None
 
-    def _next_from_schedule_v1(self, schedule: dict) -> StateType:
+    def _next_from_schedule_v1(self, schedule: dict[str, Any]) -> StateType | dt_stdlib.datetime:
         """Back-compat wrapper — see _next_from_schedule2()'s docstring."""
         now = dt_util.now()
         occurrences = occurrences_from_schedule_v1(

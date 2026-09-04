@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import datetime
 import pytest
+from freezegun import freeze_time
 from homeassistant.util import dt as dt_util
 from custom_components.roomba_plus.mission_store import MissionStore
 from custom_components.roomba_plus.mission_store import DaySummary
@@ -637,6 +638,150 @@ class TestAsyncAppend:
         # After trim, latest should be the last-appended
         assert store.latest()["id"] == f"m_{MAX_RECORDS + 4}"
 
+    @pytest.mark.asyncio
+    async def test_update_terminal_fields_merges_additive_fields_in_place(self):
+        store = MissionStore()
+        existing = _make_record(result="completed", area_sqft=None, zones=[])
+        existing["id"] = "m_1700000000"
+        existing["npicks_delta"] = 0
+        existing["ended_at"] = "2099-01-01T01:59:00+00:00"
+        await store.async_append(existing)
+
+        incoming = {
+            "id": "m_1700000000",
+            "started_at": "2099-01-01T00:00:00+00:00",
+            "ended_at": "2099-01-01T02:00:00+00:00",
+            "duration_min": 999,
+            "initiator": "manual",
+            "result": "cancelled",
+            "area_sqft": 250.0,
+            "zones": ["Kitchen"],
+            "error_code": 17,
+            "npicks_delta": 3,
+        }
+        merged = store.update_terminal_fields("m_1700000000", incoming)
+
+        assert merged is True
+        rec = store.latest()
+        assert rec["area_sqft"] == 250.0
+        assert rec["zones"] == ["Kitchen"]
+        assert rec["npicks_delta"] == 3
+        assert rec["error_code"] == 17
+        assert rec["duration_min"] == existing["duration_min"]
+        assert rec["initiator"] == "schedule"
+        assert rec["result"] == "completed"
+        assert rec["started_at"] == existing["started_at"]
+        assert rec["ended_at"] == existing["ended_at"]
+        assert rec["id"] == "m_1700000000"
+
+    @pytest.mark.asyncio
+    async def test_update_terminal_fields_returns_false_when_no_match(self):
+        store = MissionStore()
+        await store.async_append(_make_record(result="completed"))
+        merged = store.update_terminal_fields(
+            "m_does_not_exist", {"id": "m_does_not_exist"}
+        )
+        assert merged is False
+
+    @pytest.mark.asyncio
+    async def test_update_terminal_fields_returns_false_for_non_terminal_result(self):
+        store = MissionStore()
+        placeholder = _make_record(result=None)
+        placeholder["id"] = "m_1700000000"
+        await store.async_append(placeholder)
+        merged = store.update_terminal_fields(
+            "m_1700000000", {"id": "m_1700000000", "area_sqft": 10}
+        )
+        assert merged is False
+        assert store.latest()["area_sqft"] != 10
+        assert MissionStore.is_terminal_result("unknown") is True
+        assert MissionStore.is_terminal_result("in_progress") is False
+
+    @pytest.mark.asyncio
+    async def test_update_terminal_fields_matches_across_recharge_segment_suffix(self):
+        store = MissionStore()
+        segment = _make_record(result="completed", area_sqft=None)
+        segment["id"] = "m_1700000000_r1"
+        await store.async_append(segment)
+        merge_rec = _make_record(result="completed")
+        merge_rec["ended_at"] = segment["ended_at"]
+        merge_rec["area_sqft"] = 42
+        merge_rec["zones"] = []
+        merged = store.update_terminal_fields("m_1700000000", merge_rec)
+        assert merged is True
+        assert store.latest()["area_sqft"] == 42
+
+    @pytest.mark.asyncio
+    async def test_update_terminal_fields_does_not_overwrite_existing_area_sqft(self):
+        store = MissionStore()
+        existing = _make_record(result="completed", area_sqft=100.0)
+        existing["id"] = "m_1700000000"
+        await store.async_append(existing)
+        store.update_terminal_fields(
+            "m_1700000000",
+            {"id": "m_1700000000", "area_sqft": 999,
+             "ended_at": existing["ended_at"]},
+        )
+        assert store.latest()["area_sqft"] == 100.0
+
+    @pytest.mark.asyncio
+    async def test_update_terminal_fields_falls_through_for_later_recharge_segment(self):
+        """A terminal record far older than the replay window is a genuine
+        980/900-series recharge-segment resume: update_terminal_fields must
+        NOT merge in place, so async_append's _r<N> segment path stays
+        reachable and segment 2 keeps its own duration/area."""
+        store = MissionStore()
+        existing = _make_record(result="completed", area_sqft=100.0)
+        existing["id"] = "m_1700000000"
+        await store.async_append(existing)
+
+        later = _make_record(result="completed")
+        later["id"] = "m_1700000000"
+        later["ended_at"] = "2099-01-01T02:00:00+00:00"  # hours later than existing
+        later["area_sqft"] = 250.0
+        merged = store.update_terminal_fields("m_1700000000", later)
+
+        assert merged is False
+
+    @pytest.mark.asyncio
+    async def test_update_terminal_fields_replay_within_window_merges(self):
+        """A terminal re-delivery arriving within the replay window merges in
+        place (additive fields only) — no new segment record is created."""
+        store = MissionStore()
+        existing = _make_record(result="completed", area_sqft=None)
+        existing["id"] = "m_1700000000"
+        await store.async_append(existing)
+
+        replay = _make_record(result="completed")
+        replay["id"] = "m_1700000000"
+        replay["ended_at"] = existing["ended_at"]  # re-delivery of same terminal event
+        replay["area_sqft"] = 42.0
+        merged = store.update_terminal_fields("m_1700000000", replay)
+
+        assert merged is True
+        assert len(store.query(365)) == 1
+        assert store.latest()["area_sqft"] == 42.0
+
+    @pytest.mark.asyncio
+    async def test_update_terminal_fields_keeps_larger_npicks_delta(self):
+        store = MissionStore()
+        existing = _make_record(result="completed")
+        existing["id"] = "m_1700000000"
+        existing["npicks_delta"] = 1
+        await store.async_append(existing)
+        store.update_terminal_fields(
+            "m_1700000000",
+            {"id": "m_1700000000", "npicks_delta": 4,
+             "ended_at": existing["ended_at"]},
+        )
+        assert store.latest()["npicks_delta"] == 4
+        store.update_terminal_fields(
+            "m_1700000000",
+            {"id": "m_1700000000", "npicks_delta": 2,
+             "ended_at": existing["ended_at"]},
+        )
+        assert store.latest()["npicks_delta"] == 4
+
 
 class TestQuery:
     @pytest.mark.asyncio
@@ -790,10 +935,33 @@ class TestCleanStreak:
         assert store.clean_streak() == 0
 
     @pytest.mark.asyncio
-    async def test_streak_zero_when_no_today(self):
+    async def test_yesterday_still_counts_before_today_runs(self):
+        """@chairstacker: 0 just after midnight on a robot with history.
+
+        A mission yesterday and none yet today is not a broken streak --
+        it is the ordinary state of every morning. Tying the count to
+        `today` reset it to 0 at midnight and threw the run away."""
         store = MissionStore()
         await store.async_append(_make_record(days_ago=1, result="completed"))
+        assert store.clean_streak() == 1
+
+    @pytest.mark.asyncio
+
+    async def test_a_full_day_missed_does_break_it(self, hass):
+        """Yesterday empty and nothing today: the run is genuinely
+        broken, and the streak is 0."""
+        store = MissionStore()
+        await store.async_append(_make_record(days_ago=2, result="completed"))
         assert store.clean_streak() == 0
+
+    @pytest.mark.asyncio
+
+    async def test_today_and_yesterday_chain(self, hass):
+        store = MissionStore()
+        await store.async_append(_make_record(days_ago=0, result="completed"))
+        await store.async_append(_make_record(days_ago=1, result="completed"))
+        await store.async_append(_make_record(days_ago=2, result="completed"))
+        assert store.clean_streak() == 3
 
 
 class TestPresenceWindows:
@@ -1261,6 +1429,7 @@ class TestMergeCloudFieldsB1Ext:
 
     # ── query_by_day integration: the original field bug ─────────────────────
 
+    @freeze_time("2026-07-10 12:00:00")
     def test_query_by_day_completed_count_after_b1ext_correction(self):
         """End-to-end repro of the field bug (980 OG, originally observed
         26.06.2026): before B1-EXT, summary showed completed:3 for a day
@@ -1632,6 +1801,55 @@ class TestL6Helpers:
 
         assert _presence_utilisation(_FakeEntity(), 7) is None
 
+    @pytest.mark.asyncio
+    async def test_presence_utilisation_used_matches_opportunities_population(self):
+        """`used` must apply the same duration_min >= avg_duration filter as
+        `opportunities`, otherwise a short away-window that still resulted in
+        a clean inflates the numerator without inflating the denominator and
+        the percentage can exceed 100.
+        """
+        from custom_components.roomba_plus.sensor import _presence_utilisation
+
+        store = MissionStore()
+        now = datetime.datetime.now(datetime.timezone.utc)
+        start = now - datetime.timedelta(hours=6)
+        gaps_min = [10, 10, 10, 50]  # three short, one >= the 45-min avg_duration
+        t = start
+        for i, gap in enumerate(gaps_min):
+            ended = t + datetime.timedelta(minutes=45)
+            await store.async_append({
+                "id": f"m_{i}",
+                "started_at": t.isoformat(),
+                "ended_at": ended.isoformat(),
+                "duration_min": 45,
+                "area_sqft": 400.0,
+                "result": "completed",
+                "initiator": "schedule",
+                "zones": [],
+                "error_code": None,
+                "bbrun_hr": 100,
+            })
+            t = ended + datetime.timedelta(minutes=gap)
+        await store.async_append({
+            "id": "m_last",
+            "started_at": t.isoformat(),
+            "ended_at": (t + datetime.timedelta(minutes=45)).isoformat(),
+            "duration_min": 45,
+            "area_sqft": 400.0,
+            "result": "completed",
+            "initiator": "schedule",
+            "zones": [],
+            "error_code": None,
+            "bbrun_hr": 100,
+        })
+
+        entity = self._make_entity_with_store(store)
+        result = _presence_utilisation(entity, 7)
+
+        assert result is not None
+        assert result <= 100.0
+        assert result == 100.0
+
 
 class TestMssnStrtTmCaching:
     """Verify the closure caches start_ts at mission start, not end."""
@@ -1897,8 +2115,13 @@ class TestErrorRestoreLogic:
         last_error_zone = None
         for _rec in reversed(records):
             _res = _rec.get("result")
-            if _res in ("error", "stuck") and _rec.get("error_code"):
+            if _res in MissionStore.ERROR_RESULTS and _rec.get("error_code"):
                 last_error_code = _rec["error_code"]
+                last_error_at   = _rec.get("ended_at")
+                last_error_zone = (_rec.get("zones") or [None])[0]
+                break
+            elif _res in MissionStore.STUCK_RESULTS:
+                last_error_code = None
                 last_error_at   = _rec.get("ended_at")
                 last_error_zone = (_rec.get("zones") or [None])[0]
                 break
@@ -1977,6 +2200,26 @@ class TestErrorRestoreLogic:
         ]
         code, _, _ = self._restore_error(records)
         assert code == 15
+
+    def test_stuck_without_error_code_restores_triplet(self):
+        """Code-less stuck: at/zone still restored, code stays None (not skipped)."""
+        records = [
+            {**_make_record_v192_fixes(1, result="stuck", error_code=None), "zones": ["Kitchen"]},
+        ]
+        code, at, zone = self._restore_error(records)
+        assert code is None
+        assert at is not None
+        assert zone == "Kitchen"
+
+    def test_stuck_without_error_code_not_shadowed_by_older_coded_error(self):
+        """Most-recent code-less stuck wins over an older coded error."""
+        records = [
+            _make_record_v192_fixes(2, result="error", error_code=17),
+            {**_make_record_v192_fixes(1, result="stuck_and_abandoned", error_code=None), "zones": ["Hallway"]},
+        ]
+        code, at, zone = self._restore_error(records)
+        assert code is None
+        assert zone == "Hallway"
 
 
 class TestLastMissionFromStore:
@@ -2142,6 +2385,46 @@ class TestBackfillBasicCorrection:
         )
 
 
+    def test_same_terminal_record_cannot_be_result_corrected_twice(self):
+        """Cloud truth applies once: after B1-EXT corrects 'completed' to
+        'error' (done==bat), a later merge with a contradictory cloud record
+        must not flip the same record again (no error<->cancelled
+        oscillation). Timing/identity fields stay frozen throughout."""
+        store = MissionStore()
+        local = _local_rec(started_ts=1700000000, ended_ts=1700003600)
+        local["result"] = "completed"
+        store = _make_store([local])
+
+        store.backfill_from_cloud([{**_cloud_rec(1700000000, 1700003600),
+                                     "done": "bat", "done_raw": "bat"}])
+        assert store._records[0]["result"] == "error"
+
+        # A later, contradictory cloud record for the same end-time.
+        store.backfill_from_cloud([{
+            "startTime": 1700000000, "timestamp": 1700003600,
+            "done": "cncl", "done_raw": "usrEnd", "pauseId": 5,
+        }])
+        assert store._records[0]["result"] == "error", (
+            "once cloud-corrected, a terminal result is immutable"
+        )
+
+    def test_terminal_result_rewrite_is_exempt_only_for_first_cloud_truth(self):
+        """merge_latest_from_cloud applies the same once-only rule."""
+        store = MissionStore()
+        local = _local_rec(started_ts=1700000000, ended_ts=1700003600)
+        local["result"] = "completed"
+        store = _make_store([local])
+
+        store.merge_latest_from_cloud([{**_cloud_rec(1700000000, 1700003600),
+                                           "done": "bat", "done_raw": "bat"}])
+        assert store._records[0]["result"] == "error"
+        store.merge_latest_from_cloud([{
+            "startTime": 1700000000, "timestamp": 1700003600,
+            "done": "cncl", "done_raw": "usrEnd", "pauseId": 5,
+        }])
+        assert store._records[0]["result"] == "error"
+
+
 class TestBackfillMatching:
 
     def test_matches_within_tolerance(self):
@@ -2204,9 +2487,7 @@ class TestBackfillMatching:
         ]
         n = store.backfill_from_cloud(cloud)
         assert n.corrected == 1
-        # local1 unchanged
         assert store._records[0]["started_at"] == _utc(start_accurate)
-        # local2 corrected
         assert store._records[1]["started_at"] == _utc(1700003700)
 
 
@@ -3471,6 +3752,16 @@ class TestRoomsOverdueMerged:
     def _now(self) -> str:
         return "2026-07-04T12:00:00+00:00"
 
+    # SAME TIME-BOMB CLASS as
+    # test_query_by_day_completed_count_after_b1ext_correction above
+    # (found empirically by re-running this file under a frozen future
+    # clock, rather than by reading the code): the fixture data is
+    # pinned to real historic dates, but the lookback window inside the
+    # queried method derives from the REAL clock -- so the test only
+    # passed while today happened to sit close enough to those dates.
+    # Frozen to the same 2026-07-04 these tests already pass in as
+    # their own "now", making them deterministic forever.
+    @freeze_time("2026-07-04 12:00:00")
     def test_configured_overrides_learned_with_x1_threshold(self):
         """Kitchen's learned cadence is ~4 days -> healthy at 4 days
         since last under learned mean+2sigma — but a configured
@@ -3508,6 +3799,7 @@ class TestRoomsOverdueMerged:
         assert a["expected_interval_days"] is None
         assert a["overdue_factor"] is None
 
+    @freeze_time("2026-07-04 12:00:00")
     def test_unknown_config_key_falls_back_to_learned(self):
         """A stale/unknown frequency key in options must not crash or
         create a bogus interval — it falls through to learned."""
@@ -3552,6 +3844,7 @@ class TestRoomHistoryLivePathRegression:
         # Without maps: raw rids, still functional for interval math
         assert set(store.room_cleaning_history()) == {"7", "9"}
 
+    @freeze_time("2026-07-04 12:00:00")
     def test_live_records_feed_coverage_health(self):
         store = MissionStore()
         stamps = ["2026-06-20", "2026-06-24", "2026-06-28", "2026-07-02"]
@@ -3598,3 +3891,416 @@ class TestPmapsInfoMerge:
         assert store._records[-1]["pmaps_info"] == [
             {"pmap_id": "P1", "pmapv_id": "V7"}
         ]
+
+
+class TestHistoryResolvesAgainstTheMissionsOwnMap:
+    """@dduff617 (S9+, four Smart Maps) saw historical rooms rendered
+    as raw region ids -- `"2"` and `"5"` -- beside correctly named ones.
+
+    `cloud_coordinator.regions` deliberately holds ONLY the active
+    map's regions, so a room COMMAND cannot go to the wrong floor (#8).
+    That filter is right. But every historical record was resolved
+    against it too, so a mission run on a different map had no entry
+    and its ids survived unresolved. The iRobot app shows those
+    missions correctly -- the account has the context; we were looking
+    at one map's dictionary.
+    """
+
+    BY_PMAP = {
+        "MAP-UPSTAIRS": {"2": "Guest room", "5": "Landing"},
+        "MAP-DOWNSTAIRS": {"1": "Kitchen"},
+    }
+
+    @staticmethod
+    def _record(pmap_id, rids):
+        """A cloud-enriched record: rooms come from timeline.finEvents."""
+        return {
+            "id": "M1",
+            "pmaps_info": [{"pmap_id": pmap_id, "pmapv_id": "V1"}],
+            "timeline": {
+                "finEvents": [
+                    {"type": "room", "room": {"rid": rid, "status": 0}}
+                    for rid in rids
+                ]
+            },
+        }
+
+    def _store(self):
+        from custom_components.roomba_plus.mission_store import MissionStore
+
+        return MissionStore.__new__(MissionStore)
+
+    def test_rooms_from_another_map_resolve(self):
+        store = self._store()
+        rec = self._record("MAP-UPSTAIRS", ["2", "5"])
+
+        # The ACTIVE map is downstairs and knows neither id.
+        names = store._record_room_names(
+            rec, {"1": "Kitchen"}, self.BY_PMAP
+        )
+
+        assert names == ["Guest room", "Landing"], (
+            "a mission on another Smart Map must resolve against that map"
+        )
+
+    def test_the_active_map_is_still_the_fallback(self):
+        """A record with no map recorded -- older entries, EPHEMERAL
+        tier -- keeps the behaviour that was there before."""
+        store = self._store()
+        rec = {
+            "id": "M2",
+            "timeline": {
+                "finEvents": [{"type": "room", "room": {"rid": "1", "status": 0}}]
+            },
+        }
+
+        names = store._record_room_names(rec, {"1": "Kitchen"}, self.BY_PMAP)
+
+        assert names == ["Kitchen"]
+
+    def test_an_unknown_id_is_still_returned_raw(self):
+        """Data is never silently dropped -- an id nobody can name
+        stays visible rather than vanishing from the history."""
+        store = self._store()
+        rec = self._record("MAP-UPSTAIRS", ["99"])
+
+        names = store._record_room_names(rec, {}, self.BY_PMAP)
+
+        assert names == ["99"]
+
+    def test_the_record_map_wins_over_the_active_one(self):
+        """Duplicate ids across floors: id 2 exists on both. The
+        mission's own map decides, which is the whole point -- users
+        who reuse room names across maps would otherwise collide."""
+        store = self._store()
+        rec = self._record("MAP-UPSTAIRS", ["2"])
+
+        names = store._record_room_names(
+            rec, {"2": "Wrong floor's room"}, self.BY_PMAP
+        )
+
+        assert names == ["Guest room"]
+
+    def test_no_by_pmap_at_all_behaves_as_before(self):
+        """Cloud disabled: nothing changes for anyone not affected."""
+        store = self._store()
+        rec = self._record("MAP-UPSTAIRS", ["2"])
+
+        assert store._record_room_names(rec, {"2": "Old behaviour"}, None) == [
+            "Old behaviour"
+        ]
+
+
+class TestRegionLastCleaned:
+    """The id-keyed history behind the per-region "last cleaned"
+    sensors (@chairstacker's request).
+
+    Keyed by map AND region because ids repeat across maps -- merging
+    them would attribute one floor's clean to another floor's room.
+    """
+
+    @staticmethod
+    def _rec(rec_id, pmap_id, rids, ended_at):
+        return {
+            "id": rec_id,
+            "ended_at": ended_at,
+            "pmaps_info": [{"pmap_id": pmap_id}] if pmap_id else None,
+            "timeline": {
+                "finEvents": [
+                    {"type": "room", "room": {"rid": r, "status": 0}} for r in rids
+                ]
+            },
+        }
+
+    def _store(self, records):
+        from custom_components.roomba_plus.mission_store import MissionStore
+
+        store = MissionStore.__new__(MissionStore)
+        store._records = records
+        return store
+
+    def test_ids_are_qualified_by_map(self):
+        store = self._store([self._rec("M1", "MAP-A", ["2"], "2026-08-21T10:00:00+00:00")])
+
+        assert store.region_last_cleaned() == {
+            "MAP-A/2": "2026-08-21T10:00:00+00:00"
+        }
+
+    def test_the_same_id_on_two_maps_stays_separate(self):
+        """The whole reason for the compound key."""
+        store = self._store([
+            self._rec("M1", "MAP-A", ["2"], "2026-08-21T10:00:00+00:00"),
+            self._rec("M2", "MAP-B", ["2"], "2026-08-20T10:00:00+00:00"),
+        ])
+
+        result = store.region_last_cleaned()
+
+        assert result["MAP-A/2"] == "2026-08-21T10:00:00+00:00"
+        assert result["MAP-B/2"] == "2026-08-20T10:00:00+00:00"
+
+    def test_newest_wins_per_region(self):
+        """Records are scanned newest-first; the first hit stands."""
+        store = self._store([
+            self._rec("M1", "MAP-A", ["2"], "2026-08-21T10:00:00+00:00"),
+            self._rec("M2", "MAP-A", ["2"], "2026-08-01T10:00:00+00:00"),
+        ])
+
+        assert store.region_last_cleaned()["MAP-A/2"] == "2026-08-21T10:00:00+00:00"
+
+    def test_a_multi_room_mission_records_every_room(self):
+        store = self._store([
+            self._rec("M1", "MAP-A", ["2", "5", "7"], "2026-08-21T10:00:00+00:00")
+        ])
+
+        assert set(store.region_last_cleaned()) == {"MAP-A/2", "MAP-A/5", "MAP-A/7"}
+
+    def test_a_record_with_no_map_falls_back_to_the_bare_id(self):
+        """Older entries and EPHEMERAL tier carry no pmaps_info; their
+        data is still worth having."""
+        store = self._store([self._rec("M1", None, ["2"], "2026-08-21T10:00:00+00:00")])
+
+        assert store.region_last_cleaned() == {"2": "2026-08-21T10:00:00+00:00"}
+
+    def test_records_without_an_end_time_are_skipped(self):
+        """A mission still running has nothing to report yet."""
+        store = self._store([self._rec("M1", "MAP-A", ["2"], None)])
+
+        assert store.region_last_cleaned() == {}
+
+    def test_ids_survive_a_rename(self):
+        """The point of keying on ids: `record_region_ids` never looks
+        at names, so renaming a room in the app cannot orphan its
+        history."""
+        from custom_components.roomba_plus.mission_store import MissionStore
+
+        rec = self._rec("M1", "MAP-A", ["2", "5"], "2026-08-21T10:00:00+00:00")
+
+        assert MissionStore.record_region_ids(rec) == ["2", "5"]
+
+
+class TestPrimeRecordsAreADifferentShape:
+    """Prime stores no `timeline`. `prime_mission_sync` walks the
+    library's timeline objects (attributes, and the field is
+    `region_id`, not `rid`) and keeps `room_durations_sec` --
+    `{region_id: seconds}`.
+
+    Reading only the Classic shape returned [] for every Prime mission,
+    so the per-region sensors would all have sat at "unknown" forever,
+    looking like a robot that had never cleaned anything.
+    """
+
+    def test_a_prime_record_yields_its_regions(self):
+        from custom_components.roomba_plus.mission_store import MissionStore
+
+        rec = {
+            "id": "M1",
+            "ended_at": "2026-08-21T10:00:00+00:00",
+            "room_durations_sec": {"10": 120.0, "101": 60.0},
+        }
+
+        assert MissionStore.record_region_ids(rec) == ["10", "101"]
+
+    def test_a_classic_record_still_uses_finEvents(self):
+        """Both shapes, one method -- the Classic path must not have
+        been traded away for the Prime one."""
+        from custom_components.roomba_plus.mission_store import MissionStore
+
+        rec = {
+            "timeline": {
+                "finEvents": [{"type": "room", "room": {"rid": "2", "status": 0}}]
+            }
+        }
+
+        assert MissionStore.record_region_ids(rec) == ["2"]
+
+    def test_prime_regions_reach_the_last_cleaned_history(self):
+        """End to end: a Prime record produces a dated entry."""
+        from custom_components.roomba_plus.mission_store import MissionStore
+
+        store = MissionStore.__new__(MissionStore)
+        store._records = [{
+            "id": "M1",
+            "ended_at": "2026-08-21T10:00:00+00:00",
+            "pmaps_info": [{"pmap_id": "MAP-A"}],
+            "room_durations_sec": {"101": 60.0},
+        }]
+
+        assert store.region_last_cleaned() == {
+            "MAP-A/101": "2026-08-21T10:00:00+00:00"
+        }
+
+
+class TestOverdueAndCountsResolvePerMap:
+    """Same fault as the history sensor, two functions further on.
+
+    @dduff617's report named `room_cleaning_history`, but
+    `room_coverage_health` and `room_visit_counts` share the resolver.
+    An unresolved raw id counts as its own room there: never cleaned,
+    so permanently overdue, and one real room's visits split across two
+    entries. Fixed together because they are one bug in one place.
+    """
+
+    BY_PMAP = {"MAP-UPSTAIRS": {"2": "Guest room"}}
+
+    @staticmethod
+    def _rec(pmap_id, rids, ended_at):
+        return {
+            "id": "M1",
+            "ended_at": ended_at,
+            "started_at": ended_at,
+            "pmaps_info": [{"pmap_id": pmap_id}],
+            "timeline": {
+                "finEvents": [
+                    {"type": "room", "room": {"rid": r, "status": 0}} for r in rids
+                ]
+            },
+        }
+
+    def _store(self, records):
+        from custom_components.roomba_plus.mission_store import MissionStore
+
+        store = MissionStore.__new__(MissionStore)
+        store._records = records
+        return store
+
+    def test_visit_counts_name_rooms_from_their_own_map(self):
+        store = self._store([
+            self._rec("MAP-UPSTAIRS", ["2"], "2026-08-21T10:00:00+00:00"),
+            self._rec("MAP-UPSTAIRS", ["2"], "2026-08-14T10:00:00+00:00"),
+        ])
+
+        counts = store.room_visit_counts({}, None, self.BY_PMAP)
+
+        assert counts == {"Guest room": 2}, (
+            "without per-map resolution these arrive as raw id '2'"
+        )
+
+    def test_without_the_map_the_raw_id_shows_the_old_behaviour(self):
+        """The contrast, so the test proves the fix rather than the
+        fixture."""
+        store = self._store([
+            self._rec("MAP-UPSTAIRS", ["2"], "2026-08-21T10:00:00+00:00"),
+        ])
+
+        assert store.room_visit_counts({}, None, None) == {"2": 1}
+
+    def test_coverage_health_uses_the_records_own_map(self):
+        store = self._store([
+            self._rec("MAP-UPSTAIRS", ["2"], "2026-08-21T10:00:00+00:00"),
+            self._rec("MAP-UPSTAIRS", ["2"], "2026-08-14T10:00:00+00:00"),
+            self._rec("MAP-UPSTAIRS", ["2"], "2026-08-07T10:00:00+00:00"),
+            self._rec("MAP-UPSTAIRS", ["2"], "2026-07-31T10:00:00+00:00"),
+        ])
+
+        health = store.room_coverage_health(
+            "2026-08-22T10:00:00+00:00",
+            region_map={}, umf_regions=None, regions_by_pmap=self.BY_PMAP,
+        )
+
+        assert "Guest room" in health
+        assert "2" not in health
+
+
+class TestStuckRecoveryReadsTheRecord:
+    """@ScenicSystemsLLC's Braava got stuck, was freed by hand 16 minutes
+    later, then cleaned four more rooms and docked — 168 minutes, 524
+    sqft, a genuine `dest: dock` finish. Recorded
+    `stuck_and_abandoned`.
+
+    The classifier measured elapsed time since `stuck_cleared_ts`,
+    reading it as "when the robot resumed". It is not: the edge that
+    sets it fires on **every** re-entry into an active phase after a
+    stuck, so the last one wins. His final room ran under five minutes,
+    and that is all the clock was measuring.
+
+    His own suggestion: decide from what the mission recorded. Rooms
+    finished after the stuck, or a real dock finish.
+    """
+
+    @staticmethod
+    def _verdict(events, mission_id="M1", record_id=None):
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.callbacks import (
+            _mission_recovered_after_stuck,
+        )
+
+        entry = SimpleNamespace(
+            runtime_data=SimpleNamespace(
+                cloud_coordinator=SimpleNamespace(
+                    raw_records=[
+                        {"missionId": record_id or mission_id,
+                         "timeline": {"finEvents": events}}
+                    ]
+                )
+            )
+        )
+        return _mission_recovered_after_stuck(entry, {"missionId": mission_id})
+
+    def test_his_mission_reads_as_resumed(self):
+        """Four rooms finished and a dock finish — both signals present."""
+        events = [
+            {"type": "room", "room": {"status": 0, "rid": "1"}},
+            {"type": "room", "room": {"status": 0, "rid": "2"}},
+            {"type": "room", "room": {"status": 6, "rid": "3"}},
+            {"type": "room", "room": {"status": 0, "rid": "4"}},
+            {"type": "travel", "travel": {"dest": "dock"}},
+        ]
+
+        assert self._verdict(events) is True
+
+    def test_a_genuine_abandon_reads_as_abandoned(self):
+        """Stuck, nothing finished, no drive home."""
+        assert self._verdict([]) is False
+
+    def test_dock_finish_alone_is_enough(self):
+        """It drove home under its own power."""
+        events = [{"type": "travel", "travel": {"dest": "dock"}}]
+
+        assert self._verdict(events) is True
+
+    def test_rooms_alone_are_enough(self):
+        """Finished rooms after being freed, then ran out of battery —
+        it did not abandon, whatever the ending."""
+        events = [{"type": "room", "room": {"status": 0, "rid": "1"}}]
+
+        assert self._verdict(events) is True
+
+    def test_no_record_means_no_verdict(self):
+        """None, not False. A Prime robot or a local-only setup has no
+        cloud record, and the caller falls back rather than guessing."""
+        assert self._verdict([], record_id="A_DIFFERENT_MISSION") is None
+
+
+class TestABatteryAbortIsNotAnEntrapment:
+    """@AlakazipLabs walked an i3 down to 6%, sent `dock`, and watched it
+    accept, set off, and give up 13 seconds later:
+
+        14:11:26  phase=hmUsrDock  error=0   notReady=0
+        14:11:39  phase=stuck      error=46  notReady=15
+
+    `nStuck` went 111 → 112. So the robot's own counter scores a flat
+    battery identically to being trapped under a sofa — and this
+    integration derives its problem-zone figure and its mission results
+    from exactly that counter.
+
+    `error 46` is Low battery, and it arrives in the same message.
+    """
+
+    @staticmethod
+    def _is_battery_abort(mission):
+        """The condition, as the callback evaluates it."""
+        return mission.get("error") == 46
+
+    def test_his_abort_is_recognised(self):
+        assert self._is_battery_abort(
+            {"phase": "stuck", "error": 46, "notReady": 15}
+        )
+
+    def test_a_real_entrapment_is_not(self):
+        """Trapped under furniture: stuck, but no battery error."""
+        assert not self._is_battery_abort({"phase": "stuck", "error": 0})
+
+    def test_another_error_is_not(self):
+        """Deliberately narrow — only code 46, not any error at all."""
+        assert not self._is_battery_abort({"phase": "stuck", "error": 1010})

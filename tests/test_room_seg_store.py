@@ -1223,3 +1223,169 @@ class TestBoundaryHistory:
         with patch("custom_components.roomba_plus.room_seg_store.Store", return_value=store_mock):
             await store.async_load(MagicMock(), "e1")
         assert list(store._boundary_history) == []
+
+
+class TestAFailedLoadKeepsTheTuning:
+    """The load path reset the store by calling `self.__init__()`, which
+    takes `min_distance_cells` and `merge_ratio` as parameters with
+    defaults — so a store built with non-default tuning silently lost it
+    the first time a stored payload failed to parse.
+
+    Found by mypy, which flags `self.__init__()` as unsound for a
+    different reason (subclassing). The parameter loss was underneath.
+    """
+
+    def test_reset_keeps_the_constructor_arguments(self):
+        from custom_components.roomba_plus.room_seg_store import RoomSegStore
+
+        store = RoomSegStore(min_distance_cells=3.0, merge_ratio=0.9)
+        store._reset()
+
+        assert store._min_distance_cells == 3.0
+        assert store._merge_ratio == 0.9
+
+    def test_reset_clears_the_data(self):
+        from custom_components.roomba_plus.room_seg_store import RoomSegStore
+
+        store = RoomSegStore()
+        store.last_cell_count = 42
+        store._reset()
+
+        assert store.last_cell_count == 0
+        assert store.rooms == {}
+
+
+class TestRoomsWaitForEnoughCoverage:
+    """v3.2.2 — segmentation no longer runs after a single mission.
+
+    The growth gate that existed does nothing on the first run:
+    `self.rooms` is empty, so the condition short-circuits and rooms
+    were derived from the sparsest map the robot will ever produce.
+
+    That is the worst moment for this algorithm family. An unvisited
+    threshold is indistinguishable from a wall, so a room gets split
+    that is not split; more missions cross the threshold and the false
+    split disappears.
+
+    Observed on a real 980's own archives: 7 rooms after one mission,
+    6 after four, 5 once coverage settled. A user saw seven rooms
+    appear as entities and two later vanish.
+    """
+
+    @staticmethod
+    def _cells(n=400):
+        return {(i % 20, i // 20): 1.0 for i in range(n)}
+
+    def test_one_mission_is_not_enough(self):
+        from custom_components.roomba_plus.room_seg_store import RoomSegStore
+
+        store = RoomSegStore()
+
+        assert store.maybe_recompute(self._cells(), missions_seen=1) is False
+        assert not store.rooms
+
+    def test_enough_missions_lets_it_run(self):
+        from custom_components.roomba_plus.room_seg_store import (
+            MIN_MISSIONS_BEFORE_SEGMENTING,
+            RoomSegStore,
+        )
+
+        store = RoomSegStore()
+
+        assert store.maybe_recompute(
+            self._cells(), missions_seen=MIN_MISSIONS_BEFORE_SEGMENTING
+        ) is True
+
+    def test_the_gate_only_applies_before_rooms_exist(self):
+        """Once rooms are known, a later recompute must not be blocked
+        by a mission count -- the growth gate governs from then on."""
+        from custom_components.roomba_plus.room_seg_store import RoomSegStore
+
+        store = RoomSegStore()
+        store.maybe_recompute(self._cells(), missions_seen=5)
+        assert store.rooms
+        store.last_cell_count = 0
+
+        assert store.maybe_recompute(self._cells(800), missions_seen=1) is True
+
+    def test_an_unknown_count_keeps_the_old_behaviour(self):
+        """A caller that cannot count must not be blocked forever."""
+        from custom_components.roomba_plus.room_seg_store import RoomSegStore
+
+        store = RoomSegStore()
+
+        assert store.maybe_recompute(self._cells(), missions_seen=None) is True
+
+
+class TestARefutedRoomIsDeleted:
+    """A room whose cells the new segmentation divided differently used
+    to survive forever.
+
+    The staleness check asked whether 80% of its cells were absorbed by
+    **matched** rooms. When those cells had scattered across clusters
+    that were themselves new, nothing absorbed 80%, and the room stayed.
+
+    `maybe_recompute()` receives the whole cumulative visited grid, not
+    one mission's slice — so a room that fails to match was not
+    unobserved. Its cells were in the input and the segmentation chose
+    to divide them differently. **Refuted, not unseen.**
+
+    Field evidence (R980040, 445 missions): four rooms with
+    `recompute_count == 0` and 931 cells between them, never once
+    re-recognised. Total room cells 8814 against a grid of 6614.
+    """
+
+    @staticmethod
+    def _store():
+        from custom_components.roomba_plus.room_seg_store import RoomSegStore
+
+        return RoomSegStore()
+
+    @staticmethod
+    def _result(rooms):
+        from custom_components.roomba_plus.room_segmentation import (
+            RoomSegmentationResult,
+        )
+
+        return RoomSegmentationResult(rooms=rooms, doors=[], dist={}, seeds=[])
+
+    def test_cells_scattered_across_new_clusters_delete_the_old_room(self):
+        """The case the matched-only check missed."""
+        store = self._store()
+        store._match_rooms(self._result({1: {(x, 0) for x in range(12)}}))
+        assert "room_1" in store.rooms
+
+        # THE SAME TWELVE CELLS, split four ways. Each new cluster
+        # shares 3 of 12 with the old room -- Jaccard 0.25, under the
+        # 0.30 match threshold -- so none of them matches it, and none
+        # of them absorbs 80% of it alone either. Checking matched
+        # rooms only, nothing absorbs anything and room_1 survives
+        # forever on cells that no longer describe a room.
+        store._match_rooms(self._result({
+            i + 1: {(x, 0) for x in range(i * 3, (i + 1) * 3)}
+            for i in range(4)
+        }))
+
+        assert "room_1" not in store.rooms, "the refuted room should be gone"
+        assert len(store.rooms) == 4
+
+    def test_a_room_created_this_round_is_not_deleted(self):
+        """Every new room is 100% inside one of this round's clusters,
+        so a naive check deletes all of them on creation."""
+        store = self._store()
+
+        store._match_rooms(self._result({
+            1: {(x, 0) for x in range(10)},
+            2: {(x, 5) for x in range(10)},
+        }))
+
+        assert len(store.rooms) == 2
+
+    def test_a_matched_room_survives(self):
+        store = self._store()
+        cells = {(x, 0) for x in range(10)}
+        store._match_rooms(self._result({1: cells}))
+        store._match_rooms(self._result({1: cells}))
+
+        assert len(store.rooms) == 1
+        assert next(iter(store.rooms.values())).recompute_count == 1

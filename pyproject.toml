@@ -25,3 +25,38 @@ select = ["F"]
 # applies to — not hidden in this config file. A new genuinely-unused
 # import or variable anywhere else has nothing to suppress it and will
 # be caught.
+
+[tool.pytest.ini_options]
+# ASYNC FIXTURES NEED THIS. `pytest-homeassistant-custom-component`
+# ships `hass` as an async fixture; under strict mode a test marked
+# `@pytest.mark.asyncio` still receives the async generator rather than
+# the instance, and fails with `'async_generator' object has no
+# attribute ...` several frames later.
+#
+# Auto mode resolves them. It also makes the explicit `asyncio` markers
+# throughout the suite redundant rather than wrong.
+asyncio_mode = "auto"
+markers = [
+    # ASSERTS ON SOMETHING NOT FIELD-CONFIRMED.
+    #
+    # A green test states a fact. When the fact is a guess, the test
+    # preserves the guess: `assert call.body_json == {"assetId": ...}`
+    # stayed green for months on a wire key nobody had ever confirmed.
+    # The real key is `robot_id`, found by tracing a native format
+    # string.
+    #
+    # Nothing about that test looked wrong. It had a plausible value, a
+    # clear name and a passing result -- and it made the assumption
+    # harder to question, not easier, because questioning it meant
+    # arguing with a green test.
+    #
+    # Usage: @pytest.mark.assumed("what is unconfirmed, and what would
+    # settle it"). The reason is not optional -- "unconfirmed" without
+    # saying what would confirm it is how a marker becomes decoration.
+    #
+    # These tests still run and still have to pass. The marker changes
+    # nothing at runtime; it makes the set enumerable, so a field report
+    # that confirms a format can be traced to the tests that guessed at
+    # it.
+    "assumed(reason): asserts on a value that is not field-confirmed",
+]

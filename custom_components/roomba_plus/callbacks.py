@@ -22,7 +22,7 @@ from homeassistant.util import dt as dt_util
 from homeassistant.helpers.event import async_call_later
 from homeassistant.core import HomeAssistant, callback
 
-from .const import CONF_BLID, CONF_CORRELATION_ENTITIES, CONF_SMART_ZONE_DATA, END_SIGNAL_DEBOUNCE_COUNT, END_SIGNAL_MIN_HOLD_SECONDS, EVENT_MAP_RETRAIN_COMPLETED, EVENT_MAP_RETRAIN_STARTED, EVENT_MISSION_COMPLETED, EVENT_ROOM_COMPLETED, POSE_POINT_CM_TO_MM, ROOM_TRANSITION_CANDIDATE_PHASES, UNVISITED_ROOMS_MAX_SUPPRESSION_SECONDS, active_charge_cycles, estcap_to_mah
+from .const import CLEANING_PHASES, CONF_BLID, CONF_CORRELATION_ENTITIES, CONF_SMART_ZONE_DATA, END_SIGNAL_DEBOUNCE_COUNT, END_SIGNAL_MIN_HOLD_SECONDS, EVENT_MAP_RETRAIN_COMPLETED, EVENT_MAP_RETRAIN_STARTED, EVENT_MISSION_COMPLETED, EVENT_ROOM_COMPLETED, POSE_POINT_CM_TO_MM, ROOM_TRANSITION_CANDIDATE_PHASES, UNVISITED_ROOMS_MAX_SUPPRESSION_SECONDS, active_charge_cycles, estcap_to_mah
 from .map_renderer import ROBOT_DIAMETER_MM_ISJ_SERIES
 from .mission_map import (
     MissionMapMismatch,
@@ -35,6 +35,8 @@ if TYPE_CHECKING:
     from .cloud_coordinator import IrobotCloudCoordinator
     from .models import RoombaConfigEntry, RoombaData
 
+from .structural_failures import record_failure, record_success
+
 _LOGGER = logging.getLogger(__name__)
 
 # v2.6.3 A+D — phases used ONLY for mission start/stuck detection (not end).
@@ -42,7 +44,14 @@ _LOGGER = logging.getLogger(__name__)
 # hmPostMsn/hmUsrDock/stuck are NOT included — using had_cleaning_phase flag
 # instead of last_phase guard eliminates the stuck-bypass bug (A) and the
 # false mission-restart bug (D) without needing those phases in either set.
-_ACTIVE_CLEANING_PHASES: frozenset[str] = frozenset({"run", "hmMidMsn", "evac"})
+#: ONE SOURCE, IMPORTED. This was a third literal copy of the same set,
+#: alongside presence_manager.py's and const.py's -- and only const.py
+#: carries the reasoning, including why `evac` deliberately differs from
+#: the vendor's own rule table (an i7+ evacuates MID-mission, and
+#: treating that as an ending reset the map renderer early).
+#:
+#: A copy without the reasoning is the one that gets "corrected" later.
+_ACTIVE_CLEANING_PHASES: frozenset[str] = CLEANING_PHASES
 
 # Aligned with const.py MISSION_END_PHASES plus completed/cancelled which
 # are valid end states in some firmware variants.
@@ -58,6 +67,12 @@ _MISSION_END_PHASES: frozenset[str] = frozenset(
 # neither catches up, the existing 24h idle poll remains the backstop.
 CLOUD_CATCHUP_FIRST_DELAY_SEC = 90
 CLOUD_CATCHUP_SECOND_DELAY_SEC = 600
+# How close a local record's end time must be to the start of a checkpoint
+# sequence for that record to BE the mission that just ended. Same window
+# as MissionStore.backfill_from_cloud()'s matching tolerance, deliberately:
+# a record this accepts is one backfill would pair with the same cloud
+# record.
+_CLOUD_CATCHUP_MISSION_MATCH_SEC = 120
 
 # v2.8.0 AUTO-ADVANCE-ROOM — phases that may represent an inter-room transition
 # on lewis firmware (i7+/s9+) rather than a genuine mission end or recharge.
@@ -155,10 +170,71 @@ def _room_transition_confidence_ok(
             "faster than estimated, or robot just entered it)",
             elapsed, expected, _ROOM_TRANSITION_MIN_ELAPSED_RATIO,
         )
-    return _ok
+    return bool(_ok)
 
 
 # ── Partial-message-safe top-level key lookup ───────────────────────────────
+
+def _mission_recovered_after_stuck(
+    entry: RoombaConfigEntry, mission: dict[str, Any]
+) -> bool | None:
+    """Did this mission carry on after its stuck event?
+
+    Answered from what the mission RECORDED rather than from a live
+    clock, because the clock it replaces was measuring the wrong thing:
+    `stuck_cleared_ts` is rewritten on every re-entry into an active
+    phase, so a mission that resumed and then cleaned for hours read as
+    abandoned whenever its final room ran short.
+
+    Two signals, both already in the cloud record:
+
+      - rooms the robot finished (`finEvents` entries with a completed
+        status), which a robot that gave up does not accumulate
+      - a `travel` event whose destination is the dock, which is how a
+        mission ends when the robot drove home rather than being
+        cancelled or expiring
+
+    Returns None when the record is not available -- a Prime robot, a
+    local-only setup, or the cloud simply not having caught up. The
+    caller then falls back to the old elapsed-time test, which is wrong
+    in one direction but better than refusing to classify.
+    """
+    cc = getattr(entry.runtime_data, "cloud_coordinator", None)
+    if cc is None:
+        return None
+    mission_id = mission.get("missionId") or mission.get("mission_id")
+    if not mission_id:
+        return None
+
+    for record in getattr(cc, "raw_records", None) or []:
+        if not isinstance(record, dict):
+            continue
+        if record.get("missionId") != mission_id:
+            continue
+        timeline = record.get("timeline")
+        if not isinstance(timeline, dict):
+            return None
+        events = timeline.get("finEvents") or []
+
+        rooms_done = sum(
+            1 for ev in events
+            if isinstance(ev, dict)
+            and ev.get("type") == "room"
+            and (ev.get("room") or {}).get("status") in (0, 6)
+        )
+        docked = any(
+            isinstance(ev, dict)
+            and ev.get("type") == "travel"
+            and (ev.get("travel") or {}).get("dest") == "dock"
+            for ev in events
+        )
+        # EITHER is enough. A mission that finished rooms after being
+        # freed did not abandon, whatever its ending; and one that drove
+        # home under its own power did not abandon either.
+        return rooms_done > 0 or docked
+
+    return None
+
 
 def _merged_top_level(
     entry: RoombaConfigEntry,
@@ -185,7 +261,7 @@ def _merged_top_level(
     """
     value = reported.get(key)
     if value:
-        return value
+        return dict(value)
     roomba = getattr(entry.runtime_data, "roomba", None)
     master = getattr(roomba, "master_state", None) or {}
     return ((master.get("state") or {}).get("reported") or {}).get(key) or {}
@@ -225,6 +301,37 @@ def _capture_zone_names(
     return []  # NONE (600-series) or SMART without cloud
 
 
+def _mission_already_terminal(entry: RoombaConfigEntry, mssn_strt_tm: int) -> bool:
+    """MissionStore already holds a terminal record for this mssnStrtTm
+    whose ended_at is within the MQTT re-delivery window -- i.e. a phase
+    flipping back to run/hmMidMsn/evac under the same mssnStrtTm is a
+    post-terminal replay pulse, not a new mission start.
+
+    A terminal record older than the window means a genuine new segment
+    (980/900-series multi-recharge keeps mssnStrtTm across segments), so
+    older terminal records do not suppress.
+    """
+    if not mssn_strt_tm:
+        return False
+    data: RoombaData = entry.runtime_data
+    store = data.mission_store
+    if store is None:
+        return False
+    from .mission_store import MissionStore
+    candidate_id = f"m_{mssn_strt_tm}"
+    now = dt_util.utcnow()
+    for r in store.records:
+        if (
+            MissionStore.base_mission_id(r.get("id")) == candidate_id
+            and MissionStore.is_terminal_result(r.get("result"))
+        ):
+            ended = r.get("ended_at")
+            ended_dt = dt_util.parse_datetime(ended) if ended else None
+            if ended_dt is None or (now - ended_dt).total_seconds() <= _CLOUD_CATCHUP_MISSION_MATCH_SEC:
+                return True
+    return False
+
+
 # ── Mission record builder ────────────────────────────────────────────────────
 
 async def async_record_mission(
@@ -235,6 +342,7 @@ async def async_record_mission(
     zones: list[str],
     start_ts: int,
     nstuck_delta: int,
+    mission_error_code: int = 0,
     recharge_min: int = 0,
     result_override: str | None = None,
     npicks_delta: int = 0,
@@ -284,7 +392,12 @@ async def async_record_mission(
         )
 
     phase = mission.get("phase", "")
-    error_code: int = mission.get("error", 0) or 0
+    # THE MISSION, NOT THE LAST FRAME. `mission.error` is whatever the
+    # end message carried; `mission_error_code` is whatever appeared at
+    # any point. An error that fires mid-drive and clears itself -- the
+    # 42 that filed a failed mission as `completed` -- is only in the
+    # second.
+    error_code: int = (mission.get("error", 0) or 0) or mission_error_code
 
     # F6c — result_override takes precedence (e.g. "blocked_timeout")
     if result_override:
@@ -320,7 +433,7 @@ async def async_record_mission(
 
     # F8b — capture error context at mission end
     # pose is None for firmware 3.20+ and 600-series; absent when null.
-    error_position_mm: dict | None = None
+    error_position_mm: dict[str, Any] | None = None
     if error_code:
         _pose = _merged_top_level(entry, reported, "pose")
         pose_point = _pose.get("point") if _pose else None
@@ -383,7 +496,8 @@ async def async_record_mission(
         "npicks_delta": npicks_delta,   # v3.2.0 ANOMALY-EXPLAIN
     }
 
-    await data.mission_store.async_append(record)
+    if not data.mission_store.update_terminal_fields(record["id"], record):
+        await data.mission_store.async_append(record)
     await data.mission_store.async_save(hass, entry.entry_id)
 
     # v3.1.0 L9-MAP — update the personal relocalisation baseline.
@@ -419,6 +533,7 @@ async def async_record_mission(
         # would mix in mid-mission jitter unrelated to charge-cycle deltas.
         bbchg3 = _merged_top_level(entry, reported, "bbchg3")
         raw_estcap = bbchg3.get("estCap")
+        cycles_energy = active_charge_cycles(bbchg3)
         if raw_estcap:
             profile = data.robot_profile
             if profile is not None:
@@ -430,6 +545,16 @@ async def async_record_mission(
                 )
                 if estcap_mah is not None:
                     rps.record_estcap_observation(estcap_mah)
+                    # F12e — advance the lifetime energy high-water here,
+                    # where RobotProfileStore is already being persisted:
+                    # the sensor read path stays side-effect-free and a
+                    # restart between polls cannot lose the floor.
+                    voltage = profile.battery_voltage if profile else 14.8
+                    energy_kwh = round(
+                        estcap_mah * voltage * int(cycles_energy or 0) / 1_000_000, 3
+                    )
+                    if energy_kwh:
+                        rps.update_energy_high_water(energy_kwh)
                     await rps.async_save(hass, entry.entry_id)
 
     # v2.9.0 EVENT-BUS — fire roomba_plus_mission_completed for automations.
@@ -592,6 +717,10 @@ def make_mission_callback(
     _last_mirrored_recharge_min: int = 0
     # F6h — stuck recovery tracking
     had_stuck_event: bool = False
+    #: Any error seen during the mission, not the one in its last
+    #: message. A code that fires and clears -- error 42 on the way to
+    #: dock, filed as `completed` -- leaves no trace in the end state.
+    mission_error_code: int = 0
     stuck_cleared_ts: float = 0.0
     # v2.6.3 A+D — True once robot enters an active cleaning phase in this mission.
     # Replaces the last_phase-in-_CLEANING_PHASES guard so that:
@@ -605,6 +734,7 @@ def make_mission_callback(
         nonlocal current_leg_rechrgM
         nonlocal _last_mirrored_recharge_min
         nonlocal had_stuck_event, stuck_cleared_ts, had_cleaning_phase
+        nonlocal mission_error_code
         nonlocal npicks_at_start
         nonlocal end_signal_streak, end_signal_first_ts
 
@@ -652,10 +782,20 @@ def make_mission_callback(
         # to 0 in the mission-end MQTT message.
         # v2.6.3 D — guard with had_cleaning_phase so stuck → run (recovery)
         # does NOT re-fire this block and corrupt mission_start_ts/nstuck_at_start.
-        if phase in _ACTIVE_CLEANING_PHASES and not had_cleaning_phase:
+        #
+        # A same mssnStrtTm reappearing here after MissionStore already
+        # holds a terminal record for it is a post-terminal replay pulse
+        # (stale/re-delivered MQTT state), not a genuine resume — treat it
+        # as inert enrichment instead of re-opening the mission.
+        _candidate_mission_start_ts = mission.get("mssnStrtTm") or 0
+        if (
+            phase in _ACTIVE_CLEANING_PHASES
+            and not had_cleaning_phase
+            and not _mission_already_terminal(entry, _candidate_mission_start_ts)
+        ):
             had_cleaning_phase = True
             current_mission_zones = _capture_zone_names(entry, reported)
-            mission_start_ts = mission.get("mssnStrtTm") or 0
+            mission_start_ts = _candidate_mission_start_ts
             bbrun = _merged_top_level(entry, reported, "bbrun")
             nstuck_at_start = bbrun.get("nStuck", 0)
             npicks_at_start = bbrun.get("nPicks", 0)
@@ -664,6 +804,7 @@ def make_mission_callback(
             last_recharge_phase_ts = 0.0
             _last_mirrored_recharge_min = 0
             had_stuck_event = False
+            mission_error_code = 0
             stuck_cleared_ts = 0.0
             _LOGGER.debug(
                 "MissionStore: mission started ts=%s nstuck_baseline=%d",
@@ -781,6 +922,11 @@ def make_mission_callback(
         # v2.6.3 A — check whenever mission is active (had_cleaning_phase=True),
         # not just during specific phases. This catches nStuck increments that
         # arrive while the robot is in the 'stuck' phase itself.
+        # Whenever it appears -- see mission_error_code above.
+        _err = mission.get("error") or 0
+        if isinstance(_err, int) and _err > 0:
+            mission_error_code = _err
+
         if had_cleaning_phase and "bbrun" in reported and not had_stuck_event:
             bbrun_now = reported["bbrun"]
             current_nstuck = bbrun_now.get("nStuck", nstuck_at_start)
@@ -1096,9 +1242,59 @@ def make_mission_callback(
             nstuck_delta = max(0, bbrun_end.get("nStuck", 0) - nstuck_at_start)
             npicks_delta = max(0, bbrun_end.get("nPicks", 0) - npicks_at_start)
 
+            # A FLAT BATTERY IS NOT AN ENTRAPMENT, and the robot's own
+            # counter cannot tell them apart.
+            #
+            # @AlakazipLabs walked an i3 down to 6%, sent `dock`, and
+            # watched it accept, set off, and give up 13 seconds later
+            # with `error 46` (Low battery) -- and `nStuck` went 111 to
+            # 112. So a robot that repeatedly runs itself flat scores
+            # identically to one that repeatedly gets trapped, in the
+            # problem-zone sensor and in every mission result.
+            #
+            # `error 46` separates them, and it is in the same message.
+            # Deliberately narrow: only this one code, only when the
+            # stuck delta would otherwise have decided the result.
+            _battery_abort = (mission.get("error") == 46)
+
             # F6h — classify stuck recovery outcome
             result_override: str | None = None
-            if had_stuck_event and nstuck_delta > 0:
+            if _battery_abort and had_stuck_event and nstuck_delta > 0:
+                # Ran out of charge mid-drive. The mission ended, but not
+                # because anything trapped the robot.
+                result_override = "error"
+            if not _battery_abort and had_stuck_event and nstuck_delta > 0:
+                # WHAT THE MISSION DID, not when its phase last changed.
+                #
+                # The elapsed-time test below reads `stuck_cleared_ts` as
+                # "when the robot resumed". It is not: the edge that sets
+                # it fires on EVERY re-entry into an active phase after a
+                # stuck, so over a long mission the last one wins.
+                #
+                # @ScenicSystemsLLC's Braava got stuck, was freed by hand
+                # 16 minutes later, then cleaned four more rooms and
+                # docked -- 168 minutes, 524 sqft, a genuine `dest: dock`
+                # finish. It was recorded `stuck_and_abandoned`, because
+                # the last room before docking took under five minutes
+                # and that is all the clock was measuring.
+                #
+                # His own suggestion, and it is the right one: decide
+                # retrospectively from what the mission recorded. Rooms
+                # completed after the stuck, plus a real dock finish,
+                # answer the question directly -- elapsed time was only
+                # ever a proxy for both.
+                _resumed = _mission_recovered_after_stuck(entry, mission)
+                if _resumed is not None:
+                    result_override = (
+                        "stuck_and_resumed" if _resumed
+                        else "stuck_and_abandoned"
+                    )
+            if (
+                result_override is None
+                and not _battery_abort
+                and had_stuck_event
+                and nstuck_delta > 0
+            ):
                 # stuck_and_resumed: robot had stuck event but kept cleaning
                 # (stuck_cleared_ts was reset when it re-entered run phase)
                 # We distinguish by whether total run time is > 5 min post-stuck,
@@ -1122,6 +1318,7 @@ def make_mission_callback(
                     list(current_mission_zones),
                     start_ts=mission_start_ts,
                     nstuck_delta=nstuck_delta,
+                    mission_error_code=mission_error_code,
                     recharge_min=recharge_min_accumulator + current_leg_rechrgM,  # F4e
                     result_override=result_override,         # F6h
                     npicks_delta=npicks_delta,                # v3.2.0 ANOMALY-EXPLAIN
@@ -1205,7 +1402,7 @@ def make_mission_callback(
                             if r.get("id") and r.get("name")
                         }
                     _names = [
-                        _cloud_id_to_name.get(_MS.extract_rid(r))
+                        _cloud_id_to_name.get(_MS.extract_rid(r) or "")
                         or r.get("region_name")
                         or (_zone.get(_MS.extract_rid(r)) or {}).get("name")
                         or _MS.extract_rid(r)
@@ -1236,7 +1433,11 @@ def make_mission_callback(
                         _total_est: float | None = None
                         try:
                             from .sensor import _compute_room_time_estimates
-                            _room_secs = _compute_room_time_estimates(entry, _names)
+                            _room_secs = list(
+                                _compute_room_time_estimates(
+                                    entry, [str(x) for x in _names]
+                                )
+                            )
                             _known_secs: list[float] = []
                             for _s in _room_secs:
                                 if _s is None:
@@ -1296,6 +1497,11 @@ def make_mission_callback(
                                     )
                         except Exception:  # noqa: BLE001
                             _LOGGER.debug(
+                                # NOT INSTRUMENTED: an estimate is
+                                # legitimately absent for Auto pass mode
+                                # and for rooms the robot has not
+                                # learned, so a failure here is a normal
+                                # state rather than a defect.
                                 "AUTO-ADVANCE-ROOM: room time estimate lookup "
                                 "failed — continuing without estimates",
                                 exc_info=True,
@@ -1352,6 +1558,8 @@ def make_mission_callback(
                             )
                     except Exception:  # noqa: BLE001
                         _LOGGER.debug(
+                            # NOT INSTRUMENTED: the retry exists because
+                            # the first attempt legitimately finds nothing.
                             "AUTO-ADVANCE-ROOM: estimate retry failed — "
                             "continuing without estimates",
                             exc_info=True,
@@ -1459,7 +1667,17 @@ def make_mission_callback(
             return
         _on_mission_message({"state": {"reported": cached_state}}, _synthetic=True)
 
-    _on_mission_message.recheck_stuck_end_state = _async_recheck_stuck_end_state
+    # ATTACHED TO THE FUNCTION, which mypy cannot express: a plain
+    # Callable has no attributes. `__init__.py` reads it back off the
+    # returned callback to schedule the stuck-end recheck.
+    #
+    # It works and the alternative -- a small class, or returning a
+    # tuple -- would touch the one call site and every test that builds
+    # this callback. Setting it with a typed cast keeps the checker
+    # honest about what is happening.
+    _on_mission_message.recheck_stuck_end_state = (  # type: ignore[attr-defined]
+        _async_recheck_stuck_end_state
+    )
     return _on_mission_message
 
 
@@ -1500,6 +1718,11 @@ def make_mission_complete_callback(
     # v2.10.1 CLOUD-CATCHUP fix — see _latest_has_timeline()'s docstring.
     _baseline_latest_record: dict[str, Any] | None = None
     _baseline_had_timeline: bool = False
+    # Wall clock at the moment the checkpoint sequence started, i.e. mission
+    # end. Used to tell "the baseline record IS the mission that just ended"
+    # apart from "the baseline record is an older mission" — see
+    # _baseline_is_this_mission().
+    _baseline_captured_ts: float = 0.0
 
     def _cancel_pending(*_args: Any) -> None:
         nonlocal _cancel_checkpoint
@@ -1545,12 +1768,65 @@ def make_mission_complete_callback(
         ms = getattr(entry.runtime_data, "mission_store", None)
         if ms is None:
             return True
-        latest = ms.latest()
+        # Annotated because the identity comparison below narrows this to
+        # the DECLARED type of _baseline_latest_record (dict | None),
+        # discarding the None guard directly above it. The annotation
+        # keeps it a plain dict in both branches.
+        latest: dict[str, Any] | None = ms.latest()
         if latest is None:
             return False
-        if latest is _baseline_latest_record:
-            return _baseline_had_timeline
-        return isinstance(latest.get("timeline"), dict)
+        record: dict[str, Any] = latest
+        if record is not _baseline_latest_record:
+            return isinstance(record.get("timeline"), dict)
+        # SAME OBJECT AS THE BASELINE — two opposite situations look
+        # identical here, and the frozen answer is right for only one.
+        #
+        # (a) The baseline is an OLDER mission's record, because this
+        #     mission had not been locally recorded yet when the sequence
+        #     started. Re-reading it live is the Thonno bug above: an
+        #     unrelated backfill enriching that old record in place would
+        #     read as "our mission is done". Frozen answer is correct.
+        #
+        # (b) The baseline IS this mission's record, appended before the
+        #     sequence started — the ordinary case, since _schedule() is
+        #     deferred through call_soon_threadsafe and the recording
+        #     callback has already run by then. Here the frozen answer is
+        #     WRONG and can never become right: backfill_from_cloud()
+        #     merges the cloud timeline into that same dict IN PLACE, so
+        #     the object never changes identity and the frozen False
+        #     outlives the data actually arriving. That produced a
+        #     "giving up for this mission" warning on a mission whose
+        #     timeline had in fact been merged (@mdarocha).
+        #
+        # The record's own end time separates them: this mission ended
+        # when the sequence started, an older one ended before that.
+        if _baseline_is_this_mission(record):
+            return isinstance(record.get("timeline"), dict)
+        return _baseline_had_timeline
+
+    def _baseline_is_this_mission(record: dict[str, Any]) -> bool:
+        """True when `record` is the mission whose end started this sequence.
+
+        Compared against the capture time rather than any id: at capture
+        the record may be seconds old and its `ended_at` is the only field
+        tying it to this mission that is set locally, before any cloud
+        data arrives. The window matches backfill_from_cloud()'s own
+        ±120 s matching tolerance, so a record this considers "this
+        mission" is one backfill would also pair with this mission's
+        cloud record.
+        """
+        if not _baseline_captured_ts:
+            return False
+        ended_str = record.get("ended_at") or ""
+        if not ended_str:
+            return False
+        try:
+            ended_dt = datetime.datetime.fromisoformat(ended_str)
+        except (TypeError, ValueError):
+            return False
+        if ended_dt.tzinfo is None:
+            ended_dt = ended_dt.replace(tzinfo=datetime.timezone.utc)
+        return abs(ended_dt.timestamp() - _baseline_captured_ts) <= _CLOUD_CATCHUP_MISSION_MATCH_SEC
 
     async def _attempt(checkpoint: int) -> None:
         nonlocal _cancel_checkpoint
@@ -1571,6 +1847,7 @@ def make_mission_complete_callback(
 
     def _schedule(checkpoint: int, delay: int) -> None:
         nonlocal _cancel_checkpoint, _baseline_latest_record, _baseline_had_timeline
+        nonlocal _baseline_captured_ts
         _cancel_pending()
         if checkpoint == 1:
             # Captured only when a NEW checkpoint sequence starts
@@ -1586,6 +1863,7 @@ def make_mission_complete_callback(
                 _baseline_latest_record
                 and isinstance(_baseline_latest_record.get("timeline"), dict)
             )
+            _baseline_captured_ts = _time_mod.time()
 
         async def _action(_now: Any) -> None:
             await _attempt(checkpoint)
@@ -1658,7 +1936,9 @@ def make_map_retrain_callback(
             )
         try:
             await cloud_coordinator.async_request_refresh()
+            record_success("map retrain refresh")
         except Exception:  # noqa: BLE001
+            record_failure("map retrain refresh", "refreshing after a retrain")
             _LOGGER.debug(
                 "Roomba+ cloud: map retrain refresh failed for pmap(s) %s — "
                 "no map_retrain_completed event fired",
@@ -1674,7 +1954,7 @@ def make_map_retrain_callback(
 
     def _on_roomba_message(json_data: dict[str, Any]) -> None:
         reported = json_data.get("state", {}).get("reported", {})
-        pmaps: list[dict] = reported.get("pmaps", [])
+        pmaps: list[dict[str, Any]] = reported.get("pmaps", [])
         changed_pids: list[str] = []
         for pmap_entry in pmaps:
             for pid, pmapv in pmap_entry.items():
@@ -1700,7 +1980,7 @@ def make_map_updating_callback(
 ) -> Any:
     """Return an MQTT callback for MAP-RETRAIN-WF (v2.9.0).
 
-    Tracks cleanMissionStatus.notReady & 64 ("Smart Map updating") on every
+    Tracks cleanMissionStatus.notReady == 67 ("Smart Map updating") on every
     message and forwards the live boolean to repairs.async_check_map_
     retrain_workflow(), which owns the duration tracking and Repair Issue
     escalation. No separate timer needed — the robot keeps sending regular
@@ -1710,7 +1990,7 @@ def make_map_updating_callback(
     SMART-tier only (registered conditionally in __init__.py) — notReady's
     bit-64 meaning is specific to Smart Map robots.
     """
-    from .const import MAP_UPDATING_NOT_READY_BIT
+    from .const import MAP_UPDATING_NOT_READY
 
     def _on_roomba_message(json_data: dict[str, Any]) -> None:
         reported = json_data.get("state", {}).get("reported", {})
@@ -1718,7 +1998,8 @@ def make_map_updating_callback(
         if mission is None:
             return
         not_ready = mission.get("notReady", 0) or 0
-        map_updating = bool(not_ready & MAP_UPDATING_NOT_READY_BIT)
+        # Equality: notReady is a scalar index, not a mask.
+        map_updating = not_ready == MAP_UPDATING_NOT_READY
 
         # v2.9.0 — this callback runs on roombapy's MQTT thread, not the
         # event loop thread (same reason make_map_retrain_callback bridges
@@ -1753,7 +2034,7 @@ def _umf_version_changed(
     aligner = entry.runtime_data.umf_aligner
     if aligner is None:
         return True
-    return aligner.pmap_version_id != current_version
+    return bool(aligner.pmap_version_id != current_version)
 
 
 async def _async_realign(
@@ -1783,7 +2064,7 @@ async def _async_realign(
 
 
 def _extract_traversal_umf_positions(
-    records: list[dict],
+    records: list[dict[str, Any]],
     aligner: Any,
     min_missions: int = 3,
 ) -> list[tuple[float, float]]:
@@ -1869,7 +2150,7 @@ async def _async_update_robot_profile_store(
     # J: lifetime sqft staleness tracking
     try:
         _reported = dict(
-            entry.runtime_data.roomba.master_state
+            (entry.runtime_data.roomba.master_state if entry.runtime_data.roomba else {})
             .get("state", {}).get("reported", {})
         )
         _bbrun = _reported.get("bbrun", {})
@@ -2138,7 +2419,12 @@ async def _async_update_gs_smart_coverage(
 
     watermark = gs.last_processed_nmssn
     candidates = [
-        r for r in ms.records()
+        # `records` IS A PROPERTY, and this was the one place calling it.
+        # `ms.records()` raises TypeError -- a Sequence is not callable --
+        # so this whole coverage pass died on its first line every time
+        # it ran. Four other call sites in the integration read it
+        # correctly; this one did not, and nothing exercised it.
+        r for r in ms.records
         if r.get("pmaps_info")
         and (_gs_coverage_safe_int(r.get("nMssn")) or 0) > watermark
     ]

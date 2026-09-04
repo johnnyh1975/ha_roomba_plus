@@ -1,4 +1,13 @@
 {
+  "common": {
+    "weekday_0": "Zo",
+    "weekday_1": "Ma",
+    "weekday_2": "Di",
+    "weekday_3": "Wo",
+    "weekday_4": "Do",
+    "weekday_5": "Vr",
+    "weekday_6": "Za"
+  },
   "config": {
     "step": {
       "user": {
@@ -42,14 +51,14 @@
         }
       },
       "reconfigure": {
-        "description": "Update the connection settings for {name}.",
+        "description": "Werk de verbindingsinstellingen bij voor {name}.",
         "data": {
           "host": "IP address",
           "password": "Password"
         },
         "data_description": {
-          "host": "The local IP address of the Roomba.",
-          "password": "The robot password (hold HOME button to retrieve)."
+          "host": "Het lokale IP-adres van de Roomba.",
+          "password": "Het robotwachtwoord (houd de HOME-knop ingedrukt om het op te halen)."
         }
       },
       "reauth_confirm": {
@@ -63,6 +72,39 @@
           "irobot_username": "Het e-mailadres waarmee je inlogt in de iRobot-app.",
           "irobot_password": "Je huidige iRobot-app-wachtwoord."
         }
+      },
+      "prime_account": {
+        "title": "Log in met je iRobot-account",
+        "description": "Werkt voor elke robot. Vereist voor Combo/V4-modellen, die geen lokale installatie hebben — en de juiste route voor elke robot waarvan het wachtwoord niet automatisch gevonden kon worden. Voer het e-mailadres en wachtwoord van je iRobot-account in; hiermee worden ook andere robots op hetzelfde account gevonden.",
+        "data": {
+          "irobot_username": "iRobot e-mail",
+          "irobot_password": "iRobot wachtwoord"
+        },
+        "data_description": {
+          "irobot_username": "Het e-mailadres waarmee je inlogt op de iRobot-app.",
+          "irobot_password": "Je wachtwoord van de iRobot-app."
+        }
+      },
+      "prime_robot_picker": {
+        "title": "Kies een robot",
+        "description": "Robots gevonden op dit account. Kies er één om in te stellen — voeg extra robots toe door deze installatie opnieuw te starten.",
+        "data": {
+          "blid": "Robot"
+        }
+      },
+      "prime_classic_ip": {
+        "title": "Lokaal netwerkadres",
+        "description": "Kon {name} niet automatisch vinden op je lokale netwerk. Voer het lokale IP-adres in — de inloggegevens die al via je iRobot-account zijn bevestigd, worden hergebruikt.",
+        "data": {
+          "host": "IP-adres"
+        }
+      },
+      "prime_classic_analytics": {
+        "title": "Cloudfuncties voor {name}",
+        "description": "Wil je de inloggegevens van je iRobot-account ook voor deze robot behouden, om kamernamen, missiegeschiedenis en favorieten uit de cloud te lezen? Alle opdrachten blijven hoe dan ook lokaal via MQTT verlopen.",
+        "data": {
+          "enable_cloud_analytics": "Cloudfuncties voor deze robot inschakelen"
+        }
       }
     },
     "error": {
@@ -71,14 +113,24 @@
       "unknown": "Onverwachte fout. Bekijk de Home Assistant-logboeken voor meer informatie.",
       "cloud_auth_failed": "Cloud-authenticatie mislukt. Controleer je iRobot e-mailadres en wachtwoord.",
       "cloud_unavailable": "Kan de iRobot-cloud niet bereiken. Controleer je internetverbinding en probeer opnieuw.",
-      "invalid_cloud_credentials": "Cloud-authenticatie mislukt. Controleer uw iRobot e-mailadres en wachtwoord."
+      "invalid_cloud_credentials": "Cloud-authenticatie mislukt. Controleer uw iRobot e-mailadres en wachtwoord.",
+      "cloud_rate_limited": "De iRobot-cloudlogin is tijdelijk beperkt. Sluit de iRobot-app op je telefoon en probeer het opnieuw.",
+      "cloud_ssl_certificate_error": "Het certificaat van de iRobot-cloudserver kon niet worden geverifieerd. Dit is bijna altijd een tijdelijk probleem bij iRobot — probeer het over een paar uur opnieuw."
     },
     "abort": {
       "already_configured": "Deze robot is al geconfigureerd.",
       "not_irobot_device": "Het gevonden apparaat is geen iRobot-apparaat.",
       "short_blid": "Er is al een configuratiestroom actief voor deze robot.",
       "cannot_connect": "Kan de robot op het opgegeven adres niet bereiken.",
-      "reconfigure_successful": "Connection settings updated successfully."
+      "reconfigure_successful": "Verbindingsinstellingen bijgewerkt.",
+      "no_new_robots_found": "Geen nieuwe robots gevonden op dit iRobot-account — alle robots zijn al ingesteld.",
+      "prime_classic_password_missing": "Het wachtwoord van deze robot was niet opgenomen in het antwoord van het iRobot-account. Probeer deze in plaats daarvan handmatig toe te voegen.",
+      "demand_cleaning_not_supported": "Deze robot rapporteert geen vuildetectiegegevens die nodig zijn voor reiniging op verzoek.",
+      "integration_not_loaded": "De integratie is niet geladen. Herstart Home Assistant en probeer het opnieuw.",
+      "room_schedule_no_rooms": "Er zijn nog geen kamers bekend voor deze robot. Laat hem eerst een kartering voltooien.",
+      "room_schedule_not_supported": "Kamerschema's vereisen een robot die kamergegevens rapporteert.",
+      "no_rooms_to_name": "Geen kamers gevonden om te benoemen. De kamers van deze robot verschijnen zodra hij minstens één keer specifieke kamers heeft schoongemaakt, of zodra zijn kaart beschikbaar is via je iRobot-account.",
+      "all_rooms_named": "Elke kamer heeft al een naam. Hernoem er een via de zoneselector op de apparaatpagina."
     }
   },
   "options": {
@@ -93,6 +145,7 @@
           "map_management": "Zonebeheer",
           "presence_scheduling": "Aanwezigheidsgestuurde planning",
           "demand_cleaning": "Reinigen op aanvraag",
+          "room_schedule": "Schoonmaakfrequentie per kamer",
           "rooms": "Kamers en zones",
           "rest980_migrate": "Kamers importeren uit roomba_rest980"
         }
@@ -114,7 +167,15 @@
           "map_size_px": "Kaartgrootte (pixels)",
           "map_scale_mm_per_px": "Schaal (mm/pixel)",
           "floor_label": "Verdieping (bijv. Begane grond)",
-          "correlation_entities": "Vuil correleren met sensoren (optioneel)"
+          "correlation_entities": "Vuil correleren met sensoren (optioneel)",
+          "map_room_labels": "Kamernamen op de kaartafbeelding tekenen",
+          "prime_favorite_buttons": "Een knop maken voor elke opgeslagen favoriet",
+          "enable_schedule_calendar": "Schoonmaakschema's als agenda tonen",
+          "map_clean_zones": "Reinigingszones tonen",
+          "map_keepout_zones": "Verboden zones tonen",
+          "map_nomop_zones": "Zones zonder dweilen tonen",
+          "enable_maintenance_list": "Onderhoud als takenlijst tonen",
+          "region_sensors": "Aparte sensor per kamer en zone"
         },
         "data_description": {
           "continuous": "Een permanente MQTT-verbinding met de robot behouden. Aanbevolen.",
@@ -151,11 +212,11 @@
           "blocking_behavior": "Behavior when blocked",
           "blocking_timeout_min": "Queue timeout (minutes)"
         },
-        "description": "Configure sensors that must be inactive before a smart_start can begin.",
+        "description": "Stel sensoren in die inactief moeten zijn voordat een smart_start kan beginnen.",
         "data_description": {
-          "blocking_sensors": "Binary sensors that block a start when ON (e.g. door open, motion detected).",
-          "blocking_behavior": "Abort immediately or queue the start until sensors clear.",
-          "blocking_timeout_min": "How long to wait for sensors to clear before giving up."
+          "blocking_sensors": "Binaire sensoren die een start blokkeren wanneer ze AAN staan (bijv. deur open, beweging gedetecteerd).",
+          "blocking_behavior": "Direct afbreken of de start in de wachtrij zetten tot de sensoren vrij zijn.",
+          "blocking_timeout_min": "Hoe lang wachten tot de sensoren vrij zijn voordat wordt opgegeven."
         }
       },
       "map_management": {
@@ -163,7 +224,7 @@
         "data": {
           "selected_zone": "Zone to edit"
         },
-        "description": "Select a zone to rename or hide. Submit with no zone selected to save changes.\n\n{zone_summary}"
+        "description": "Selecteer een zone om te hernoemen of te verbergen. Verzend zonder zone om wijzigingen op te slaan.\n\n{zone_summary}"
       },
       "map_management_edit": {
         "title": "Zone bewerken: {zone_name}",
@@ -171,10 +232,10 @@
           "display_name": "Display name",
           "hidden": "Hide this zone"
         },
-        "description": "Set a display name and visibility for this zone.",
+        "description": "Stel een weergavenaam en zichtbaarheid in voor deze zone.",
         "data_description": {
-          "display_name": "Custom name shown in selectors. Leave blank to use the default name.",
-          "hidden": "Hidden zones are removed from selectors and will not trigger naming repair issues."
+          "display_name": "Aangepaste naam in selectors. Laat leeg om de standaardnaam te gebruiken.",
+          "hidden": "Verborgen zones verdwijnen uit selectors en veroorzaken geen naamgevingsmeldingen."
         }
       },
       "presence_scheduling": {
@@ -190,10 +251,10 @@
       },
       "demand_cleaning": {
         "title": "Demand cleaning",
-        "description": "Automatically start a clean when the floor is significantly dirtier than usual.",
+        "description": "Start automatisch een schoonmaakbeurt wanneer de vloer duidelijk viezer is dan normaal.",
         "data": {
           "demand_cleaning_enabled": "Enable demand cleaning",
-          "demand_clean_multiplier": "Trigger multiplier (e.g. 1.5 = 50% above average)"
+          "demand_clean_multiplier": "Drempelfactor (bijv. 1,5 = 50% boven gemiddeld)"
         }
       },
       "test_cloud_connection": {
@@ -218,15 +279,19 @@
       "invalid_cloud_credentials": "Cloud-authenticatie mislukt. Controleer uw iRobot e-mailadres en wachtwoord.",
       "cannot_connect": "Kan geen verbinding maken. Controleer uw internetverbinding en probeer opnieuw.",
       "no_valid_ids": "Geen geldige invoer gevonden. Gebruik het formaat id=Naam, één per regel.",
-      "pmap_not_resolved": "Kan de kaart-ID niet oplossen. Zorg ervoor dat de robot gedockt en verbonden is en probeer het opnieuw."
+      "pmap_not_resolved": "Kan de kaart-ID niet oplossen. Zorg ervoor dat de robot gedockt en verbonden is en probeer het opnieuw.",
+      "cloud_rate_limited": "De iRobot-cloudlogin is tijdelijk beperkt. Sluit de iRobot-app op je telefoon en probeer het opnieuw.",
+      "cloud_ssl_certificate_error": "Het certificaat van de iRobot-cloudserver kon niet worden geverifieerd. Dit is bijna altijd een tijdelijk probleem bij iRobot — probeer het over een paar uur opnieuw."
     },
     "abort": {
-      "integration_not_loaded": "The integration could not be loaded. Check the logs and reload before opening settings.",
+      "integration_not_loaded": "De integratie kon niet worden geladen. Controleer de logboeken en herlaad voordat je de instellingen opent.",
       "demand_cleaning_not_supported": "Vraaggestuurd reinigen vereist een SMART-robot met geconfigureerde cloudgegevens.",
       "no_rest980_rooms_found": "Geen kamers gevonden in je roomba_rest980-installatie.",
       "rest980_rooms_already_imported": "Alle kamers van roomba_rest980 hebben al een naam in Roomba+.",
       "room_schedule_not_supported": "Frequenties per kamer vereisen een Smart Map-robot met cloudgegevens.",
-      "room_schedule_no_rooms": "Nog geen benoemde kamers op de Smart Map gevonden."
+      "room_schedule_no_rooms": "Nog geen benoemde kamers op de Smart Map gevonden.",
+      "no_rooms_to_name": "Geen kamers gevonden om te benoemen. De kamers van deze robot verschijnen zodra hij minstens één keer specifieke kamers heeft schoongemaakt, of zodra zijn kaart beschikbaar is via je iRobot-account.",
+      "all_rooms_named": "Elke kamer heeft al een naam. Hernoem er een via de zoneselector op de apparaatpagina."
     }
   },
   "entity": {
@@ -259,16 +324,76 @@
         "name": "Missies – Laatste"
       },
       "phase": {
-        "name": "Status"
+        "name": "Status",
+        "state": {
+          "new_mission": "Nieuwe missie",
+          "resumed": "Hervat",
+          "recharging": "Bijladen",
+          "mission_completed": "Missie voltooid",
+          "cancelled": "Geannuleerd",
+          "paused": "Gepauzeerd",
+          "base_unplugged": "Basis zonder stroom",
+          "charging": "Opladen",
+          "running": "Aan het schoonmaken",
+          "emptying_bin": "Bak legen",
+          "stopped": "Gestopt",
+          "stuck": "Vastgelopen",
+          "sent_home": "Naar huis gestuurd",
+          "sent_to_charge": "Naar laadstation gestuurd",
+          "docking_mid_mission": "Tussentijds naar dock",
+          "returning_after_mission": "Terug na missie",
+          "updating_map": "Kaart bijwerken",
+          "refilling_tank": "Tank vullen",
+          "washing_pad": "Dweil wassen",
+          "drying_pad": "Dweil drogen",
+          "not_responding": "Reageert niet",
+          "charging_mid_mission": "Opladen tijdens missie",
+          "no_contact": "Geen contact",
+          "idle": "Inactief",
+          "unknown": "Onbekend"
+        }
       },
       "error": {
         "name": "Status – Fout"
       },
       "job_initiator": {
-        "name": "Status – Gestart door"
+        "name": "Status – Gestart door",
+        "state": {
+          "schedule": "iRobot-schema",
+          "remote_app": "iRobot-app",
+          "manual": "Robot",
+          "local_app": "Home Assistant",
+          "demand": "Reiniging op verzoek",
+          "none": "Geen",
+          "dock_button": "Knop op dock",
+          "alexa": "Alexa",
+          "siri": "Siri",
+          "ifttt": "IFTTT",
+          "homey": "Homey",
+          "openhab": "openHAB",
+          "yonomi": "Yonomi",
+          "bosch": "Bosch",
+          "swisscom": "Swisscom",
+          "alismart": "AliSmart",
+          "teamed_robot": "Gekoppelde robot",
+          "cloud": "iRobot-cloud",
+          "remote_automation": "iRobot-automatisering",
+          "local_automation": "Lokale automatisering",
+          "simulated_automation": "Gesimuleerde automatisering",
+          "wifi": "Wi-Fi",
+          "shell": "Shell",
+          "internal": "Robot (intern)",
+          "unknown": "Onbekend"
+        }
       },
       "clean_mode": {
-        "name": "Instelling – Reinigingsgangen"
+        "name": "Instelling – Reinigingsgangen",
+        "state": {
+          "auto": "Automatisch",
+          "one_pass": "Eén keer",
+          "two_passes": "Twee keer",
+          "not_available": "Niet beschikbaar"
+        }
       },
       "scrubs_count": {
         "name": "Vuildetecties"
@@ -283,10 +408,28 @@
         "name": "Onderhoud – Borstels"
       },
       "carpet_boost_mode": {
-        "name": "Instelling – Tapijt-boost"
+        "name": "Instelling – Tapijt-boost",
+        "state": {
+          "auto": "Automatisch",
+          "performance": "Prestatie",
+          "eco": "Eco",
+          "not_available": "Niet beschikbaar"
+        }
       },
       "clean_base_status": {
-        "name": "Clean Base-status"
+        "name": "Clean Base-status",
+        "state": {
+          "not_available": "Niet beschikbaar",
+          "unknown": "Onbekend",
+          "ready": "Gereed",
+          "empty": "Leeg",
+          "bag_missing": "Zak ontbreekt",
+          "clogged": "Verstopt",
+          "sealing_problem": "Afdichtingsprobleem",
+          "bag_full": "Zak vol",
+          "ir_comms_problem": "IR-communicatieprobleem",
+          "bin_full_sensors_not_cleared": "Stofbak vol — sensoren niet vrijgemaakt"
+        }
       },
       "dock_tank_level": {
         "name": "Tankniveau basisstation"
@@ -295,16 +438,109 @@
         "name": "Tankniveau"
       },
       "mop_pad": {
-        "name": "Dweilpad"
+        "name": "Dweilpad",
+        "state": {
+          "reusable_dry": "Droog (herbruikbaar)",
+          "reusable_wet": "Nat (herbruikbaar)",
+          "disposable_dry": "Droog (wegwerp)",
+          "disposable_wet": "Nat (wegwerp)",
+          "plate_fitted": "Plaat geplaatst",
+          "no_plate": "Geen plaat",
+          "no_pad": "Geen doek",
+          "unknown": "Onbekend"
+        }
       },
       "mop_behavior": {
-        "name": "Dweil – Reinigingssterkte (legacy)"
+        "name": "Dweil – Reinigingssterkte (legacy)",
+        "state": {
+          "no_mop": "Niet dweilen",
+          "extended": "Uitgebreid",
+          "standard": "Standaard",
+          "deep": "Diep",
+          "unknown": "Onbekend"
+        }
       },
       "mop_tank_level": {
         "name": "Dweiltankniveau"
       },
       "readiness": {
-        "name": "Status – Gereedheid"
+        "name": "Status – Gereedheid",
+        "state": {
+          "none": "Geen",
+          "cliff": "Valsensor",
+          "wheel_drop_both": "Beide wielen omlaag",
+          "wheel_drop_left": "Linkerwiel omlaag",
+          "wheel_drop_right": "Rechterwiel omlaag",
+          "final_docking": "Laatste dockingfase",
+          "brush_stall": "Borstel geblokkeerd",
+          "no_bin": "Geen stofbak",
+          "nav_crash": "Navigatiecrash",
+          "misconfigured": "Verkeerd geconfigureerd",
+          "in_rcon": "In rcon",
+          "invalid_command": "Ongeldige opdracht",
+          "insufficient_charge": "Onvoldoende lading",
+          "bin_full": "Stofbak vol",
+          "nav_comms_down": "Navigatiecommunicatie uitgevallen",
+          "in_cloud_upgrade": "Cloud-upgrade bezig",
+          "charging_sleep": "Slaapstand tijdens opladen",
+          "invalid_pad": "Ongeldige doek",
+          "safety_offline": "Veiligheidssysteem offline",
+          "gyro": "Gyroscoop",
+          "lid_open": "Klep open",
+          "bumped": "Aangestoten",
+          "map_version_mismatch": "Kaartversie komt niet overeen",
+          "tank_low": "Reservoir bijna leeg",
+          "no_pad": "Geen doek",
+          "bumper_offline": "Bumper offline",
+          "power_offline": "Voeding offline",
+          "new_cleaning_head": "Nieuwe reinigingskop",
+          "schedule_no_clock": "Schema zonder klok",
+          "battery_auth_error": "Accu-authenticatiefout",
+          "mobility_offline": "Aandrijving offline",
+          "invalid_cal": "Ongeldige kalibratie",
+          "in_dock_halo": "In dockzone",
+          "pad_detection_timeout": "Time-out doekdetectie",
+          "auto_evacuation_clogged": "Automatische lediging verstopt",
+          "sm_bus_permanent_failure": "SM-bus permanente storing",
+          "charge_timeout": "Time-out bij opladen",
+          "saving_map": "Kaart opslaan",
+          "dead_camera": "Camera defect",
+          "backup_refused": "Achteruitrijden geweigerd",
+          "safety_fault_confinement": "Veiligheidsfout begrenzing",
+          "safety_fault_tilt": "Veiligheidsfout kanteling",
+          "safety_fault_rollover": "Veiligheidsfout omslaan",
+          "safety_fault_lift": "Veiligheidsfout optillen",
+          "safety_fault_emergency_stop": "Veiligheidsfout noodstop",
+          "safety_fault_hardware": "Veiligheidsfout hardware",
+          "safety_fault_unknown": "Veiligheidsfout onbekend",
+          "safety_fault_handle_lift": "Veiligheidsfout handgreep optillen",
+          "localization_failed": "Lokalisatie mislukt",
+          "low_beacon_count": "Te weinig bakens",
+          "precheck_refused": "Voorcontrole geweigerd",
+          "safety_fault_drive_stall_left": "Veiligheidsfout aandrijving links geblokkeerd",
+          "safety_fault_drive_stall_right": "Veiligheidsfout aandrijving rechts geblokkeerd",
+          "not_docked": "Niet in dock",
+          "bridge_not_confined": "Brug niet begrensd",
+          "bridge_does_not_reach_dock": "Brug bereikt dock niet",
+          "bridge_does_not_reach_yard": "Brug bereikt tuin niet",
+          "wheel_motor_overtemp": "Wielmotor te warm",
+          "wheel_motor_undertemp": "Wielmotor te koud",
+          "blade_motor_overtemp": "Mesmotor te warm",
+          "blade_motor_undertemp": "Mesmotor te koud",
+          "fleet_disabled": "Vloot uitgeschakeld",
+          "subscription_expired": "Abonnement verlopen",
+          "dead_navigation_board": "Navigatieprint defect",
+          "downloading_map": "Kaart downloaden",
+          "off_dock": "Van dock",
+          "tank_leaking": "Reservoir lekt",
+          "robot_fluid_level_sensor_broken": "Vloeistofniveausensor robot defect",
+          "tank_fluid_level_sensor_broken": "Vloeistofniveausensor reservoir defect",
+          "cleaning_head_hw_mismatch": "Hardware reinigingskop komt niet overeen",
+          "dead_floor_type_sensor": "Vloertypesensor defect",
+          "unknown": "Onbekend",
+          "ota_update": "OTA-update",
+          "unrecognized": "Niet herkend"
+        }
       },
       "next_clean": {
         "name": "Status – Volgende schoonmaak"
@@ -425,6 +661,18 @@
       },
       "pad_days_until_due": {
         "name": "Onderhoud – Pad dagen resterend"
+      },
+      "side_brush_wear_rate": {
+        "name": "Onderhoud – Zijborstel slijtage"
+      },
+      "clean_base_bag_wear_rate": {
+        "name": "Onderhoud – Clean Base-zak slijtage"
+      },
+      "side_brush_days_until_due": {
+        "name": "Onderhoud – Zijborstel dagen resterend"
+      },
+      "clean_base_bag_days_until_due": {
+        "name": "Onderhoud – Clean Base-zak dagen resterend"
       },
       "battery_capacity_mah": {
         "name": "Batterijcapaciteit"
@@ -638,9 +886,6 @@
       "last_mission_team_id": {
         "name": "Missies – Team-ID van laatste missie"
       },
-      "reset_diagnostics": {
-        "name": "Reset-diagnostiek"
-      },
       "health_score_trend": {
         "name": "Gezondheidsscore-trend",
         "state": {
@@ -658,6 +903,391 @@
       },
       "dirt_weather_correlation": {
         "name": "Vuilcorrelatie"
+      },
+      "prime_mission_event": {
+        "name": "Missiegebeurtenis"
+      },
+      "prime_connection_health": {
+        "name": "Verbindingsstatus",
+        "state": {
+          "ok": "OK",
+          "error": "Fout"
+        }
+      },
+      "prime_detected_pad": {
+        "name": "Gedetecteerde pad",
+        "state": {
+          "pad_plate": "Alle doeken geplaatst",
+          "no_pad": "Doek ontbreekt",
+          "disp_dry": "Wegwerpdoek droog",
+          "disp_wet": "Wegwerpdoek nat",
+          "reusable_dry": "Herbruikbare doek droog",
+          "reusable_wet": "Herbruikbare doek nat",
+          "invalid": "Doek niet herkend"
+        }
+      },
+      "prime_runtime_hours": {
+        "name": "Levensduur bedrijfstijd"
+      },
+      "prime_firmware_version": {
+        "name": "Firmwareversie"
+      },
+      "prime_dock_status": {
+        "name": "Dockstatus",
+        "state": {
+          "dock_no_common_error": "Dock geen algemene fout",
+          "pad_wash_unheated_water": "Doek wassen met onverwarmd water",
+          "pad_dry_unheated_air": "Doek drogen met onverwarmde lucht",
+          "pad_wash_normal_heated_water": "Doek wassen met normaal verwarmd water",
+          "pad_dry_heated_air": "Doek drogen met verwarmde lucht",
+          "pad_wash_max_heated_water": "Doek wassen met maximaal verwarmd water",
+          "dock_unknown": "Dock onbekend",
+          "dock_ready": "Dock gereed",
+          "dock_evacuation_in_progress": "Dock lediging bezig",
+          "dock_evacuation_complete": "Dock lediging voltooid",
+          "dock_evacuation_stopping": "Dock lediging stopt",
+          "dock_evacuation_upgrading": "Dock lediging upgraden",
+          "dock_bag_missing": "Dock zak ontbreekt",
+          "dock_clogged": "Dock verstopt",
+          "dock_vacuum_inoperable": "Dock zuigmotor onbruikbaar",
+          "dock_bag_full": "Dock zak vol",
+          "dock_motor_failure": "Dock motorstoring",
+          "dock_partial_clog": "Dock gedeeltelijke verstopping",
+          "dock_communication_failure": "Dock communicatiestoring",
+          "dock_evacuation_report_error": "Dock fout ledigingsrapport",
+          "dock_lifetime_data_report_error": "Dock fout levensduurdatarapport",
+          "dock_all_reports_error": "Dock fout alle rapporten",
+          "dock_hardware_issue_error": "Dock hardwareprobleemfout",
+          "fluid_replenishment_unknown": "Vloeistofbijvulling onbekend",
+          "fluid_replenishment_okay": "Vloeistofbijvulling OK",
+          "fluid_replenishment_started": "Vloeistofbijvulling gestart",
+          "fluid_replenishment_in_progress": "Vloeistofbijvulling bezig",
+          "fluid_replenishment_complete": "Vloeistofbijvulling voltooid",
+          "fluid_replenishment_complete_not_enough_water": "Vloeistofbijvulling voltooid onvoldoende water",
+          "fluid_replenishment_invalid_dock_state_error": "Vloeistofbijvulling fout ongeldige dockstatus",
+          "fluid_replenishment_tank_missing_error": "Vloeistofbijvulling fout reservoir ontbreekt",
+          "fluid_replenishment_tank_level_too_low_error": "Vloeistofbijvulling fout reservoirniveau te laag",
+          "fluid_replenishment_tank_level_sensor_issue_error": "Vloeistofbijvulling fout reservoirniveausensor",
+          "fluid_replenishment_couldnt_insert_snorkel_error": "Vloeistofbijvulling fout snorkel kon niet worden ingebracht",
+          "fluid_replenishment_clog_error": "Vloeistofbijvulling verstoppingsfout",
+          "fluid_replenishment_pump_failure_error": "Vloeistofbijvulling fout pompstoring",
+          "fluid_replenishment_incorrect_robot_tank_error": "Vloeistofbijvulling fout onjuist robotreservoir",
+          "fluid_replenishment_communication_failure_error": "Vloeistofbijvulling fout communicatiestoring",
+          "fluid_replenishment_couldnt_extend_snorkel_error": "Vloeistofbijvulling fout snorkel kon niet worden uitgeschoven",
+          "fluid_replenishment_couldnt_retract_snorkel_error": "Vloeistofbijvulling fout snorkel kon niet worden ingetrokken",
+          "fluid_replenishment_dock_tank_level_not_decreasing_error": "Vloeistofbijvulling fout dockreservoirniveau daalt niet",
+          "fluid_replenishment_robot_tank_level_not_increasing_error": "Vloeistofbijvulling fout robotreservoirniveau stijgt niet",
+          "fluid_replenishment_hardware_issue_error": "Vloeistofbijvulling hardwareprobleemfout",
+          "fluid_replenishment_dock_tank_level_decreasing_error": "Vloeistofbijvulling fout dockreservoirniveau daalt",
+          "fluid_replenishment_robot_tank_filling_timeout_error": "Vloeistofbijvulling fout time-out vullen robotreservoir",
+          "pad_wash_unknown": "Doek wassen onbekend",
+          "pad_wash_okay": "Doek wassen OK",
+          "pad_wash_in_progress": "Doek wassen bezig",
+          "pad_wash_complete_with_success": "Doek wassen succesvol voltooid",
+          "pad_wet_in_progress": "Doek bevochtigen bezig",
+          "pad_wet_complete": "Doek bevochtigen voltooid",
+          "pad_wash_not_available_dock_updating": "Doek wassen niet beschikbaar dock wordt bijgewerkt",
+          "pad_wash_flushing_sluice": "Doek wassen sluis spoelen",
+          "pad_wash_sluice_flush_complete": "Doek wassen sluis spoelen voltooid",
+          "pad_wash_invalid_dock_state_error": "Doek wassen fout ongeldige dockstatus",
+          "pad_wash_clear_fluid_tank_missing_error": "Doek wassen fout schoonwaterreservoir ontbreekt",
+          "pad_wash_clear_fluid_tank_level_too_low_error": "Doek wassen fout schoonwaterniveau te laag",
+          "pad_wash_clear_fluid_tank_level_sensor_issue_error": "Doek wassen fout niveausensor schoonwaterreservoir",
+          "pad_wash_grey_water_tank_missing_error": "Doek wassen fout vuilwaterreservoir ontbreekt",
+          "pad_wash_grey_water_tank_level_too_full_error": "Doek wassen fout vuilwaterniveau te vol",
+          "pad_wash_hardware_error": "Doek wassen hardwarefout",
+          "pad_wash_communication_failure_error": "Doek wassen fout communicatiestoring",
+          "pad_wash_grey_water_tank_level_not_decreasing_error": "Doek wassen fout vuilwaterniveau daalt niet",
+          "pad_wash_grey_water_tank_level_not_increasing_error": "Doek wassen fout vuilwaterniveau stijgt niet",
+          "pad_wash_clear_fluid_tank_level_decreasing_error": "Doek wassen fout schoonwaterniveau daalt",
+          "pad_wash_grey_water_tank_level_decreasing_error": "Doek wassen fout vuilwaterniveau daalt",
+          "pad_wash_hardware_issue_error": "Doek wassen hardwareprobleemfout",
+          "pad_wash_no_pad_attached_error": "Doek wassen fout geen doek bevestigd",
+          "pad_wash_pad_actuator_stall_error": "Doek wassen fout doekactuator geblokkeerd",
+          "pad_dry_unknown": "Doek drogen onbekend",
+          "pad_dry_okay": "Doek drogen OK",
+          "pad_dry_in_progress": "Doek drogen bezig",
+          "pad_dry_complete_with_success": "Doek drogen succesvol voltooid",
+          "pad_dry_interrupt_by_robot": "Doek drogen onderbroken door robot",
+          "pad_dry_interrupt_by_mission": "Doek drogen onderbroken door missie",
+          "pad_dry_interrupt_by_user": "Doek drogen onderbroken door gebruiker",
+          "pad_dry_not_available_dock_updating": "Doek drogen niet beschikbaar dock wordt bijgewerkt",
+          "pad_dry_invalid_state_error": "Doek drogen fout ongeldige status",
+          "pad_dry_motor_stall_error": "Doek drogen fout motor geblokkeerd",
+          "pad_dry_motor_fail_to_start_error": "Doek drogen fout motor start niet",
+          "pad_dry_actuator_stall_error": "Doek drogen fout actuator geblokkeerd",
+          "pad_dry_pad_not_washed_error": "Doek drogen fout doek niet gewassen",
+          "pad_dry_motor_f_e_t_fault_error": "Doek drogen fout motor-FET",
+          "pad_dry_hardware_issue_error": "Doek drogen hardwareprobleemfout",
+          "pad_dry_no_pad_attached_error": "Doek drogen fout geen doek bevestigd",
+          "pad_dry_communication_failure_error": "Doek drogen fout communicatiestoring",
+          "pad_wash_blocked_check_tanks": "Doek wassen geblokkeerd — controleer reservoirs",
+          "not_reported": "Niet gerapporteerd door dit dock",
+          "unrecognized": "Niet herkend"
+        }
+      },
+      "prime_pad_wash_status": {
+        "name": "Pad-wasstatus",
+        "state": {
+          "dock_no_common_error": "Dock geen algemene fout",
+          "pad_wash_unheated_water": "Doek wassen met onverwarmd water",
+          "pad_dry_unheated_air": "Doek drogen met onverwarmde lucht",
+          "pad_wash_normal_heated_water": "Doek wassen met normaal verwarmd water",
+          "pad_dry_heated_air": "Doek drogen met verwarmde lucht",
+          "pad_wash_max_heated_water": "Doek wassen met maximaal verwarmd water",
+          "dock_unknown": "Dock onbekend",
+          "dock_ready": "Dock gereed",
+          "dock_evacuation_in_progress": "Dock lediging bezig",
+          "dock_evacuation_complete": "Dock lediging voltooid",
+          "dock_evacuation_stopping": "Dock lediging stopt",
+          "dock_evacuation_upgrading": "Dock lediging upgraden",
+          "dock_bag_missing": "Dock zak ontbreekt",
+          "dock_clogged": "Dock verstopt",
+          "dock_vacuum_inoperable": "Dock zuigmotor onbruikbaar",
+          "dock_bag_full": "Dock zak vol",
+          "dock_motor_failure": "Dock motorstoring",
+          "dock_partial_clog": "Dock gedeeltelijke verstopping",
+          "dock_communication_failure": "Dock communicatiestoring",
+          "dock_evacuation_report_error": "Dock fout ledigingsrapport",
+          "dock_lifetime_data_report_error": "Dock fout levensduurdatarapport",
+          "dock_all_reports_error": "Dock fout alle rapporten",
+          "dock_hardware_issue_error": "Dock hardwareprobleemfout",
+          "fluid_replenishment_unknown": "Vloeistofbijvulling onbekend",
+          "fluid_replenishment_okay": "Vloeistofbijvulling OK",
+          "fluid_replenishment_started": "Vloeistofbijvulling gestart",
+          "fluid_replenishment_in_progress": "Vloeistofbijvulling bezig",
+          "fluid_replenishment_complete": "Vloeistofbijvulling voltooid",
+          "fluid_replenishment_complete_not_enough_water": "Vloeistofbijvulling voltooid onvoldoende water",
+          "fluid_replenishment_invalid_dock_state_error": "Vloeistofbijvulling fout ongeldige dockstatus",
+          "fluid_replenishment_tank_missing_error": "Vloeistofbijvulling fout reservoir ontbreekt",
+          "fluid_replenishment_tank_level_too_low_error": "Vloeistofbijvulling fout reservoirniveau te laag",
+          "fluid_replenishment_tank_level_sensor_issue_error": "Vloeistofbijvulling fout reservoirniveausensor",
+          "fluid_replenishment_couldnt_insert_snorkel_error": "Vloeistofbijvulling fout snorkel kon niet worden ingebracht",
+          "fluid_replenishment_clog_error": "Vloeistofbijvulling verstoppingsfout",
+          "fluid_replenishment_pump_failure_error": "Vloeistofbijvulling fout pompstoring",
+          "fluid_replenishment_incorrect_robot_tank_error": "Vloeistofbijvulling fout onjuist robotreservoir",
+          "fluid_replenishment_communication_failure_error": "Vloeistofbijvulling fout communicatiestoring",
+          "fluid_replenishment_couldnt_extend_snorkel_error": "Vloeistofbijvulling fout snorkel kon niet worden uitgeschoven",
+          "fluid_replenishment_couldnt_retract_snorkel_error": "Vloeistofbijvulling fout snorkel kon niet worden ingetrokken",
+          "fluid_replenishment_dock_tank_level_not_decreasing_error": "Vloeistofbijvulling fout dockreservoirniveau daalt niet",
+          "fluid_replenishment_robot_tank_level_not_increasing_error": "Vloeistofbijvulling fout robotreservoirniveau stijgt niet",
+          "fluid_replenishment_hardware_issue_error": "Vloeistofbijvulling hardwareprobleemfout",
+          "fluid_replenishment_dock_tank_level_decreasing_error": "Vloeistofbijvulling fout dockreservoirniveau daalt",
+          "fluid_replenishment_robot_tank_filling_timeout_error": "Vloeistofbijvulling fout time-out vullen robotreservoir",
+          "pad_wash_unknown": "Doek wassen onbekend",
+          "pad_wash_okay": "Doek wassen OK",
+          "pad_wash_in_progress": "Doek wassen bezig",
+          "pad_wash_complete_with_success": "Doek wassen succesvol voltooid",
+          "pad_wet_in_progress": "Doek bevochtigen bezig",
+          "pad_wet_complete": "Doek bevochtigen voltooid",
+          "pad_wash_not_available_dock_updating": "Doek wassen niet beschikbaar dock wordt bijgewerkt",
+          "pad_wash_flushing_sluice": "Doek wassen sluis spoelen",
+          "pad_wash_sluice_flush_complete": "Doek wassen sluis spoelen voltooid",
+          "pad_wash_invalid_dock_state_error": "Doek wassen fout ongeldige dockstatus",
+          "pad_wash_clear_fluid_tank_missing_error": "Doek wassen fout schoonwaterreservoir ontbreekt",
+          "pad_wash_clear_fluid_tank_level_too_low_error": "Doek wassen fout schoonwaterniveau te laag",
+          "pad_wash_clear_fluid_tank_level_sensor_issue_error": "Doek wassen fout niveausensor schoonwaterreservoir",
+          "pad_wash_grey_water_tank_missing_error": "Doek wassen fout vuilwaterreservoir ontbreekt",
+          "pad_wash_grey_water_tank_level_too_full_error": "Doek wassen fout vuilwaterniveau te vol",
+          "pad_wash_hardware_error": "Doek wassen hardwarefout",
+          "pad_wash_communication_failure_error": "Doek wassen fout communicatiestoring",
+          "pad_wash_grey_water_tank_level_not_decreasing_error": "Doek wassen fout vuilwaterniveau daalt niet",
+          "pad_wash_grey_water_tank_level_not_increasing_error": "Doek wassen fout vuilwaterniveau stijgt niet",
+          "pad_wash_clear_fluid_tank_level_decreasing_error": "Doek wassen fout schoonwaterniveau daalt",
+          "pad_wash_grey_water_tank_level_decreasing_error": "Doek wassen fout vuilwaterniveau daalt",
+          "pad_wash_hardware_issue_error": "Doek wassen hardwareprobleemfout",
+          "pad_wash_no_pad_attached_error": "Doek wassen fout geen doek bevestigd",
+          "pad_wash_pad_actuator_stall_error": "Doek wassen fout doekactuator geblokkeerd",
+          "pad_dry_unknown": "Doek drogen onbekend",
+          "pad_dry_okay": "Doek drogen OK",
+          "pad_dry_in_progress": "Doek drogen bezig",
+          "pad_dry_complete_with_success": "Doek drogen succesvol voltooid",
+          "pad_dry_interrupt_by_robot": "Doek drogen onderbroken door robot",
+          "pad_dry_interrupt_by_mission": "Doek drogen onderbroken door missie",
+          "pad_dry_interrupt_by_user": "Doek drogen onderbroken door gebruiker",
+          "pad_dry_not_available_dock_updating": "Doek drogen niet beschikbaar dock wordt bijgewerkt",
+          "pad_dry_invalid_state_error": "Doek drogen fout ongeldige status",
+          "pad_dry_motor_stall_error": "Doek drogen fout motor geblokkeerd",
+          "pad_dry_motor_fail_to_start_error": "Doek drogen fout motor start niet",
+          "pad_dry_actuator_stall_error": "Doek drogen fout actuator geblokkeerd",
+          "pad_dry_pad_not_washed_error": "Doek drogen fout doek niet gewassen",
+          "pad_dry_motor_f_e_t_fault_error": "Doek drogen fout motor-FET",
+          "pad_dry_hardware_issue_error": "Doek drogen hardwareprobleemfout",
+          "pad_dry_no_pad_attached_error": "Doek drogen fout geen doek bevestigd",
+          "pad_dry_communication_failure_error": "Doek drogen fout communicatiestoring",
+          "pad_wash_blocked_check_tanks": "Doek wassen geblokkeerd — controleer reservoirs",
+          "not_reported": "Niet gerapporteerd door dit dock",
+          "unrecognized": "Niet herkend"
+        }
+      },
+      "prime_pad_dry_status": {
+        "name": "Pad-droogstatus",
+        "state": {
+          "dock_no_common_error": "Dock geen algemene fout",
+          "pad_wash_unheated_water": "Doek wassen met onverwarmd water",
+          "pad_dry_unheated_air": "Doek drogen met onverwarmde lucht",
+          "pad_wash_normal_heated_water": "Doek wassen met normaal verwarmd water",
+          "pad_dry_heated_air": "Doek drogen met verwarmde lucht",
+          "pad_wash_max_heated_water": "Doek wassen met maximaal verwarmd water",
+          "dock_unknown": "Dock onbekend",
+          "dock_ready": "Dock gereed",
+          "dock_evacuation_in_progress": "Dock lediging bezig",
+          "dock_evacuation_complete": "Dock lediging voltooid",
+          "dock_evacuation_stopping": "Dock lediging stopt",
+          "dock_evacuation_upgrading": "Dock lediging upgraden",
+          "dock_bag_missing": "Dock zak ontbreekt",
+          "dock_clogged": "Dock verstopt",
+          "dock_vacuum_inoperable": "Dock zuigmotor onbruikbaar",
+          "dock_bag_full": "Dock zak vol",
+          "dock_motor_failure": "Dock motorstoring",
+          "dock_partial_clog": "Dock gedeeltelijke verstopping",
+          "dock_communication_failure": "Dock communicatiestoring",
+          "dock_evacuation_report_error": "Dock fout ledigingsrapport",
+          "dock_lifetime_data_report_error": "Dock fout levensduurdatarapport",
+          "dock_all_reports_error": "Dock fout alle rapporten",
+          "dock_hardware_issue_error": "Dock hardwareprobleemfout",
+          "fluid_replenishment_unknown": "Vloeistofbijvulling onbekend",
+          "fluid_replenishment_okay": "Vloeistofbijvulling OK",
+          "fluid_replenishment_started": "Vloeistofbijvulling gestart",
+          "fluid_replenishment_in_progress": "Vloeistofbijvulling bezig",
+          "fluid_replenishment_complete": "Vloeistofbijvulling voltooid",
+          "fluid_replenishment_complete_not_enough_water": "Vloeistofbijvulling voltooid onvoldoende water",
+          "fluid_replenishment_invalid_dock_state_error": "Vloeistofbijvulling fout ongeldige dockstatus",
+          "fluid_replenishment_tank_missing_error": "Vloeistofbijvulling fout reservoir ontbreekt",
+          "fluid_replenishment_tank_level_too_low_error": "Vloeistofbijvulling fout reservoirniveau te laag",
+          "fluid_replenishment_tank_level_sensor_issue_error": "Vloeistofbijvulling fout reservoirniveausensor",
+          "fluid_replenishment_couldnt_insert_snorkel_error": "Vloeistofbijvulling fout snorkel kon niet worden ingebracht",
+          "fluid_replenishment_clog_error": "Vloeistofbijvulling verstoppingsfout",
+          "fluid_replenishment_pump_failure_error": "Vloeistofbijvulling fout pompstoring",
+          "fluid_replenishment_incorrect_robot_tank_error": "Vloeistofbijvulling fout onjuist robotreservoir",
+          "fluid_replenishment_communication_failure_error": "Vloeistofbijvulling fout communicatiestoring",
+          "fluid_replenishment_couldnt_extend_snorkel_error": "Vloeistofbijvulling fout snorkel kon niet worden uitgeschoven",
+          "fluid_replenishment_couldnt_retract_snorkel_error": "Vloeistofbijvulling fout snorkel kon niet worden ingetrokken",
+          "fluid_replenishment_dock_tank_level_not_decreasing_error": "Vloeistofbijvulling fout dockreservoirniveau daalt niet",
+          "fluid_replenishment_robot_tank_level_not_increasing_error": "Vloeistofbijvulling fout robotreservoirniveau stijgt niet",
+          "fluid_replenishment_hardware_issue_error": "Vloeistofbijvulling hardwareprobleemfout",
+          "fluid_replenishment_dock_tank_level_decreasing_error": "Vloeistofbijvulling fout dockreservoirniveau daalt",
+          "fluid_replenishment_robot_tank_filling_timeout_error": "Vloeistofbijvulling fout time-out vullen robotreservoir",
+          "pad_wash_unknown": "Doek wassen onbekend",
+          "pad_wash_okay": "Doek wassen OK",
+          "pad_wash_in_progress": "Doek wassen bezig",
+          "pad_wash_complete_with_success": "Doek wassen succesvol voltooid",
+          "pad_wet_in_progress": "Doek bevochtigen bezig",
+          "pad_wet_complete": "Doek bevochtigen voltooid",
+          "pad_wash_not_available_dock_updating": "Doek wassen niet beschikbaar dock wordt bijgewerkt",
+          "pad_wash_flushing_sluice": "Doek wassen sluis spoelen",
+          "pad_wash_sluice_flush_complete": "Doek wassen sluis spoelen voltooid",
+          "pad_wash_invalid_dock_state_error": "Doek wassen fout ongeldige dockstatus",
+          "pad_wash_clear_fluid_tank_missing_error": "Doek wassen fout schoonwaterreservoir ontbreekt",
+          "pad_wash_clear_fluid_tank_level_too_low_error": "Doek wassen fout schoonwaterniveau te laag",
+          "pad_wash_clear_fluid_tank_level_sensor_issue_error": "Doek wassen fout niveausensor schoonwaterreservoir",
+          "pad_wash_grey_water_tank_missing_error": "Doek wassen fout vuilwaterreservoir ontbreekt",
+          "pad_wash_grey_water_tank_level_too_full_error": "Doek wassen fout vuilwaterniveau te vol",
+          "pad_wash_hardware_error": "Doek wassen hardwarefout",
+          "pad_wash_communication_failure_error": "Doek wassen fout communicatiestoring",
+          "pad_wash_grey_water_tank_level_not_decreasing_error": "Doek wassen fout vuilwaterniveau daalt niet",
+          "pad_wash_grey_water_tank_level_not_increasing_error": "Doek wassen fout vuilwaterniveau stijgt niet",
+          "pad_wash_clear_fluid_tank_level_decreasing_error": "Doek wassen fout schoonwaterniveau daalt",
+          "pad_wash_grey_water_tank_level_decreasing_error": "Doek wassen fout vuilwaterniveau daalt",
+          "pad_wash_hardware_issue_error": "Doek wassen hardwareprobleemfout",
+          "pad_wash_no_pad_attached_error": "Doek wassen fout geen doek bevestigd",
+          "pad_wash_pad_actuator_stall_error": "Doek wassen fout doekactuator geblokkeerd",
+          "pad_dry_unknown": "Doek drogen onbekend",
+          "pad_dry_okay": "Doek drogen OK",
+          "pad_dry_in_progress": "Doek drogen bezig",
+          "pad_dry_complete_with_success": "Doek drogen succesvol voltooid",
+          "pad_dry_interrupt_by_robot": "Doek drogen onderbroken door robot",
+          "pad_dry_interrupt_by_mission": "Doek drogen onderbroken door missie",
+          "pad_dry_interrupt_by_user": "Doek drogen onderbroken door gebruiker",
+          "pad_dry_not_available_dock_updating": "Doek drogen niet beschikbaar dock wordt bijgewerkt",
+          "pad_dry_invalid_state_error": "Doek drogen fout ongeldige status",
+          "pad_dry_motor_stall_error": "Doek drogen fout motor geblokkeerd",
+          "pad_dry_motor_fail_to_start_error": "Doek drogen fout motor start niet",
+          "pad_dry_actuator_stall_error": "Doek drogen fout actuator geblokkeerd",
+          "pad_dry_pad_not_washed_error": "Doek drogen fout doek niet gewassen",
+          "pad_dry_motor_f_e_t_fault_error": "Doek drogen fout motor-FET",
+          "pad_dry_hardware_issue_error": "Doek drogen hardwareprobleemfout",
+          "pad_dry_no_pad_attached_error": "Doek drogen fout geen doek bevestigd",
+          "pad_dry_communication_failure_error": "Doek drogen fout communicatiestoring",
+          "pad_wash_blocked_check_tanks": "Doek wassen geblokkeerd — controleer reservoirs",
+          "not_reported": "Niet gerapporteerd door dit dock",
+          "unrecognized": "Niet herkend"
+        }
+      },
+      "prime_suction_level": {
+        "name": "Zuigkracht",
+        "state": {
+          "invalid": "Ongeldig",
+          "low": "Laag",
+          "medium": "Gemiddeld",
+          "high": "Hoog",
+          "turbo": "Turbo"
+        }
+      },
+      "prime_charge_cycles_ok": {
+        "name": "Laadcycli (geslaagd)"
+      },
+      "prime_charge_cycles_error": {
+        "name": "Laadcycli (mislukt)"
+      },
+      "prime_system_uptime": {
+        "name": "Systeem-uptime"
+      },
+      "prime_navigation_resets": {
+        "name": "Navigatie-resets"
+      },
+      "prime_serial_number": {
+        "name": "Serienummer"
+      },
+      "prime_consumable_part": {
+        "name": "Onderhoud – {part}"
+      },
+      "prime_part_edge_brush": {
+        "name": "Onderhoud – Zijborstel"
+      },
+      "prime_part_multi_surface_brush": {
+        "name": "Onderhoud – Hoofdborstel(s)"
+      },
+      "prime_part_filter": {
+        "name": "Onderhoud – Hoogrendementsfilter"
+      },
+      "prime_part_dirt_bag": {
+        "name": "Onderhoud – Stofzak"
+      },
+      "prime_part_mop_pads": {
+        "name": "Onderhoud – DualClean-dweilpads"
+      },
+      "prime_part_cliff_sensors": {
+        "name": "Onderhoud – Valsensoren"
+      },
+      "prime_part_pad_wash_cleaning": {
+        "name": "Onderhoud – BasisDock wassysteem"
+      },
+      "prime_part_pad_wash_replacement": {
+        "name": "Onderhoud – Wasbaar dweilpad"
+      },
+      "prime_cleaning_mode": {
+        "name": "Reinigingsmodus",
+        "state": {
+          "vacuuming": "Stofzuigen",
+          "mopping": "Dweilen",
+          "vacuuming_and_mopping": "Stofzuigen en dweilen"
+        }
+      },
+      "region_last_cleaned": {
+        "name": "Laatst schoongemaakt – {region}"
+      },
+      "part_edge_brush": {
+        "name": "Onderhoud – Zijborstel"
+      },
+      "part_dirt_bag": {
+        "name": "Onderhoud – Stofzak"
+      },
+      "last_charge": {
+        "name": "Laatst opgeladen"
+      },
+      "reset_diagnostics_summary": {
+        "name": "Diagnostische reset-tellers"
       }
     },
     "binary_sensor": {
@@ -674,7 +1304,10 @@
         "name": "Dweilprobleem"
       },
       "mop_tank_present": {
-        "name": "Dweiltank aanwezig"
+        "name": "Waterreservoir in de robot"
+      },
+      "prime_dock_error": {
+        "name": "Dockfout"
       },
       "mop_lid_closed": {
         "name": "Dweilklep open"
@@ -687,6 +1320,18 @@
         "state": {
           "on": "Vereist",
           "off": "OK"
+        },
+        "state_attributes": {
+          "required_actions": {
+            "name": "Vereiste acties",
+            "state": {
+              "replace_filter": "Vervang het filter.",
+              "replace_main_brushes": "Vervang de hoofdborstels.",
+              "replace_mop_pad": "Vervang de dweilpad.",
+              "replace_side_brush": "Vervang de zijborstel.",
+              "replace_clean_base_bag": "Vervang de Clean Base-zak."
+            }
+          }
         }
       },
       "start_blocked": {
@@ -734,6 +1379,12 @@
       },
       "layout_change_detected": {
         "name": "Indelingswijziging gedetecteerd"
+      },
+      "prime_start_blocked": {
+        "name": "Start geblokkeerd"
+      },
+      "prime_quiet_hours": {
+        "name": "In stille uren"
       }
     },
     "button": {
@@ -798,6 +1449,36 @@
       },
       "gentle_mode": {
         "name": "Instelling – Zachte modus"
+      },
+      "prime_carpet_boost": {
+        "name": "Instelling – Tapijtboost"
+      },
+      "prime_schedule": {
+        "name": "Schema – {schedule}"
+      },
+      "prime_child_lock": {
+        "name": "Kinderslot"
+      },
+      "prime_eco_charge": {
+        "name": "Eco-laden"
+      },
+      "prime_pad_dry_allowed": {
+        "name": "Dweil drogen"
+      },
+      "prime_two_pass": {
+        "name": "Twee keer schoonmaken"
+      },
+      "prime_vac_high": {
+        "name": "Extra zuigkracht"
+      },
+      "prime_quiet_hours_active": {
+        "name": "Niet storen"
+      },
+      "prime_pad_wash_allowed": {
+        "name": "Dweilwassen toegestaan"
+      },
+      "prime_pad_dry": {
+        "name": "Dweil nu drogen"
       }
     },
     "select": {
@@ -836,17 +1517,133 @@
           "eco": "Eco",
           "performance": "Prestaties"
         }
+      },
+      "prime_suction_level": {
+        "name": "Zuigkracht",
+        "state": {
+          "light": "Licht",
+          "normal": "Normaal",
+          "deep": "Diep"
+        }
+      },
+      "prime_map": {
+        "name": "Kaart",
+        "state": {
+          "follow_robot": "Robot volgen"
+        }
+      },
+      "prime_cleaning_mode": {
+        "name": "Reinigingsmodus",
+        "state": {
+          "vacuum": "Stofzuigen",
+          "mop": "Dweilen",
+          "vacuum_and_mop": "Stofzuigen en dweilen",
+          "vacuum_then_mop": "Stofzuigen, dan dweilen"
+        }
+      },
+      "prime_pad_dry_duration": {
+        "name": "Droogduur dweil",
+        "state": {
+          "2_hours": "2 uur",
+          "3_hours": "3 uur",
+          "4_hours": "4 uur",
+          "5_hours": "5 uur",
+          "6_hours": "6 uur"
+        }
+      },
+      "prime_pad_wash_return": {
+        "name": "Wasfrequentie dweil",
+        "state": {
+          "after_each_room": "Na elke kamer",
+          "by_time": "Per tijdsinterval",
+          "by_area": "Per oppervlakte-interval",
+          "mission": "Voor en na routines",
+          "refill": "Ook tijdens bijvullen",
+          "refill_and_room": "Ook tussen kamers"
+        }
+      },
+      "prime_pad_wash_area_interval": {
+        "name": "Wasinterval op oppervlakte",
+        "state": {
+          "6": "6",
+          "8": "8",
+          "10": "10",
+          "15": "15",
+          "20": "20"
+        }
+      },
+      "prime_pad_wash_time_interval": {
+        "name": "Wasinterval op tijd",
+        "state": {
+          "10": "10 minuten",
+          "15": "15 minuten",
+          "20": "20 minuten",
+          "25": "25 minuten"
+        }
+      },
+      "prime_pad_wash_heat": {
+        "name": "Verwarmd dweilwater",
+        "state": {
+          "no_heat": "Geen verwarming",
+          "default_heat": "Standaardverwarming",
+          "high_heat": "Hoge verwarming"
+        }
+      },
+      "prime_autoevac_frequency": {
+        "name": "Frequentie automatisch legen",
+        "state": {
+          "every_routine": "Na elke routine",
+          "every_2_routines": "Elke 2 routines",
+          "every_3_routines": "Elke 3 routines",
+          "on_dock_return": "Bij terugkeer naar het station",
+          "10": "Elke 10 oppervlakte-eenheden",
+          "15": "Elke 15 oppervlakte-eenheden",
+          "25": "Elke 25 oppervlakte-eenheden",
+          "30": "Elke 30 oppervlakte-eenheden",
+          "50": "Elke 50 oppervlakte-eenheden"
+        }
+      },
+      "prime_pad_wetness": {
+        "name": "Dweilvochtigheid",
+        "state": {
+          "1": "1",
+          "2": "2",
+          "3": "3",
+          "4": "4",
+          "5": "5",
+          "6": "6",
+          "7": "7",
+          "8": "8",
+          "9": "9",
+          "10": "10",
+          "11": "11",
+          "12": "12",
+          "13": "13",
+          "14": "14",
+          "15": "15",
+          "16": "16",
+          "17": "17",
+          "18": "18",
+          "19": "19",
+          "20": "20"
+        }
       }
     },
     "image": {
       "map": {
-        "name": "Reinigingskaart"
+        "name": "Schoonmaakroute"
       },
       "coverage_map": {
-        "name": "Dekkingskaart"
+        "name": "Dekkings-heatmap"
       },
       "rooms_map": {
         "name": "Kamerkaart"
+      },
+      "cleaning_map": {
+        "name": "Live schoonmaakkaart"
+      },
+      "raw_map": {
+        "name": "Ruwe livekaart"
       }
     },
     "device_tracker": {
@@ -915,7 +1712,7 @@
       "description": "Uw iRobot-cloudkaart bevat {zone_count} door de robot gedetecteerde obstakelzone(s). Voer enkele schoonmaakmissies uit zodat Roomba+ deze lokaal kan bevestigen."
     },
     "dock_contact_health": {
-      "title": "Dock contact health issue detected",
+      "title": "Probleem met dockcontacten gedetecteerd",
       "description": "The robot is reporting dock contact issues:\n\n- Contact chatters: {chatters}\n- Knockoffs (unintended undocking): {knockoffs}\n- Charge aborts: {aborts}\n\n**Recommended actions:**\n1. Clean the charging contacts on the robot and dock with a dry cloth.\n2. Ensure the dock is on a flat, stable surface.\n3. If knockoffs are high, check for obstructions near the dock. {smberr_context}"
     },
     "mqtt_watchdog": {
@@ -964,7 +1761,8 @@
       "health_score_drop": "Gezondheidsscore gedaald",
       "map_retrain_started": "Kaart-herleren gestart",
       "map_retrain_completed": "Kaart-herleren voltooid",
-      "firmware_updated": "Firmware bijgewerkt"
+      "firmware_updated": "Firmware bijgewerkt",
+      "start_blocked": "Start geblokkeerd door een storing"
     }
   },
   "services": {
@@ -984,43 +1782,43 @@
     },
     "reset_filter": {
       "name": "Reset filter",
-      "description": "Record the current time as the filter replacement date."
+      "description": "Leg het huidige tijdstip vast als vervangdatum van het filter."
     },
     "reset_brush": {
       "name": "Reset brushes",
-      "description": "Record the current time as the brush replacement date."
+      "description": "Leg het huidige tijdstip vast als vervangdatum van de borstel."
     },
     "reset_battery": {
       "name": "Reset battery",
-      "description": "Record the current time as the battery replacement date."
+      "description": "Leg het huidige tijdstip vast als vervangdatum van de accu."
     },
     "reset_pad": {
       "name": "Reset cleaning pad",
-      "description": "Record the current time as the pad replacement date (Braava only)."
+      "description": "Leg het huidige tijdstip vast als vervangdatum van de doek (alleen Braava)."
     },
     "smart_start": {
       "name": "Smart start",
-      "description": "Start a clean with blocking-sensor checks."
+      "description": "Start een schoonmaakbeurt met controle op blokkerende sensoren."
     },
     "clean_sequence": {
       "name": "Start sequence clean",
-      "description": "Start robot B when robot A completes its current mission. The listener fires once and removes itself automatically.",
+      "description": "Start robot B wanneer robot A zijn huidige missie voltooit. De luisteraar wordt één keer geactiveerd en verwijdert zichzelf.",
       "fields": {
         "entity_id": {
           "name": "Trigger robot",
-          "description": "Vacuum entity for robot A (must finish first)."
+          "description": "Stofzuigerentiteit voor robot A (moet eerst klaar zijn)."
         },
         "target_entity_id": {
           "name": "Target robot",
-          "description": "Vacuum entity for robot B (started after A finishes)."
+          "description": "Stofzuigerentiteit voor robot B (start nadat A klaar is)."
         },
         "require_completed": {
           "name": "Require completion",
-          "description": "When true, robot B starts only if robot A docked normally."
+          "description": "Indien waar start robot B alleen als robot A normaal is gedockt."
         },
         "delay_minutes": {
           "name": "Delay (minutes)",
-          "description": "Wait this many minutes after robot A docks before starting robot B."
+          "description": "Wacht zoveel minuten nadat robot A is gedockt voordat robot B start."
         }
       }
     },
@@ -1031,6 +1829,38 @@
     "restore_backup": {
       "name": "Back-up herstellen",
       "description": "Herstelt alle gegevens uit een back-up ZIP. Werkt direct, geen herstart nodig."
+    },
+    "set_quiet_hours": {
+      "name": "Stille uren instellen",
+      "description": "Schrijft het Niet storen-venster van het huishouden.",
+      "fields": {
+        "start": {
+          "name": "Start",
+          "description": "Wanneer de stille uren dagelijks beginnen."
+        },
+        "end": {
+          "name": "Einde",
+          "description": "Wanneer ze dagelijks eindigen."
+        },
+        "ends_at": {
+          "name": "Stil tot",
+          "description": "Eén moment in plaats van een dagelijks venster."
+        }
+      }
+    },
+    "clean_zone": {
+      "name": "Zone reinigen",
+      "description": "Stuurt een Prime-robot op verzoek naar een of meer schoonmaakzones, op naam of numeriek id.",
+      "fields": {
+        "zone_name": {
+          "name": "Zonenaam",
+          "description": "Een of meer zonenamen, precies zoals op de kaart. Gebruik dit of zone-id."
+        },
+        "zone_id": {
+          "name": "Zone-id",
+          "description": "Een of meer numerieke zone-ids. Gebruik dit of zonenaam."
+        }
+      }
     }
   },
   "exceptions": {
@@ -1053,28 +1883,73 @@
       "message": "De robot werkt momenteel zijn Smart Map bij. Wacht tot de gereedheidsensor 'Gereed' toont en probeer het opnieuw."
     },
     "entity_not_found": {
-      "message": "Entity {entity_id} not found in the entity registry."
+      "message": "Entiteit {entity_id} niet gevonden in het entiteitenregister."
     },
     "maintenance_store_unavailable": {
-      "message": "Maintenance store is not available for {entity_id}. Reload the integration and try again."
+      "message": "Onderhoudsopslag is niet beschikbaar voor {entity_id}. Herlaad de integratie en probeer het opnieuw."
     },
     "no_valid_segments": {
-      "message": "No segments matched the current map. The map may have been retrained — re-run a room mission in the iRobot app to refresh the room layout."
+      "message": "Geen segmenten kwamen overeen met de huidige kaart. De kaart is mogelijk opnieuw geleerd — voer een kamermissie uit in de iRobot-app om de indeling te vernieuwen."
     },
     "config_entry_not_found": {
-      "message": "No config entry found for {entity_id}. Try reloading the integration."
+      "message": "Geen configuratie-item gevonden voor {entity_id}. Probeer de integratie opnieuw te laden."
     },
     "room_name_and_room_passes_conflict": {
-      "message": "Provide either room_name or room_passes, not both."
+      "message": "Geef of room_name of room_passes op, niet beide."
     },
     "room_name_or_room_passes_required": {
-      "message": "Provide either room_name or room_passes."
+      "message": "Geef room_name of room_passes op."
     },
     "no_rooms_resolved": {
       "message": "Geen kamers om te reinigen — geef minstens één kamernaam op."
     },
     "backup_entity_not_found": {
       "message": "De entiteit \"{entity_id}\" kon niet aan een Roomba+-robot worden gekoppeld. Controleer de entity-ID en probeer opnieuw."
+    },
+    "cloud_credentials_invalid": {
+      "message": "De iRobot-cloudgegevens zijn ongeldig: {error}"
+    },
+    "cloud_temporarily_unavailable": {
+      "message": "De iRobot-cloud is tijdelijk niet beschikbaar: {error}"
+    },
+    "unknown_rooms": {
+      "message": "Onbekende kamer(s) voor {entity_id}: {rooms}. Bekende kamers: {known}."
+    },
+    "favorite_prime_only": {
+      "message": "run_favorite is alleen beschikbaar voor V4/Prime-robots"
+    },
+    "favorite_not_found": {
+      "message": "Geen uitvoerbare favoriet met id {favorite_id}"
+    },
+    "dock_operation_in_progress": {
+      "message": "Het station is bezig ({operation}). De robot accepteert pas opdrachten als het klaar is."
+    },
+    "quiet_hours_incomplete": {
+      "message": "Stille uren hebben een start en een einde nodig, of geen van beide."
+    },
+    "quiet_hours_ambiguous": {
+      "message": "Geef een dagelijks venster (start en einde) of één moment — de robot accepteert precies één van beide."
+    },
+    "quiet_hours_not_prime": {
+      "message": "{entity} is geen V4/Prime-robot met een huishouden."
+    },
+    "prime_not_connected": {
+      "message": "Deze robot heeft geen cloudverbinding."
+    },
+    "cloud_required": {
+      "message": "Kamers kiezen vereist iRobot-cloudgegevens op deze robot. Voeg ze toe in de integratie-opties, of maak het hele huis schoon."
+    },
+    "calendar_room_not_found": {
+      "message": "Geen kamer komt overeen met \"{text}\". Noem een kamer in de titel, beschrijving of locatie — bekende kamers: {known}. Laat alle drie leeg voor het hele huis."
+    },
+    "zone_name_and_zone_id_conflict": {
+      "message": "Geef zone_name of zone_id op, niet beide."
+    },
+    "zone_name_or_zone_id_required": {
+      "message": "Geef zone_name of zone_id op."
+    },
+    "zone_name_not_found": {
+      "message": "Een of meer zonenamen zijn niet op de kaart gevonden."
     }
   },
   "selector": {

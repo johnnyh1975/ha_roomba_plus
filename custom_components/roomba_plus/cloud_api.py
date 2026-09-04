@@ -20,7 +20,6 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-from json.decoder import JSONDecodeError
 import logging
 import urllib.parse
 import uuid
@@ -28,6 +27,17 @@ from datetime import UTC, datetime
 from typing import Any
 
 import aiohttp
+
+from roombapy_prime import (
+    AuthConnectionError as _PrimeConnectionError,
+    AuthCredentialsError as _PrimeCredentialsError,
+    AuthError as _PrimeAuthError,
+    AuthRateLimitedError as _PrimeRateLimitedError,
+    AuthSSLError as _PrimeSSLError,
+    AuthTimeoutError as _PrimeTimeoutError,
+    LoginResult,
+    login as _prime_login,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -45,7 +55,6 @@ def _discovery_url(country_code: str) -> str:
 # Backward-compatible name used by existing tests (v1.8.3+: parameterised by country_code)
 DISCOVERY_URL: str = _discovery_url("US")
 
-_USER_AGENT_APP = "iRobot/7.16.2.140449 CFNetwork/1568.100.1.2.1 Darwin/24.0.0"
 _USER_AGENT_AWS = "aws-sdk-iOS/2.27.6 iOS/18.0.1 en_US"
 
 
@@ -54,7 +63,41 @@ class CloudApiError(Exception):
 
 
 class AuthenticationError(CloudApiError):
-    """Authentication failed — bad credentials or rate-limited."""
+    """The login attempt itself was rejected -- wrong username/password.
+
+    NOT raised for rate-limiting (see RateLimitedError) or malformed/
+    incomplete server responses (those stay a plain CloudApiError --
+    re-entering the same, correct credentials wouldn't fix a malformed
+    response, so telling the user to check their password would be
+    misleading). Mirrors roombapy-prime's AuthCredentialsError, since
+    v3.6.0 (login consolidation) -- see authenticate()'s docstring."""
+
+
+class RateLimitedError(CloudApiError):
+    """iRobot's backend rejected the login due to too many active app
+    sessions/tokens (the "mqtt slot" case) -- distinct from
+    AuthenticationError since the fix is "close the iRobot app and try
+    again", not "check your password". Mirrors roombapy-prime's
+    AuthRateLimitedError, since v3.6.0."""
+
+
+class SSLCertificateError(CloudApiError):
+    """TLS/certificate verification failure -- see
+    _raise_clear_ssl_error(). Confidently "not your fault, temporary":
+    a cert failure is unambiguous, unlike CloudConnectionError below."""
+
+
+class CloudConnectionError(CloudApiError):
+    """Could not establish a connection at all (DNS failure, connection
+    refused, network unreachable). Deliberately does NOT claim to know
+    whether this is iRobot's fault or the caller's own network -- that
+    confidence isn't justified here, unlike SSLCertificateError.
+    Mirrors roombapy-prime's AuthConnectionError, since v3.6.0."""
+
+
+class CloudTimeoutError(CloudApiError):
+    """Request was sent but no response came back in time. Mirrors
+    roombapy-prime's AuthTimeoutError, since v3.6.0."""
 
 
 def _raise_clear_ssl_error(exc: "aiohttp.ClientSSLError") -> None:
@@ -78,7 +121,7 @@ def _raise_clear_ssl_error(exc: "aiohttp.ClientSSLError") -> None:
     temporary (resolves once iRobot renews their certificate) and outside
     this integration's control either way.
     """
-    raise CloudApiError(
+    raise SSLCertificateError(
         "Could not verify iRobot's cloud server certificate. This is "
         "almost always a temporary problem on iRobot's servers (an "
         "expired or currently-renewing TLS certificate), not something "
@@ -120,8 +163,16 @@ class _AWSSignatureV4:
         host: str,
         path: str,
         query_params: dict[str, Any] | None = None,
+        payload: str = "",
     ) -> dict[str, str]:
-        """Return a dict of headers with AWS SigV4 Authorization included."""
+        """Return a dict of headers with AWS SigV4 Authorization included.
+
+        `payload` is the exact request body that will be sent, byte for
+        byte. SigV4 signs a hash of it, so the caller MUST transmit the
+        same string it passed here — re-serialising the same dict can
+        reorder keys and invalidate the signature. Empty string (the
+        default) is correct for GET.
+        """
         now = datetime.now(tz=UTC)
         amz_date = now.strftime("%Y%m%dT%H%M%SZ")
         date_stamp = now.strftime("%Y%m%d")
@@ -145,7 +196,7 @@ class _AWSSignatureV4:
         canonical_headers = "".join(f"{k}:{base_headers[k]}\n" for k in sorted_keys)
         signed_hdrs = ";".join(sorted_keys)
 
-        payload_hash = self._sha256_hex("")
+        payload_hash = self._sha256_hex(payload)
         canonical_req = "\n".join([
             method.upper(), canonical_uri, canonical_qs,
             canonical_headers, signed_hdrs, payload_hash,
@@ -202,143 +253,84 @@ class IrobotCloudApi:
         self._country_code = country_code
 
         self._app_id = str(uuid.uuid4())
-        self._device_id = str(uuid.uuid4())
 
         # Filled by authenticate()
         self._deployment: dict[str, Any] = {}
         self._credentials: dict[str, Any] = {}
         self.robots: dict[str, Any] = {}   # blid → robot_info
+        self.login_result: LoginResult | None = None
 
     # ── Auth ──────────────────────────────────────────────────────────────────
 
     async def authenticate(self) -> None:
-        """Run the full Gigya → iRobot auth flow. Stores credentials in-place."""
-        endpoints = await self._discover()
-        gigya_key = endpoints["gigya"]["api_key"]
-        uid, sig, ts = await self._login_gigya(endpoints["gigya"], gigya_key)
-        await self._login_irobot(uid, sig, ts)
+        """Run the full Gigya → iRobot auth flow via roombapy-prime's
+        shared login() (roombapy_prime.auth). Stores credentials in-place.
+
+        CONSOLIDATED (v3.6.0): previously this method ran its own
+        Gigya/discovery/login HTTP handling (~150 lines, since removed).
+        roombapy-prime's login() implements the exact same flow --
+        confirmed identical endpoint-for-endpoint, payload-for-payload,
+        since it was originally carried over FROM this file -- so this
+        removes a maintained duplicate rather than changing behavior.
+
+        Catches roombapy-prime's typed exception subclasses and maps
+        each to this module's own vocabulary, so existing callers
+        (config_flow.py, cloud_coordinator.py) keep working against
+        CloudApiError/AuthenticationError/etc. without needing to know
+        anything about roombapy-prime directly -- that mapping is this
+        method's job, not theirs.
+        """
+        try:
+            result = await _prime_login(
+                self._session, self._username, self._password, self._country_code,
+                app_id=f"IOS-{self._app_id}",
+            )
+        except _PrimeCredentialsError as exc:
+            raise AuthenticationError(str(exc)) from exc
+        except _PrimeRateLimitedError as exc:
+            raise RateLimitedError(str(exc)) from exc
+        except _PrimeSSLError as exc:
+            raise SSLCertificateError(str(exc)) from exc
+        except _PrimeConnectionError as exc:
+            raise CloudConnectionError(str(exc)) from exc
+        except _PrimeTimeoutError as exc:
+            raise CloudTimeoutError(str(exc)) from exc
+        except _PrimeAuthError as exc:
+            # Any other AuthError (malformed/incomplete response, discovery
+            # response missing an expected field, etc.) -- deliberately
+            # NOT AuthenticationError: re-entering the same, correct
+            # credentials would not fix a malformed server response, so
+            # telling the user to check their password here would be
+            # misleading.
+            raise CloudApiError(str(exc)) from exc
+
+        self._deployment = result.deployment
+        self._credentials = {
+            "CognitoId": result.credentials.cognito_id,
+            "AccessKeyId": result.credentials.access_key_id,
+            "SecretKey": result.credentials.secret_key,
+            "SessionToken": result.credentials.session_token,
+        }
+        self.robots = result.raw.get("robots", {})
+        # NEW (this session, prompted by a real "onboarding is slow" field
+        # report): the full LoginResult object, kept alongside the
+        # already-extracted pieces above rather than discarded. Lets a
+        # caller (config_flow.py, specifically) hand this exact result to
+        # PrimeFactory.create_prime_robot()'s new login_result= parameter
+        # moments later during the same onboarding run, instead of
+        # triggering a second, fully redundant Gigya+iRobot login chain.
+        # See config_flow.py's _async_create_prime_entry() and
+        # __init__.py's _async_setup_entry_prime() for the actual
+        # bridging logic -- this attribute only makes the data available,
+        # it doesn't do any caching itself.
+        self.login_result = result
+
         _LOGGER.info("iRobot cloud: authenticated, %d robot(s) found", len(self.robots))
         _LOGGER.debug(
             "iRobot cloud: robots dict — keys=%s  first_robot=%s",
             sorted(self.robots.keys()),
             next(iter(self.robots.values()), {}),
         )
-
-    async def _discover(self) -> dict[str, Any]:
-        try:
-            async with self._session.get(_discovery_url(self._country_code)) as resp:
-                if resp.status != 200:
-                    raise CloudApiError(f"Endpoint discovery failed: {resp.status}")
-                data = await resp.json()
-        except aiohttp.ClientSSLError as exc:
-            _raise_clear_ssl_error(exc)
-        self._deployment = data["deployments"][data["current_deployment"]]
-        return data
-
-    async def _login_gigya(
-        self, gigya_cfg: dict, api_key: str
-    ) -> tuple[str, str, str]:
-        base = f"https://accounts.{gigya_cfg['datacenter_domain']}/accounts."
-        payload = {
-            "loginMode": "standard",
-            "loginID": self._username,
-            "password": self._password,
-            "include": "profile,data,emails,subscriptions,preferences,",
-            "includeUserInfo": "true",
-            "targetEnv": "mobile",
-            "source": "showScreenSet",
-            "sdk": "ios_swift_1.3.0",
-            "sessionExpiration": "-2",
-            "apikey": api_key,
-        }
-        headers = {
-            "Content-Type": "application/x-www-form-urlencoded",
-            "User-Agent": _USER_AGENT_APP,
-        }
-        try:
-            async with self._session.post(
-                f"{base}login",
-                headers=headers,
-                data=urllib.parse.urlencode(payload),
-            ) as resp:
-                text = await resp.text()
-        except aiohttp.ClientSSLError as exc:
-            _raise_clear_ssl_error(exc)
-
-        try:
-            result = json.loads(text)
-        except JSONDecodeError as exc:
-            raise AuthenticationError(f"Invalid Gigya response: {text[:200]}") from exc
-
-        if result.get("errorCode", 0) != 0:
-            raise AuthenticationError(f"Gigya login failed: {result.get('errorMessage', result)}")
-
-        for key in ("UID", "UIDSignature", "signatureTimestamp"):
-            if key not in result:
-                raise AuthenticationError(f"Missing '{key}' in Gigya response")
-
-        return result["UID"], result["UIDSignature"], result["signatureTimestamp"]
-
-    async def _login_irobot(self, uid: str, uid_sig: str, sig_ts: str) -> None:
-        payload = {
-            "app_id": f"IOS-{self._app_id}",
-            "app_info": {
-                "device_id": f"IOS-{self._device_id}",
-                "device_name": "iPhone",
-                "language": "en_US",
-                "version": "7.16.2",
-            },
-            "assume_robot_ownership": "0",
-            "authorizer_params": {"devices_per_token": 5},
-            "gigya": {"signature": uid_sig, "timestamp": sig_ts, "uid": uid},
-            "multiple_authorizer_token_support": True,
-            "push_info": {
-                "platform": "APNS",
-                "push_token": "eb6ce9172e5fde9fe4c9a2a945b35709f73fb8014eb7449d944c6c89eeb472fb",
-                "supported_push_types": ["cr", "cse", "bf", "ae", "pm", "te", "dt"],
-            },
-            "skip_ownership_check": "0",
-        }
-        try:
-            async with self._session.post(
-                f"{self._deployment['httpBase']}/v2/login",
-                headers={"Content-Type": "application/json"},
-                json=payload,
-            ) as resp:
-                text = await resp.text()
-        except aiohttp.ClientSSLError as exc:
-            _raise_clear_ssl_error(exc)
-
-        try:
-            result = json.loads(text)
-        except JSONDecodeError as exc:
-            raise AuthenticationError(f"Invalid iRobot login response: {text[:200]}") from exc
-
-        if result.get("errorCode"):
-            msg = result.get("errorMessage") or str(result)
-            if "mqtt slot" in msg.lower():
-                msg = (
-                    "Cloud auth rate-limited. Close the iRobot app and try again. "
-                    f"({msg})"
-                )
-            raise AuthenticationError(msg)
-
-        if "credentials" not in result:
-            raise AuthenticationError(f"No credentials in iRobot login response: {result}")
-
-        # v3.3.0 REVIEW-REMAINDER — validate the four keys _signed_get
-        # depends on AT the gate, so a degraded response raises a clean
-        # AuthenticationError here instead of a bare KeyError later
-        # (same validate-at-the-gate lesson as the import endpoint).
-        creds = result["credentials"]
-        for key in ("CognitoId", "AccessKeyId", "SecretKey", "SessionToken"):
-            if key not in creds:
-                raise AuthenticationError(
-                    f"Missing '{key}' in iRobot credentials response"
-                )
-
-        self._credentials = creds
-        self.robots = result.get("robots", {})
 
     # ── Authenticated requests ─────────────────────────────────────────────────
 
@@ -387,6 +379,55 @@ class IrobotCloudApi:
         except aiohttp.ClientSSLError as exc:
             _raise_clear_ssl_error(exc)
 
+    async def _aws_post(
+        self, url: str, body: dict[str, Any], *, _retry: bool = True
+    ) -> Any:
+        """POST a JSON body to url with AWS SigV4 signing.
+
+        The body is serialised ONCE and both signed and sent, because
+        SigV4 hashes the exact bytes transmitted — re-serialising between
+        signing and sending can reorder keys and invalidate the signature.
+        """
+        if not self._credentials:
+            raise AuthenticationError("Not authenticated — call authenticate() first")
+
+        payload = json.dumps(body, separators=(",", ":"))
+        region = self._credentials["CognitoId"].split(":")[0]
+        parsed = urllib.parse.urlparse(url)
+        signer = _AWSSignatureV4(
+            self._credentials["AccessKeyId"],
+            self._credentials["SecretKey"],
+            self._credentials["SessionToken"],
+        )
+        headers = signer.signed_headers(
+            method="POST",
+            service="execute-api",
+            region=region,
+            host=parsed.netloc,
+            path=parsed.path,
+            payload=payload,
+        )
+
+        try:
+            async with self._session.post(
+                url, headers=headers, data=payload
+            ) as resp:
+                if resp.status == 403 and _retry:
+                    _LOGGER.debug("iRobot cloud: 403 — reauthenticating")
+                    await self.authenticate()
+                    return await self._aws_post(url, body, _retry=False)
+                if resp.status != 200:
+                    text = await resp.text()
+                    raise CloudApiError(
+                        f"Cloud request failed ({resp.status}): {url} — {text[:200]}"
+                    )
+                try:
+                    return await resp.json()
+                except aiohttp.ContentTypeError as exc:
+                    raise CloudApiError(f"Non-JSON cloud response: {url}") from exc
+        except aiohttp.ClientSSLError as exc:
+            _raise_clear_ssl_error(exc)
+
     # ── Public data endpoints ─────────────────────────────────────────────────
 
     async def get_pmaps(self, blid: str) -> list[dict[str, Any]]:
@@ -405,15 +446,33 @@ class IrobotCloudApi:
             f"{self._deployment['httpBaseAuth']}/v1/{blid}"
             f"/pmaps/{pmap_id}/versions/{version_id}/umf"
         )
-        return await self._aws_get(url, {"activeDetails": "2"})
+        return dict(await self._aws_get(url, {"activeDetails": "2"}))
 
     async def get_mission_history(
         self,
         blid: str,
         count: int = 100,
         before_ts: int | None = None,
-    ) -> dict[str, Any]:
+    ) -> Any:
         """Return mission history for a robot.
+
+        RETURNS WHATEVER THE ENDPOINT SENDS -- a list of per-mission
+        records in practice, and the caller checks for that
+        (`isinstance(raw_history, list)` in cloud_coordinator).
+
+        a39 declared `dict[str, Any]` and wrapped the result in
+        `dict()` to match. @ScenicSystemsLLC: every refresh on every
+        robot raised `dictionary update sequence element #0 has length
+        31; 2 is required` -- Python trying to read a 31-key mission
+        record as a key/value pair.
+
+        Not a display bug. The ValueError escaped the coordinator's
+        handler (which catches CloudApiError, ClientError and
+        TimeoutError, not ValueError), so the whole coroutine died
+        after favourites and pmaps had already been fetched -- and
+        Python returns nothing from a raising function. Favourite
+        buttons went unavailable and every room map went blank, on
+        three robots, every cycle.
 
         Args:
             blid:      Robot BLID.
@@ -432,6 +491,91 @@ class IrobotCloudApi:
         if before_ts is not None:
             params["before"] = str(before_ts)
         return await self._aws_get(url, params)
+
+    async def get_robot_parts(self, blid: str) -> dict[str, Any]:
+        """Return the consumable-part counters iRobot's own app displays.
+
+        Endpoint recovered by reverse engineering the official Android app
+        (`com.irobot.home` 7.18.0): the native core registers this call as
+        `core::protocol::GetRobotPartsAwsDeserializer` against the literal
+        path template `/v1/robots/%s/parts`, and the response is what fills
+        the app's four maintenance tiles.
+
+        NOTE THE PATH SHAPE. Every other authenticated endpoint in this
+        class is `/v1/{blid}/...`; this one is `/v1/robots/{blid}/parts`.
+        Dropping the `robots/` segment returns a 403 from API Gateway
+        ("not authorized to perform: execute-api:Invoke"), not a 404 —
+        i.e. a wrong path here looks like an auth failure, which is why
+        the segment is called out rather than left to look like a typo.
+
+        Response shape (confirmed live against an i3+, sku i355640,
+        firmware daredevil+2.6.0):
+
+            {"robot_id": "<blid>", "num_parts": 4, "parts": [
+                {"part_id": "35", "counter": 43, "count_type": "minutes",
+                 "count_used": 1344, "count_remaining": 1800,
+                 "minutes_remaining": 1800, "last_updated_ts": 1780665041,
+                 "counter_category": "replacement", "reset_by": "user"},
+                ...]}
+
+        `count_used` is robot RUNTIME MINUTES on the currently-installed
+        part since it was last reset — including resets performed in
+        iRobot's own app, which is what makes this endpoint the migration
+        path for a robot that has been in service before this integration
+        was installed. `count_remaining` / `minutes_remaining` is the
+        budget left before the app flags a replacement; `counter` is
+        percent used (verified: count_used 17662, count_remaining 1080,
+        counter 94 — 17662/(17662+1080) = 94%).
+
+        The endpoint does NOT return part names. iRobot's app resolves
+        those client-side from a per-SKU catalog that is not served here;
+        see `const.IROBOT_PART_ROLES` for how this integration maps the
+        numeric ids.
+
+        Returns `{}` on any failure so a robot or account without this
+        endpoint cannot break a coordinator refresh.
+        """
+        url = f"{self._deployment['httpBaseAuth']}/v1/robots/{blid}/parts"
+        result = await self._aws_get(url)
+        return result if isinstance(result, dict) else {}
+
+    async def set_robot_part_counter(
+        self, blid: str, part_id: str, counter: int = 0
+    ) -> dict[str, Any]:
+        """Set a consumable's wear counter, iRobot-cloud-side.
+
+        `counter` is PERCENT USED, the same field GET returns, so 0 means
+        "this part is brand new" — i.e. what the official app writes when
+        you confirm a replacement. Defaults to 0 because recording a
+        replacement is the only reason this integration calls it.
+
+        WIRE FORMAT CONFIRMED AGAINST THE LIVE API, not inferred. Static
+        analysis of the app suggested `PUT` with a flat
+        `{"part_id": "35"}` body; both are wrong and fail in ways that
+        look like something else:
+
+          * PUT and PATCH are not routed — API Gateway answers 403 with
+            an IAM "not authorized to perform: execute-api:Invoke"
+            message, which reads like an auth or credential problem
+            rather than a wrong verb.
+          * The flat body is accepted with 200 and silently ignored:
+            the response reports `num_parts: 0` and nothing changes. A
+            no-op that looks like success.
+
+        What actually works is POST with the parts ARRAY form, one entry
+        per part. Omitting `counter` returns
+        `400 {"errorType": "AspenError.InvalidEvent",
+        "errorMessage": "Missing parameters: ['counter']"}`.
+
+        Returns the response, which echoes the parts it accepted —
+        `num_parts` is the count actually applied, so 0 means the call
+        matched nothing and the caller should treat it as a failure
+        rather than a success.
+        """
+        url = f"{self._deployment['httpBaseAuth']}/v1/robots/{blid}/parts"
+        body = {"parts": [{"part_id": str(part_id), "counter": int(counter)}]}
+        result = await self._aws_post(url, body)
+        return result if isinstance(result, dict) else {}
 
     async def get_favorites(self) -> list[dict[str, Any]]:
         """Return user-defined favorite cleaning routines."""

@@ -1,0 +1,255 @@
+{
+  "atlantis": {
+    "cap": {
+      "carpetBoost": 2,
+      "eCmd": 1,
+      "lang": 0,
+      "ota": 1,
+      "svcConf": 1
+    },
+    "carpetBoost": null,
+    "childLock": null,
+    "detectedPad": "padPlate",
+    "dock": {
+      "known": false
+    },
+    "name": "Demo R1",
+    "padWetness": {
+      "padPlate": 1
+    },
+    "sku": "R111840"
+  },
+  "lewis": {
+    "cap": {
+      "5ghz": 1,
+      "area": 1,
+      "binFullDetect": 1,
+      "dockComm": 1,
+      "eco": 1,
+      "edge": 0,
+      "log": 2,
+      "maps": 3,
+      "multiPass": 2,
+      "ota": 2,
+      "pmaps": 5,
+      "pose": 1,
+      "pp": 0,
+      "prov": 3,
+      "sched": 1,
+      "svcConf": 1,
+      "team": 1,
+      "wDevLoc": 2
+    },
+    "carpetBoost": false,
+    "childLock": null,
+    "detectedPad": null,
+    "dock": {
+      "fwVer": "2.1.3",
+      "id": "73121166136183179987861171146111546148134",
+      "known": true,
+      "pn": "4638607",
+      "state": 300
+    },
+    "name": "Demo i7",
+    "padWetness": null,
+    "sku": "i710020"
+  },
+  "ruby": {
+    "cap": {
+      "5ghz": 1,
+      "area": 1,
+      "binFullDetect": 2,
+      "dockComm": 1,
+      "eco": 1,
+      "edge": 0,
+      "expectingUserConf": 1,
+      "lang": 2,
+      "langOta": 0,
+      "log": 2,
+      "maps": 3,
+      "multiPass": 2,
+      "oMode": 2,
+      "odoa": 2,
+      "ota": 2,
+      "pmaps": 5,
+      "pp": 0,
+      "prov": 3,
+      "sched": 1,
+      "svcConf": 1,
+      "tLine": 2,
+      "team": 1
+    },
+    "carpetBoost": false,
+    "childLock": null,
+    "detectedPad": null,
+    "dock": {
+      "fwVer": "4.2.6",
+      "hwRev": 0,
+      "id": "491817227076681101908511319424716675201",
+      "known": true,
+      "pn": "unknown",
+      "state": 301,
+      "varID": 6
+    },
+    "name": "Demo Ruby j9",
+    "padWetness": null,
+    "sku": "j915020"
+  },
+  "san_marino": {
+    "cap": {
+      "5ghz": 1,
+      "area": 1,
+      "eco": 1,
+      "edge": 0,
+      "log": 2,
+      "maps": 3,
+      "multiPass": 2,
+      "ota": 2,
+      "pmaps": 5,
+      "pose": 1,
+      "pp": 0,
+      "prov": 3,
+      "sched": 1,
+      "svcConf": 1,
+      "team": 1
+    },
+    "carpetBoost": false,
+    "childLock": null,
+    "detectedPad": "reusablewet",
+    "dock": {
+      "known": true
+    },
+    "name": "Demo m6",
+    "padWetness": {
+      "disposable": 3,
+      "reusable": 3
+    },
+    "sku": "m611020"
+  },
+  "sapphire": {
+    "cap": {
+      "5ghz": 1,
+      "area": 1,
+      "binFullDetect": 2,
+      "dockComm": 1,
+      "eco": 1,
+      "edge": 0,
+      "expectingUserConf": 1,
+      "lang": 2,
+      "langOta": 0,
+      "log": 2,
+      "maps": 3,
+      "multiPass": 2,
+      "oMode": 2,
+      "odoa": 2,
+      "ota": 2,
+      "pmaps": 5,
+      "pp": 0,
+      "prov": 3,
+      "sched": 1,
+      "svcConf": 1,
+      "tLine": 2,
+      "team": 1
+    },
+    "carpetBoost": false,
+    "childLock": null,
+    "detectedPad": null,
+    "dock": {
+      "fwVer": "4.2.6",
+      "hwRev": 0,
+      "id": "491817227076681101908511319424716675201",
+      "known": true,
+      "pn": "unknown",
+      "state": 301,
+      "varID": 6
+    },
+    "name": "Demo Sapphire j7",
+    "padWetness": null,
+    "sku": "j755840"
+  },
+  "soho": {
+    "cap": {
+      "5ghz": 1,
+      "addOnHw": 0,
+      "area": 1,
+      "binFullDetect": 2,
+      "carpetBoost": 1,
+      "dockComm": 1,
+      "eco": 1,
+      "edge": 0,
+      "gentle": 1,
+      "lang": 2,
+      "langOta": 0,
+      "log": 2,
+      "maps": 3,
+      "mc": 2,
+      "multiPass": 2,
+      "ns": 1,
+      "oMode": 2,
+      "ota": 2,
+      "pmaps": 10,
+      "pose": 2,
+      "pp": 0,
+      "prov": 3,
+      "sched": 2,
+      "svcConf": 1,
+      "tLine": 2,
+      "team": 1,
+      "tileScan": 1
+    },
+    "carpetBoost": true,
+    "childLock": false,
+    "detectedPad": null,
+    "dock": {
+      "fwVer": "unknown",
+      "hwRev": 45,
+      "id": "unknown",
+      "known": true,
+      "pn": "unknown",
+      "state": 301,
+      "varID": 1
+    },
+    "name": "Roomba S9 313B",
+    "padWetness": null,
+    "sku": "s955020"
+  },
+  "stingray": {
+    "cap": {
+      "5ghz": 1,
+      "area": 1,
+      "binFullDetect": 2,
+      "bleDevLoc": 1,
+      "dockComm": 1,
+      "eco": 1,
+      "edge": 0,
+      "expectingUserConf": 1,
+      "lang": 2,
+      "langOta": 0,
+      "log": 2,
+      "maps": 3,
+      "multiPass": 2,
+      "oMode": 6,
+      "ota": 2,
+      "pmaps": 5,
+      "pose": 1,
+      "pp": 0,
+      "prov": 3,
+      "sched": 1,
+      "svcConf": 1,
+      "tLine": 2,
+      "team": 1,
+      "wDevLoc": 2
+    },
+    "carpetBoost": false,
+    "childLock": null,
+    "detectedPad": "reusableWet",
+    "dock": {
+      "known": true
+    },
+    "name": "Demo Stingray J7",
+    "padWetness": {
+      "reusable": 3
+    },
+    "sku": "xst0020"
+  }
+}

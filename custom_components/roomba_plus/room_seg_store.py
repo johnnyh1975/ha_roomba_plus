@@ -53,6 +53,16 @@ CELL_MM = 150.0
 # home size, see ROOM_SEGMENTATION_NOTES.md) — skip recomputation if the
 # grid has barely grown since last time, rather than re-running on every
 # single mission end.
+#: How many COMPLETED missions before rooms are derived at all.
+#:
+#: Three is a compromise, not a measurement. On this project's own data
+#: the room count was still moving at four missions and settled later,
+#: so three is early rather than safe -- but waiting longer means a new
+#: install shows no rooms for over a week, and a user who sees nothing
+#: assumes the feature is broken. Refining this needs more archives than
+#: one robot's.
+MIN_MISSIONS_BEFORE_SEGMENTING = 3
+
 MIN_NEW_CELLS_TO_RECOMPUTE = 30
 
 # A new room candidate is "the same" as an existing persisted room if
@@ -243,13 +253,27 @@ class RoomSegStore:
         min_distance_cells: float = 8.0,
         merge_ratio: float = 0.55,
     ) -> None:
+        self._min_distance_cells = min_distance_cells
+        self._merge_ratio = merge_ratio
+        self._reset()
+
+    def _reset(self) -> None:
+        """Back to an empty store, keeping the tuning parameters.
+
+        Called from `__init__` and from the load path when a stored
+        payload will not parse -- a half-loaded store is worse than an
+        empty one.
+
+        This used to be `self.__init__()`, which **discarded
+        min_distance_cells and merge_ratio** and put them back to their
+        defaults. A store built with non-default tuning silently lost it
+        the first time a load failed.
+        """
         self.rooms: dict[str, SegRoom] = {}
         self.doors: list[SegDoor] = []
         self.last_cell_count: int = 0
         self._next_room_n: int = 1
         self._next_door_n: int = 1
-        self._min_distance_cells = min_distance_cells
-        self._merge_ratio = merge_ratio
         self.migrated_from_zonestore: bool = False
         # v3.2.1 BOUNDARY-HISTORY — see MAX_BOUNDARY_HISTORY docstring.
         # Each entry: sorted list of [room_a, room_b] pairs adjacent
@@ -258,10 +282,46 @@ class RoomSegStore:
 
     # ── Recompute ────────────────────────────────────────────────────────────
 
-    def maybe_recompute(self, cells: dict[tuple[int, int], float]) -> bool:
-        """Re-run segmentation if the grid has grown enough since the last
-        computation (or there's no prior result at all). Returns True if a
-        recompute actually ran."""
+    def maybe_recompute(
+        self,
+        cells: dict[tuple[int, int], float],
+        missions_seen: int | None = None,
+    ) -> bool:
+        """Re-run segmentation if there is enough coverage to justify it.
+
+        TWO GATES, and only one of them existed.
+
+        The growth gate below stops needless recomputation once rooms
+        are known. It does nothing on the FIRST run, because `self.rooms`
+        is empty and the condition short-circuits -- so segmentation ran
+        after a single mission, on the sparsest map the robot will ever
+        produce.
+
+        That is the worst possible moment for this algorithm family.
+        Distance-transform-plus-watershed is measurably unstable on
+        incomplete coverage: an unvisited threshold is indistinguishable
+        from a wall, so it splits a room that is not split. More
+        missions cross the threshold and the false split disappears.
+
+        Observed on a real 980's own archives: 7 rooms after one
+        mission, 6 after four, 5 once coverage settled. A user saw seven
+        rooms appear as entities and two of them later vanish.
+
+        COMPLETED missions, not all of them. A run that ended early has
+        no perimeter pass -- the second phase of the coverage strategy,
+        where the robot traces obstacle outlines -- so its mask edge is
+        rougher and further from the real walls. Counting it towards
+        readiness would defeat the point of waiting.
+
+        `missions_seen=None` keeps the old behaviour for callers that
+        cannot count, rather than silently blocking them forever.
+        """
+        if (
+            not self.rooms
+            and missions_seen is not None
+            and missions_seen < MIN_MISSIONS_BEFORE_SEGMENTING
+        ):
+            return False
         if self.rooms and (len(cells) - self.last_cell_count) < MIN_NEW_CELLS_TO_RECOMPUTE:
             return False
         if not cells:
@@ -290,6 +350,10 @@ class RoomSegStore:
         label) to an existing persisted room id, or assign a fresh one.
         Returns the label -> persisted-id mapping (used by _match_doors)."""
         matched_existing: set[str] = set()
+        #: Rooms this round created. They are 100% inside one of this
+        #: round's clusters by construction, so the staleness check
+        #: below would delete every one of them immediately.
+        created_this_round: set[str] = set()
         label_to_id: dict[int, str] = {}
 
         # Match in descending cluster-size order: bigger, more confident
@@ -318,6 +382,7 @@ class RoomSegStore:
                 rid = f"room_{self._next_room_n}"
                 self._next_room_n += 1
                 self.rooms[rid] = SegRoom(id=rid, cells=set(new_cells))
+                created_this_round.add(rid)
                 label_to_id[label] = rid
 
         # v3.2.1 STALE-ROOM CLEANUP — see STALE_ABSORPTION_RATIO docstring
@@ -344,11 +409,38 @@ class RoomSegStore:
         # extra and is correct either way).
         stale_ids = []
         for rid, room in self.rooms.items():
-            if rid in matched_existing or not room.cells:
+            if (
+                rid in matched_existing
+                or rid in created_this_round
+                or not room.cells
+            ):
                 continue
+            # EVERY NEW CLUSTER, not only the matched ones.
+            #
+            # `maybe_recompute()` is handed `grid_store.cells` -- the
+            # whole cumulative visited grid, not one mission's slice. So
+            # a room that fails to match was NOT unobserved: its cells
+            # were in the input and the segmentation chose to divide
+            # them differently. It is refuted, not merely unseen.
+            #
+            # Checking only matched rooms missed the case where those
+            # cells are now spread across clusters that are themselves
+            # new -- none of them absorbs 80%, so nothing absorbs 80%,
+            # and the old room survives forever.
+            #
+            # Field evidence (R980040, 445 missions): four rooms with
+            # `recompute_count == 0` and 931 cells between them, never
+            # once re-recognised. Total room cells 8814 against a grid
+            # of 6614 -- a third of the room list was stale.
+            #
+            # This is the same widening as the v3.2.1 fix below, one
+            # step further: from "one absorber" to "all matched rooms"
+            # to "all of this round's output".
             absorbed = set()
             for mid in matched_existing:
                 absorbed |= (room.cells & self.rooms[mid].cells)
+            for new_cells in result.rooms.values():
+                absorbed |= (room.cells & new_cells)
             if len(absorbed) / len(room.cells) >= STALE_ABSORPTION_RATIO:
                 stale_ids.append(rid)
         for rid in stale_ids:
@@ -373,13 +465,17 @@ class RoomSegStore:
 
         matched_door_ids: set[str] = set()
         new_doors: list[SegDoor] = []
-        for d in result.doors:
-            room_a = label_to_id.get(d["a"])
-            room_b = label_to_id.get(d["b"])
+        # `raw`, NOT `d`: the loop above binds `d` to a SegDoor and
+        # this one to a raw dict from the segmenter. One name for
+        # two shapes made every subscript below look like an error
+        # on the dataclass.
+        for raw in result.doors:
+            room_a = label_to_id.get(raw["a"])
+            room_b = label_to_id.get(raw["b"])
             if room_a is None or room_b is None:
                 continue
             key = _unordered_key(room_a, room_b)
-            new_x_mm, new_y_mm = d["cell"][0] * CELL_MM, d["cell"][1] * CELL_MM
+            new_x_mm, new_y_mm = raw["cell"][0] * CELL_MM, raw["cell"][1] * CELL_MM
 
             # Find the CLOSEST existing door of this pair, if any is
             # within DOOR_MERGE_DISTANCE_MM — closest, not first, so a
@@ -391,18 +487,22 @@ class RoomSegStore:
                 if best_dist is None or dist < best_dist:
                     best_existing, best_dist = existing, dist
 
-            if best_existing is not None and best_dist <= DOOR_MERGE_DISTANCE_MM:
-                best_existing.update_position(d["cell"])
-                best_existing.saddle_mm = d["saddle_mm"]
+            if (
+                best_existing is not None
+                and best_dist is not None
+                and best_dist <= DOOR_MERGE_DISTANCE_MM
+            ):
+                best_existing.update_position(raw["cell"])
+                best_existing.saddle_mm = raw["saddle_mm"]
                 matched_door_ids.add(best_existing.id)
                 new_doors.append(best_existing)
             else:
                 door = SegDoor(
                     id=f"door_{self._next_door_n}",
                     room_a=room_a, room_b=room_b,
-                    cell=d["cell"], saddle_mm=d["saddle_mm"],
+                    cell=raw["cell"], saddle_mm=raw["saddle_mm"],
                 )
-                door.update_position(d["cell"])
+                door.update_position(raw["cell"])
                 self._next_door_n += 1
                 matched_door_ids.add(door.id)
                 new_doors.append(door)
@@ -543,7 +643,9 @@ class RoomSegStore:
     def has_unconfirmed_rooms(self) -> bool:
         return bool(self.unconfirmed_rooms)
 
-    def diagnostic_info(self) -> dict[str, Any]:
+    def diagnostic_info(
+        self, grid_cell_count: int | None = None
+    ) -> dict[str, Any]:
         return {
             "room_count": len(self.rooms),
             "door_count": len(self.doors),
@@ -571,8 +673,8 @@ class RoomSegStore:
     # ── Persistence ──────────────────────────────────────────────────────────
 
     async def async_load(self, hass: HomeAssistant, entry_id: str) -> None:
-        store = Store(hass, _HA_STORE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
-        data: dict | None = await store.async_load()
+        store: Store[dict[str, Any]] = Store(hass, _HA_STORE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
+        data: dict[str, Any] | None = await store.async_load()
         if not data:
             _LOGGER.debug("RoomSegStore: no persisted data for %s", entry_id)
             return
@@ -611,7 +713,7 @@ class RoomSegStore:
             )
         except Exception as exc:  # noqa: BLE001
             _LOGGER.warning("RoomSegStore: failed to load data for %s: %s", entry_id, exc)
-            self.__init__()
+            self._reset()
 
     def _boundary_stability(self, room_a: str, room_b: str) -> float:
         """v3.2.1 — fraction of the boundary-history window in which
@@ -626,7 +728,7 @@ class RoomSegStore:
         return hits / len(self._boundary_history)
 
     async def async_save(self, hass: HomeAssistant, entry_id: str) -> None:
-        store = Store(hass, _HA_STORE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
+        store: Store[dict[str, Any]] = Store(hass, _HA_STORE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
         await store.async_save({
             "version": PAYLOAD_VERSION,
             "rooms": [r.to_dict() for r in self.rooms.values()],

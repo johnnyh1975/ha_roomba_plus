@@ -341,10 +341,18 @@ class TestElapsedSecHelper:
         """Helper adds monotonic delta when phase=run and _last_phase_ts is set."""
         from custom_components.roomba_plus.sensor import RoombaMissionProgress
 
-        mts = self._make_mts(run_sec=60.0, last_phase_ts=time.monotonic() - 30)
-        elapsed = RoombaMissionProgress._elapsed_sec(mts, "run")
-        # Should be ~90 s (60 stored + ~30 live)
-        assert 85 <= elapsed <= 95
+        # Clock pinned, same reasoning as the flush tests below: a
+        # tolerance window against the real clock only holds while the
+        # two monotonic() calls land close together, which under load
+        # they sometimes do not.
+        # Patched on the time module itself: sensor_rooms imports it
+        # INSIDE the function, so there is no module-level attribute to
+        # replace.
+        with patch("time.monotonic", return_value=1000.0):
+            mts = self._make_mts(run_sec=60.0, last_phase_ts=970.0)
+            elapsed = RoombaMissionProgress._elapsed_sec(mts, "run")
+
+        assert elapsed == 90.0
 
     def test_no_live_delta_when_phase_not_run(self):
         """Helper returns bare run_sec when phase is not 'run'."""
@@ -654,16 +662,34 @@ class TestOnPhaseOtherFlush:
         return mts
 
     def test_flush_adds_pending_delta_to_run_sec(self):
-        """Delta since last phase=run is flushed into run_sec on phase transition."""
-        mts = self._make_mts(run_sec=120.0, last_phase_ts=time.monotonic() - 30)
-        mts.on_phase_other()
-        # run_sec should now be ~150 s (120 stored + ~30 flushed)
-        assert 145 <= mts.run_sec <= 155
+        """Delta since last phase=run is flushed into run_sec on phase transition.
+
+        TIME IS PINNED RATHER THAN TOLERATED (this session). This used
+        to build a timestamp from the real clock and allow ±5 s of slack
+        against whatever time.monotonic() returned inside the code under
+        test. That holds only while the two calls happen close together
+        -- and in a 4,294-test suite under load they sometimes do not.
+        It failed exactly once here, could not be reproduced across ten
+        random orderings, and would have gone on failing occasionally in
+        CI for reasons nobody could pin down.
+
+        Controlling the clock removes the guess entirely: the assertion
+        becomes exact, and a failure means the arithmetic is wrong
+        rather than that the machine was busy."""
+        with patch("custom_components.roomba_plus.mission_timer_store.time") as mock_time:
+            mock_time.monotonic.return_value = 1000.0
+            mts = self._make_mts(run_sec=120.0, last_phase_ts=970.0)
+            mts.on_phase_other()
+
+        assert mts.run_sec == 150.0
 
     def test_last_phase_ts_reset_after_flush(self):
         """_last_phase_ts is always 0 after on_phase_other regardless of flush."""
-        mts = self._make_mts(run_sec=60.0, last_phase_ts=time.monotonic() - 10)
-        mts.on_phase_other()
+        with patch("custom_components.roomba_plus.mission_timer_store.time") as mock_time:
+            mock_time.monotonic.return_value = 1000.0
+            mts = self._make_mts(run_sec=60.0, last_phase_ts=990.0)
+            mts.on_phase_other()
+
         assert mts._last_phase_ts == 0.0
 
     def test_no_flush_when_last_phase_ts_zero(self):
@@ -679,23 +705,37 @@ class TestOnPhaseOtherFlush:
         assert mts.run_sec == 60.0   # large gap rejected, run_sec unchanged
 
     def test_elapsed_does_not_drop_at_transition(self):
-        """Simulates the bounce-back pattern: elapsed stays continuous through transition."""
+        """Simulates the bounce-back pattern: elapsed stays continuous
+        through transition.
+
+        TIME IS PINNED (this session). This called time.monotonic() twice
+        -- once to build the store and once inside the code under test --
+        and asserted the difference fell in a 10-second window. Under
+        load the two calls drift, and it failed once in a full run while
+        passing three times in isolation.
+
+        Four other tests in this file had the same shape and were pinned
+        earlier today. This one was missed because it reads as a logic
+        test rather than a timing one."""
+        from unittest.mock import patch
+
         from custom_components.roomba_plus.sensor import RoombaMissionProgress
 
-        now = time.monotonic()
-        mts = self._make_mts(run_sec=120.0, last_phase_ts=now - 30)
+        now = 10_000.0
+        with patch("time.monotonic", return_value=now):
+            mts = self._make_mts(run_sec=120.0, last_phase_ts=now - 30)
 
-        # BEFORE transition: elapsed includes live delta
-        elapsed_before = RoombaMissionProgress._elapsed_sec(mts, "run")
-        assert 145 <= elapsed_before <= 155
+            # BEFORE transition: elapsed includes live delta
+            elapsed_before = RoombaMissionProgress._elapsed_sec(mts, "run")
+            assert elapsed_before == 150.0
 
-        # Transition fires — flush pending delta
-        mts.on_phase_other()
+            # Transition fires — flush pending delta
+            mts.on_phase_other()
 
-        # AFTER transition: elapsed equals flushed run_sec (no live delta, phase=hmMidMsn)
-        elapsed_after = RoombaMissionProgress._elapsed_sec(mts, "hmMidMsn")
-        # Should be ~150, NOT dropping back to 120
-        assert 145 <= elapsed_after <= 155
+            # AFTER transition: elapsed equals flushed run_sec (no live
+            # delta, phase=hmMidMsn). Must be 150, NOT back to 120.
+            elapsed_after = RoombaMissionProgress._elapsed_sec(mts, "hmMidMsn")
+            assert elapsed_after == 150.0
 
 
 class TestAdvanceRoomRemoved:
@@ -3288,3 +3328,124 @@ class TestUnloadFlush:
         store.async_save.assert_awaited_once()
         payload = store.async_save.call_args[0][0]
         assert "run_sec" in payload
+
+
+class TestMissionPhaseSourcePrime:
+    """`_mission_phase` reads the tier that is actually reporting one.
+
+    THE FIELD CAPTURE THIS GUARDS (@utkjmitch, Y351020, CLOUD_ONLY):
+    mid-mission with `mission_id` set, elapsed 10.7 min ticking, and a
+    52.2-minute rolling mean persisted — all three rendering as
+    attributes, and the state `unknown` for the whole fifty minutes.
+
+    Zero `mission_progress:` debug lines in the log, which is what made
+    the diagnosis short: `native_value` returned at the phase gate
+    before its first debug call. `roomba_reported_state()` returns `{}`
+    for CLOUD_ONLY BY DESIGN, so the Classic-shaped read was `""`
+    forever. The attributes read the same dead phase without gating on
+    it, which is why they worked and the percentage did not.
+    """
+
+    def test_classic_phase_wins_without_touching_prime(self):
+        """A LOCAL robot's reported phase is returned as-is and the
+        fallback never engages — `prime_status_coordinator` is
+        explicitly None, as it is on a Classic entry."""
+        from custom_components.roomba_plus.sensor_rooms import _mission_phase
+
+        data = MagicMock()
+        data.roomba_reported_state.return_value = {
+            "cleanMissionStatus": {"phase": "run"}
+        }
+        data.prime_status_coordinator = None
+
+        assert _mission_phase(data) == "run"
+
+    def test_prime_fallback_reads_the_current_state_shadow(self):
+        """Parsed by the real library model rather than a MagicMock,
+        which would invent `.phase` on demand and prove nothing."""
+        from custom_components.roomba_plus.sensor_rooms import _mission_phase
+
+        data = MagicMock()
+        data.roomba_reported_state.return_value = {}
+        coordinator = MagicMock()
+        coordinator.data = {"ro-currentstate": {"cleanMissionStatus": {"phase": "run"}}}
+        data.prime_status_coordinator = coordinator
+
+        assert _mission_phase(data) == "run"
+
+    def test_no_source_reports_no_phase(self):
+        from custom_components.roomba_plus.sensor_rooms import _mission_phase
+
+        data = MagicMock()
+        data.roomba_reported_state.return_value = {}
+        data.prime_status_coordinator = None
+        assert _mission_phase(data) == ""
+
+        coordinator = MagicMock()
+        coordinator.data = None
+        data.prime_status_coordinator = coordinator
+        assert _mission_phase(data) == ""
+
+    def test_native_value_returns_a_percentage_on_prime(self):
+        """THE REPRO. Everything the percentage needs is present on a
+        CLOUD_ONLY entry: 10.7 minutes against a 52.2-minute mean is
+        20%. Before the fix this exact setup returned None."""
+        from custom_components.roomba_plus.sensor import RoombaMissionProgress
+
+        sensor = MagicMock(spec=RoombaMissionProgress)
+        sensor._config_entry = MagicMock()
+        sensor._room_estimates = MagicMock(return_value=[])
+
+        mts = MagicMock()
+        mts.mission_id = "218"
+        mts.effective_elapsed_min = 10.7
+
+        rps = MagicMock()
+        rps.mission_duration_mean = 52.2
+
+        data = MagicMock()
+        data.roomba_reported_state.return_value = {}
+        coordinator = MagicMock()
+        coordinator.data = {"ro-currentstate": {"cleanMissionStatus": {"phase": "run"}}}
+        data.prime_status_coordinator = coordinator
+        data.mission_timer_store = mts
+        data.robot_profile_store = rps
+        sensor._config_entry.runtime_data = data
+
+        with patch(
+            "custom_components.roomba_plus.sensor_rooms._get_planned_room_order",
+            return_value=[],
+        ):
+            value = RoombaMissionProgress.native_value.fget(sensor)
+
+        assert value == 20
+
+    def test_native_value_still_none_when_prime_is_idle(self):
+        """A charging Prime robot must not report a percentage. The gate
+        opens for run/hmMidMsn/evac only — the fix changes where the
+        phase comes from, not which phases count."""
+        from custom_components.roomba_plus.sensor import RoombaMissionProgress
+
+        sensor = MagicMock(spec=RoombaMissionProgress)
+        sensor._config_entry = MagicMock()
+
+        data = MagicMock()
+        data.roomba_reported_state.return_value = {}
+        coordinator = MagicMock()
+        coordinator.data = {
+            "ro-currentstate": {"cleanMissionStatus": {"phase": "charge"}}
+        }
+        data.prime_status_coordinator = coordinator
+        sensor._config_entry.runtime_data = data
+
+        # HELD VALUE, NOT A COMPUTED ONE. Since @chairstacker (#72) the
+        # sensor keeps its last percentage past the end of a mission
+        # instead of dropping to Unknown -- so an idle robot reports
+        # whatever the last run reached, and None only when nothing has
+        # run yet.
+        #
+        # What must still hold: a charging robot does not COMPUTE a new
+        # percentage. Setting the held value to None makes that visible.
+        sensor._last_progress = None
+
+        assert RoombaMissionProgress.native_value.fget(sensor) is None

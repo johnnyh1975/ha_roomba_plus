@@ -15,6 +15,7 @@ import pytest
 import sys
 import types
 from custom_components.roomba_plus.presence_manager import PresenceManager
+from homeassistant.util import dt as dt_util
 from datetime import UTC
 from datetime import datetime as datetime_v240_scheduling
 from datetime import timedelta
@@ -430,7 +431,7 @@ class TestRecordCleanEvent:
     def test_records_event_in_correct_slot(self):
         pm = _make_pm()
         dt = datetime_v240_scheduling.now(UTC).replace(hour=9)
-        local = dt.astimezone()
+        local = dt_util.as_local(dt)
         expected_slot = (local.weekday(), local.hour)
         pm.record_clean_event(dt)
         assert expected_slot in pm._clean_events
@@ -441,7 +442,7 @@ class TestRecordCleanEvent:
         dt = datetime_v240_scheduling.now(UTC).replace(hour=9)
         for _ in range(5):
             pm.record_clean_event(dt)
-        local = dt.astimezone()
+        local = dt_util.as_local(dt)
         slot = (local.weekday(), local.hour)
         assert len(pm._clean_events[slot]) == 5
 
@@ -642,6 +643,7 @@ class TestTotalEnergyConsumed:
         entity = MagicMock()
         entity.battery_stats = {"estCap": 2500, "nLithChrg": 100}
         entity._config_entry.runtime_data.robot_profile = None
+        entity._config_entry.runtime_data.robot_profile_store = RobotProfileStore()
         # 2500 mAh × 14.8 V × 100 cycles = 3.7 kWh
         result = desc.value_fn(entity)
         assert result is not None
@@ -659,6 +661,7 @@ class TestTotalEnergyConsumed:
             "nNimhChrg": 0,
         }
         entity._config_entry.runtime_data.robot_profile = ROBOT_PROFILES["9"]
+        entity._config_entry.runtime_data.robot_profile_store = RobotProfileStore()
         result = _total_energy_consumed_kwh(entity)
         assert result is not None
         # 3300 mAh × 14.4V × 1 cycle / 1_000_000 ≈ 0.0475 kWh
@@ -676,6 +679,7 @@ class TestTotalEnergyConsumed:
             "nNimhChrg": 1,
         }
         entity._config_entry.runtime_data.robot_profile = ROBOT_PROFILES["9"]
+        entity._config_entry.runtime_data.robot_profile_store = RobotProfileStore()
         result = _total_energy_consumed_kwh(entity)
         assert result is not None
         # 3300 mAh × 14.4V × 1 cycle / 1_000_000
@@ -700,11 +704,26 @@ class TestTotalEnergyConsumed:
             "nNimhChrg": 1,       # first NiMH cycle
         }
         entity._config_entry.runtime_data.robot_profile = ROBOT_PROFILES["9"]
+        entity._config_entry.runtime_data.robot_profile_store = RobotProfileStore()
         result = _total_energy_consumed_kwh(entity)
         assert result is not None
         # Must use NiMH scale (÷ 1.87), not Li-ion (÷ 3.73)
         # 3300 mAh × 14.4V × 1 cycle / 1_000_000
         assert abs(result - round(3300 * 14.4 * 1 / 1_000_000, 3)) < 0.005
+
+    def test_energy_never_decreases_below_high_water_mark(self):
+        from custom_components.roomba_plus.sensor import _total_energy_consumed_kwh
+        entity = MagicMock()
+        entity.battery_stats = {"estCap": 2500, "nLithChrg": 10}
+        entity._config_entry.runtime_data.robot_profile = None
+        store = RobotProfileStore()
+        store.lifetime_energy_kwh_high_water = 5.0
+        entity._config_entry.runtime_data.robot_profile_store = store
+        # 2500 mAh × 14.8 V × 10 cycles / 1_000_000 = 0.37 kWh, below the
+        # stored high-water mark.
+        result = _total_energy_consumed_kwh(entity)
+        assert result == 5.0
+        assert store.lifetime_energy_kwh_high_water == 5.0
 
     def test_returns_none_when_no_cycles(self):
         from custom_components.roomba_plus.sensor import SENSORS
@@ -749,8 +768,11 @@ class TestRecordCleanEventWiring:
         import inspect
         from custom_components.roomba_plus import callbacks
         src = inspect.getsource(callbacks)
-        # v2.6.3: _CLEANING_PHASES guard replaced by had_cleaning_phase flag
-        phase_idx = src.find('_ACTIVE_CLEANING_PHASES and not had_cleaning_phase')
+        # v2.6.3: _CLEANING_PHASES guard replaced by had_cleaning_phase flag;
+        # v4.0.0b3 live-investigation fix: the guard additionally rejects
+        # post-terminal replay pulses (_mission_already_terminal), so the
+        # exact-string match anchors on the phase list membership check.
+        phase_idx = src.find('phase in _ACTIVE_CLEANING_PHASES')
         record_idx = src.find('record_clean_event')
         assert phase_idx != -1, "_ACTIVE_CLEANING_PHASES mission-start guard not found in callbacks.py"
         assert record_idx != -1, "record_clean_event not found in callbacks.py"
@@ -760,10 +782,12 @@ class TestRecordCleanEventWiring:
         )
         # v2.9.0 — threshold bumped 800→900: F4e's current_leg_rechrgM
         # double-counting bugfix added one legitimate reset line to this
-        # exact span (mission-start block). record_clean_event's actual
-        # placement (still immediately after the phase-guard block) is
-        # unchanged — this is proximity slack, not a placement regression.
-        assert record_idx - phase_idx < 900, (
+        # exact span (mission-start block); the v4.0.0b3 live-fix added the
+        # _mission_already_terminal replay-guard condition to the same guard
+        # (1100 now). record_clean_event's actual placement (still
+        # immediately after the phase-guard block) is unchanged — this is
+        # proximity slack, not a placement regression.
+        assert record_idx - phase_idx < 1100, (
             "record_clean_event is too far from the mission-start transition — check placement"
         )
 
@@ -1074,3 +1098,243 @@ class TestPresenceUnavailable:
             "person.alice": "away",
             "person.bob": "unavailable",
         }) is False
+
+
+class TestTheCleanDelayIsHonoured:
+    """`CONF_CLEAN_DELAY_MIN` existed as an option, was offered in the
+    dialog, was stored -- and no code read it.
+
+    The two delays answer different questions: the away delay waits to
+    be sure everyone has really gone (somebody walking to the postbox
+    should not start a mission), and this one waits before cleaning,
+    because a car still on the drive is not a reason to send the robot
+    out. Somebody who set both got only the first.
+    """
+
+    def _manager(self, clean_delay):
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, MagicMock
+
+        from custom_components.roomba_plus.presence_manager import PresenceManager
+
+        manager = object.__new__(PresenceManager)
+        entry = MagicMock()
+        entry.options = {
+            "clean_delay_min": clean_delay,
+            "presence_mode": "away_only",
+        }
+        entry.runtime_data = SimpleNamespace(roomba=MagicMock())
+        manager._entry = entry
+        manager._hass = MagicMock()
+        manager._away_task = None
+        manager._managed_hold = False
+        manager._did_unfreeze = False
+        manager._set_sched_hold = AsyncMock()
+        return manager
+
+    @pytest.mark.asyncio
+    async def test_the_configured_minutes_are_waited(self):
+        from unittest.mock import AsyncMock, patch
+
+        manager = self._manager(15)
+        with patch(
+            "custom_components.roomba_plus.presence_manager.asyncio.sleep",
+            new_callable=AsyncMock,
+        ) as sleep:
+            await manager._away_delay(0)
+
+        assert (15 * 60) in [call.args[0] for call in sleep.await_args_list]
+
+    @pytest.mark.asyncio
+    async def test_zero_waits_only_once(self):
+        """The away delay still runs; the clean delay simply adds
+        nothing when it is not configured."""
+        from unittest.mock import AsyncMock, patch
+
+        manager = self._manager(0)
+        with patch(
+            "custom_components.roomba_plus.presence_manager.asyncio.sleep",
+            new_callable=AsyncMock,
+        ) as sleep:
+            await manager._away_delay(0)
+
+        assert sleep.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_an_arrival_during_the_clean_delay_stops_it(self):
+        """Cleaning must not start after somebody came home."""
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+
+        manager = self._manager(15)
+        with patch(
+            "custom_components.roomba_plus.presence_manager.asyncio.sleep",
+            new_callable=AsyncMock,
+            side_effect=[None, asyncio.CancelledError()],
+        ):
+            await manager._away_delay(0)
+
+        manager._set_sched_hold.assert_not_awaited()
+
+
+class TestPrimePausesSchedulesInsteadOfHolding:
+    """`schedHold` is Classic's way of holding a schedule without
+    changing it. A Prime robot carries the field, accepts a write, reads
+    it back changed, **and runs anyway** — APK research 10 found it
+    appears once in the Prime app, with no serialisation annotation and
+    no consumer across 3801 classes. Inherited plumbing, not a control.
+
+    What Prime offers instead is `enabled` per schedule, which the app
+    itself uses.
+    """
+
+    def _manager(self, schedules):
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, MagicMock
+
+        from custom_components.roomba_plus.presence_manager import PresenceManager
+
+        mgr = object.__new__(PresenceManager)
+        robot = AsyncMock()
+        entry = MagicMock()
+        entry.runtime_data = SimpleNamespace(
+            prime_robot=robot, prime_household_id="HH"
+        )
+        mgr._entry = entry
+        mgr._hass = MagicMock()
+        mgr._paused_schedule_ids = set()
+        mgr._set_sched_hold = AsyncMock()
+        return mgr, robot, schedules
+
+    def _schedule(self, sid, enabled=True):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            schedule_id=sid,
+            options=SimpleNamespace(enabled=enabled, deleted=None),
+        )
+
+    async def _pause(self, mgr, schedules, paused):
+        from unittest.mock import AsyncMock, patch
+
+        # The import is local inside the method, so the patch has to sit
+        # on the module it comes FROM, not on presence_manager.
+        with patch(
+            "custom_components.roomba_plus.prime_schedule_switch."
+            "async_read_schedule_containers",
+            AsyncMock(return_value=[("C1", schedules)]),
+        ):
+            await mgr._set_schedules_paused(paused)
+
+    @pytest.mark.asyncio
+    async def test_pausing_disables_an_enabled_schedule(self):
+        schedules = [self._schedule("S1")]
+        mgr, robot, _ = self._manager(schedules)
+
+        await self._pause(mgr, schedules, True)
+
+        assert schedules[0].options.enabled is False
+        robot.update_schedules.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_resuming_re_enables_only_what_we_paused(self):
+        """Turning everything back on would enable a schedule the user
+        had deliberately switched off before leaving — the robot would
+        run on a day they had opted out of, and nothing in Home
+        Assistant would explain why."""
+        ours = self._schedule("S1")
+        theirs = self._schedule("S2", enabled=False)
+        mgr, _, _ = self._manager([ours, theirs])
+
+        await self._pause(mgr, [ours, theirs], True)
+        await self._pause(mgr, [ours, theirs], False)
+
+        assert ours.options.enabled is True
+        assert theirs.options.enabled is False
+
+    @pytest.mark.asyncio
+    async def test_a_deleted_schedule_is_left_alone(self):
+        deleted = self._schedule("S1")
+        deleted.options.deleted = True
+        mgr, robot, _ = self._manager([deleted])
+
+        await self._pause(mgr, [deleted], True)
+
+        assert deleted.options.enabled is True
+        robot.update_schedules.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_classic_robot_still_uses_sched_hold(self):
+        """The field works there, and a paused Classic schedule still
+        looks scheduled in the app — which a disabled Prime one does
+        not."""
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, MagicMock
+
+        from custom_components.roomba_plus.presence_manager import PresenceManager
+
+        mgr = object.__new__(PresenceManager)
+        entry = MagicMock()
+        entry.runtime_data = SimpleNamespace(prime_robot=None)
+        mgr._entry = entry
+        mgr._paused_schedule_ids = set()
+        mgr._set_sched_hold = AsyncMock()
+
+        await PresenceManager._set_schedules_paused(mgr, True)
+
+        mgr._set_sched_hold.assert_awaited_once_with(True)
+
+
+class TestPresenceOnPrimeDoesNotReachForALocalRobot:
+    """`_set_schedules_paused` branches on `prime_robot` correctly and
+    never touches `data.roomba` on a Prime entry. `_handle_someone_home`
+    did not: it read `data.roomba.master_state` to decide whether to
+    re-freeze, before the branch that would have protected it.
+
+    `data.roomba` is None on every CLOUD_ONLY entry by design, so a Prime
+    user with presence scheduling on got an AttributeError the first
+    time somebody came home.
+
+    Found by mypy. No test built a Prime entry with presence enabled,
+    and the field question about presence on Prime had been open in the
+    tester notes for a week with no answer.
+    """
+
+    @staticmethod
+    def _manager(did_unfreeze):
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, MagicMock
+
+        from custom_components.roomba_plus.presence_manager import (
+            PresenceManager,
+        )
+
+        manager = PresenceManager.__new__(PresenceManager)
+        manager._hass = MagicMock()
+        manager._away_task = None
+        manager._did_unfreeze = did_unfreeze
+        manager._managed_hold = False
+        manager._entry = SimpleNamespace(
+            runtime_data=SimpleNamespace(roomba=None, prime_robot=object())
+        )
+        manager._set_schedules_paused = AsyncMock()
+        return manager
+
+    @pytest.mark.asyncio
+    async def test_a_prime_entry_does_not_raise(self):
+        manager = self._manager(did_unfreeze=False)
+
+        await manager._handle_someone_home()
+
+        manager._set_schedules_paused.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_it_still_refreezes_what_it_unfroze(self):
+        """The ownership check `schedHold` provides on Classic —
+        without a shadow field to read."""
+        manager = self._manager(did_unfreeze=True)
+
+        await manager._handle_someone_home()
+
+        manager._set_schedules_paused.assert_awaited_once_with(True)
+        assert manager._did_unfreeze is False

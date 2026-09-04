@@ -1001,6 +1001,68 @@ class TestGridStoreEdgeRatioCache:
         assert 300.0 in gs._edge_ratio_cache
 
 
+class TestEdgeCoverageRatioRetainedAcrossSparseMissions:
+    def test_sparse_update_retains_prior_valid_ratio(self):
+        gs = _make_grid_with_cells(100)
+        valid = gs.edge_coverage_ratio()
+        assert valid is not None
+
+        gs.update_from_mission([(0.0, 0.0)], [])
+        gs._cells = {(0, 0): 0.5}
+
+        assert gs.edge_coverage_ratio() == valid
+
+    def test_non_default_depth_does_not_use_retained_ratio(self):
+        gs = _make_grid_with_cells(300)
+        gs.edge_coverage_ratio()
+        gs._cells = {(0, 0): 0.5}
+
+        assert gs.edge_coverage_ratio(edge_depth_mm=500.0) is None
+
+    def test_fresh_valid_ratio_overwrites_retained_value(self):
+        gs = _make_grid_with_cells(100)
+        first = gs.edge_coverage_ratio()
+        gs.update_from_mission([(0.0, 0.0)], [])
+        gs._cells = {
+            (i, i): 0.5 for i in range(30)
+        }
+        second = gs.edge_coverage_ratio()
+        assert second is not None
+        assert second != first
+        gs._cells = {(0, 0): 0.5}
+        assert gs.edge_coverage_ratio() == second
+
+    @pytest.mark.asyncio
+    async def test_retained_ratio_survives_save_load_roundtrip(self):
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        gs = _make_grid_with_cells(100)
+        valid = gs.edge_coverage_ratio()
+        gs._cells = {(0, 0): 0.5}
+        assert gs.edge_coverage_ratio() == valid
+
+        saved_data: dict = {}
+        hass = MagicMock()
+        store_mock = AsyncMock()
+
+        async def _capture_save(data):
+            saved_data.update(data)
+
+        store_mock.async_save = _capture_save
+        with patch("homeassistant.helpers.storage.Store", return_value=store_mock):
+            await gs.async_save(hass, "test_entry")
+        assert saved_data["last_valid_edge_coverage_ratio"] == valid
+
+        gs2 = GridStore()
+        store_mock.async_load = AsyncMock(return_value=saved_data)
+        with patch("homeassistant.helpers.storage.Store", return_value=store_mock):
+            await gs2.async_load(hass, "test_entry")
+
+        assert gs2._cells == {(0, 0): pytest.approx(0.5)}
+        assert gs2.edge_coverage_ratio() == valid
+
+
+
 class TestGridStoreL7Format:
     """_stuck dict uses new structured format."""
 
@@ -1465,3 +1527,227 @@ class TestStoreEncapGridAccessors:
         assert gs.stuck_count((2, 2)) == 7
         assert gs.stuck_count((3, 3)) == 0
         assert gs.stuck_count((9, 9)) == 0
+
+
+class TestStampingAlongThePath:
+    """v3.2.2 — disks are placed along each step, not only where poses
+    landed.
+
+    On a real 980 poses arrive ~1.8 s apart, so up to 542 mm at full
+    speed. Against a 170 mm footprint radius that leaves ~200 mm of
+    floor between consecutive disks which the robot demonstrably drove
+    over and the grid recorded as never visited.
+
+    Those holes concentrate on long straight runs -- including
+    thresholds, where a gap reads as a wall and splits a room that is
+    not split.
+    """
+
+    def test_a_long_step_no_longer_leaves_a_hole(self):
+        from custom_components.roomba_plus.grid_store import _disk_filled_cells
+
+        from custom_components.roomba_plus.grid_store import CELL_SIZE_MM, _mm_to_cell
+
+        far = _disk_filled_cells([(0.0, 0.0), (540.0, 0.0)], 170.0)
+
+        # THE MIDPOINT IS THE TEST. Two disks of radius 170 mm placed
+        # 540 mm apart reach 170 mm from each end, leaving the middle
+        # ~200 mm uncovered. Asserting on a cell count would pass
+        # either way -- ten cells from two disks clears any loose
+        # threshold. The gap has to be named.
+        gap_cells = {
+            _mm_to_cell(x, 0.0)
+            for x in range(200, 341, int(CELL_SIZE_MM))
+        }
+        missing = gap_cells - far
+
+        assert not missing, f"floor the robot drove over, unrecorded: {missing}"
+
+        # And the band is continuous: no hole anywhere along the run.
+        row = sorted(cx for cx, cy in far if cy == _mm_to_cell(0.0, 0.0)[1])
+        assert row == list(range(row[0], row[-1] + 1)), "gap inside the swept band"
+
+    def test_a_short_step_is_unchanged(self):
+        """Densifying must not alter what already worked."""
+        from custom_components.roomba_plus.grid_store import _disk_filled_cells
+
+        near = _disk_filled_cells([(0.0, 0.0), (100.0, 0.0)], 170.0)
+        single = _disk_filled_cells([(0.0, 0.0)], 170.0)
+
+        assert near >= single
+
+    def test_a_discontinuity_is_not_filled_in(self):
+        """A jump means the robot was somewhere else, not that it drove
+        the line between. Painting a corridor across the home would be
+        an invention -- a hole is the conservative answer."""
+        from custom_components.roomba_plus.grid_store import _disk_filled_cells
+
+        jumped = _disk_filled_cells([(0.0, 0.0), (9000.0, 0.0)], 170.0)
+        two_ends = (
+            _disk_filled_cells([(0.0, 0.0)], 170.0)
+            | _disk_filled_cells([(9000.0, 0.0)], 170.0)
+        )
+
+        assert jumped == two_ends, "nothing between the two ends"
+
+    def test_a_single_pose_still_stamps_its_disk(self):
+        from custom_components.roomba_plus.grid_store import _disk_filled_cells
+
+        assert _disk_filled_cells([(0.0, 0.0)], 170.0)
+
+
+class TestBreaksDecideWhatGetsFilled:
+    """v3.2.2 — the grid learns where continuity broke.
+
+    Without them the stamp fell back to a plain distance rule (1200 mm),
+    which cannot separate fast driving at a slow message rate from a
+    small relocalisation: on a real 980 poses arrive ~1.8 s apart, so
+    542 mm of honest travel and a metre-scale jump sit uncomfortably
+    close together. The renderer's threshold calibrates itself against
+    this robot's own stream, so its verdict is worth more than any
+    constant here.
+    """
+
+    def test_a_marked_step_is_not_filled_even_when_short(self):
+        """Distance alone would have connected these two -- the break
+        is the only thing that says otherwise."""
+        from custom_components.roomba_plus.grid_store import _disk_filled_cells
+
+        pts = [(0.0, 0.0), (600.0, 0.0)]
+        joined = _disk_filled_cells(pts, 170.0, breaks=None)
+        split = _disk_filled_cells(pts, 170.0, breaks={1})
+
+        assert len(split) < len(joined)
+
+    def test_an_unmarked_long_step_is_filled(self):
+        """The mirror image: distance alone would have refused this one,
+        and the break information says it was real travel."""
+        from custom_components.roomba_plus.grid_store import _disk_filled_cells
+
+        pts = [(0.0, 0.0), (2000.0, 0.0)]
+        by_distance = _disk_filled_cells(pts, 170.0, breaks=None)
+        by_breaks = _disk_filled_cells(pts, 170.0, breaks=set())
+
+        assert len(by_breaks) > len(by_distance)
+
+    def test_the_index_is_the_second_point_of_the_pair(self):
+        """A robot revisits positions constantly. Looking the index up
+        by value would find the first occurrence and misplace every
+        break after the first repeat."""
+        from custom_components.roomba_plus.grid_store import _disk_filled_cells
+
+        # Returns to the origin, then makes a long step that IS marked.
+        pts = [(0.0, 0.0), (300.0, 0.0), (0.0, 0.0), (2000.0, 0.0)]
+        marked = _disk_filled_cells(pts, 170.0, breaks={3})
+        unmarked = _disk_filled_cells(pts, 170.0, breaks=set())
+
+        assert len(marked) < len(unmarked), "break at index 3 must not be filled"
+
+    def test_no_breaks_argument_keeps_the_old_behaviour(self):
+        """Callers that do not have the information must not change."""
+        from custom_components.roomba_plus.grid_store import _disk_filled_cells
+
+        pts = [(0.0, 0.0), (500.0, 0.0)]
+
+        assert _disk_filled_cells(pts, 170.0) == _disk_filled_cells(
+            pts, 170.0, breaks=None
+        )
+
+
+class TestTheHeatmapIsNotUpsideDown:
+    """@pk-1966 (#78) noticed the coverage heatmap did not line up with
+    the room map, and marked four known places on both to show it.
+
+    Normalising his screenshot: y matched `1 - y` on all four points
+    while x kept its order. That is a vertical flip, not the rotation it
+    looks like — the rotation is the two tiles' aspect ratios fooling
+    the eye.
+
+    The renderer measured downward from the bottom of the grid while
+    every other map measures downward from the top. It had been upside
+    down since it was written, and nobody noticed because it has no
+    landmark: no dock icon, no room outlines, nothing to be upside down
+    relative to.
+    """
+
+    @staticmethod
+    def _row_of(png_bytes, y_fraction):
+        """Which columns are painted at a given height of the image."""
+        import io
+
+        from PIL import Image
+
+        img = Image.open(io.BytesIO(png_bytes)).convert("RGBA")
+        w, h = img.size
+        row = int(h * y_fraction)
+        return [x for x in range(w) if img.getpixel((x, row))[3] > 0]
+
+    @staticmethod
+    def _store_with(cells):
+        from custom_components.roomba_plus.grid_store import GridStore
+
+        gs = GridStore()
+        gs._cells = dict.fromkeys(cells, 1.0)
+        return gs
+
+    def test_a_cell_high_in_mm_is_drawn_high_in_the_image(self):
+        """The whole bug in one assertion: larger y means further up on
+        screen, because image rows run downward.
+
+        ASYMMETRIC ON PURPOSE. A first version of this used two cells at
+        opposite ends and asserted both top and bottom were painted --
+        which is true in either orientation, so it passed with the flip
+        reverted. Three cells clustered low leaves the top of the image
+        empty, and that emptiness is what distinguishes the two.
+        """
+        # DIAGONAL, so top and bottom differ in x as well as being
+        # occupied. Symmetric data cannot distinguish the orientations:
+        # two cells at opposite ends paint top and bottom either way.
+        #
+        #   high y, low x   -> belongs TOP-LEFT
+        #   low y, high x   -> belongs BOTTOM-RIGHT
+        gs = self._store_with({(0, 20), (20, 0)})
+
+        png = gs.render_heatmap()
+
+        top = self._row_of(png, 0.02)
+        bottom = self._row_of(png, 0.98)
+
+        assert top and bottom, "both cells must be visible"
+        assert max(top) < 200, "the high-y cell is the LEFT one"
+        assert min(bottom) > 200, "the low-y cell is the RIGHT one"
+
+    def test_x_order_is_unchanged(self):
+        """He confirmed x keeps its order in both maps. Fixing y must
+        not disturb that."""
+        gs = self._store_with({(0, 0), (20, 0)})
+
+        png = gs.render_heatmap()
+        # Both cells share a row here, so read wherever they landed.
+        painted = [
+            x for frac in (0.02, 0.5, 0.98)
+            for x in self._row_of(png, frac)
+        ]
+
+        assert painted, "both cells must be visible"
+        assert min(painted) < 50, "left cell stays left"
+        assert max(painted) > 300, "right cell stays right"
+
+    def test_a_cell_is_inside_the_canvas(self):
+        """Flipping the top-left corner without accounting for the cell
+        height would push the bottom row off the image."""
+        import io
+
+        from PIL import Image
+
+        gs = self._store_with({(0, 0)})
+
+        img = Image.open(io.BytesIO(gs.render_heatmap())).convert("RGBA")
+        painted = [
+            (x, y)
+            for x in range(img.size[0])
+            for y in range(img.size[1])
+            if img.getpixel((x, y))[3] > 0
+        ]
+
+        assert painted, "the single cell must be visible at all"

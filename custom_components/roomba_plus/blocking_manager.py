@@ -14,6 +14,8 @@ https://github.com/tonylofgren/aurora-smart-home
 """
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import asyncio
 import logging
 from datetime import timedelta
@@ -67,13 +69,13 @@ class BlockingManager:
         # Queue metadata — set when queued, cleared by cancel_queue()
         self._queued_since: str | None = None
         self._timeout_at: str | None = None
-        self._timeout_task: asyncio.Task | None = None
+        self._timeout_task: asyncio.Task[None] | None = None
         self._queued_rooms: list[str] | None = None
         self._state_callbacks: list[Any] = []
 
     # ── Public state ──────────────────────────────────────────────────────────
 
-    def register_state_callback(self, callback_fn: Any) -> None:
+    def register_state_callback(self, callback_fn: Any) -> Callable[[], None]:
         """Register a callable invoked when queue state changes.
 
         Used by RoombaStartBlocked to receive immediate updates without
@@ -201,8 +203,10 @@ class BlockingManager:
             unsub = self._hass.bus.async_listen(
                 "state_changed",
                 _on_state_changed,
-                event_filter=lambda e, _eid=eid: (
-                    e.data.get("entity_id") == _eid
+                event_filter=(
+                    lambda e, _eid=eid: bool(  # type: ignore[misc]
+                        e.data.get("entity_id") == _eid
+                    )
                 ),
             )
             self._cancel_listeners.append(unsub)
@@ -276,13 +280,34 @@ class BlockingManager:
                 )
 
     async def _do_start(self, rooms: list[str] | None) -> None:
-        """Execute the actual start command on the robot."""
+        """Execute the actual start command on the robot.
+
+        CORRECTED (this session): used to unconditionally assume a
+        Classic entry (data.roomba, plain hass.services.async_call to
+        the Classic-only clean_room service). Both would fail for a
+        Prime/CLOUD_ONLY entry -- data.roomba is None (AttributeError),
+        and clean_room's underlying region-based transport is still
+        unconfirmed for Prime (two live field tests, zero effect so
+        far). See services.py's own async_handle_smart_start() for the
+        equivalent fix on the OTHER path that can reach a robot start
+        (this manager isn't the only caller -- smart_start falls
+        through to data.roomba.start directly when no blocking sensors
+        are configured at all, i.e. blocking_manager is None)."""
         from homeassistant.helpers import entity_registry as er
-        from .models import RoombaData
+        from .models import ConnectionType, RoombaData
 
         data: RoombaData = self._entry.runtime_data
 
         if rooms:
+            if data.connection_type == ConnectionType.CLOUD_ONLY:
+                _LOGGER.error(
+                    "BlockingManager: room-targeted start requested for a "
+                    "Prime/V4 robot (blid=%s) -- not supported yet, region-"
+                    "based cleaning commands are still unconfirmed for "
+                    "Prime devices. Nothing was sent.",
+                    data.blid,
+                )
+                return
             # Resolve the vacuum entity_id via the entity registry using unique_id.
             # Never construct entity_id from blid — HA slugifies names at registration
             # time and the result is not guaranteed to match any specific pattern.
@@ -304,8 +329,14 @@ class BlockingManager:
                 {"entity_id": entity_entry, "room_name": rooms},
                 blocking=True,
             )
-        else:
-            await self._hass.async_add_executor_job(data.roomba.start)
+        elif data.prime_robot is not None:
+            # Branch on the value rather than on `connection_type`: the
+            # two agree, and only one of them narrows.
+            await data.prime_robot.send_simple_command("start")
+        elif data.roomba is not None:
+            await self._hass.async_add_executor_job(
+                data.roomba.send_command, "start"
+            )
         _LOGGER.info("BlockingManager: start issued")
 
     # ── Cleanup ───────────────────────────────────────────────────────────────

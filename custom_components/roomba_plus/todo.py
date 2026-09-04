@@ -45,8 +45,9 @@ from homeassistant.util import dt as dt_util
 import datetime as dt_stdlib
 
 from .const import is_mop
+
 from .entity import IRobotEntity
-from .models import RoombaConfigEntry
+from .models import ConnectionType, RoombaConfigEntry
 from .sensor_helpers import _brush_days_until_due, _filter_days_until_due
 from .zone_naming import unlabelled_zone_ids
 
@@ -67,14 +68,13 @@ class RoombaMaintenanceTodo(IRobotEntity, TodoListEntity):
     _attr_supported_features = TodoListEntityFeature.UPDATE_TODO_ITEM
 
     def __init__(self, roomba: Any, blid: str, config_entry: RoombaConfigEntry) -> None:
-        super().__init__(roomba, blid)
-        self._config_entry = config_entry
+        super().__init__(roomba, blid, config_entry)
         self._attr_unique_id = f"{self.robot_unique_id}_maintenance"
 
     # ── Shared helpers (same pattern as button.py's reset buttons) ──────────
 
     def _current_hr(self) -> int:
-        return (self.vacuum_state.get("bbrun") or {}).get("hr", 0)
+        return int((self.vacuum_state.get("bbrun") or {}).get("hr", 0))
 
     def _maintenance_store(self) -> Any:
         return self._config_entry.runtime_data.maintenance_store
@@ -196,6 +196,14 @@ async def async_setup_entry(
     cleanSchedule2/region data exists to be unlabelled in the first
     place — unlabelled_zone_ids() returns empty for them naturally).
     """
+    # PRIME HAS ITS OWN LIST, built from parts the robot counts itself
+    # rather than from lifetime hours and thresholds of ours.
+    if config_entry.runtime_data.connection_type is ConnectionType.CLOUD_ONLY:
+        from .todo_prime import async_setup_prime_todo  # noqa: PLC0415
+
+        await async_setup_prime_todo(hass, config_entry, async_add_entities)
+        return
+
     roomba = config_entry.runtime_data.roomba
     blid = config_entry.runtime_data.blid
     async_add_entities([RoombaMaintenanceTodo(roomba, blid, config_entry)])

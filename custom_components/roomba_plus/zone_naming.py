@@ -14,13 +14,15 @@ imports beyond what const.py itself already needs.
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from typing import Any
 
 from .const import CONF_SMART_ZONE_HIDDEN, extract_region_id
 
 
 def collect_region_ids(
-    vacuum_state: dict[str, Any], options: dict[str, Any],
+    vacuum_state: Mapping[str, Any], options: Mapping[str, Any],
 ) -> list[str]:
     """All known region_ids from live vacuum_state (cleanSchedule2,
     lastCommand) merged with persisted discovered_zone_ids from config
@@ -68,7 +70,7 @@ def collect_region_ids(
 
 
 def unlabelled_zone_ids(
-    vacuum_state: dict[str, Any], options: dict[str, Any],
+    vacuum_state: Mapping[str, Any], options: Mapping[str, Any],
 ) -> list[str]:
     """Region_ids with no user-assigned label yet, excluding hidden
     ones. Checks smart_zone_data first (new storage), falls back to

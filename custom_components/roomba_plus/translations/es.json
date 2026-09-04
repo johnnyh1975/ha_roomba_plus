@@ -1,4 +1,13 @@
 {
+  "common": {
+    "weekday_0": "Dom",
+    "weekday_1": "Lun",
+    "weekday_2": "Mar",
+    "weekday_3": "Mié",
+    "weekday_4": "Jue",
+    "weekday_5": "Vie",
+    "weekday_6": "Sáb"
+  },
   "config": {
     "step": {
       "user": {
@@ -42,14 +51,14 @@
         }
       },
       "reconfigure": {
-        "description": "Update the connection settings for {name}.",
+        "description": "Actualiza los ajustes de conexión de {name}.",
         "data": {
           "host": "IP address",
           "password": "Password"
         },
         "data_description": {
-          "host": "The local IP address of the Roomba.",
-          "password": "The robot password (hold HOME button to retrieve)."
+          "host": "La dirección IP local del Roomba.",
+          "password": "La contraseña del robot (mantén pulsado el botón HOME para obtenerla)."
         }
       },
       "reauth_confirm": {
@@ -63,6 +72,39 @@
           "irobot_username": "El correo electrónico usado para iniciar sesión en la app de iRobot.",
           "irobot_password": "Tu contraseña actual de la app de iRobot."
         }
+      },
+      "prime_account": {
+        "title": "Inicia sesión con tu cuenta de iRobot",
+        "description": "Funciona con cualquier robot. Necesario para los modelos Combo/V4, que no tienen configuración local, y también la vía adecuada para cualquier robot cuya contraseña no se haya encontrado automáticamente. Introduce el correo y la contraseña de tu cuenta iRobot; así se detectan también otros robots de la misma cuenta.",
+        "data": {
+          "irobot_username": "Email iRobot",
+          "irobot_password": "Contraseña iRobot"
+        },
+        "data_description": {
+          "irobot_username": "La dirección de email usada para iniciar sesión en la app iRobot.",
+          "irobot_password": "La contraseña de la app iRobot."
+        }
+      },
+      "prime_robot_picker": {
+        "title": "Elige un robot",
+        "description": "Robots encontrados en esta cuenta. Elige uno para configurarlo — añade robots adicionales iniciando esta configuración de nuevo.",
+        "data": {
+          "blid": "Robot"
+        }
+      },
+      "prime_classic_ip": {
+        "title": "Dirección de red local",
+        "description": "No se pudo encontrar {name} automáticamente en tu red local. Ingresa su dirección IP local — el usuario/contraseña ya confirmados mediante tu cuenta de iRobot se reutilizarán.",
+        "data": {
+          "host": "Dirección IP"
+        }
+      },
+      "prime_classic_analytics": {
+        "title": "Funciones cloud para {name}",
+        "description": "¿Conservar las credenciales de tu cuenta de iRobot también para este robot, para habilitar nombres de habitaciones, historial de misiones y favoritos leídos desde la nube? Todos los comandos seguirán ejecutándose localmente por MQTT de todos modos.",
+        "data": {
+          "enable_cloud_analytics": "Habilitar funciones cloud para este robot"
+        }
       }
     },
     "error": {
@@ -71,14 +113,24 @@
       "unknown": "Error inesperado. Consulta los registros de Home Assistant para más detalles.",
       "cloud_auth_failed": "Error de autenticación cloud. Comprueba tu email y contraseña de iRobot.",
       "cloud_unavailable": "No se pudo conectar al cloud de iRobot. Comprueba tu conexión a Internet e inténtalo de nuevo.",
-      "invalid_cloud_credentials": "Error de autenticación en la nube. Compruebe su correo y contraseña de iRobot."
+      "invalid_cloud_credentials": "Error de autenticación en la nube. Compruebe su correo y contraseña de iRobot.",
+      "cloud_rate_limited": "El inicio de sesión en la nube de iRobot está temporalmente limitado. Cierra la app de iRobot en tu teléfono e inténtalo de nuevo.",
+      "cloud_ssl_certificate_error": "No se pudo verificar el certificado del servidor cloud de iRobot. Esto casi siempre es un problema temporal de iRobot — inténtalo de nuevo en unas horas."
     },
     "abort": {
       "already_configured": "Este robot ya está configurado.",
       "not_irobot_device": "El dispositivo detectado no es un dispositivo iRobot.",
       "short_blid": "Ya hay un flujo de configuración en curso para este robot.",
       "cannot_connect": "No se puede conectar al robot en la dirección especificada.",
-      "reconfigure_successful": "Connection settings updated successfully."
+      "reconfigure_successful": "Ajustes de conexión actualizados.",
+      "no_new_robots_found": "No se encontraron robots nuevos en esta cuenta de iRobot — todos los robots ya están configurados.",
+      "prime_classic_password_missing": "La contraseña de este robot no estaba incluida en la respuesta de la cuenta de iRobot. Intenta añadirlo manualmente en su lugar.",
+      "demand_cleaning_not_supported": "Este robot no informa de los datos de detección de suciedad necesarios para la limpieza bajo demanda.",
+      "integration_not_loaded": "La integración no está cargada. Reinicia Home Assistant e inténtalo de nuevo.",
+      "room_schedule_no_rooms": "Todavía no se conocen habitaciones para este robot. Deja que complete un mapeo primero.",
+      "room_schedule_not_supported": "Las programaciones por habitación requieren un robot que informe de datos de habitaciones.",
+      "no_rooms_to_name": "No se encontraron habitaciones para nombrar. Las habitaciones de este robot aparecen cuando ha limpiado habitaciones concretas al menos una vez, o cuando su mapa está disponible en tu cuenta de iRobot.",
+      "all_rooms_named": "Cada habitación ya tiene nombre. Cambia uno desde el selector de zonas en la página del dispositivo."
     }
   },
   "options": {
@@ -93,6 +145,7 @@
           "map_management": "Gestión de zonas",
           "presence_scheduling": "Programación según presencia",
           "demand_cleaning": "Limpieza por demanda",
+          "room_schedule": "Frecuencia de limpieza por habitación",
           "rooms": "Habitaciones y zonas",
           "rest980_migrate": "Importar habitaciones desde roomba_rest980"
         }
@@ -114,7 +167,15 @@
           "map_size_px": "Tamaño del mapa (píxeles)",
           "map_scale_mm_per_px": "Escala (mm/píxel)",
           "floor_label": "Planta (p. ej. Planta baja)",
-          "correlation_entities": "Correlacionar suciedad con sensores (opcional)"
+          "correlation_entities": "Correlacionar suciedad con sensores (opcional)",
+          "map_room_labels": "Dibujar los nombres de las habitaciones en el mapa",
+          "prime_favorite_buttons": "Crear un botón para cada favorito guardado",
+          "enable_schedule_calendar": "Mostrar las programaciones de limpieza como calendario",
+          "map_clean_zones": "Dibujar zonas de limpieza",
+          "map_keepout_zones": "Dibujar zonas prohibidas",
+          "map_nomop_zones": "Dibujar zonas sin fregado",
+          "enable_maintenance_list": "Mostrar el mantenimiento como lista de tareas",
+          "region_sensors": "Sensor propio por habitación y zona"
         },
         "data_description": {
           "continuous": "Mantener una conexión MQTT persistente con el robot. Recomendado.",
@@ -151,11 +212,11 @@
           "blocking_behavior": "Behavior when blocked",
           "blocking_timeout_min": "Queue timeout (minutes)"
         },
-        "description": "Configure sensors that must be inactive before a smart_start can begin.",
+        "description": "Configura los sensores que deben estar inactivos antes de que pueda iniciarse un smart_start.",
         "data_description": {
-          "blocking_sensors": "Binary sensors that block a start when ON (e.g. door open, motion detected).",
-          "blocking_behavior": "Abort immediately or queue the start until sensors clear.",
-          "blocking_timeout_min": "How long to wait for sensors to clear before giving up."
+          "blocking_sensors": "Sensores binarios que bloquean el inicio cuando están activos (p. ej. puerta abierta, movimiento detectado).",
+          "blocking_behavior": "Cancelar de inmediato o poner el inicio en cola hasta que los sensores se liberen.",
+          "blocking_timeout_min": "Cuánto esperar a que los sensores se liberen antes de desistir."
         }
       },
       "map_management": {
@@ -163,7 +224,7 @@
         "data": {
           "selected_zone": "Zone to edit"
         },
-        "description": "Select a zone to rename or hide. Submit with no zone selected to save changes.\n\n{zone_summary}"
+        "description": "Selecciona una zona para renombrar u ocultar. Envía sin zona seleccionada para guardar.\n\n{zone_summary}"
       },
       "map_management_edit": {
         "title": "Editar zona: {zone_name}",
@@ -171,10 +232,10 @@
           "display_name": "Display name",
           "hidden": "Hide this zone"
         },
-        "description": "Set a display name and visibility for this zone.",
+        "description": "Define un nombre visible y la visibilidad de esta zona.",
         "data_description": {
-          "display_name": "Custom name shown in selectors. Leave blank to use the default name.",
-          "hidden": "Hidden zones are removed from selectors and will not trigger naming repair issues."
+          "display_name": "Nombre personalizado en los selectores. Déjalo en blanco para usar el nombre por defecto.",
+          "hidden": "Las zonas ocultas desaparecen de los selectores y no generan avisos de nombrado."
         }
       },
       "presence_scheduling": {
@@ -190,10 +251,10 @@
       },
       "demand_cleaning": {
         "title": "Demand cleaning",
-        "description": "Automatically start a clean when the floor is significantly dirtier than usual.",
+        "description": "Inicia una limpieza automáticamente cuando el suelo está bastante más sucio de lo habitual.",
         "data": {
           "demand_cleaning_enabled": "Enable demand cleaning",
-          "demand_clean_multiplier": "Trigger multiplier (e.g. 1.5 = 50% above average)"
+          "demand_clean_multiplier": "Multiplicador de activación (p. ej. 1,5 = 50 % por encima de la media)"
         }
       },
       "test_cloud_connection": {
@@ -218,15 +279,19 @@
       "invalid_cloud_credentials": "Error de autenticación en la nube. Compruebe su correo y contraseña de iRobot.",
       "cannot_connect": "No se puede conectar. Compruebe su conexión a internet y vuelva a intentarlo.",
       "no_valid_ids": "No se encontraron entradas válidas. Usa el formato id=Nombre, una por línea.",
-      "pmap_not_resolved": "No se pudo resolver el ID del mapa. Asegúrate de que el robot esté en la base y conectado, luego inténtalo de nuevo."
+      "pmap_not_resolved": "No se pudo resolver el ID del mapa. Asegúrate de que el robot esté en la base y conectado, luego inténtalo de nuevo.",
+      "cloud_rate_limited": "El inicio de sesión en la nube de iRobot está temporalmente limitado. Cierra la app de iRobot en tu teléfono e inténtalo de nuevo.",
+      "cloud_ssl_certificate_error": "No se pudo verificar el certificado del servidor cloud de iRobot. Esto casi siempre es un problema temporal de iRobot — inténtalo de nuevo en unas horas."
     },
     "abort": {
-      "integration_not_loaded": "The integration could not be loaded. Check the logs and reload before opening settings.",
+      "integration_not_loaded": "No se pudo cargar la integración. Revisa los registros y recarga antes de abrir los ajustes.",
       "demand_cleaning_not_supported": "La limpieza bajo demanda requiere un robot SMART con credenciales de nube configuradas.",
       "no_rest980_rooms_found": "No se encontraron habitaciones en tu instalación de roomba_rest980.",
       "rest980_rooms_already_imported": "Todas las habitaciones de roomba_rest980 ya están nombradas en Roomba+.",
       "room_schedule_not_supported": "Las frecuencias por habitación requieren un robot con Smart Map y credenciales de nube.",
-      "room_schedule_no_rooms": "Aún no se han encontrado habitaciones con nombre en el Smart Map."
+      "room_schedule_no_rooms": "Aún no se han encontrado habitaciones con nombre en el Smart Map.",
+      "no_rooms_to_name": "No se encontraron habitaciones para nombrar. Las habitaciones de este robot aparecen cuando ha limpiado habitaciones concretas al menos una vez, o cuando su mapa está disponible en tu cuenta de iRobot.",
+      "all_rooms_named": "Cada habitación ya tiene nombre. Cambia uno desde el selector de zonas en la página del dispositivo."
     }
   },
   "entity": {
@@ -259,16 +324,76 @@
         "name": "Misiones – Última"
       },
       "phase": {
-        "name": "Estado"
+        "name": "Estado",
+        "state": {
+          "new_mission": "Nueva misión",
+          "resumed": "Reanudado",
+          "recharging": "Recargando",
+          "mission_completed": "Misión completada",
+          "cancelled": "Cancelado",
+          "paused": "En pausa",
+          "base_unplugged": "Base sin corriente",
+          "charging": "Cargando",
+          "running": "Limpiando",
+          "emptying_bin": "Vaciando el depósito",
+          "stopped": "Detenido",
+          "stuck": "Atascado",
+          "sent_home": "Enviado a la base",
+          "sent_to_charge": "Enviado a cargar",
+          "docking_mid_mission": "Volviendo a la base",
+          "returning_after_mission": "Regresando tras la misión",
+          "updating_map": "Actualizando el mapa",
+          "refilling_tank": "Rellenando el tanque",
+          "washing_pad": "Lavando la mopa",
+          "drying_pad": "Secando la mopa",
+          "not_responding": "No responde",
+          "charging_mid_mission": "Cargando durante la misión",
+          "no_contact": "Sin contacto",
+          "idle": "Inactivo",
+          "unknown": "Desconocido"
+        }
       },
       "error": {
         "name": "Estado – Error"
       },
       "job_initiator": {
-        "name": "Estado – Iniciado por"
+        "name": "Estado – Iniciado por",
+        "state": {
+          "schedule": "Programación de iRobot",
+          "remote_app": "App de iRobot",
+          "manual": "Robot",
+          "local_app": "Home Assistant",
+          "demand": "Limpieza bajo demanda",
+          "none": "Ninguno",
+          "dock_button": "Botón de la base",
+          "alexa": "Alexa",
+          "siri": "Siri",
+          "ifttt": "IFTTT",
+          "homey": "Homey",
+          "openhab": "openHAB",
+          "yonomi": "Yonomi",
+          "bosch": "Bosch",
+          "swisscom": "Swisscom",
+          "alismart": "AliSmart",
+          "teamed_robot": "Robot en equipo",
+          "cloud": "Nube de iRobot",
+          "remote_automation": "Automatización de iRobot",
+          "local_automation": "Automatización local",
+          "simulated_automation": "Automatización simulada",
+          "wifi": "Wi-Fi",
+          "shell": "Shell",
+          "internal": "Robot (interno)",
+          "unknown": "Desconocido"
+        }
       },
       "clean_mode": {
-        "name": "Ajuste – Pasadas de limpieza"
+        "name": "Ajuste – Pasadas de limpieza",
+        "state": {
+          "auto": "Automático",
+          "one_pass": "Una pasada",
+          "two_passes": "Dos pasadas",
+          "not_available": "No disponible"
+        }
       },
       "scrubs_count": {
         "name": "Detecciones de suciedad"
@@ -283,10 +408,28 @@
         "name": "Mantenimiento – Cepillos"
       },
       "carpet_boost_mode": {
-        "name": "Ajuste – Boost de alfombra"
+        "name": "Ajuste – Boost de alfombra",
+        "state": {
+          "auto": "Automático",
+          "performance": "Rendimiento",
+          "eco": "Eco",
+          "not_available": "No disponible"
+        }
       },
       "clean_base_status": {
-        "name": "Estado de Clean Base"
+        "name": "Estado de Clean Base",
+        "state": {
+          "not_available": "No disponible",
+          "unknown": "Desconocido",
+          "ready": "Lista",
+          "empty": "Vacía",
+          "bag_missing": "Falta la bolsa",
+          "clogged": "Obstruida",
+          "sealing_problem": "Problema de sellado",
+          "bag_full": "Bolsa llena",
+          "ir_comms_problem": "Problema de comunicación IR",
+          "bin_full_sensors_not_cleared": "Depósito lleno — sensores sin limpiar"
+        }
       },
       "dock_tank_level": {
         "name": "Nivel del depósito de la base"
@@ -295,16 +438,109 @@
         "name": "Nivel del depósito"
       },
       "mop_pad": {
-        "name": "Almohadilla de fregona"
+        "name": "Almohadilla de fregona",
+        "state": {
+          "reusable_dry": "Seca (reutilizable)",
+          "reusable_wet": "Húmeda (reutilizable)",
+          "disposable_dry": "Seca (desechable)",
+          "disposable_wet": "Húmeda (desechable)",
+          "plate_fitted": "Placa colocada",
+          "no_plate": "Sin placa",
+          "no_pad": "Sin mopa",
+          "unknown": "Desconocido"
+        }
       },
       "mop_behavior": {
-        "name": "Fregado – Intensidad (legacy)"
+        "name": "Fregado – Intensidad (legacy)",
+        "state": {
+          "no_mop": "Sin fregado",
+          "extended": "Extendido",
+          "standard": "Estándar",
+          "deep": "Profundo",
+          "unknown": "Desconocido"
+        }
       },
       "mop_tank_level": {
         "name": "Nivel del depósito de fregona"
       },
       "readiness": {
-        "name": "Estado – Disponibilidad"
+        "name": "Estado – Disponibilidad",
+        "state": {
+          "none": "Ninguno",
+          "cliff": "Sensor de desnivel",
+          "wheel_drop_both": "Ambas ruedas descolgadas",
+          "wheel_drop_left": "Rueda izquierda descolgada",
+          "wheel_drop_right": "Rueda derecha descolgada",
+          "final_docking": "Acoplamiento final",
+          "brush_stall": "Cepillo bloqueado",
+          "no_bin": "Sin depósito",
+          "nav_crash": "Fallo de navegación",
+          "misconfigured": "Mal configurado",
+          "in_rcon": "En rcon",
+          "invalid_command": "Comando no válido",
+          "insufficient_charge": "Carga insuficiente",
+          "bin_full": "Depósito lleno",
+          "nav_comms_down": "Comunicación de navegación caída",
+          "in_cloud_upgrade": "Actualización en la nube",
+          "charging_sleep": "Reposo durante la carga",
+          "invalid_pad": "Mopa no válida",
+          "safety_offline": "Seguridad sin conexión",
+          "gyro": "Giroscopio",
+          "lid_open": "Tapa abierta",
+          "bumped": "Golpeado",
+          "map_version_mismatch": "Versión de mapa no coincidente",
+          "tank_low": "Depósito bajo",
+          "no_pad": "Sin mopa",
+          "bumper_offline": "Parachoques sin conexión",
+          "power_offline": "Alimentación sin conexión",
+          "new_cleaning_head": "Cabezal de limpieza nuevo",
+          "schedule_no_clock": "Programación sin reloj",
+          "battery_auth_error": "Error de autenticación de batería",
+          "mobility_offline": "Movilidad sin conexión",
+          "invalid_cal": "Calibración no válida",
+          "in_dock_halo": "En halo de la base",
+          "pad_detection_timeout": "Tiempo agotado en detección de mopa",
+          "auto_evacuation_clogged": "Autovaciado obstruido",
+          "sm_bus_permanent_failure": "Fallo permanente del bus SM",
+          "charge_timeout": "Tiempo de carga agotado",
+          "saving_map": "Guardando mapa",
+          "dead_camera": "Cámara inoperativa",
+          "backup_refused": "Retroceso rechazado",
+          "safety_fault_confinement": "Fallo de seguridad: confinamiento",
+          "safety_fault_tilt": "Fallo de seguridad: inclinación",
+          "safety_fault_rollover": "Fallo de seguridad: vuelco",
+          "safety_fault_lift": "Fallo de seguridad: elevación",
+          "safety_fault_emergency_stop": "Fallo de seguridad: parada de emergencia",
+          "safety_fault_hardware": "Fallo de seguridad: hardware",
+          "safety_fault_unknown": "Fallo de seguridad: desconocido",
+          "safety_fault_handle_lift": "Fallo de seguridad: elevación por asa",
+          "localization_failed": "Localización fallida",
+          "low_beacon_count": "Pocas balizas detectadas",
+          "precheck_refused": "Comprobación previa rechazada",
+          "safety_fault_drive_stall_left": "Fallo de seguridad: tracción izquierda bloqueada",
+          "safety_fault_drive_stall_right": "Fallo de seguridad: tracción derecha bloqueada",
+          "not_docked": "Sin acoplar",
+          "bridge_not_confined": "Puente no confinado",
+          "bridge_does_not_reach_dock": "El puente no llega a la base",
+          "bridge_does_not_reach_yard": "El puente no llega al jardín",
+          "wheel_motor_overtemp": "Sobretemperatura del motor de rueda",
+          "wheel_motor_undertemp": "Temperatura baja del motor de rueda",
+          "blade_motor_overtemp": "Sobretemperatura del motor de cuchilla",
+          "blade_motor_undertemp": "Temperatura baja del motor de cuchilla",
+          "fleet_disabled": "Flota deshabilitada",
+          "subscription_expired": "Suscripción caducada",
+          "dead_navigation_board": "Placa de navegación inoperativa",
+          "downloading_map": "Descargando mapa",
+          "off_dock": "Fuera de la base",
+          "tank_leaking": "Depósito con fugas",
+          "robot_fluid_level_sensor_broken": "Sensor de nivel de líquido del robot averiado",
+          "tank_fluid_level_sensor_broken": "Sensor de nivel de líquido del depósito averiado",
+          "cleaning_head_hw_mismatch": "Hardware del cabezal de limpieza no coincidente",
+          "dead_floor_type_sensor": "Sensor de tipo de suelo inoperativo",
+          "unknown": "Desconocido",
+          "ota_update": "Actualización OTA",
+          "unrecognized": "No reconocido"
+        }
       },
       "next_clean": {
         "name": "Estado – Próxima limpieza"
@@ -425,6 +661,18 @@
       },
       "pad_days_until_due": {
         "name": "Mantenimiento – Pad días restantes"
+      },
+      "side_brush_wear_rate": {
+        "name": "Mantenimiento – Tasa desgaste cepillo lateral"
+      },
+      "clean_base_bag_wear_rate": {
+        "name": "Mantenimiento – Tasa desgaste bolsa de la Clean Base"
+      },
+      "side_brush_days_until_due": {
+        "name": "Mantenimiento – Cepillo lateral días restantes"
+      },
+      "clean_base_bag_days_until_due": {
+        "name": "Mantenimiento – Bolsa de la Clean Base días restantes"
       },
       "battery_capacity_mah": {
         "name": "Capacidad batería"
@@ -638,9 +886,6 @@
       "last_mission_team_id": {
         "name": "Misiones – ID de equipo de la última misión"
       },
-      "reset_diagnostics": {
-        "name": "Diagnóstico de reinicios"
-      },
       "health_score_trend": {
         "name": "Tendencia de puntuación de salud",
         "state": {
@@ -658,6 +903,391 @@
       },
       "dirt_weather_correlation": {
         "name": "Correlación de suciedad"
+      },
+      "prime_mission_event": {
+        "name": "Evento de misión"
+      },
+      "prime_connection_health": {
+        "name": "Estado de la conexión",
+        "state": {
+          "ok": "OK",
+          "error": "Error"
+        }
+      },
+      "prime_detected_pad": {
+        "name": "Almohadilla detectada",
+        "state": {
+          "pad_plate": "Todas las mopas colocadas",
+          "no_pad": "Falta una mopa",
+          "disp_dry": "Mopa desechable seca",
+          "disp_wet": "Mopa desechable húmeda",
+          "reusable_dry": "Mopa reutilizable seca",
+          "reusable_wet": "Mopa reutilizable húmeda",
+          "invalid": "Mopa no reconocida"
+        }
+      },
+      "prime_runtime_hours": {
+        "name": "Tiempo de funcionamiento total"
+      },
+      "prime_firmware_version": {
+        "name": "Versión del firmware"
+      },
+      "prime_dock_status": {
+        "name": "Estado de la base",
+        "state": {
+          "dock_no_common_error": "Base sin error común",
+          "pad_wash_unheated_water": "Lavado de mopa con agua sin calentar",
+          "pad_dry_unheated_air": "Secado de mopa con aire sin calentar",
+          "pad_wash_normal_heated_water": "Lavado de mopa con agua caliente normal",
+          "pad_dry_heated_air": "Secado de mopa con aire caliente",
+          "pad_wash_max_heated_water": "Lavado de mopa con agua caliente máxima",
+          "dock_unknown": "Base desconocida",
+          "dock_ready": "Base lista",
+          "dock_evacuation_in_progress": "Vaciado de la base en curso",
+          "dock_evacuation_complete": "Vaciado de la base completado",
+          "dock_evacuation_stopping": "Deteniendo el vaciado de la base",
+          "dock_evacuation_upgrading": "Actualización del vaciado de la base",
+          "dock_bag_missing": "Falta la bolsa de la base",
+          "dock_clogged": "Base obstruida",
+          "dock_vacuum_inoperable": "Aspiración de la base inoperativa",
+          "dock_bag_full": "Bolsa de la base llena",
+          "dock_motor_failure": "Fallo del motor de la base",
+          "dock_partial_clog": "Obstrucción parcial de la base",
+          "dock_communication_failure": "Fallo de comunicación de la base",
+          "dock_evacuation_report_error": "Error en el informe de vaciado de la base",
+          "dock_lifetime_data_report_error": "Error en el informe de datos de vida útil de la base",
+          "dock_all_reports_error": "Error en todos los informes de la base",
+          "dock_hardware_issue_error": "Error de hardware de la base",
+          "fluid_replenishment_unknown": "Reposición de líquido desconocida",
+          "fluid_replenishment_okay": "Reposición de líquido OK",
+          "fluid_replenishment_started": "Reposición de líquido iniciada",
+          "fluid_replenishment_in_progress": "Reposición de líquido en curso",
+          "fluid_replenishment_complete": "Reposición de líquido completada",
+          "fluid_replenishment_complete_not_enough_water": "Reposición de líquido completada sin agua suficiente",
+          "fluid_replenishment_invalid_dock_state_error": "Error de reposición de líquido: estado de la base no válido",
+          "fluid_replenishment_tank_missing_error": "Error de reposición de líquido: falta el depósito",
+          "fluid_replenishment_tank_level_too_low_error": "Error de reposición de líquido: nivel del depósito demasiado bajo",
+          "fluid_replenishment_tank_level_sensor_issue_error": "Error de reposición de líquido: problema del sensor de nivel del depósito",
+          "fluid_replenishment_couldnt_insert_snorkel_error": "Error de reposición de líquido: no se pudo insertar el tubo",
+          "fluid_replenishment_clog_error": "Error de reposición de líquido: obstrucción",
+          "fluid_replenishment_pump_failure_error": "Error de reposición de líquido: fallo de la bomba",
+          "fluid_replenishment_incorrect_robot_tank_error": "Error de reposición de líquido: depósito del robot incorrecto",
+          "fluid_replenishment_communication_failure_error": "Error de reposición de líquido: fallo de comunicación",
+          "fluid_replenishment_couldnt_extend_snorkel_error": "Error de reposición de líquido: no se pudo extender el tubo",
+          "fluid_replenishment_couldnt_retract_snorkel_error": "Error de reposición de líquido: no se pudo retraer el tubo",
+          "fluid_replenishment_dock_tank_level_not_decreasing_error": "Error de reposición de líquido: el nivel del depósito de la base no disminuye",
+          "fluid_replenishment_robot_tank_level_not_increasing_error": "Error de reposición de líquido: el nivel del depósito del robot no aumenta",
+          "fluid_replenishment_hardware_issue_error": "Error de reposición de líquido: problema de hardware",
+          "fluid_replenishment_dock_tank_level_decreasing_error": "Error de reposición de líquido: el nivel del depósito de la base disminuye",
+          "fluid_replenishment_robot_tank_filling_timeout_error": "Error de reposición de líquido: tiempo de llenado del depósito del robot agotado",
+          "pad_wash_unknown": "Lavado de mopa desconocido",
+          "pad_wash_okay": "Lavado de mopa OK",
+          "pad_wash_in_progress": "Lavado de mopa en curso",
+          "pad_wash_complete_with_success": "Lavado de mopa completado con éxito",
+          "pad_wet_in_progress": "Humedecido de mopa en curso",
+          "pad_wet_complete": "Humedecido de mopa completado",
+          "pad_wash_not_available_dock_updating": "Lavado de mopa no disponible: base actualizándose",
+          "pad_wash_flushing_sluice": "Lavado de mopa: enjuagando el canal",
+          "pad_wash_sluice_flush_complete": "Lavado de mopa: enjuague del canal completado",
+          "pad_wash_invalid_dock_state_error": "Error de lavado de mopa: estado de la base no válido",
+          "pad_wash_clear_fluid_tank_missing_error": "Error de lavado de mopa: falta el depósito de agua limpia",
+          "pad_wash_clear_fluid_tank_level_too_low_error": "Error de lavado de mopa: nivel del depósito de agua limpia demasiado bajo",
+          "pad_wash_clear_fluid_tank_level_sensor_issue_error": "Error de lavado de mopa: problema del sensor de nivel del depósito de agua limpia",
+          "pad_wash_grey_water_tank_missing_error": "Error de lavado de mopa: falta el depósito de agua sucia",
+          "pad_wash_grey_water_tank_level_too_full_error": "Error de lavado de mopa: depósito de agua sucia demasiado lleno",
+          "pad_wash_hardware_error": "Error de hardware del lavado de mopa",
+          "pad_wash_communication_failure_error": "Error de lavado de mopa: fallo de comunicación",
+          "pad_wash_grey_water_tank_level_not_decreasing_error": "Error de lavado de mopa: el nivel del depósito de agua sucia no disminuye",
+          "pad_wash_grey_water_tank_level_not_increasing_error": "Error de lavado de mopa: el nivel del depósito de agua sucia no aumenta",
+          "pad_wash_clear_fluid_tank_level_decreasing_error": "Error de lavado de mopa: el nivel del depósito de agua limpia disminuye",
+          "pad_wash_grey_water_tank_level_decreasing_error": "Error de lavado de mopa: el nivel del depósito de agua sucia disminuye",
+          "pad_wash_hardware_issue_error": "Error de lavado de mopa: problema de hardware",
+          "pad_wash_no_pad_attached_error": "Error de lavado de mopa: no hay mopa colocada",
+          "pad_wash_pad_actuator_stall_error": "Error de lavado de mopa: actuador de la mopa bloqueado",
+          "pad_dry_unknown": "Secado de mopa desconocido",
+          "pad_dry_okay": "Secado de mopa OK",
+          "pad_dry_in_progress": "Secado de mopa en curso",
+          "pad_dry_complete_with_success": "Secado de mopa completado con éxito",
+          "pad_dry_interrupt_by_robot": "Secado de mopa interrumpido por el robot",
+          "pad_dry_interrupt_by_mission": "Secado de mopa interrumpido por la misión",
+          "pad_dry_interrupt_by_user": "Secado de mopa interrumpido por el usuario",
+          "pad_dry_not_available_dock_updating": "Secado de mopa no disponible: base actualizándose",
+          "pad_dry_invalid_state_error": "Error de secado de mopa: estado no válido",
+          "pad_dry_motor_stall_error": "Error de secado de mopa: motor bloqueado",
+          "pad_dry_motor_fail_to_start_error": "Error de secado de mopa: el motor no arranca",
+          "pad_dry_actuator_stall_error": "Error de secado de mopa: actuador bloqueado",
+          "pad_dry_pad_not_washed_error": "Error de secado de mopa: mopa sin lavar",
+          "pad_dry_motor_f_e_t_fault_error": "Error de secado de mopa: fallo del FET del motor",
+          "pad_dry_hardware_issue_error": "Error de secado de mopa: problema de hardware",
+          "pad_dry_no_pad_attached_error": "Error de secado de mopa: no hay mopa colocada",
+          "pad_dry_communication_failure_error": "Error de secado de mopa: fallo de comunicación",
+          "pad_wash_blocked_check_tanks": "Lavado de mopa bloqueado — revisar depósitos",
+          "not_reported": "No informado por esta base",
+          "unrecognized": "No reconocido"
+        }
+      },
+      "prime_pad_wash_status": {
+        "name": "Estado de lavado de la almohadilla",
+        "state": {
+          "dock_no_common_error": "Base sin error común",
+          "pad_wash_unheated_water": "Lavado de mopa con agua sin calentar",
+          "pad_dry_unheated_air": "Secado de mopa con aire sin calentar",
+          "pad_wash_normal_heated_water": "Lavado de mopa con agua caliente normal",
+          "pad_dry_heated_air": "Secado de mopa con aire caliente",
+          "pad_wash_max_heated_water": "Lavado de mopa con agua caliente máxima",
+          "dock_unknown": "Base desconocida",
+          "dock_ready": "Base lista",
+          "dock_evacuation_in_progress": "Vaciado de la base en curso",
+          "dock_evacuation_complete": "Vaciado de la base completado",
+          "dock_evacuation_stopping": "Deteniendo el vaciado de la base",
+          "dock_evacuation_upgrading": "Actualización del vaciado de la base",
+          "dock_bag_missing": "Falta la bolsa de la base",
+          "dock_clogged": "Base obstruida",
+          "dock_vacuum_inoperable": "Aspiración de la base inoperativa",
+          "dock_bag_full": "Bolsa de la base llena",
+          "dock_motor_failure": "Fallo del motor de la base",
+          "dock_partial_clog": "Obstrucción parcial de la base",
+          "dock_communication_failure": "Fallo de comunicación de la base",
+          "dock_evacuation_report_error": "Error en el informe de vaciado de la base",
+          "dock_lifetime_data_report_error": "Error en el informe de datos de vida útil de la base",
+          "dock_all_reports_error": "Error en todos los informes de la base",
+          "dock_hardware_issue_error": "Error de hardware de la base",
+          "fluid_replenishment_unknown": "Reposición de líquido desconocida",
+          "fluid_replenishment_okay": "Reposición de líquido OK",
+          "fluid_replenishment_started": "Reposición de líquido iniciada",
+          "fluid_replenishment_in_progress": "Reposición de líquido en curso",
+          "fluid_replenishment_complete": "Reposición de líquido completada",
+          "fluid_replenishment_complete_not_enough_water": "Reposición de líquido completada sin agua suficiente",
+          "fluid_replenishment_invalid_dock_state_error": "Error de reposición de líquido: estado de la base no válido",
+          "fluid_replenishment_tank_missing_error": "Error de reposición de líquido: falta el depósito",
+          "fluid_replenishment_tank_level_too_low_error": "Error de reposición de líquido: nivel del depósito demasiado bajo",
+          "fluid_replenishment_tank_level_sensor_issue_error": "Error de reposición de líquido: problema del sensor de nivel del depósito",
+          "fluid_replenishment_couldnt_insert_snorkel_error": "Error de reposición de líquido: no se pudo insertar el tubo",
+          "fluid_replenishment_clog_error": "Error de reposición de líquido: obstrucción",
+          "fluid_replenishment_pump_failure_error": "Error de reposición de líquido: fallo de la bomba",
+          "fluid_replenishment_incorrect_robot_tank_error": "Error de reposición de líquido: depósito del robot incorrecto",
+          "fluid_replenishment_communication_failure_error": "Error de reposición de líquido: fallo de comunicación",
+          "fluid_replenishment_couldnt_extend_snorkel_error": "Error de reposición de líquido: no se pudo extender el tubo",
+          "fluid_replenishment_couldnt_retract_snorkel_error": "Error de reposición de líquido: no se pudo retraer el tubo",
+          "fluid_replenishment_dock_tank_level_not_decreasing_error": "Error de reposición de líquido: el nivel del depósito de la base no disminuye",
+          "fluid_replenishment_robot_tank_level_not_increasing_error": "Error de reposición de líquido: el nivel del depósito del robot no aumenta",
+          "fluid_replenishment_hardware_issue_error": "Error de reposición de líquido: problema de hardware",
+          "fluid_replenishment_dock_tank_level_decreasing_error": "Error de reposición de líquido: el nivel del depósito de la base disminuye",
+          "fluid_replenishment_robot_tank_filling_timeout_error": "Error de reposición de líquido: tiempo de llenado del depósito del robot agotado",
+          "pad_wash_unknown": "Lavado de mopa desconocido",
+          "pad_wash_okay": "Lavado de mopa OK",
+          "pad_wash_in_progress": "Lavado de mopa en curso",
+          "pad_wash_complete_with_success": "Lavado de mopa completado con éxito",
+          "pad_wet_in_progress": "Humedecido de mopa en curso",
+          "pad_wet_complete": "Humedecido de mopa completado",
+          "pad_wash_not_available_dock_updating": "Lavado de mopa no disponible: base actualizándose",
+          "pad_wash_flushing_sluice": "Lavado de mopa: enjuagando el canal",
+          "pad_wash_sluice_flush_complete": "Lavado de mopa: enjuague del canal completado",
+          "pad_wash_invalid_dock_state_error": "Error de lavado de mopa: estado de la base no válido",
+          "pad_wash_clear_fluid_tank_missing_error": "Error de lavado de mopa: falta el depósito de agua limpia",
+          "pad_wash_clear_fluid_tank_level_too_low_error": "Error de lavado de mopa: nivel del depósito de agua limpia demasiado bajo",
+          "pad_wash_clear_fluid_tank_level_sensor_issue_error": "Error de lavado de mopa: problema del sensor de nivel del depósito de agua limpia",
+          "pad_wash_grey_water_tank_missing_error": "Error de lavado de mopa: falta el depósito de agua sucia",
+          "pad_wash_grey_water_tank_level_too_full_error": "Error de lavado de mopa: depósito de agua sucia demasiado lleno",
+          "pad_wash_hardware_error": "Error de hardware del lavado de mopa",
+          "pad_wash_communication_failure_error": "Error de lavado de mopa: fallo de comunicación",
+          "pad_wash_grey_water_tank_level_not_decreasing_error": "Error de lavado de mopa: el nivel del depósito de agua sucia no disminuye",
+          "pad_wash_grey_water_tank_level_not_increasing_error": "Error de lavado de mopa: el nivel del depósito de agua sucia no aumenta",
+          "pad_wash_clear_fluid_tank_level_decreasing_error": "Error de lavado de mopa: el nivel del depósito de agua limpia disminuye",
+          "pad_wash_grey_water_tank_level_decreasing_error": "Error de lavado de mopa: el nivel del depósito de agua sucia disminuye",
+          "pad_wash_hardware_issue_error": "Error de lavado de mopa: problema de hardware",
+          "pad_wash_no_pad_attached_error": "Error de lavado de mopa: no hay mopa colocada",
+          "pad_wash_pad_actuator_stall_error": "Error de lavado de mopa: actuador de la mopa bloqueado",
+          "pad_dry_unknown": "Secado de mopa desconocido",
+          "pad_dry_okay": "Secado de mopa OK",
+          "pad_dry_in_progress": "Secado de mopa en curso",
+          "pad_dry_complete_with_success": "Secado de mopa completado con éxito",
+          "pad_dry_interrupt_by_robot": "Secado de mopa interrumpido por el robot",
+          "pad_dry_interrupt_by_mission": "Secado de mopa interrumpido por la misión",
+          "pad_dry_interrupt_by_user": "Secado de mopa interrumpido por el usuario",
+          "pad_dry_not_available_dock_updating": "Secado de mopa no disponible: base actualizándose",
+          "pad_dry_invalid_state_error": "Error de secado de mopa: estado no válido",
+          "pad_dry_motor_stall_error": "Error de secado de mopa: motor bloqueado",
+          "pad_dry_motor_fail_to_start_error": "Error de secado de mopa: el motor no arranca",
+          "pad_dry_actuator_stall_error": "Error de secado de mopa: actuador bloqueado",
+          "pad_dry_pad_not_washed_error": "Error de secado de mopa: mopa sin lavar",
+          "pad_dry_motor_f_e_t_fault_error": "Error de secado de mopa: fallo del FET del motor",
+          "pad_dry_hardware_issue_error": "Error de secado de mopa: problema de hardware",
+          "pad_dry_no_pad_attached_error": "Error de secado de mopa: no hay mopa colocada",
+          "pad_dry_communication_failure_error": "Error de secado de mopa: fallo de comunicación",
+          "pad_wash_blocked_check_tanks": "Lavado de mopa bloqueado — revisar depósitos",
+          "not_reported": "No informado por esta base",
+          "unrecognized": "No reconocido"
+        }
+      },
+      "prime_pad_dry_status": {
+        "name": "Estado de secado de la almohadilla",
+        "state": {
+          "dock_no_common_error": "Base sin error común",
+          "pad_wash_unheated_water": "Lavado de mopa con agua sin calentar",
+          "pad_dry_unheated_air": "Secado de mopa con aire sin calentar",
+          "pad_wash_normal_heated_water": "Lavado de mopa con agua caliente normal",
+          "pad_dry_heated_air": "Secado de mopa con aire caliente",
+          "pad_wash_max_heated_water": "Lavado de mopa con agua caliente máxima",
+          "dock_unknown": "Base desconocida",
+          "dock_ready": "Base lista",
+          "dock_evacuation_in_progress": "Vaciado de la base en curso",
+          "dock_evacuation_complete": "Vaciado de la base completado",
+          "dock_evacuation_stopping": "Deteniendo el vaciado de la base",
+          "dock_evacuation_upgrading": "Actualización del vaciado de la base",
+          "dock_bag_missing": "Falta la bolsa de la base",
+          "dock_clogged": "Base obstruida",
+          "dock_vacuum_inoperable": "Aspiración de la base inoperativa",
+          "dock_bag_full": "Bolsa de la base llena",
+          "dock_motor_failure": "Fallo del motor de la base",
+          "dock_partial_clog": "Obstrucción parcial de la base",
+          "dock_communication_failure": "Fallo de comunicación de la base",
+          "dock_evacuation_report_error": "Error en el informe de vaciado de la base",
+          "dock_lifetime_data_report_error": "Error en el informe de datos de vida útil de la base",
+          "dock_all_reports_error": "Error en todos los informes de la base",
+          "dock_hardware_issue_error": "Error de hardware de la base",
+          "fluid_replenishment_unknown": "Reposición de líquido desconocida",
+          "fluid_replenishment_okay": "Reposición de líquido OK",
+          "fluid_replenishment_started": "Reposición de líquido iniciada",
+          "fluid_replenishment_in_progress": "Reposición de líquido en curso",
+          "fluid_replenishment_complete": "Reposición de líquido completada",
+          "fluid_replenishment_complete_not_enough_water": "Reposición de líquido completada sin agua suficiente",
+          "fluid_replenishment_invalid_dock_state_error": "Error de reposición de líquido: estado de la base no válido",
+          "fluid_replenishment_tank_missing_error": "Error de reposición de líquido: falta el depósito",
+          "fluid_replenishment_tank_level_too_low_error": "Error de reposición de líquido: nivel del depósito demasiado bajo",
+          "fluid_replenishment_tank_level_sensor_issue_error": "Error de reposición de líquido: problema del sensor de nivel del depósito",
+          "fluid_replenishment_couldnt_insert_snorkel_error": "Error de reposición de líquido: no se pudo insertar el tubo",
+          "fluid_replenishment_clog_error": "Error de reposición de líquido: obstrucción",
+          "fluid_replenishment_pump_failure_error": "Error de reposición de líquido: fallo de la bomba",
+          "fluid_replenishment_incorrect_robot_tank_error": "Error de reposición de líquido: depósito del robot incorrecto",
+          "fluid_replenishment_communication_failure_error": "Error de reposición de líquido: fallo de comunicación",
+          "fluid_replenishment_couldnt_extend_snorkel_error": "Error de reposición de líquido: no se pudo extender el tubo",
+          "fluid_replenishment_couldnt_retract_snorkel_error": "Error de reposición de líquido: no se pudo retraer el tubo",
+          "fluid_replenishment_dock_tank_level_not_decreasing_error": "Error de reposición de líquido: el nivel del depósito de la base no disminuye",
+          "fluid_replenishment_robot_tank_level_not_increasing_error": "Error de reposición de líquido: el nivel del depósito del robot no aumenta",
+          "fluid_replenishment_hardware_issue_error": "Error de reposición de líquido: problema de hardware",
+          "fluid_replenishment_dock_tank_level_decreasing_error": "Error de reposición de líquido: el nivel del depósito de la base disminuye",
+          "fluid_replenishment_robot_tank_filling_timeout_error": "Error de reposición de líquido: tiempo de llenado del depósito del robot agotado",
+          "pad_wash_unknown": "Lavado de mopa desconocido",
+          "pad_wash_okay": "Lavado de mopa OK",
+          "pad_wash_in_progress": "Lavado de mopa en curso",
+          "pad_wash_complete_with_success": "Lavado de mopa completado con éxito",
+          "pad_wet_in_progress": "Humedecido de mopa en curso",
+          "pad_wet_complete": "Humedecido de mopa completado",
+          "pad_wash_not_available_dock_updating": "Lavado de mopa no disponible: base actualizándose",
+          "pad_wash_flushing_sluice": "Lavado de mopa: enjuagando el canal",
+          "pad_wash_sluice_flush_complete": "Lavado de mopa: enjuague del canal completado",
+          "pad_wash_invalid_dock_state_error": "Error de lavado de mopa: estado de la base no válido",
+          "pad_wash_clear_fluid_tank_missing_error": "Error de lavado de mopa: falta el depósito de agua limpia",
+          "pad_wash_clear_fluid_tank_level_too_low_error": "Error de lavado de mopa: nivel del depósito de agua limpia demasiado bajo",
+          "pad_wash_clear_fluid_tank_level_sensor_issue_error": "Error de lavado de mopa: problema del sensor de nivel del depósito de agua limpia",
+          "pad_wash_grey_water_tank_missing_error": "Error de lavado de mopa: falta el depósito de agua sucia",
+          "pad_wash_grey_water_tank_level_too_full_error": "Error de lavado de mopa: depósito de agua sucia demasiado lleno",
+          "pad_wash_hardware_error": "Error de hardware del lavado de mopa",
+          "pad_wash_communication_failure_error": "Error de lavado de mopa: fallo de comunicación",
+          "pad_wash_grey_water_tank_level_not_decreasing_error": "Error de lavado de mopa: el nivel del depósito de agua sucia no disminuye",
+          "pad_wash_grey_water_tank_level_not_increasing_error": "Error de lavado de mopa: el nivel del depósito de agua sucia no aumenta",
+          "pad_wash_clear_fluid_tank_level_decreasing_error": "Error de lavado de mopa: el nivel del depósito de agua limpia disminuye",
+          "pad_wash_grey_water_tank_level_decreasing_error": "Error de lavado de mopa: el nivel del depósito de agua sucia disminuye",
+          "pad_wash_hardware_issue_error": "Error de lavado de mopa: problema de hardware",
+          "pad_wash_no_pad_attached_error": "Error de lavado de mopa: no hay mopa colocada",
+          "pad_wash_pad_actuator_stall_error": "Error de lavado de mopa: actuador de la mopa bloqueado",
+          "pad_dry_unknown": "Secado de mopa desconocido",
+          "pad_dry_okay": "Secado de mopa OK",
+          "pad_dry_in_progress": "Secado de mopa en curso",
+          "pad_dry_complete_with_success": "Secado de mopa completado con éxito",
+          "pad_dry_interrupt_by_robot": "Secado de mopa interrumpido por el robot",
+          "pad_dry_interrupt_by_mission": "Secado de mopa interrumpido por la misión",
+          "pad_dry_interrupt_by_user": "Secado de mopa interrumpido por el usuario",
+          "pad_dry_not_available_dock_updating": "Secado de mopa no disponible: base actualizándose",
+          "pad_dry_invalid_state_error": "Error de secado de mopa: estado no válido",
+          "pad_dry_motor_stall_error": "Error de secado de mopa: motor bloqueado",
+          "pad_dry_motor_fail_to_start_error": "Error de secado de mopa: el motor no arranca",
+          "pad_dry_actuator_stall_error": "Error de secado de mopa: actuador bloqueado",
+          "pad_dry_pad_not_washed_error": "Error de secado de mopa: mopa sin lavar",
+          "pad_dry_motor_f_e_t_fault_error": "Error de secado de mopa: fallo del FET del motor",
+          "pad_dry_hardware_issue_error": "Error de secado de mopa: problema de hardware",
+          "pad_dry_no_pad_attached_error": "Error de secado de mopa: no hay mopa colocada",
+          "pad_dry_communication_failure_error": "Error de secado de mopa: fallo de comunicación",
+          "pad_wash_blocked_check_tanks": "Lavado de mopa bloqueado — revisar depósitos",
+          "not_reported": "No informado por esta base",
+          "unrecognized": "No reconocido"
+        }
+      },
+      "prime_suction_level": {
+        "name": "Nivel de succión",
+        "state": {
+          "invalid": "Inválido",
+          "low": "Baja",
+          "medium": "Media",
+          "high": "Alta",
+          "turbo": "Turbo"
+        }
+      },
+      "prime_charge_cycles_ok": {
+        "name": "Ciclos de carga (exitosos)"
+      },
+      "prime_charge_cycles_error": {
+        "name": "Ciclos de carga (fallidos)"
+      },
+      "prime_system_uptime": {
+        "name": "Tiempo de actividad del sistema"
+      },
+      "prime_navigation_resets": {
+        "name": "Reinicios de navegación"
+      },
+      "prime_serial_number": {
+        "name": "Número de serie"
+      },
+      "prime_consumable_part": {
+        "name": "Mantenimiento – {part}"
+      },
+      "prime_part_edge_brush": {
+        "name": "Mantenimiento – Cepillo lateral"
+      },
+      "prime_part_multi_surface_brush": {
+        "name": "Mantenimiento – cepillos multisuperficie"
+      },
+      "prime_part_filter": {
+        "name": "Mantenimiento – filtro de alta eficiencia"
+      },
+      "prime_part_dirt_bag": {
+        "name": "Mantenimiento – Bolsa para polvo"
+      },
+      "prime_part_mop_pads": {
+        "name": "Mantenimiento – Mopas DualClean"
+      },
+      "prime_part_cliff_sensors": {
+        "name": "Mantenimiento – Sensores de desnivel"
+      },
+      "prime_part_pad_wash_cleaning": {
+        "name": "Mantenimiento – sistema de lavado de la base"
+      },
+      "prime_part_pad_wash_replacement": {
+        "name": "Mantenimiento – Mopa lavable"
+      },
+      "prime_cleaning_mode": {
+        "name": "Modo de limpieza",
+        "state": {
+          "vacuuming": "Aspirando",
+          "mopping": "Fregando",
+          "vacuuming_and_mopping": "Aspirando y fregando"
+        }
+      },
+      "region_last_cleaned": {
+        "name": "Última limpieza – {region}"
+      },
+      "part_edge_brush": {
+        "name": "Mantenimiento – Cepillo lateral"
+      },
+      "part_dirt_bag": {
+        "name": "Mantenimiento – Bolsa para polvo"
+      },
+      "last_charge": {
+        "name": "Última carga"
+      },
+      "reset_diagnostics_summary": {
+        "name": "Contadores de reseteo de diagnóstico"
       }
     },
     "binary_sensor": {
@@ -668,13 +1298,16 @@
         "name": "Conectado"
       },
       "bin_present": {
-        "name": "Depósito presente"
+        "name": "Depósito de polvo presente"
       },
       "mop_ready": {
         "name": "Problema de fregona"
       },
       "mop_tank_present": {
-        "name": "Depósito de fregona presente"
+        "name": "Depósito de agua del robot"
+      },
+      "prime_dock_error": {
+        "name": "Error de la base"
       },
       "mop_lid_closed": {
         "name": "Tapa de fregona abierta"
@@ -687,6 +1320,18 @@
         "state": {
           "on": "Requerido",
           "off": "OK"
+        },
+        "state_attributes": {
+          "required_actions": {
+            "name": "Acciones necesarias",
+            "state": {
+              "replace_filter": "Sustituya el filtro.",
+              "replace_main_brushes": "Sustituya los cepillos principales.",
+              "replace_mop_pad": "Sustituya la almohadilla de fregado.",
+              "replace_side_brush": "Sustituya el cepillo lateral.",
+              "replace_clean_base_bag": "Sustituya la bolsa de la Clean Base."
+            }
+          }
         }
       },
       "start_blocked": {
@@ -712,7 +1357,7 @@
         "name": "Tapa abierta"
       },
       "mop_tank_present_direct": {
-        "name": "Depósito presente"
+        "name": "Depósito de agua presente"
       },
       "mid_mission_recharge": {
         "name": "Recarga intermedia activa"
@@ -734,6 +1379,12 @@
       },
       "layout_change_detected": {
         "name": "Cambio de disposición detectado"
+      },
+      "prime_start_blocked": {
+        "name": "Inicio bloqueado"
+      },
+      "prime_quiet_hours": {
+        "name": "En horas de silencio"
       }
     },
     "button": {
@@ -778,6 +1429,30 @@
       },
       "map_training": {
         "name": "Acción – Iniciar mapeo"
+      },
+      "prime_favorite": {
+        "name": "Favorito – {favorite}"
+      },
+      "prime_locate": {
+        "name": "Localizar"
+      },
+      "prime_empty_bin": {
+        "name": "Vaciar depósito"
+      },
+      "prime_wash_pad": {
+        "name": "Lavar la mopa"
+      },
+      "prime_stop_pad_dry": {
+        "name": "Detener el secado"
+      },
+      "prime_start_pad_dry": {
+        "name": "Iniciar el secado"
+      },
+      "reset_side_brush": {
+        "name": "Mantenimiento – Confirmar sustitución de cepillo lateral"
+      },
+      "reset_clean_base_bag": {
+        "name": "Mantenimiento – Confirmar sustitución de bolsa de la Clean Base"
       }
     },
     "switch": {
@@ -798,6 +1473,36 @@
       },
       "gentle_mode": {
         "name": "Ajuste – Modo suave"
+      },
+      "prime_carpet_boost": {
+        "name": "Ajuste – Refuerzo para alfombras"
+      },
+      "prime_schedule": {
+        "name": "Programación – {schedule}"
+      },
+      "prime_child_lock": {
+        "name": "Bloqueo infantil"
+      },
+      "prime_eco_charge": {
+        "name": "Carga ecológica"
+      },
+      "prime_pad_dry_allowed": {
+        "name": "Secado de la mopa"
+      },
+      "prime_two_pass": {
+        "name": "Limpieza en dos pasadas"
+      },
+      "prime_vac_high": {
+        "name": "Potencia de succión extra"
+      },
+      "prime_quiet_hours_active": {
+        "name": "No molestar"
+      },
+      "prime_pad_wash_allowed": {
+        "name": "Lavado de mopa permitido"
+      },
+      "prime_pad_dry": {
+        "name": "Secar mopa ahora"
       }
     },
     "select": {
@@ -836,17 +1541,133 @@
           "eco": "Eco",
           "performance": "Rendimiento"
         }
+      },
+      "prime_suction_level": {
+        "name": "Nivel de succión",
+        "state": {
+          "light": "Ligero",
+          "normal": "Normal",
+          "deep": "Profundo"
+        }
+      },
+      "prime_map": {
+        "name": "Mapa",
+        "state": {
+          "follow_robot": "Seguir al robot"
+        }
+      },
+      "prime_cleaning_mode": {
+        "name": "Modo de limpieza",
+        "state": {
+          "vacuum": "Aspirar",
+          "mop": "Fregar",
+          "vacuum_and_mop": "Aspirar y fregar",
+          "vacuum_then_mop": "Aspirar y luego fregar"
+        }
+      },
+      "prime_pad_dry_duration": {
+        "name": "Duración del secado de la mopa",
+        "state": {
+          "2_hours": "2 horas",
+          "3_hours": "3 horas",
+          "4_hours": "4 horas",
+          "5_hours": "5 horas",
+          "6_hours": "6 horas"
+        }
+      },
+      "prime_pad_wash_return": {
+        "name": "Frecuencia de lavado de la mopa",
+        "state": {
+          "after_each_room": "Después de cada habitación",
+          "by_time": "Por intervalo de tiempo",
+          "by_area": "Por intervalo de superficie",
+          "mission": "Antes y después de rutinas",
+          "refill": "También al rellenar",
+          "refill_and_room": "También entre habitaciones"
+        }
+      },
+      "prime_pad_wash_area_interval": {
+        "name": "Intervalo de lavado por superficie",
+        "state": {
+          "6": "6",
+          "8": "8",
+          "10": "10",
+          "15": "15",
+          "20": "20"
+        }
+      },
+      "prime_pad_wash_time_interval": {
+        "name": "Intervalo de lavado por tiempo",
+        "state": {
+          "10": "10 minutos",
+          "15": "15 minutos",
+          "20": "20 minutos",
+          "25": "25 minutos"
+        }
+      },
+      "prime_pad_wash_heat": {
+        "name": "Agua caliente para la mopa",
+        "state": {
+          "no_heat": "Sin calor",
+          "default_heat": "Calor estándar",
+          "high_heat": "Calor alto"
+        }
+      },
+      "prime_autoevac_frequency": {
+        "name": "Frecuencia de vaciado automático",
+        "state": {
+          "every_routine": "Después de cada rutina",
+          "every_2_routines": "Cada 2 rutinas",
+          "every_3_routines": "Cada 3 rutinas",
+          "on_dock_return": "Al volver a la base",
+          "10": "Cada 10 unidades de superficie",
+          "15": "Cada 15 unidades de superficie",
+          "25": "Cada 25 unidades de superficie",
+          "30": "Cada 30 unidades de superficie",
+          "50": "Cada 50 unidades de superficie"
+        }
+      },
+      "prime_pad_wetness": {
+        "name": "Humedad de la mopa",
+        "state": {
+          "1": "1",
+          "2": "2",
+          "3": "3",
+          "4": "4",
+          "5": "5",
+          "6": "6",
+          "7": "7",
+          "8": "8",
+          "9": "9",
+          "10": "10",
+          "11": "11",
+          "12": "12",
+          "13": "13",
+          "14": "14",
+          "15": "15",
+          "16": "16",
+          "17": "17",
+          "18": "18",
+          "19": "19",
+          "20": "20"
+        }
       }
     },
     "image": {
       "map": {
-        "name": "Mapa de limpieza"
+        "name": "Recorrido de limpieza"
       },
       "coverage_map": {
-        "name": "Mapa de cobertura"
+        "name": "Mapa de calor de cobertura"
       },
       "rooms_map": {
         "name": "Mapa de habitaciones"
+      },
+      "cleaning_map": {
+        "name": "Mapa de limpieza en directo"
+      },
+      "raw_map": {
+        "name": "Mapa en directo sin procesar"
       }
     },
     "device_tracker": {
@@ -915,7 +1736,7 @@
       "description": "Su mapa en la nube de iRobot contiene {zone_count} zona(s) de obstáculos detectados por el robot. Realice algunas misiónes de limpieza para que Roomba+ pueda confirmarlos localmente."
     },
     "dock_contact_health": {
-      "title": "Dock contact health issue detected",
+      "title": "Se ha detectado un problema en los contactos de la base",
       "description": "The robot is reporting dock contact issues:\n\n- Contact chatters: {chatters}\n- Knockoffs (unintended undocking): {knockoffs}\n- Charge aborts: {aborts}\n\n**Recommended actions:**\n1. Clean the charging contacts on the robot and dock with a dry cloth.\n2. Ensure the dock is on a flat, stable surface.\n3. If knockoffs are high, check for obstructions near the dock. {smberr_context}"
     },
     "mqtt_watchdog": {
@@ -964,7 +1785,8 @@
       "health_score_drop": "Puntuación de salud bajó",
       "map_retrain_started": "Reentrenamiento de mapa iniciado",
       "map_retrain_completed": "Reentrenamiento de mapa completado",
-      "firmware_updated": "Firmware actualizado"
+      "firmware_updated": "Firmware actualizado",
+      "start_blocked": "Inicio bloqueado por un fallo"
     }
   },
   "services": {
@@ -984,43 +1806,43 @@
     },
     "reset_filter": {
       "name": "Reset filter",
-      "description": "Record the current time as the filter replacement date."
+      "description": "Registra la hora actual como fecha de sustitución del filtro."
     },
     "reset_brush": {
       "name": "Reset brushes",
-      "description": "Record the current time as the brush replacement date."
+      "description": "Registra la hora actual como fecha de sustitución del cepillo."
     },
     "reset_battery": {
       "name": "Reset battery",
-      "description": "Record the current time as the battery replacement date."
+      "description": "Registra la hora actual como fecha de sustitución de la batería."
     },
     "reset_pad": {
       "name": "Reset cleaning pad",
-      "description": "Record the current time as the pad replacement date (Braava only)."
+      "description": "Registra la hora actual como fecha de sustitución de la mopa (solo Braava)."
     },
     "smart_start": {
       "name": "Smart start",
-      "description": "Start a clean with blocking-sensor checks."
+      "description": "Inicia una limpieza con comprobación de sensores bloqueantes."
     },
     "clean_sequence": {
       "name": "Start sequence clean",
-      "description": "Start robot B when robot A completes its current mission. The listener fires once and removes itself automatically.",
+      "description": "Inicia el robot B cuando el robot A termina su misión actual. El escuchador se activa una vez y se elimina solo.",
       "fields": {
         "entity_id": {
           "name": "Trigger robot",
-          "description": "Vacuum entity for robot A (must finish first)."
+          "description": "Entidad de aspiradora del robot A (debe terminar primero)."
         },
         "target_entity_id": {
           "name": "Target robot",
-          "description": "Vacuum entity for robot B (started after A finishes)."
+          "description": "Entidad de aspiradora del robot B (se inicia cuando A termina)."
         },
         "require_completed": {
           "name": "Require completion",
-          "description": "When true, robot B starts only if robot A docked normally."
+          "description": "Si está activo, el robot B solo se inicia si el robot A volvió a la base con normalidad."
         },
         "delay_minutes": {
           "name": "Delay (minutes)",
-          "description": "Wait this many minutes after robot A docks before starting robot B."
+          "description": "Espera estos minutos después de que el robot A vuelva a la base antes de iniciar el robot B."
         }
       }
     },
@@ -1031,6 +1853,38 @@
     "restore_backup": {
       "name": "Restaurar copia de seguridad",
       "description": "Restaura todos los datos de un ZIP de copia de seguridad. Efecto inmediato, sin reinicio."
+    },
+    "set_quiet_hours": {
+      "name": "Establecer horas de silencio",
+      "description": "Escribe la ventana No molestar del hogar.",
+      "fields": {
+        "start": {
+          "name": "Inicio",
+          "description": "Cuándo empiezan las horas de silencio cada día."
+        },
+        "end": {
+          "name": "Fin",
+          "description": "Cuándo terminan cada día."
+        },
+        "ends_at": {
+          "name": "Silencio hasta",
+          "description": "Un momento único en lugar de una ventana diaria."
+        }
+      }
+    },
+    "clean_zone": {
+      "name": "Limpiar zona",
+      "description": "Envía un robot Prime a una o varias zonas de limpieza bajo demanda, por nombre o por id numérico.",
+      "fields": {
+        "zone_name": {
+          "name": "Nombre de zona",
+          "description": "Uno o varios nombres de zona, tal como aparecen en el mapa. Usa esto o el id de zona."
+        },
+        "zone_id": {
+          "name": "ID de zona",
+          "description": "Uno o varios id numéricos de zona. Usa esto o el nombre de zona."
+        }
+      }
     }
   },
   "exceptions": {
@@ -1053,28 +1907,73 @@
       "message": "El robot está actualizando su Smart Map. Espera a que el sensor de disponibilidad muestre 'Listo' e inténtalo de nuevo."
     },
     "entity_not_found": {
-      "message": "Entity {entity_id} not found in the entity registry."
+      "message": "La entidad {entity_id} no se encuentra en el registro de entidades."
     },
     "maintenance_store_unavailable": {
-      "message": "Maintenance store is not available for {entity_id}. Reload the integration and try again."
+      "message": "El almacén de mantenimiento no está disponible para {entity_id}. Recarga la integración e inténtalo de nuevo."
     },
     "no_valid_segments": {
-      "message": "No segments matched the current map. The map may have been retrained — re-run a room mission in the iRobot app to refresh the room layout."
+      "message": "Ningún segmento coincide con el mapa actual. Puede que el mapa se haya vuelto a aprender: ejecuta una misión por habitaciones en la app de iRobot para actualizar la distribución."
     },
     "config_entry_not_found": {
-      "message": "No config entry found for {entity_id}. Try reloading the integration."
+      "message": "No se encontró ninguna entrada de configuración para {entity_id}. Prueba a recargar la integración."
     },
     "room_name_and_room_passes_conflict": {
-      "message": "Provide either room_name or room_passes, not both."
+      "message": "Indica room_name o room_passes, no ambos."
     },
     "room_name_or_room_passes_required": {
-      "message": "Provide either room_name or room_passes."
+      "message": "Indica room_name o room_passes."
     },
     "no_rooms_resolved": {
       "message": "No hay habitaciones para limpiar — indica al menos un nombre de habitación."
     },
     "backup_entity_not_found": {
       "message": "La entidad «{entity_id}» no se pudo asociar a ningún robot Roomba+. Compruebe el ID y vuelva a intentarlo."
+    },
+    "cloud_credentials_invalid": {
+      "message": "Las credenciales de la nube de iRobot no son válidas: {error}"
+    },
+    "cloud_temporarily_unavailable": {
+      "message": "La nube de iRobot no está disponible temporalmente: {error}"
+    },
+    "unknown_rooms": {
+      "message": "Habitación(es) desconocida(s) para {entity_id}: {rooms}. Habitaciones conocidas: {known}."
+    },
+    "favorite_prime_only": {
+      "message": "run_favorite solo está disponible para robots V4/Prime"
+    },
+    "favorite_not_found": {
+      "message": "No hay ningún favorito ejecutable con el ID {favorite_id}"
+    },
+    "dock_operation_in_progress": {
+      "message": "La base está ocupada ({operation}). El robot no aceptará órdenes hasta que termine."
+    },
+    "quiet_hours_incomplete": {
+      "message": "Las horas de silencio necesitan inicio y fin, o ninguno."
+    },
+    "quiet_hours_ambiguous": {
+      "message": "Indica una ventana diaria (inicio y fin) o un momento único — el robot acepta exactamente uno de los dos."
+    },
+    "quiet_hours_not_prime": {
+      "message": "{entity} no es un robot V4/Prime con hogar."
+    },
+    "prime_not_connected": {
+      "message": "Este robot no tiene conexión con la nube."
+    },
+    "cloud_required": {
+      "message": "Seleccionar habitaciones requiere credenciales de la nube de iRobot en este robot. Añádelas en las opciones de la integración, o limpia toda la casa."
+    },
+    "calendar_room_not_found": {
+      "message": "Ninguna habitación coincide con \"{text}\". Indica una habitación en el título, la descripción o la ubicación — habitaciones conocidas: {known}. Déjalos los tres sin nombres para limpiar toda la casa."
+    },
+    "zone_name_and_zone_id_conflict": {
+      "message": "Indica zone_name o zone_id, no ambos."
+    },
+    "zone_name_or_zone_id_required": {
+      "message": "Indica zone_name o zone_id."
+    },
+    "zone_name_not_found": {
+      "message": "No se encontraron uno o varios nombres de zona en el mapa."
     }
   },
   "selector": {

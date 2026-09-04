@@ -13,26 +13,47 @@ https://github.com/tonylofgren/aurora-smart-home
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
+
+from typing import Any
+
 import logging
 import statistics
 from dataclasses import dataclass, field
 
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.storage import Store
 
 from .const import (
-    CONF_BRUSH_HOURS,
-    CONF_FILTER_HOURS,
-    DEFAULT_BRUSH_HOURS,
-    DEFAULT_FILTER_HOURS,
+    CONSUMABLE_ROLES,
     is_mop,
+    part_role,
 )
-from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 _LOGGER = logging.getLogger(__name__)
 
 STORAGE_KEY_PREFIX = "roomba_plus_maintenance"
 STORAGE_VERSION    = 1
+
+
+def _iso_from_epoch(ts: Any) -> str | None:
+    """Convert an epoch-seconds reset timestamp to a local ISO-8601 string.
+
+    iRobot's parts endpoint reports `last_updated_ts` in epoch seconds, and
+    omits it entirely for a part that has never been reset. Returns None for
+    that case and for any unparseable value, so a missing timestamp leaves
+    the store's existing value untouched instead of blanking it.
+    """
+    if ts is None:
+        return None
+    try:
+        epoch = int(ts)
+    except (TypeError, ValueError):
+        return None
+    if epoch <= 0:
+        return None
+    return dt_util.utc_from_timestamp(epoch).astimezone(dt_util.DEFAULT_TIME_ZONE).isoformat()
 
 
 @dataclass
@@ -79,6 +100,28 @@ class MaintenanceStore:
     filter_baseline_seeded: bool = False
     brush_baseline_seeded: bool = False
 
+    # side_brush/clean_base_bag mirror the filter/brush slots above —
+    # cloud-only roles, so reset_hr/reset_at are only ever written by
+    # hydrate_from_cloud_parts() or their own reset button/service, never
+    # auto-seeded (no CONF_*_HOURS default exists to seed against).
+    side_brush_reset_hr: int = 0
+    side_brush_reset_at: str | None = None
+    side_brush_reset_history: list[int] = field(default_factory=list)
+    side_brush_baseline_seeded: bool = False
+
+    clean_base_bag_reset_hr: int = 0
+    clean_base_bag_reset_at: str | None = None
+    clean_base_bag_reset_history: list[int] = field(default_factory=list)
+    clean_base_bag_baseline_seeded: bool = False
+
+    # Cloud consumable state, keyed by iRobot `part_id`. Written by
+    # hydrate_from_cloud_parts() from /v1/robots/{blid}/parts and read by
+    # the per-part cloud sensors. Held here rather than only in the
+    # coordinator so the last known values survive a cloud outage and an
+    # HA restart, matching how every other maintenance figure behaves.
+    cloud_parts: dict[str, dict[str, Any]] = field(default_factory=dict)
+    cloud_parts_hydrated_at: str | None = None
+
     # IA74-MAINT (v2.6.0) — clean/inspect timestamps (calendar-based, no bbrun.hr)
     wheel_cleaned_at: str | None = None
     contact_cleaned_at: str | None = None
@@ -86,8 +129,8 @@ class MaintenanceStore:
 
     async def async_load(self, hass: HomeAssistant, entry_id: str) -> None:
         """Load persisted reset values from hass.storage."""
-        store = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
-        data: dict | None = await store.async_load()
+        store: Store[dict[str, Any]] = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
+        data: dict[str, Any] | None = await store.async_load()
         if not data:
             _LOGGER.debug("MaintenanceStore: no persisted data for %s", entry_id)
             return
@@ -117,6 +160,27 @@ class MaintenanceStore:
             # and no seeding could have happened yet).
             self.filter_baseline_seeded = bool(data.get("filter_baseline_seeded", False))
             self.brush_baseline_seeded  = bool(data.get("brush_baseline_seeded",  False))
+            self.side_brush_reset_hr = int(data.get("side_brush_reset_hr", 0))
+            self.side_brush_reset_at = data.get("side_brush_reset_at")
+            self.side_brush_reset_history = [
+                int(h) for h in data.get("side_brush_reset_history", [])
+            ]
+            self.side_brush_baseline_seeded = bool(data.get("side_brush_baseline_seeded", False))
+            self.clean_base_bag_reset_hr = int(data.get("clean_base_bag_reset_hr", 0))
+            self.clean_base_bag_reset_at = data.get("clean_base_bag_reset_at")
+            self.clean_base_bag_reset_history = [
+                int(h) for h in data.get("clean_base_bag_reset_history", [])
+            ]
+            self.clean_base_bag_baseline_seeded = bool(data.get("clean_base_bag_baseline_seeded", False))
+            # Cloud consumable state — absent on installs that predate
+            # cloud parts hydration, and absent for robots whose account
+            # does not serve the endpoint. Both are "no cloud truth yet".
+            raw_cloud_parts = data.get("cloud_parts")
+            self.cloud_parts = (
+                {str(k): dict(v) for k, v in raw_cloud_parts.items() if isinstance(v, Mapping)}
+                if isinstance(raw_cloud_parts, Mapping) else {}
+            )
+            self.cloud_parts_hydrated_at = data.get("cloud_parts_hydrated_at")
             # IA74-MAINT: calendar-based inspect timestamps
             self.wheel_cleaned_at   = data.get("wheel_cleaned_at")
             self.contact_cleaned_at = data.get("contact_cleaned_at")
@@ -130,7 +194,7 @@ class MaintenanceStore:
 
     async def async_save(self, hass: HomeAssistant, entry_id: str) -> None:
         """Persist current reset values to hass.storage."""
-        store = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
+        store: Store[dict[str, Any]] = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
         await store.async_save({
             "filter_reset_hr":  self.filter_reset_hr,
             "brush_reset_hr":   self.brush_reset_hr,
@@ -144,6 +208,16 @@ class MaintenanceStore:
             "brush_reset_history":  self.brush_reset_history,   # L2
             "filter_baseline_seeded": self.filter_baseline_seeded,  # v3.4.1
             "brush_baseline_seeded":  self.brush_baseline_seeded,   # v3.4.1
+            "side_brush_reset_hr": self.side_brush_reset_hr,
+            "side_brush_reset_at": self.side_brush_reset_at,
+            "side_brush_reset_history": self.side_brush_reset_history,
+            "side_brush_baseline_seeded": self.side_brush_baseline_seeded,
+            "clean_base_bag_reset_hr": self.clean_base_bag_reset_hr,
+            "clean_base_bag_reset_at": self.clean_base_bag_reset_at,
+            "clean_base_bag_reset_history": self.clean_base_bag_reset_history,
+            "clean_base_bag_baseline_seeded": self.clean_base_bag_baseline_seeded,
+            "cloud_parts": self.cloud_parts,
+            "cloud_parts_hydrated_at": self.cloud_parts_hydrated_at,
             # IA74-MAINT
             "wheel_cleaned_at":   self.wheel_cleaned_at,
             "contact_cleaned_at": self.contact_cleaned_at,
@@ -152,16 +226,24 @@ class MaintenanceStore:
 
     # ── Reset methods ─────────────────────────────────────────────────────────
 
+    def _reset_slot(self, slot: str, current_hr: int) -> None:
+        """Record current_hr/now as the reset point for a role's local slot.
+
+        Appends to `{slot}_reset_history` first, before updating
+        `{slot}_reset_hr`, so the interval between the previous and this
+        reset stays computable for the learned-lifespan median.
+        """
+        getattr(self, f"{slot}_reset_history").append(current_hr)
+        setattr(self, f"{slot}_reset_hr", current_hr)
+        setattr(self, f"{slot}_reset_at", dt_util.now().isoformat())
+
     def reset_filter(self, current_hr: int) -> None:
         """Record current bbrun.hr and wall-clock time as filter replacement point.
 
         L2: appends to filter_reset_history for self-calibrating lifespan.
         After 2+ replacements, learned_filter_hours provides the personal interval.
         """
-        # L2: record history before updating reset_hr so the interval is computable
-        self.filter_reset_history.append(current_hr)
-        self.filter_reset_hr = current_hr
-        self.filter_reset_at = dt_util.now().isoformat()
+        self._reset_slot("filter", current_hr)
         _LOGGER.info("MaintenanceStore: filter reset at %dh (history len=%d)",
                      current_hr, len(self.filter_reset_history))
 
@@ -171,10 +253,7 @@ class MaintenanceStore:
         L2: appends to brush_reset_history for self-calibrating lifespan.
         After 2+ replacements, learned_brush_hours provides the personal interval.
         """
-        # L2: record history before updating reset_hr
-        self.brush_reset_history.append(current_hr)
-        self.brush_reset_hr = current_hr
-        self.brush_reset_at = dt_util.now().isoformat()
+        self._reset_slot("brush", current_hr)
         _LOGGER.info("MaintenanceStore: brush reset at %dh (history len=%d)",
                      current_hr, len(self.brush_reset_history))
 
@@ -186,10 +265,199 @@ class MaintenanceStore:
 
     def reset_pad(self, current_hr: int) -> None:
         """Braava alias for reset_brush — pad and brush share the same store slot."""
-        self.brush_reset_history.append(current_hr)
-        self.brush_reset_hr = current_hr
-        self.brush_reset_at = dt_util.now().isoformat()
+        self._reset_slot("brush", current_hr)
         _LOGGER.info("MaintenanceStore: pad reset at %dh", current_hr)
+
+    def reset_side_brush(self, current_hr: int) -> None:
+        """Record current bbrun.hr and wall-clock time as side brush replacement
+        point — the local counterpart to the cloud-side reset a
+        SideBrushResetButton press also performs, so wear-rate/days-until-due
+        keep a baseline through a cloud outage."""
+        self._reset_slot("side_brush", current_hr)
+        _LOGGER.info("MaintenanceStore: side brush reset at %dh (history len=%d)",
+                     current_hr, len(self.side_brush_reset_history))
+
+    def reset_clean_base_bag(self, current_hr: int) -> None:
+        """Record current bbrun.hr and wall-clock time as Clean Base bag
+        replacement point — see reset_side_brush()'s docstring."""
+        self._reset_slot("clean_base_bag", current_hr)
+        _LOGGER.info("MaintenanceStore: clean base bag reset at %dh (history len=%d)",
+                     current_hr, len(self.clean_base_bag_reset_history))
+
+    # ── Cloud reads ───────────────────────────────────────────────────────────
+
+    def cloud_part_by_role(self, role: str) -> dict[str, Any] | None:
+        """Return the hydrated cloud record for a consumable role, or None.
+
+        None means "no cloud truth for this part": the account does not
+        serve the parts endpoint, the robot does not report this part, or
+        nothing has been hydrated yet. Callers fall back to the local
+        runtime-hours estimate in that case.
+        """
+        for record in self.cloud_parts.values():
+            if record.get("role") == role:
+                return record
+        return None
+
+    def cloud_remaining_hours(self, role: str) -> int | None:
+        """Return hours left on a consumable per iRobot's own counter.
+
+        This is the figure the official app shows, converted from the
+        runtime minutes the cloud reports. None when there is no cloud
+        record for the role, or when the counter is not minute-based —
+        a non-minute counter cannot be divided by 60 into hours.
+        """
+        record = self.cloud_part_by_role(role)
+        if record is None or record.get("count_type") != "minutes":
+            return None
+        remaining = record.get("count_remaining")
+        if remaining is None:
+            remaining = record.get("minutes_remaining")
+        if remaining is None:
+            return None
+        try:
+            return int(int(remaining) // 60)
+        except (TypeError, ValueError):
+            return None
+
+    def cloud_full_life_hours(self, role: str) -> int | None:
+        """Return the cloud's full-life hours for a consumable role.
+
+        (count_used + count_remaining) / 60 — the total service life
+        iRobot's own counter allots the part, independent of how much of
+        it has been used. None under the same conditions as
+        cloud_remaining_hours: no cloud record, a non-minute counter, or
+        either half of the sum missing/invalid.
+        """
+        record = self.cloud_part_by_role(role)
+        if record is None or record.get("count_type") != "minutes":
+            return None
+        used = record.get("count_used")
+        remaining = record.get("count_remaining")
+        if remaining is None:
+            remaining = record.get("minutes_remaining")
+        if used is None or remaining is None:
+            return None
+        try:
+            return int((int(used) + int(remaining)) // 60)
+        except (TypeError, ValueError):
+            return None
+
+    def reset_baseline_for_role(self, role: str) -> tuple[int, str | None]:
+        """Return the (reset_hr, reset_at) wear-rate baseline for any of the
+        four maintenance roles, from that role's local MaintenanceStore
+        slot. hydrate_from_cloud_parts() keeps every slot current on each
+        successful cloud poll and otherwise leaves it untouched, which is
+        what lets this survive a cloud outage — see its own docstring.
+        """
+        slot = CONSUMABLE_ROLES[role].slot
+        return getattr(self, f"{slot}_reset_hr"), getattr(self, f"{slot}_reset_at")
+
+    # ── Cloud hydration ───────────────────────────────────────────────────────
+
+    def hydrate_from_cloud_parts(
+        self, parts: list[dict[str, Any]], current_hr: int
+    ) -> bool:
+        """Adopt iRobot's own consumable counters as this store's baseline.
+
+        THE POINT OF THIS METHOD IS MIGRATION. Without it, a robot that has
+        been in service for months before this integration was installed
+        gets its maintenance baseline from the cold-start seed, which
+        assumes every consumable is fresh as of install time. That is
+        wrong for exactly the users most likely to install this — and it
+        is why the remaining-hours sensors can read a full budget on a
+        robot whose filter is nearly due, and why the days-until-due
+        sensors sit at "unknown" with no wear history to extrapolate from.
+
+        The cloud knows better, because the official app writes to it: a
+        part's `count_used` is robot runtime minutes since that part was
+        last reset, including resets the user performed in the app. So the
+        bbrun.hr reading at the moment of that reset is recoverable:
+
+            reset_hr = current_hr - count_used / 60
+
+        Every part is recorded in `cloud_parts` verbatim, keyed by id, with
+        no interpretation — the per-part sensors read that and therefore
+        never depend on the id->role guess. Every known role is additionally
+        mapped onto its own local slot (see IROBOT_PART_ROLE_TO_STORE_SLOT),
+        and only when the role is known; an unrecognised id updates
+        `cloud_parts` and nothing else, so a mis-mapped id can never write
+        a wrong baseline into the store.
+
+        `*_reset_history` is deliberately NOT appended to. That list feeds
+        the learned-lifespan median and means "a replacement the user
+        confirmed"; the cloud exposes only the most recent reset per part,
+        so appending would invent a single synthetic interval and bias the
+        learned figure. Hydration sets the baseline; real resets keep
+        building the history from there.
+
+        Returns True when anything changed, so the caller knows whether a
+        save is needed.
+        """
+        changed = False
+        for entry in parts:
+            part_id = entry.get("part_id")
+            if part_id is None:
+                continue
+            key = str(part_id).strip()
+
+            snapshot = {
+                "part_id": key,
+                "count_used": entry.get("count_used"),
+                "count_remaining": entry.get("count_remaining"),
+                "minutes_remaining": entry.get("minutes_remaining"),
+                "counter": entry.get("counter"),
+                "count_type": entry.get("count_type"),
+                "counter_category": entry.get("counter_category"),
+                "last_updated_ts": entry.get("last_updated_ts"),
+                "reset_by": entry.get("reset_by"),
+                "role": part_role(key),
+            }
+            if self.cloud_parts.get(key) != snapshot:
+                self.cloud_parts[key] = snapshot
+                changed = True
+
+            spec = CONSUMABLE_ROLES.get(snapshot["role"] or "")
+            if spec is None:
+                continue
+            slot = spec.slot
+
+            # Only minute-denominated counters are convertible to the
+            # bbrun.hr domain the legacy slots live in. Anything else
+            # (a hypothetical mission-count or fill-count counter) is
+            # left alone rather than silently misread as minutes.
+            if entry.get("count_type") != "minutes":
+                continue
+            try:
+                used_hr = int(int(entry["count_used"]) // 60)
+            except (KeyError, TypeError, ValueError):
+                continue
+
+            reset_hr = max(0, int(current_hr) - used_hr)
+            reset_at = _iso_from_epoch(entry.get("last_updated_ts"))
+
+            if getattr(self, f"{slot}_reset_hr") != reset_hr:
+                setattr(self, f"{slot}_reset_hr", reset_hr)
+                changed = True
+            # A part that has never been reset carries no timestamp; keep
+            # whatever the store already had rather than blanking it.
+            if reset_at is not None and getattr(self, f"{slot}_reset_at") != reset_at:
+                setattr(self, f"{slot}_reset_at", reset_at)
+                changed = True
+            # The cold-start seed must not later overwrite a real cloud
+            # baseline with the install-time assumption.
+            if not getattr(self, f"{slot}_baseline_seeded"):
+                setattr(self, f"{slot}_baseline_seeded", True)
+                changed = True
+
+        if changed:
+            self.cloud_parts_hydrated_at = dt_util.now().isoformat()
+            _LOGGER.info(
+                "MaintenanceStore: hydrated %d cloud part(s) at %dh runtime "
+                "(filter_reset=%dh brush_reset=%dh)",
+                len(parts), current_hr, self.filter_reset_hr, self.brush_reset_hr,
+            )
+        return changed
 
     # ── IA74-MAINT (v2.7.0) — calendar-based inspect resets ──────────────────
     # These components have no bbrun.hr lifecycle — they are cleaned on a
@@ -236,81 +504,119 @@ class MaintenanceStore:
 
     # ── L2 — Self-calibrating lifespan ───────────────────────────────────────
 
-    @property
-    def learned_filter_hours(self) -> float | None:
-        """Median interval between filter replacements, or None if < 2 resets.
-
-        L2: after 2+ replacements, returns the personal filter lifespan.
-        Exposed in diagnostics. Used by filter_remaining when available.
+    def _learned_hours(self, slot: str) -> float | None:
+        """Median interval between a role's local resets, or None with
+        fewer than 2 recorded. Shared by the local-threshold fallback.
         """
-        if len(self.filter_reset_history) < 2:
+        history = getattr(self, f"{slot}_reset_history")
+        if len(history) < 2:
             return None
         intervals = [
-            self.filter_reset_history[i] - self.filter_reset_history[i - 1]
-            for i in range(1, len(self.filter_reset_history))
-            if self.filter_reset_history[i] > self.filter_reset_history[i - 1]
+            history[i] - history[i - 1]
+            for i in range(1, len(history))
+            if history[i] > history[i - 1]
         ]
         return statistics.median(intervals) if intervals else None
+
+    def learned_hours(self, role: str) -> float | None:
+        """Return the learned replacement interval for a consumable role."""
+        return self._learned_hours(CONSUMABLE_ROLES[role].slot)
+
+    @property
+    def learned_filter_hours(self) -> float | None:
+        """Median interval between filter replacements, or None if < 2 resets."""
+        return self.learned_hours("filter")
 
     @property
     def learned_brush_hours(self) -> float | None:
-        """Median interval between brush replacements, or None if < 2 resets.
-
-        L2: after 2+ replacements, returns the personal brush lifespan.
-        Exposed in diagnostics. Used by brush_remaining when available.
-        """
-        if len(self.brush_reset_history) < 2:
-            return None
-        intervals = [
-            self.brush_reset_history[i] - self.brush_reset_history[i - 1]
-            for i in range(1, len(self.brush_reset_history))
-            if self.brush_reset_history[i] > self.brush_reset_history[i - 1]
-        ]
-        return statistics.median(intervals) if intervals else None
+        """Median interval between brush replacements, or None if < 2 resets."""
+        return self.learned_hours("main_brush")
 
     # ── Remaining-life calculations ───────────────────────────────────────────
 
-    def due_items(self, vacuum_state: dict, options: dict) -> list[str]:
-        """v3.4.3 FLEET-1 — return consumable keys currently at zero
-        remaining hours.
+    def threshold_hours(self, role: str, options: Mapping[str, Any]) -> int:
+        """Return a role's configured or built-in local threshold."""
+        spec = CONSUMABLE_ROLES[role]
+        if spec.conf_key is None:
+            return spec.default_hours
+        try:
+            return int(options.get(spec.conf_key, spec.default_hours))
+        except (TypeError, ValueError):
+            return spec.default_hours
 
-        Extracted from binary_sensor.py's RoombaMaintenanceDue._due_items()
-        (identical logic, now shared) so the household REST endpoint's
-        fleet-health rollup can report the same "is maintenance due"
-        signal without duplicating the threshold/mop-vs-vacuum-key logic
-        a second time. binary_sensor.py's _due_items() now delegates here.
-        """
+    def due_items(
+        self, vacuum_state: Mapping[str, Any], options: Mapping[str, Any]
+    ) -> list[str]:
+        """Return due consumables using the shared four-role lifecycle."""
         current_hr = (vacuum_state.get("bbrun") or {}).get("hr", 0)
+        is_mop_device = is_mop(dict(vacuum_state))
         items: list[str] = []
-        if self.filter_remaining(
-            current_hr, options.get(CONF_FILTER_HOURS, DEFAULT_FILTER_HOURS)
-        ) == 0:
-            items.append("filter")
-        brush_key = "pad" if is_mop(vacuum_state) else "brush"
-        if self.brush_remaining(
-            current_hr, options.get(CONF_BRUSH_HOURS, DEFAULT_BRUSH_HOURS)
-        ) == 0:
-            items.append(brush_key)
+        for role, spec in CONSUMABLE_ROLES.items():
+            threshold = self.threshold_hours(role, options)
+            if self._is_due(role, current_hr, threshold):
+                items.append(
+                    spec.mop_due_key
+                    if spec.mop_due_key and is_mop_device else spec.due_key
+                )
         return items
 
-    def filter_remaining(self, current_hr: int, threshold: int) -> int:
-        """Hours remaining until next filter replacement.
+    def _is_due(self, role: str, current_hr: int, threshold: int) -> bool:
+        """True when a maintenance role is due for replacement.
 
-        L2: uses learned_filter_hours when available (after 2+ replacements),
-        falling back to the configured threshold otherwise.
-        Uses round() not int() to avoid systematic truncation error (up to 59 min).
+        The cloud's own exhausted-counter state wins whenever a usable
+        cloud record exists — the same authoritative signal the official
+        app uses, at minute rather than rounded-hour precision. Only when
+        there is no such record does this fall back to the local
+        threshold-based hour count, for every role alike.
         """
-        effective = round(self.learned_filter_hours or threshold)
-        hours_since_reset = current_hr - self.filter_reset_hr
-        return max(0, effective - hours_since_reset)
+        exhausted = self._cloud_exhaustion_state(role)
+        if exhausted is not None:
+            return exhausted
+        return self.remaining_hours(role, current_hr, threshold) == 0
+
+    def _cloud_exhaustion_state(self, role: str) -> bool | None:
+        """True/False when the cloud's own minute counter answers due-ness
+        for a role, None when there is no usable cloud signal (no record,
+        or a non-minute counter) for _is_due() to fall back from.
+        """
+        record = self.cloud_part_by_role(role)
+        if record is None or record.get("count_type") != "minutes":
+            return None
+        remaining = record.get("count_remaining")
+        if remaining is None:
+            remaining = record.get("minutes_remaining")
+        if remaining is None:
+            return None
+        try:
+            return int(remaining) <= 0
+        except (TypeError, ValueError):
+            return None
+
+    def _local_remaining(self, slot: str, current_hr: int, threshold: int) -> int:
+        """Hours remaining until replacement per the local reset slot alone,
+        ignoring any cloud counter. Uses the learned interval once 2+
+        resets have been recorded, else the given threshold. round(), not
+        int(), avoids a systematic truncation error of up to 59 minutes.
+        """
+        effective = round(self._learned_hours(slot) or threshold)
+        try:
+            reset_hr = int(getattr(self, f"{slot}_reset_hr"))
+        except (TypeError, ValueError):
+            return effective
+        return max(0, effective - (current_hr - reset_hr))
+
+    def remaining_hours(self, role: str, current_hr: int, threshold: int) -> int:
+        """Hours remaining until replacement for any of the four
+        maintenance roles, local-only (no cloud counter) — see
+        _local_remaining()."""
+        return self._local_remaining(CONSUMABLE_ROLES[role].slot, current_hr, threshold)
+
+    def filter_remaining(self, current_hr: int, threshold: int) -> int:
+        """Hours remaining until next filter replacement, local-only (no
+        cloud counter) — see _local_remaining()."""
+        return self.remaining_hours("filter", current_hr, threshold)
 
     def brush_remaining(self, current_hr: int, threshold: int) -> int:
-        """Hours remaining until next brush/pad replacement.
-
-        L2: uses learned_brush_hours when available (after 2+ replacements),
-        falling back to the configured threshold otherwise.
-        Uses round() not int() to avoid systematic truncation error (up to 59 min).
-        """
-        effective = round(self.learned_brush_hours or threshold)
-        hours_since_reset = current_hr - self.brush_reset_hr
-        return max(0, effective - hours_since_reset)
+        """Hours remaining until next brush/pad replacement, local-only (no
+        cloud counter) — see _local_remaining()."""
+        return self.remaining_hours("main_brush", current_hr, threshold)

@@ -16,6 +16,7 @@ https://github.com/tonylofgren/aurora-smart-home
 from __future__ import annotations
 
 import json
+import contextlib
 import logging
 import zipfile
 from datetime import datetime, timezone
@@ -32,17 +33,22 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.storage import Store
 
 from .const import (
+    cleaning_modes_for,
     ATTR_ORDERED,
+    IROBOT_PART_ROLE_FILTER,
+    IROBOT_PART_ROLE_MAIN_BRUSH,
     ATTR_OVERRIDE_BLOCKING,
     ATTR_ROOM_NAME,
     ATTR_ROOM_PASSES,
     ATTR_ROOMS,
+    ATTR_CLEANING_MODE,
+    ATTR_RUN_PAD_WETNESS,
+    ATTR_SMART_SCRUB,
     ATTR_TWO_PASS,
-    CONF_SMART_ZONE_DATA,
     DOMAIN,
     EVENT_MAINTENANCE_RESET,
-    MAP_UPDATING_NOT_READY_BIT,
     SERVICE_CLEAN_ROOM,
+    SERVICE_CLEAN_ZONE,
     SERVICE_CLEAN_OVERDUE_ROOMS,
     SERVICE_AUTO_CLEAN_DIRTY_ROOMS,
     CONF_ROOM_SCHEDULE,
@@ -52,16 +58,31 @@ from .const import (
     SERVICE_RESET_BRUSH,
     SERVICE_RESET_FILTER,
     SERVICE_RESET_PAD,
+    SERVICE_SET_QUIET_HOURS,
     SERVICE_SMART_START,
     SERVICE_CREATE_BACKUP,
     SERVICE_RESTORE_BACKUP,
 )
-from .models import MapCapability, RoombaConfigEntry, RoombaData
+# _resolve_rooms and _resolve_pmapv_id moved to room_cleaning.py with
+# the Classic send path they belong to. They were left behind here for
+# one round as dead copies -- the same pattern that cost this project
+# two minor versions elsewhere, so they are gone rather than kept "just
+# in case".
+from .prime_coordinator import prime_region_names_from_command
+from .room_cleaning import ZID_PREFIX, async_get_room_cleaning_backend
+from .models import ConnectionType, RoombaConfigEntry, RoombaData
+from .prime_coordinator import prime_current_state
 
 if TYPE_CHECKING:
     pass
 
 _LOGGER = logging.getLogger(__name__)
+
+#: How long to give a robot to open a cycle before saying the
+#: command looks swallowed. Long enough for a normal start (a
+#: field capture showed ~10s for a region launch), short enough
+#: that the log line is still near the action that caused it.
+_SWALLOWED_COMMAND_GRACE_SEC = 20
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -74,6 +95,15 @@ _LOGGER = logging.getLogger(__name__)
 # independent of any one store's internal naming (STORAGE_VERSION vs.
 # _HA_STORE_VERSION vary by module, the value doesn't).
 _BACKUP_STORE_VERSION = 1
+#: mission_timer_store is DELIBERATELY ABSENT.
+#:
+#: It holds the state of the mission running right now -- elapsed
+#: seconds, which room, when the phase last changed. Restoring that from
+#: a backup would reinstate a mission that finished weeks ago, and the
+#: robot would disagree within seconds.
+#:
+#: Everything else here is history or user-entered data, which is what a
+#: backup is for.
 _BACKUP_STORES: tuple[tuple[str, str], ...] = (
     ("mission_store", "roomba_plus_missions"),
     ("geometry_store", "roomba_plus_geometry"),
@@ -87,170 +117,8 @@ _BACKUP_STORES: tuple[tuple[str, str], ...] = (
 )
 
 
-def _resolve_pmapv_id(state: dict, pmap_id: str) -> str | None:
-    """Return user_pmapv_id for pmap_id from local MQTT state.
-
-    v2.7.4 (PMAP-PMAPV): prefers lastCommand.user_pmapv_id over state.pmaps.
-
-    rest980 protocol: get user_pmapv_id from lastCommand (the stable committed
-    version the robot last accepted).  state.pmaps reflects the live value that
-    the robot writes to MQTT immediately after updating its map — this version
-    is not yet committed for command use and will cause error 224 if sent.
-
-    Fallback to state.pmaps when lastCommand has a different pmap_id (e.g. the
-    robot was last commanded on a different map) or when cloud data is absent.
-    """
-    last = state.get("lastCommand", {})
-    if last.get("pmap_id") == pmap_id and last.get("user_pmapv_id"):
-        return last["user_pmapv_id"]
-    for pmap in state.get("pmaps", []):
-        if pmap_id in pmap:
-            return pmap[pmap_id]
-    return None
 
 
-def _resolve_rooms(
-    zone_data: dict[str, dict],
-    room_names: list[str],
-    state: dict,
-    cloud_pmap_id: str | None = None,
-) -> list[tuple[str, str]]:
-    """Resolve room names to (region_id, pmap_id) tuples.
-
-    Args:
-        zone_data:      smart_zone_data from config_entry.options —
-                        {region_id: {"name": str, "pmap_id": str}}
-        room_names:     user-supplied room names from the service call.
-        state:          live robot state — used to resolve pmap_id when the stored
-                        value is empty (MQTT fallback).
-        cloud_pmap_id:  authoritative pmap_id from the cloud coordinator.
-                        When present this is preferred over the MQTT cascade.
-
-    Returns:
-        Ordered list of (region_id, pmap_id) matching each room name.
-
-    Raises:
-        ServiceValidationError: unknown name, unresolvable pmap_id, or
-            rooms spanning more than one pmap_id.
-    """
-    index: dict[str, tuple[str, str]] = {}
-    for rid, meta in zone_data.items():
-        if not meta.get("name"):
-            continue
-        key = meta["name"].casefold()
-        pmap_id = meta.get("pmap_id", "")
-        if key in index:
-            existing_rid, existing_pmap = index[key]
-            if cloud_pmap_id and pmap_id == cloud_pmap_id:
-                _LOGGER.warning(
-                    "clean_room: duplicate room name '%s' across maps "
-                    "(region %s from map %.8s overwrites region %s from map %.8s). "
-                    "Delete the old Smart Map in the iRobot app to prevent this.",
-                    meta["name"], rid, pmap_id, existing_rid, existing_pmap,
-                )
-                index[key] = (rid, pmap_id)
-            else:
-                _LOGGER.warning(
-                    "clean_room: duplicate room name '%s' — keeping region %s "
-                    "(region %s ignored, not from active map %.8s). "
-                    "Delete the old Smart Map in the iRobot app.",
-                    meta["name"], existing_rid, rid,
-                    cloud_pmap_id[:8] if cloud_pmap_id else "unknown",
-                )
-        else:
-            index[key] = (rid, pmap_id)
-
-    resolved: list[tuple[str, str]] = []
-    unknown: list[str] = []
-
-    # v2.7.3 (ROOM-SLUG): XVMC sends room_id (ASCII slug) as [[selection]].
-    # Build a secondary slug index so "kuche" resolves to "Küche".
-    import unicodedata as _ud
-    import re as _re
-
-    def _slug(s: str) -> str:
-        nfd = _ud.normalize("NFD", s)
-        a = "".join(c for c in nfd if _ud.category(c) != "Mn")
-        slug = _re.sub(r"[^a-zA-Z0-9]+", "_", a).strip("_").lower()
-        return _re.sub(r"_+", "_", slug) or "room"
-
-    slug_index: dict[str, tuple[str, str]] = {
-        _slug(meta["name"]): val
-        for val in [index[k] for k in index]
-        for meta in zone_data.values()
-        if meta.get("name") and index.get(meta["name"].casefold()) == val
-    }
-    # Simpler rebuild: slug → (rid, pmap_id) from the name index
-    slug_index = {
-        _slug(display_name): match_val
-        for display_name, match_val in (
-            (meta["name"], index.get(meta["name"].casefold()))
-            for meta in zone_data.values()
-            if meta.get("name") and index.get(meta["name"].casefold())
-        )
-        if match_val is not None
-    }
-
-    for name in room_names:
-        match = index.get(name.casefold()) or slug_index.get(_slug(name))
-        if match is None:
-            unknown.append(name)
-        else:
-            resolved.append(match)
-
-    if unknown:
-        raise ServiceValidationError(
-            f"Unknown room(s): {', '.join(unknown)}. "
-            f"Known rooms: {', '.join(meta['name'] for meta in zone_data.values() if meta.get('name'))}",
-            translation_domain=DOMAIN,
-            translation_key="rooms_not_found",
-            translation_placeholders={"names": ", ".join(unknown)},
-        )
-
-    # Resolve empty pmap_ids — priority:
-    #   0. cloud_pmap_id  — authoritative, immune to stale MQTT
-    #   1. lastCommand.pmap_id
-    #   2. cleanSchedule2[].cmd.pmap_id
-    #   3. pmaps[0] key   — last resort
-    last = state.get("lastCommand", {})
-    pmaps: list[dict] = state.get("pmaps", [])
-    fallback_pmap_id: str = (
-        cloud_pmap_id
-        or last.get("pmap_id")
-        or next(
-            (
-                cmd.get("cmd", {}).get("pmap_id")
-                for cmd in state.get("cleanSchedule2", [])
-                if cmd.get("cmd", {}).get("pmap_id")
-            ),
-            None,
-        )
-        or (next(iter(pmaps[0]), None) if pmaps else None)
-        or ""
-    )
-    resolved = [
-        (rid, pmap_id if pmap_id else fallback_pmap_id)
-        for rid, pmap_id in resolved
-    ]
-
-    pmap_ids = {pmap_id for _, pmap_id in resolved}
-    if "" in pmap_ids:
-        raise ServiceValidationError(
-            "Could not resolve map ID (pmap_id) for one or more rooms. "
-            "Ensure the robot has reported its map state via MQTT.",
-            translation_domain=DOMAIN,
-            translation_key="pmap_not_resolved",
-        )
-    if len(pmap_ids) > 1:
-        raise ServiceValidationError(
-            "All rooms must be on the same floor (same pmap). "
-            f"Got rooms from maps: {', '.join(pmap_ids)}",
-            translation_domain=DOMAIN,
-            translation_key="rooms_different_floors",
-            translation_placeholders={"pmap_ids": ", ".join(pmap_ids)},
-        )
-
-    return resolved
 
 
 # ── Signal helper ─────────────────────────────────────────────────────────────
@@ -320,6 +188,355 @@ def _fire_maintenance_reset_event(
 
 # ── Service handlers ──────────────────────────────────────────────────────────
 
+def _modes_for_backend(backend: Any) -> dict[str, int]:
+    """The cleaning-mode table for whichever generation `backend` serves.
+
+    "Vacuum and mop" is 32 on Prime (field-verified) and 6 on Classic
+    (captured from the iRobot app's own command by @ia74). Resolving a
+    caller's mode name against the wrong table would send a value that
+    generation has never been seen to accept -- on a field that decides
+    whether water goes on the floor.
+    """
+    data = getattr(backend, "_data", None)
+    return cleaning_modes_for(
+        getattr(data, "connection_type", None) is ConnectionType.CLOUD_ONLY
+    )
+
+
+async def _async_warn_if_swallowed(
+    hass: HomeAssistant, entry: Any, what: str
+) -> None:
+    """Log when a command was accepted and nothing happened.
+
+    THREE CAUSES, ONE SIGNATURE. A robot can take a command into
+    `lastCommand`, report `notReady: 0` and `error: 0`, and simply not
+    act on it. @Young9898 documented three routes to that state on one
+    i3+ in a single day:
+
+      - a stale `user_pmapv_id` (already guarded, separately)
+      - a region-targeted start sent while the robot is off its dock,
+        which works 6/6 from the dock and 0/2 mid-floor
+      - `notReady: 1` (Cliff) after a false cliff reading on a dark rug,
+        which swallows every motion command until the robot is picked up
+
+    Enumerating causes does not scale -- the first was diagnosed and
+    written down, and the other two look identical to it from outside,
+    which is exactly how a second cause gets attributed to the first for
+    months. Watching for the SYMPTOM covers all three and whatever comes
+    next.
+
+    Deliberately a log line and not an exception: the service has
+    already returned by the time this can be known, and a robot that
+    starts late is better served by a warning than by a caller that
+    was told the call failed.
+    """
+    import asyncio  # noqa: PLC0415
+
+    await asyncio.sleep(_SWALLOWED_COMMAND_GRACE_SEC)
+
+    try:
+        from . import roomba_reported_state  # noqa: PLC0415
+
+        status = roomba_reported_state(
+            entry.runtime_data.roomba
+        ).get("cleanMissionStatus") or {}
+    except Exception:  # noqa: BLE001
+        return
+
+    if (status.get("cycle") or "none") != "none":
+        return
+
+    not_ready = status.get("notReady")
+    _LOGGER.warning(
+        "%s was accepted by the robot but no mission started within %ds "
+        "(phase=%r, notReady=%r, error=%r). The robot takes a command "
+        "and silently ignores it in several situations: a cliff sensor "
+        "reading a dark floor as a drop-off, a region-targeted start "
+        "sent while the robot is away from its dock, or a stale map "
+        "version. Check the readiness sensor.",
+        what,
+        _SWALLOWED_COMMAND_GRACE_SEC,
+        status.get("phase"),
+        not_ready,
+        status.get("error"),
+    )
+
+
+async def _async_clean_rooms_via_backend(
+    backend: Any,
+    entity_id: str,
+    room_names: list[str],
+    ordered: bool,
+    per_room_two_pass: list[bool | None],
+    call: ServiceCall,
+) -> None:
+    """Room cleaning through a RoomCleaningBackend.
+
+    BOTH GENERATIONS now, though Prime came first. The Classic path was
+    moved into ClassicRoomCleaning afterwards, verbatim -- its 141-line
+    resolution step, the cross-map conflict rules and the readiness
+    check all came across intact, which took four rounds of existing
+    tests to confirm.
+
+    Name matching is shared, though -- match_room_names() carries the
+    slug fallback that lets "kuche" find "Küche". Two different matching
+    rules across generations would be a confusing bug to report and a
+    worse one to find.
+    """
+    from .room_cleaning import match_room_names  # noqa: PLC0415
+
+    available = await backend.available_rooms()
+    if not available:
+        raise ServiceValidationError(
+            # ABSENCE AND UNREACHABILITY ARE DIFFERENT FINDINGS.
+            #
+            # This asserted a cause it had not checked. @utkjmitch's
+            # robot had five named rooms and was told to go and name
+            # them -- they lived in a source this reader did not
+            # consult. He had done the thing the message asked for.
+            f"No rooms with names could be found for {entity_id}. If the "
+            "rooms are named in the iRobot app, a diagnostics download "
+            "will show what this integration can see; otherwise finish "
+            "a mapping run and name them there first.",
+            translation_domain=DOMAIN,
+            translation_key="no_rooms_configured",
+        )
+
+    room_ids, unknown = match_room_names(available, room_names)
+    if not room_ids and not unknown:
+        # An empty request: room_passes=[] satisfies the "exactly one
+        # of" argument checks and then resolves to nothing. Without this
+        # the call would reach the backend with no regions, which sends
+        # a command that cleans nowhere.
+        raise ServiceValidationError(
+            "No rooms to clean — provide at least one room name.",
+            translation_domain=DOMAIN,
+            translation_key="no_rooms_resolved",
+        )
+    if unknown:
+        raise ServiceValidationError(
+            f"Unknown room(s) for {entity_id}: {', '.join(unknown)}. "
+            f"Known rooms: {', '.join(sorted(available))}.",
+            translation_domain=DOMAIN,
+            translation_key="unknown_rooms",
+            translation_placeholders={
+                "entity_id": entity_id,
+                "rooms": ", ".join(unknown),
+                "known": ", ".join(sorted(available)),
+            },
+        )
+
+    caller_two_pass: bool | None = call.data.get(ATTR_TWO_PASS)
+    # ONE MODE FOR THE WHOLE CALL, not per room. The payload allows a
+    # different mode per region, and nobody has asked for that -- a
+    # service field that mixes vacuum and mop across rooms would be
+    # harder to explain than it is useful.
+
+    caller_mode_name: str | None = call.data.get(ATTR_CLEANING_MODE)
+    caller_mode: int | None = (
+        _modes_for_backend(backend).get(caller_mode_name)
+        if caller_mode_name else None
+    )
+    def _two_pass_for(index: int) -> bool | None:
+        """Per-room value, else the caller-level one, else None.
+
+        None means "leave the robot's own setting alone" and the backend
+        fills it in -- the same three-step precedence the Classic path
+        uses.
+
+        Written out rather than using `or`, which was the first draft
+        and was wrong: `False or True` is True, so a user asking for one
+        room WITHOUT a second pass while the call defaults to two passes
+        would have had their explicit choice silently overridden. This
+        project has hit "absent treated as false" more than once; here
+        it is the reverse, and just as wrong.
+        """
+        if index < len(per_room_two_pass) and per_room_two_pass[index] is not None:
+            return per_room_two_pass[index]
+        return caller_two_pass
+
+    two_pass = [_two_pass_for(i) for i in range(len(room_ids))]
+
+    _LOGGER.info(
+        "clean_room: %s → rooms=%s (via %s)",
+        entity_id, room_ids, type(backend).__name__,
+    )
+    await backend.clean_rooms(
+        room_ids, ordered=ordered, two_pass=two_pass,
+        # A single value applied to every room -- _per_room() spreads a
+        # one-element list across the whole call.
+        operating_mode=[caller_mode] if caller_mode is not None else None,
+    )
+
+    # Fire and forget: the service returns now, and this reports later
+    # if nothing actually started.
+    _entry = getattr(backend, "_config_entry", None) or getattr(
+        backend, "_data", None
+    )
+    if _entry is not None and hasattr(_entry, "async_create_background_task"):
+        _entry.async_create_background_task(
+            call.hass,
+            _async_warn_if_swallowed(call.hass, _entry, "clean_room"),
+            name=f"roomba_plus_swallow_watch_{_entry.entry_id}",
+        )
+
+
+async def async_handle_clean_zone(call: ServiceCall) -> None:
+    """Send a Prime robot to one or more clean zones on demand.
+
+    WHY THIS EXISTS. @chairstacker: the app stopped letting you save a
+    zone as a favourite -- rooms only. This is how you send the robot
+    to a zone from Home Assistant, which is where he wanted the trigger
+    anyway. A calendar workaround was the alternative, and it should
+    not have to be.
+
+    Zones travel through `clean_rooms` in the same list as rooms,
+    marked by the `zid_` prefix. Classic has read that marker since
+    v2.7.0; the Prime backend hardcoded RID until this service was
+    wired, and was fixed alongside it -- so "the backend already
+    handled zones" was true of one generation and not the other.
+
+    Zones are identified by name (as shown on the map) or by numeric id.
+    Exactly one of the two, matching the room service's shape.
+    """
+    hass = call.hass
+    entity_ids: list[str] = call.data["entity_id"]
+
+    raw_names: list[str] | None = call.data.get("zone_name")
+    raw_ids: list[str] | None = call.data.get("zone_id")
+
+    if raw_names and raw_ids:
+        raise ServiceValidationError(
+            "Provide either zone_name or zone_id, not both.",
+            translation_domain=DOMAIN,
+            translation_key="zone_name_and_zone_id_conflict",
+        )
+    if not raw_names and not raw_ids:
+        raise ServiceValidationError(
+            "Provide either zone_name or zone_id.",
+            translation_domain=DOMAIN,
+            translation_key="zone_name_or_zone_id_required",
+        )
+
+    ent_reg = er.async_get(hass)
+    for entity_id in entity_ids:
+        entry = ent_reg.async_get(entity_id)
+        if entry is None:
+            raise ServiceValidationError(
+                f"Entity {entity_id} not found",
+                translation_domain=DOMAIN,
+                translation_key="entity_not_found",
+                translation_placeholders={"entity_id": entity_id},
+            )
+        config_entry: RoombaConfigEntry | None = hass.config_entries.async_get_entry(
+            entry.config_entry_id or ""
+        )
+        if config_entry is None or config_entry.runtime_data is None:
+            continue
+
+        if raw_ids:
+            zone_ids = [str(z) for z in raw_ids]
+        else:
+            # NAME -> ID against the same command the calendar reads, so
+            # a name that shows on the map resolves here too. An unknown
+            # name is refused rather than silently dropped: a partial
+            # clean looks like success.
+            # NAMES COME FROM THE BUNDLE FIRST.
+            #
+            # `prime_room_names` is filled from the map bundle whenever a
+            # floor plan is built -- the `cleanZones` layer, which is
+            # where @chairstacker's zone names turned out to live after
+            # five rounds of looking.
+            #
+            # `prime_region_names_from_command` only knows regions that
+            # appeared in the LAST command, so a zone never yet cleaned
+            # has no name there. It fills gaps rather than leading, the
+            # same precedence prime_room_map.py uses: a name someone
+            # typed into the map editor beats one carried along by
+            # whichever command last ran.
+            names_by_id: dict[str, str] = {}
+            with contextlib.suppress(Exception):
+                names_by_id.update(
+                    prime_region_names_from_command(config_entry.runtime_data)
+                )
+            names_by_id.update(config_entry.runtime_data.prime_room_names or {})
+
+            names_to_ids = {name: zid for zid, name in names_by_id.items()}
+            zone_ids = []
+            missing = []
+            for name in raw_names or []:
+                zid = names_to_ids.get(name)
+                if zid is None:
+                    missing.append(name)
+                else:
+                    zone_ids.append(zid)
+            if missing:
+                known = ", ".join(sorted(names_to_ids)) or "(none on this map)"
+                raise ServiceValidationError(
+                    f"Zone name(s) not found: {missing}. Known zones: {known}.",
+                    translation_domain=DOMAIN,
+                    translation_key="zone_name_not_found",
+                )
+
+        backend = async_get_room_cleaning_backend(config_entry, hass)
+        if backend is None:
+            continue
+
+        prefixed = [f"{ZID_PREFIX}{zid}" for zid in zone_ids]
+
+        # THE SAME MODE OPTION clean_room HAS HAD ALL ALONG.
+        #
+        # @chairstacker asked for vac-only / mop-only / vac & mop /
+        # vac-then-mop on a zone so he can build the few ad-hoc scripts
+        # he actually wants, rather than getting a button per zone per
+        # mode. Every piece already existed -- `clean_rooms` takes
+        # `operating_mode`, and the four values are the ones the
+        # cleaning-mode select ships with -- this call simply never
+        # passed it on.
+        #
+        # The values are confirmed twice over: observed in four
+        # captures (2=vacuum, 4=mop, 6=both) and, for 32 and 512,
+        # recorded from the robot's own answer before the select
+        # shipped (`command 32 -> status 6`, `command 512 -> status
+        # 4`). So the robot accepts 32 even though the vendor app
+        # sends 6 for a combo -- which is why MODES is the source here
+        # rather than a fresh mapping off the enum.
+
+        mode_name: str | None = call.data.get(ATTR_CLEANING_MODE)
+        caller_mode: int | None = (
+            _modes_for_backend(backend).get(mode_name) if mode_name else None
+        )
+
+        _LOGGER.info(
+            "clean_zone: %s -> zones=%s mode=%s (via %s)",
+            entity_id, zone_ids, mode_name or "unset", type(backend).__name__,
+        )
+        # SMART SCRUB AND PAD WETNESS, both for this run only.
+        #
+        # Shapes from @ia74's Classic capture, where the app sends them
+        # inside the region's own params alongside operatingMode. Both
+        # omitted when unset: the pad-wetness selects already exist as
+        # device settings, and sending a per-region value would
+        # silently override what somebody set there.
+        scrub = call.data.get(ATTR_SMART_SCRUB)
+        # STRING IN, INT OUT. A `select` selector's options must declare
+        # string values -- hassfest rejects integers outright -- so the
+        # service receives "2" and the robot expects 2. Converting here
+        # rather than at the payload keeps the wire shape honest: the
+        # capture that established this field shows integers.
+        _wetness_raw = call.data.get(ATTR_RUN_PAD_WETNESS)
+        wetness = int(_wetness_raw) if _wetness_raw not in (None, "") else None
+
+        await backend.clean_rooms(
+            prefixed,
+            # One value spread across every requested zone, same as
+            # clean_room does.
+            operating_mode=[caller_mode] if caller_mode is not None else None,
+            smart_scrub=[scrub] if scrub is not None else None,
+            pad_wetness=[wetness] if wetness is not None else None,
+        )
+
+
 async def async_handle_clean_room(call: ServiceCall) -> None:
     """Handle the roomba_plus.clean_room service call.
 
@@ -333,7 +550,7 @@ async def async_handle_clean_room(call: ServiceCall) -> None:
 
     # CLEAN-ROOM-PER-ROOM-PASSES (v2.9.0): exactly one of room_name / room_passes.
     raw_room_name = call.data.get(ATTR_ROOM_NAME)
-    raw_room_passes: list[dict] | None = call.data.get(ATTR_ROOM_PASSES)
+    raw_room_passes: list[dict[str, Any]] | None = call.data.get(ATTR_ROOM_PASSES)
 
     if raw_room_name is not None and raw_room_passes is not None:
         raise ServiceValidationError(
@@ -357,7 +574,9 @@ async def async_handle_clean_room(call: ServiceCall) -> None:
         ]
     else:
         room_names = (
-            [raw_room_name] if isinstance(raw_room_name, str) else raw_room_name
+            [raw_room_name]
+            if isinstance(raw_room_name, str)
+            else list(raw_room_name or [])
         )
         per_room_two_pass = [None] * len(room_names)
 
@@ -375,9 +594,7 @@ async def async_handle_clean_room(call: ServiceCall) -> None:
                 translation_placeholders={"entity_id": entity_id},
             )
 
-        config_entry: RoombaConfigEntry | None = hass.config_entries.async_get_entry(
-            entry.config_entry_id
-        )
+        config_entry: RoombaConfigEntry | None = hass.config_entries.async_get_entry(entry.config_entry_id or "")
         if config_entry is None:
             raise ServiceValidationError(
                 f"No config entry for {entity_id}",
@@ -386,139 +603,45 @@ async def async_handle_clean_room(call: ServiceCall) -> None:
                 translation_placeholders={"entity_id": entity_id},
             )
 
-        data: RoombaData = config_entry.runtime_data
-
-        if data.map_capability != MapCapability.SMART:
+        # ASKS THE BACKEND, not a capability flag (this session).
+        #
+        # This used to gate on map_capability == SMART, which is a
+        # Classic-shaped question: has_smart_map() looks for a "pmaps"
+        # key and Prime robots report "p2maps", so every Prime robot was
+        # refused room cleaning even after the transport was confirmed
+        # working on real hardware.
+        #
+        # "Is there a backend" answers what is actually being asked --
+        # can this robot clean a named room -- for both generations, and
+        # needs no flag to be read correctly at each call site.
+        backend = async_get_room_cleaning_backend(config_entry, hass)
+        if backend is None:
             raise ServiceValidationError(
-                f"{entity_id} does not support Smart Map room cleaning. "
-                "This requires a robot with a finalized Smart Map "
-                "(i7, s9, j-series, or Braava jet m6). If you have a "
-                "compatible robot, make sure its map is saved in the iRobot app.",
+                f"{entity_id} does not support room cleaning. Classic robots need a "
+                "finalized Smart Map (i7, s9, j-series or Braava jet m6) with cloud "
+                "credentials configured; Prime robots need a saved map. Check that "
+                "the map is saved in the iRobot app.",
                 translation_domain=DOMAIN,
                 translation_key="not_smart_map",
             )
 
-        zone_data: dict = config_entry.options.get(CONF_SMART_ZONE_DATA, {})
-
-        if data.has_cloud:
-            cc = data.cloud_coordinator
-            cloud_zone_data: dict = {
-                str(r["id"]): {"name": r["name"], "pmap_id": r["pmap_id"]}
-                for r in cc.regions
-                if r.get("id") and r.get("name")
-            }
-            cloud_zone_data.update({
-                str(z["id"]): {"name": z["name"], "pmap_id": z["pmap_id"]}
-                for z in cc.zones
-                if z.get("id") and z.get("name")
-            })
-            zone_data = {**zone_data, **cloud_zone_data}
-
-        if not zone_data:
-            raise ServiceValidationError(
-                "No rooms configured yet. Run a room-targeted clean via the "
-                "iRobot app first, then assign names in the Roomba+ options.",
-                translation_domain=DOMAIN,
-                translation_key="no_rooms_configured",
-            )
-
-        state = data.roomba_reported_state()
-
-        cloud_pmap_id: str | None = None
-        if data.has_cloud:
-            cloud_pmap_id = data.cloud_coordinator.active_pmap_id
-            if cloud_pmap_id:
-                _LOGGER.debug(
-                    "clean_room: active pmap_id=%s (source=cloud) for %s",
-                    cloud_pmap_id[:12], entity_id,
-                )
-
-        not_ready: int = (state.get("cleanMissionStatus") or {}).get("notReady", 0)
-        if not_ready & MAP_UPDATING_NOT_READY_BIT:
-            raise ServiceValidationError(
-                "The robot is currently updating its Smart Map. "
-                "Wait for the update to complete (readiness sensor shows 'Ready'), "
-                "then try again.",
-                translation_domain=DOMAIN,
-                translation_key="map_updating",
-            )
-
-        resolved = _resolve_rooms(zone_data, room_names, state, cloud_pmap_id)
-        if not resolved:
-            # room_passes=[] (empty array) passes the "exactly one of" checks
-            # above and _resolve_rooms returns [] without raising (it only
-            # raises on *unknown* names, not an empty list). Guard the [0]
-            # access explicitly.
-            raise ServiceValidationError(
-                "No rooms to clean — provide at least one room name.",
-                translation_domain=DOMAIN,
-                translation_key="no_rooms_resolved",
-            )
-        pmap_id = resolved[0][1]
-
-        # v2.7.4 (PMAP-PMAPV): cloud coordinator is authoritative for lewis
-        # firmware — lewis 22.52.10 does not broadcast pmaps updates via local
-        # MQTT after map changes, so state.pmaps holds a stale/in-flux version.
-        # Cloud last_user_pmapv_id is the stable committed token the robot
-        # accepts. _resolve_pmapv_id provides lastCommand/state.pmaps fallback
-        # for robots without cloud credentials.
-        user_pmapv_id: str = (
-            (data.cloud_coordinator.active_user_pmapv_id if data.has_cloud else None)
-            or _resolve_pmapv_id(state, pmap_id)
-            or ""
+        # ONE PATH FOR BOTH GENERATIONS (this session).
+        #
+        # There used to be a Prime branch here and ~120 lines of Classic
+        # send logic below it. The Classic half now lives in
+        # ClassicRoomCleaning, moved verbatim rather than rewritten --
+        # an earlier draft copied it and silently lost the cross-map
+        # conflict rules, the map-updating check, cloud enrichment of
+        # zone data, and a distinct error message.
+        #
+        # What made the move possible was noticing that Classic needs
+        # exactly one thing beyond a region id -- that region's pmap_id
+        # -- and it already sits next to every region in the room list.
+        # Recorded there once, the send path needs no room names, and
+        # both generations fit an id-based interface.
+        await _async_clean_rooms_via_backend(
+            backend, entity_id, room_names, ordered, per_room_two_pass, call
         )
-
-        # Read cleaning pass mode from live robot state (same source as CleaningPassesSelect)
-        no_auto = bool(state.get("noAutoPasses", False))
-        # v2.7.3: optional two_pass parameter overrides the robot's current state.
-        # None = inherit from robot state (default); True/False = explicit override.
-        # CLEAN-ROOM-PER-ROOM-PASSES (v2.9.0): per-room override (room_passes)
-        # takes priority over the global two_pass override, which in turn
-        # takes priority over the robot's current state. Resolved independently
-        # per room, so a partial room_passes list (some rooms specify two_pass,
-        # others don't) still resolves sensibly.
-        caller_two_pass: bool | None = call.data.get(ATTR_TWO_PASS)
-        robot_two_pass = bool(state.get("twoPass", False))
-
-        def _resolve_two_pass(per_room: bool | None) -> bool:
-            if per_room is not None:
-                return per_room
-            if caller_two_pass is not None:
-                return caller_two_pass
-            return robot_two_pass
-
-        params = {
-            "ordered": 1 if ordered else 0,
-            "pmap_id": pmap_id,
-            "user_pmapv_id": user_pmapv_id,
-            "regions": [
-                {
-                    "region_id": rid,
-                    "type": "rid",
-                    "params": {
-                        "noAutoPasses": no_auto,
-                        "twoPass": _resolve_two_pass(
-                            per_room_two_pass[i] if i < len(per_room_two_pass) else None
-                        ),
-                    },
-                }
-                for i, (rid, _) in enumerate(resolved)
-            ],
-        }
-
-        _LOGGER.info(
-            "clean_room: %s → regions=%s pmap=%s pmapv=%s",
-            entity_id,
-            [rid for rid, _ in resolved],
-            pmap_id[:12],
-            user_pmapv_id[:12] if user_pmapv_id else "none",
-        )
-
-        await hass.async_add_executor_job(
-            data.roomba.send_command, "start", params
-        )
-
-    return {}
 
 
 async def async_handle_smart_start(call: ServiceCall) -> None:
@@ -540,7 +663,7 @@ async def async_handle_smart_start(call: ServiceCall) -> None:
                 translation_domain=DOMAIN,
                 translation_key="entity_not_found",
             )
-        config_entry = hass.config_entries.async_get_entry(entry_reg.config_entry_id)
+        config_entry = hass.config_entries.async_get_entry(entry_reg.config_entry_id or "")
         if config_entry is None:
             raise ServiceValidationError(
                 f"No config entry for {eid}",
@@ -550,11 +673,25 @@ async def async_handle_smart_start(call: ServiceCall) -> None:
             )
 
         data: RoombaData = config_entry.runtime_data
-        if rooms and data.map_capability != MapCapability.SMART:
+        # ONE CHECK FOR BOTH GENERATIONS (this session), replacing two.
+        #
+        # There used to be a Prime-specific refusal here whose stated
+        # reason was that region commands "have had zero effect in two
+        # live field tests". That was true when written and is not any
+        # more: region cleaning is confirmed working on real Prime
+        # hardware, from a saved favorite and from scratch. The blocker
+        # turned out to be a missing `initiator` field plus two wrong
+        # wire keys, not the transport.
+        #
+        # A refusal justified by a finding is only as good as the
+        # finding. Leaving it in place would have kept Prime users from
+        # a feature that works, for a reason nobody would have thought
+        # to re-check.
+        if rooms and async_get_room_cleaning_backend(config_entry) is None:
             raise ServiceValidationError(
-                f"{eid} does not support room targeting — this requires a "
-                "robot with a finalized Smart Map (i7, s9, j-series, or "
-                "Braava jet m6).",
+                f"{eid} does not support room targeting. Classic robots need a "
+                "finalized Smart Map (i7, s9, j-series or Braava jet m6); Prime "
+                "robots need a saved map.",
                 translation_domain=DOMAIN,
                 translation_key="not_smart_map",
             )
@@ -567,8 +704,19 @@ async def async_handle_smart_start(call: ServiceCall) -> None:
                 {"entity_id": eid, ATTR_ROOM_NAME: rooms},
                 blocking=True,
             )
-        else:
-            await hass.async_add_executor_job(data.roomba.start)
+        elif data.connection_type == ConnectionType.CLOUD_ONLY:
+            # REAL CRASH FIXED (this session): this branch (no
+            # blocking_manager configured at all -- CONF_BLOCKING_SENSORS
+            # empty/unset) used to unconditionally call data.roomba.start,
+            # which is None for every Prime entry -- an AttributeError on
+            # any Prime user calling roomba_plus.smart_start with no
+            # blocking sensors configured, regardless of rooms/override.
+            # send_simple_command("start") is the same confirmed-working
+            # path the vacuum entity's own start action already uses.
+            assert data.prime_robot is not None  # noqa: S101
+            await data.prime_robot.send_simple_command("start")
+        elif data.roomba is not None:
+            await hass.async_add_executor_job(data.roomba.send_command, "start")
 
 
 async def async_handle_clean_overdue_rooms(call: ServiceCall) -> None:
@@ -603,7 +751,7 @@ async def async_handle_clean_overdue_rooms(call: ServiceCall) -> None:
                 translation_domain=DOMAIN,
                 translation_key="entity_not_found",
             )
-        config_entry = hass.config_entries.async_get_entry(entry_reg.config_entry_id)
+        config_entry = hass.config_entries.async_get_entry(entry_reg.config_entry_id or "")
         if config_entry is None:
             raise ServiceValidationError(
                 f"No config entry for {eid}",
@@ -612,11 +760,18 @@ async def async_handle_clean_overdue_rooms(call: ServiceCall) -> None:
                 translation_placeholders={"entity_id": eid},
             )
         data: RoombaData = config_entry.runtime_data
-        if data.map_capability != MapCapability.SMART:
+        # Same backend question clean_room asks, for the same reason:
+        # map_capability is a Classic concept and every Prime robot
+        # fails it regardless of what it can actually do.
+        #
+        # This service delegates the actual start to clean_room, so
+        # without changing it here a Prime robot would be refused one
+        # step before reaching a path that works.
+        if async_get_room_cleaning_backend(config_entry) is None:
             raise ServiceValidationError(
-                f"{eid} does not support room targeting — this requires a "
-                "robot with a finalized Smart Map. EPHEMERAL-tier robots "
-                "(900-series) cannot clean individual rooms.",
+                f"{eid} does not support room targeting. Classic robots need a "
+                "finalized Smart Map -- EPHEMERAL-tier robots (900-series) cannot "
+                "clean individual rooms; Prime robots need a saved map.",
                 translation_domain=DOMAIN,
                 translation_key="not_smart_map",
             )
@@ -757,7 +912,7 @@ async def async_handle_auto_clean_dirty_rooms(call: ServiceCall) -> None:
                 translation_domain=DOMAIN,
                 translation_key="entity_not_found",
             )
-        config_entry = hass.config_entries.async_get_entry(entry_reg.config_entry_id)
+        config_entry = hass.config_entries.async_get_entry(entry_reg.config_entry_id or "")
         if config_entry is None:
             raise ServiceValidationError(
                 f"No config entry for {eid}",
@@ -766,11 +921,18 @@ async def async_handle_auto_clean_dirty_rooms(call: ServiceCall) -> None:
                 translation_placeholders={"entity_id": eid},
             )
         data: RoombaData = config_entry.runtime_data
-        if data.map_capability != MapCapability.SMART:
+        # Same backend question clean_room asks, for the same reason:
+        # map_capability is a Classic concept and every Prime robot
+        # fails it regardless of what it can actually do.
+        #
+        # This service delegates the actual start to clean_room, so
+        # without changing it here a Prime robot would be refused one
+        # step before reaching a path that works.
+        if async_get_room_cleaning_backend(config_entry) is None:
             raise ServiceValidationError(
-                f"{eid} does not support room targeting — this requires a "
-                "robot with a finalized Smart Map. EPHEMERAL-tier robots "
-                "(900-series) cannot clean individual rooms.",
+                f"{eid} does not support room targeting. Classic robots need a "
+                "finalized Smart Map -- EPHEMERAL-tier robots (900-series) cannot "
+                "clean individual rooms; Prime robots need a saved map.",
                 translation_domain=DOMAIN,
                 translation_key="not_smart_map",
             )
@@ -785,7 +947,22 @@ async def async_handle_auto_clean_dirty_rooms(call: ServiceCall) -> None:
 
         candidates: list[str] = []
         if ms is not None and rps is not None:
-            visit_counts = ms.room_visit_counts(region_map)
+            # Per-map resolution, same as the sensors: on a multi-map
+            # account a room cleaned on another floor arrives as a raw
+            # id and is counted as a separate, never-visited room.
+            # LATE, AND IT HAS TO BE. sensor_rooms imports entity, which
+            # imports the package `__init__`, which registers services --
+            # so a top-level import here is a cycle through the package
+            # root. The late-import checker does not see it, because it
+            # compares module pairs and this one closes via `__init__`.
+            #
+            # Found by moving it up and watching 36 tests fail on
+            # "partially initialized module".
+            from .sensor_rooms import _regions_by_pmap_for  # noqa: PLC0415
+
+            visit_counts = ms.room_visit_counts(
+                region_map, None, _regions_by_pmap_for(data)
+            )
             relative = rps.room_dirt_relative()          # rid-keyed
             index = dict(rps.room_dirt_index)            # rid-keyed
             qualifying = []
@@ -807,7 +984,15 @@ async def async_handle_auto_clean_dirty_rooms(call: ServiceCall) -> None:
                 "auto_clean_dirty_rooms: no room passes the dirt-index "
                 "trust gate for %s — whole-house fallback", eid,
             )
-            await hass.async_add_executor_job(data.roomba.start)
+            # BOTH GENERATIONS, like the main path below. This
+            # fallback reached for the local robot alone, so a Prime
+            # entry whose rooms all failed the trust gate raised
+            # AttributeError instead of falling back to a whole-house
+            # clean -- the one case this branch exists for.
+            if data.prime_robot is not None:
+                await data.prime_robot.send_simple_command("start")
+            elif data.roomba is not None:
+                await hass.async_add_executor_job(data.roomba.send_command, "start")
             continue
 
         candidates = _route_optimize_order(data, candidates, region_map)
@@ -822,6 +1007,66 @@ async def async_handle_auto_clean_dirty_rooms(call: ServiceCall) -> None:
             {"entity_id": eid, ATTR_ROOM_NAME: candidates},
             blocking=True,
         )
+
+
+# Local reset slot -> the cloud consumable role it corresponds to. Only
+# parts iRobot actually tracks appear here: "battery" has no cloud
+# counter, and "pad" is a Braava consumable the parts endpoint does not
+# report, so both reset locally only.
+_RESET_PART_TO_CLOUD_ROLE: dict[str, str] = {
+    "filter": IROBOT_PART_ROLE_FILTER,
+    "brush":  IROBOT_PART_ROLE_MAIN_BRUSH,
+}
+
+
+async def _async_push_part_reset_to_cloud(
+    config_entry: Any, data: "RoombaData", part: str
+) -> None:
+    """Record a replacement in iRobot's cloud as well as locally.
+
+    Deliberately best-effort and silent on failure: the local reset has
+    already been saved by the caller, and a cloud outage must not turn a
+    successful user action into a service error. Failures are logged at
+    debug because "this account has no cloud parts" is the ordinary case,
+    not a fault.
+
+    `counter` is percent-used, so 0 is "this part is new" — the same
+    write the official app performs when you confirm a replacement.
+    """
+    role = _RESET_PART_TO_CLOUD_ROLE.get(part)
+    if role is None:
+        return
+    cc = data.cloud_coordinator
+    store = data.maintenance_store
+    if cc is None or store is None:
+        return
+    record = store.cloud_part_by_role(role)
+    if record is None:
+        return
+    part_id = record.get("part_id")
+    if not part_id:
+        return
+    try:
+        result = await cc.api.set_robot_part_counter(data.blid, str(part_id), 0)
+    except Exception:  # noqa: BLE001
+        _LOGGER.debug(
+            "reset_%s: could not push reset to iRobot cloud for part %s",
+            part, part_id, exc_info=True,
+        )
+        return
+    # num_parts is what the API actually applied; 0 means the call was
+    # accepted but matched nothing, which is a failure wearing a 200.
+    if not result.get("num_parts"):
+        _LOGGER.debug(
+            "reset_%s: iRobot cloud accepted the call but applied no part "
+            "(part_id=%s, response=%s)",
+            part, part_id, result,
+        )
+        return
+    _LOGGER.info(
+        "reset_%s: recorded in iRobot cloud (part_id=%s)", part, part_id
+    )
+    await cc.async_request_refresh()
 
 
 async def _handle_reset_service(
@@ -839,7 +1084,7 @@ async def _handle_reset_service(
         if entry_reg is None:
             _LOGGER.warning("reset_%s: entity not found: %s", part, eid)
             continue
-        config_entry = hass.config_entries.async_get_entry(entry_reg.config_entry_id)
+        config_entry = hass.config_entries.async_get_entry(entry_reg.config_entry_id or "")
         if config_entry is None:
             _LOGGER.warning("reset_%s: config entry not found for %s", part, eid)
             continue
@@ -852,13 +1097,35 @@ async def _handle_reset_service(
                 translation_key="maintenance_store_unavailable",
             )
 
-        state = data.roomba_reported_state()
-        _bbrun   = state.get("bbrun", {})
-        _runtime = state.get("runtimeStats", {})
-        current_hr: int = _bbrun.get("hr") or _runtime.get("hr") or 0
+        # The hour meter the reset is recorded against, so "hours since
+        # the filter was changed" can be computed later.
+        #
+        # Classic reads it from the MQTT state; Prime reports the same
+        # thing in a named shadow instead. Without the Prime branch this
+        # recorded 0, which would have made every interval since the
+        # reset read as the robot's entire lifetime.
+        current_hr = 0
+        if data.connection_type is ConnectionType.CLOUD_ONLY:
+            coordinator = getattr(data, "prime_status_coordinator", None)
+            shadow = (coordinator.data or {}).get("ro-stats") if coordinator else None
+            runtime = (shadow or {}).get("runtimeStats") or {}
+            current_hr = int(runtime.get("hours") or 0)
+        else:
+            state = data.roomba_reported_state()
+            _bbrun   = state.get("bbrun", {})
+            _runtime = state.get("runtimeStats", {})
+            current_hr = int(_bbrun.get("hr") or _runtime.get("hr") or 0)
         getattr(data.maintenance_store, f"reset_{part}")(current_hr)
         await data.maintenance_store.async_save(hass, config_entry.entry_id)
         _fire_maintenance_reset_event(hass, config_entry, part, current_hr)
+
+        # PUSH THE RESET TO IROBOT TOO, so the app and this integration
+        # do not disagree about a part the user just replaced. Best
+        # effort by design: the local reset above is already recorded and
+        # persisted, so a cloud failure must not undo it or fail the
+        # service call. Robots whose account does not serve the parts
+        # endpoint simply have no role mapping and skip this entirely.
+        await _async_push_part_reset_to_cloud(config_entry, data, part)
         _async_signal_entities(hass, config_entry.entry_id, [
             "filter_last_replaced",
             "brush_last_replaced",
@@ -891,7 +1158,7 @@ async def _handle_inspect_reset_service(
         if entry_reg is None:
             _LOGGER.warning("reset_%s_cleaning: entity not found: %s", component, eid)
             continue
-        config_entry = hass.config_entries.async_get_entry(entry_reg.config_entry_id)
+        config_entry = hass.config_entries.async_get_entry(entry_reg.config_entry_id or "")
         if config_entry is None:
             _LOGGER.warning("reset_%s_cleaning: config entry not found for %s", component, eid)
             continue
@@ -933,7 +1200,7 @@ async def async_handle_reset_robot_profile(call: ServiceCall) -> None:
         if entry_reg is None:
             _LOGGER.warning("reset_robot_profile: entity not found: %s", eid)
             continue
-        config_entry = call.hass.config_entries.async_get_entry(entry_reg.config_entry_id)
+        config_entry = call.hass.config_entries.async_get_entry(entry_reg.config_entry_id or "")
         if config_entry is None:
             _LOGGER.warning("reset_robot_profile: config entry not found for %s", eid)
             continue
@@ -974,7 +1241,7 @@ async def async_handle_explain_mission(call: ServiceCall) -> dict[str, Any]:
     entry_reg = ent_reg.async_get(entity_id)
     if entry_reg is None:
         raise ServiceValidationError(f"explain_mission: entity not found: {entity_id}")
-    config_entry = call.hass.config_entries.async_get_entry(entry_reg.config_entry_id)
+    config_entry = call.hass.config_entries.async_get_entry(entry_reg.config_entry_id or "")
     if config_entry is None:
         raise ServiceValidationError(
             f"explain_mission: config entry not found for {entity_id}"
@@ -1010,7 +1277,7 @@ async def async_handle_explain_mission(call: ServiceCall) -> dict[str, Any]:
             f"explain_mission: mission not found for {entity_id}"
             + (f" (id={mission_id})" if mission_id is not None else "")
         )
-    return result
+    return dict(result)
 
 
 # ── F10d — clean_sequence ─────────────────────────────────────────────────────
@@ -1024,7 +1291,7 @@ _CLEAN_SEQUENCE_SCHEMA = vol.Schema({
 
 
 async def async_handle_clean_sequence(
-    hass: HomeAssistant, call: ServiceCall
+    call: ServiceCall
 ) -> None:
     """F10d — start robot B when robot A mission ends.
 
@@ -1041,6 +1308,18 @@ async def async_handle_clean_sequence(
                            When False, B starts even if A is idle/error.
         delay_minutes:     Wait this many minutes after A docks before starting B.
     """
+    # TWO PARAMETERS, AND HOME ASSISTANT PASSES ONE.
+    #
+    # `ServiceRegistry._execute_service` calls
+    # `await target(service_call)`. This handler took `(hass, call)`, so
+    # invoking the action raised TypeError -- for as long as it has
+    # existed.
+    #
+    # The eleven handlers that work take `call` alone and read
+    # `call.hass`. Nothing caught the difference: the tests call these
+    # directly with both arguments and never go through the registry
+    # that would have failed.
+    hass = call.hass
     from homeassistant.core import callback
     from homeassistant.helpers import entity_registry as er
 
@@ -1064,7 +1343,7 @@ async def async_handle_clean_sequence(
         trigger_entity, target_entity, require_completed, delay_minutes,
     )
 
-    unsub_ref: list = []
+    unsub_ref: list[Any] = []
 
     @callback
     def _on_trigger_state_change(
@@ -1111,12 +1390,135 @@ async def async_handle_clean_sequence(
 
 # ── Registration ──────────────────────────────────────────────────────────────
 
+async def async_handle_set_quiet_hours(call: ServiceCall) -> None:
+    """Writes the household's Do Not Disturb window.
+
+    TWO MUTUALLY EXCLUSIVE FORMS, and the vendor's own type system says
+    so. `DNDSchedule` is a sealed class with exactly two cases:
+
+        {"dailyStart": int, "dailyEnd": int}   quiet hours every day
+        {"endsAt": long}                       quiet until one moment
+
+    Sending both is what the one live attempt did before it came back
+    HTTP 400. The schema below refuses that combination rather than
+    letting the server refuse it.
+
+    HOUSEHOLD-WIDE, NOT PER ROBOT. The endpoint takes a household id,
+    so every robot on the account is affected. The entity target is how
+    Home Assistant addresses things and how this finds the household --
+    it is not a scope.
+
+    THE EFFECT IS UNPROVEN, and a caller deserves to know. A Prime robot
+    has been observed CLEANING inside its own quiet-hours window. The
+    write succeeds and reads back; whether the robot honours it is a
+    separate question that no field report has yet answered yes. The
+    warning below says so once per call rather than burying it in
+    documentation nobody opens mid-automation.
+    """
+    hass = call.hass
+    entity_ids = call.data["entity_id"]
+    if isinstance(entity_ids, str):
+        entity_ids = [entity_ids]
+    start, end = call.data.get("start"), call.data.get("end")
+    ends_at = call.data.get("ends_at")
+
+    if (start is None) != (end is None):
+        raise ServiceValidationError(
+            "Quiet hours need both a start and an end, or neither.",
+            translation_domain=DOMAIN,
+            translation_key="quiet_hours_incomplete",
+        )
+    if (start is None) == (ends_at is None):
+        raise ServiceValidationError(
+            "Give either a daily window (start and end) or a one-off "
+            "ends_at -- the robot accepts exactly one of the two.",
+            translation_domain=DOMAIN,
+            translation_key="quiet_hours_ambiguous",
+        )
+
+    ent_reg = er.async_get(hass)
+    for entity_id in entity_ids:
+        entry_reg = ent_reg.async_get(entity_id)
+        entry = (
+            hass.config_entries.async_get_entry(entry_reg.config_entry_id or "")
+            if entry_reg is not None else None
+        )
+        if entry is None:
+            raise ServiceValidationError(
+                f"Entity {entity_id} not found",
+                translation_domain=DOMAIN,
+                translation_key="entity_not_found",
+            )
+        data = entry.runtime_data
+        robot = getattr(data, "prime_robot", None)
+        household = getattr(data, "prime_household_id", None)
+        if robot is None or household is None:
+            raise ServiceValidationError(
+                f"{entity_id} is not a V4/Prime robot with a household.",
+                translation_domain=DOMAIN,
+                translation_key="quiet_hours_not_prime",
+            )
+
+        if ends_at is not None:
+            from roombapy_prime.models.schedules_dnd import DNDEndsAt
+
+            # NAIVE DATETIMES ARE THE NORM HERE, and `timestamp()` on
+            # one silently assumes the SERVER's zone. A user in a
+            # different zone from their Home Assistant host would get a
+            # quiet-hours end hours away from what they typed, with
+            # nothing to indicate it.
+            #
+            # `dt_util.as_utc()` attaches Home Assistant's configured
+            # zone first, which is the one the user picked the time in.
+            when = ends_at if ends_at.tzinfo else dt_util.as_local(ends_at)
+            body = DNDEndsAt(
+                ends_at=int(dt_util.as_utc(when).timestamp() * 1000)
+            ).to_json()
+        else:
+            from roombapy_prime.models.schedules_dnd import DNDDailySchedule
+
+            # Both are set here: two checks above enforce "both or
+            # neither" and "exactly one of start/end and ends_at", and
+            # mypy can follow neither -- both are written as comparisons
+            # between None-ness rather than as narrowing checks.
+            assert start is not None and end is not None  # noqa: S101
+            body = DNDDailySchedule(
+                daily_start=start.hour * 60 + start.minute,
+                daily_end=end.hour * 60 + end.minute,
+            ).to_json()
+
+        await robot.set_dnd_settings(household, body)
+        _LOGGER.warning(
+            "Roomba+: wrote quiet hours %s for household %s. The robot "
+            "accepting this setting is not the same as honouring it -- one "
+            "Prime robot has been seen cleaning inside its own window. Keep "
+            "any automation that depends on quiet hours in Home Assistant.",
+            body, household,
+        )
+
+
 def async_register_services(hass: HomeAssistant) -> None:
     """Register all Roomba+ domain services. Safe to call multiple times.
 
     Each service is guarded by has_service() — only registers on first call,
     subsequent entries reuse the same handlers.
     """
+    # LATE, AND IT DOES AVOID A CYCLE -- just not one this check can
+    # see. prime_schedule_services imports prime_schedule_switch, which
+    # imports from the package __init__, which imports this module. The
+    # checker only looks for a DIRECT back-import, so it reported "none
+    # of these avoids a cycle" and moving the import to the top turned
+    # the whole test suite into 32 collection errors.
+    #
+    # The Prime schedule write services live in their own module because
+    # they share the read-modify-write-under-lock discipline with
+    # prime_schedule_switch.py rather than with anything here.
+    from .prime_schedule_services import (  # noqa: PLC0415
+        async_register_prime_schedule_services,
+    )
+
+    async_register_prime_schedule_services(hass)
+
     _RESET_SCHEMA = vol.Schema({vol.Required("entity_id"): cv.entity_ids})
 
     if not hass.services.has_service(DOMAIN, SERVICE_CLEAN_ROOM):
@@ -1142,6 +1544,12 @@ def async_register_services(hass: HomeAssistant) -> None:
                 # not allowed @ data['two_pass']". Untested — test_services.py
                 # had no coverage that went through real schema validation.
                 vol.Optional(ATTR_TWO_PASS): cv.boolean,
+                # DOCUMENTED AND REJECTED. services.yaml describes this
+                # field with its options; the schema did not list it, so
+                # a caller following the documentation got "extra keys
+                # not allowed" (@utkjmitch). The handler has read it all
+                # along -- only the schema was missing.
+                vol.Optional(ATTR_CLEANING_MODE): cv.string,
                 vol.Optional(ATTR_ORDERED, default=True): cv.boolean,
                 # CLEAN-ROOM-PER-ROOM-PASSES (v2.9.0): individual pass count
                 # per room within the same sequence, e.g.
@@ -1156,6 +1564,40 @@ def async_register_services(hass: HomeAssistant) -> None:
             supports_response=SupportsResponse.OPTIONAL,
         )
         _LOGGER.debug("Registered %s.%s action", DOMAIN, SERVICE_CLEAN_ROOM)
+
+    if not hass.services.has_service(DOMAIN, SERVICE_CLEAN_ZONE):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_CLEAN_ZONE,
+            async_handle_clean_zone,
+            schema=vol.Schema({
+                vol.Required("entity_id"): cv.entity_ids,
+                # Exactly one of the two is enforced in the handler so
+                # the error can name which was missing or doubled.
+                vol.Optional("zone_name"): vol.All(cv.ensure_list, [cv.string]),
+                vol.Optional("zone_id"): vol.All(cv.ensure_list, [cv.string]),
+            }),
+        )
+        _LOGGER.debug("Registered %s.%s action", DOMAIN, SERVICE_CLEAN_ZONE)
+
+    if not hass.services.has_service(DOMAIN, SERVICE_SET_QUIET_HOURS):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_SET_QUIET_HOURS,
+            async_handle_set_quiet_hours,
+            schema=vol.Schema({
+                vol.Required("entity_id"): cv.entity_ids,
+                # THE TWO FORMS ARE CHECKED IN THE HANDLER, not here.
+                # voluptuous can express "exactly one of", but the error
+                # it produces names the schema rather than the problem;
+                # a caller who sent both deserves to be told which two
+                # things conflict.
+                vol.Optional("start"): cv.time,
+                vol.Optional("end"): cv.time,
+                vol.Optional("ends_at"): cv.datetime,
+            }),
+        )
+        _LOGGER.debug("Registered %s.%s action", DOMAIN, SERVICE_SET_QUIET_HOURS)
 
     if not hass.services.has_service(DOMAIN, SERVICE_SMART_START):
         hass.services.async_register(
@@ -1303,6 +1745,59 @@ def async_register_services(hass: HomeAssistant) -> None:
         )
         _LOGGER.debug("Registered %s.advance_room action", DOMAIN)
 
+    if not hass.services.has_service(DOMAIN, "run_favorite"):
+        hass.services.async_register(
+            DOMAIN,
+            "run_favorite",
+            async_handle_run_favorite,
+            schema=vol.Schema({
+                vol.Required("entity_id"): cv.entity_ids,
+                vol.Required("favorite_id"): cv.string,
+            }),
+        )
+        _LOGGER.debug("Registered %s.run_favorite action", DOMAIN)
+
+
+async def async_handle_run_favorite(call: ServiceCall) -> None:
+    """Runs a saved favorite by ID. V4/Prime only.
+
+    BY ID rather than by name. The name is what the user typed in the
+    iRobot app and can change there at any time; an automation keyed on
+    it breaks silently when it does. The IDs are published in the vacuum
+    entity's `favorites` attribute for exactly this reason.
+    """
+    hass = call.hass
+    ent_reg = er.async_get(hass)
+    favorite_id = call.data["favorite_id"]
+
+    for entity_id in call.data["entity_id"]:
+        entry = ent_reg.async_get(entity_id)
+        if entry is None or entry.config_entry_id is None:
+            continue
+        config_entry = hass.config_entries.async_get_entry(entry.config_entry_id or "")
+        if config_entry is None:
+            continue
+        if config_entry.runtime_data.connection_type is not ConnectionType.CLOUD_ONLY:
+            raise ServiceValidationError(
+                "run_favorite is only available for V4/Prime robots",
+                translation_domain=DOMAIN,
+                translation_key="favorite_prime_only",
+            )
+
+        from .button_prime import async_run_favorite  # noqa: PLC0415
+
+        if not await async_run_favorite(config_entry, favorite_id):
+            # Deleted since the attribute was read, or carrying no
+            # commands. Raised rather than logged: a favourite that
+            # silently does nothing is the failure this whole feature
+            # was shaped to avoid.
+            raise ServiceValidationError(
+                f"No runnable favorite with id {favorite_id}",
+                translation_domain=DOMAIN,
+                translation_key="favorite_not_found",
+                translation_placeholders={"favorite_id": str(favorite_id)},
+            )
+
 
 async def async_handle_advance_room(call: ServiceCall) -> None:
     """Handle roomba_plus.advance_room — manual room-progress override.
@@ -1331,9 +1826,7 @@ async def async_handle_advance_room(call: ServiceCall) -> None:
                 translation_placeholders={"entity_id": entity_id},
             )
 
-        config_entry: RoombaConfigEntry | None = hass.config_entries.async_get_entry(
-            entry.config_entry_id
-        )
+        config_entry: RoombaConfigEntry | None = hass.config_entries.async_get_entry(entry.config_entry_id or "")
         if config_entry is None:
             raise ServiceValidationError(
                 f"No config entry for {entity_id}",
@@ -1362,8 +1855,18 @@ async def async_handle_advance_room(call: ServiceCall) -> None:
             continue
 
         # Guard 3: non-run phase (don't advance while actively cleaning)
+        #
+        # READ THROUGH THE PRIME FALLBACK, because this guard failed OPEN
+        # on exactly the tier it was written for. `roomba_reported_state()`
+        # returns {} on a CLOUD_ONLY entry, so `phase` was "" forever and
+        # never equalled "run" -- advance_room was permitted mid-mission.
+        # Same root as @utkjmitch's mission_progress report; see
+        # prime_coordinator.prime_current_state().
         state = data.roomba_reported_state()
         phase = (state.get("cleanMissionStatus") or {}).get("phase", "")
+        if not phase:
+            status = getattr(prime_current_state(data), "clean_mission_status", None)
+            phase = str(getattr(status, "phase", None) or "")
         if phase == "run":
             _LOGGER.debug(
                 "advance_room: robot in phase=run for %s — ignored (advance "
@@ -1405,7 +1908,7 @@ def _resolve_config_entry_from_entity(
             translation_key="backup_entity_not_found",
             translation_placeholders={"entity_id": entity_id},
         )
-    config_entry = hass.config_entries.async_get_entry(entry_reg.config_entry_id)
+    config_entry = hass.config_entries.async_get_entry(entry_reg.config_entry_id or "")
     if config_entry is None:
         raise ServiceValidationError(
             f"{service_name}: config entry not found for {entity_id}",
@@ -1417,7 +1920,7 @@ def _resolve_config_entry_from_entity(
 
 
 def _write_backup_zip(
-    backup_dir: str, filename: str, manifest: dict, payloads: dict[str, dict]
+    backup_dir: str, filename: str, manifest: dict[str, Any], payloads: dict[str, dict[str, Any]]
 ) -> str:
     """Blocking: write the manifest + one JSON per store into a ZIP.
 
@@ -1433,12 +1936,12 @@ def _write_backup_zip(
     return zip_path
 
 
-def _read_backup_zip(zip_path: str) -> tuple[dict, dict[str, dict]]:
+def _read_backup_zip(zip_path: str) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
     """Blocking: read manifest + all store payloads back out of a ZIP."""
     if not Path(zip_path).is_file():
         raise HomeAssistantError(f"Backup file not found: {zip_path}")
-    payloads: dict[str, dict] = {}
-    manifest: dict = {}
+    payloads: dict[str, dict[str, Any]] = {}
+    manifest: dict[str, Any] = {}
     try:
         with zipfile.ZipFile(zip_path, "r") as zf:
             names = set(zf.namelist())
@@ -1458,8 +1961,47 @@ def _read_backup_zip(zip_path: str) -> tuple[dict, dict[str, dict]]:
     return manifest, payloads
 
 
+async def _async_prime_snapshot(config_entry: Any) -> dict[str, Any]:
+    """The cloud-side state of a Prime robot, as it is right now.
+
+    Empty for a Classic robot, and empty rather than partial if the
+    cloud cannot be reached -- half a backup that looks whole is worse
+    than none, because it is the one somebody restores from.
+
+    Each piece is fetched separately and a failure drops only that
+    piece, named. A schedule list that could not be read should not cost
+    the room names that could.
+    """
+    data = getattr(config_entry, "runtime_data", None)
+    robot = getattr(data, "prime_robot", None)
+    if robot is None:
+        return {}
+
+    snapshot: dict[str, Any] = {}
+    failed: list[str] = []
+
+    async def _capture(name: str, coro: Any) -> None:
+        try:
+            snapshot[name] = await coro
+        except Exception:  # noqa: BLE001
+            failed.append(name)
+            _LOGGER.debug("roomba_plus: backup could not read %s", name, exc_info=True)
+
+    await _capture("map_versions", robot.get_active_map_versions())
+    await _capture("favorites", robot.get_favorites_raw())
+    household = getattr(data, "prime_household_id", None)
+    if household:
+        await _capture("schedules", robot.get_schedules(household))
+
+    if failed:
+        # NAMED IN THE FILE ITSELF, so a restore knows what it does not
+        # have rather than discovering it as an absence.
+        snapshot["incomplete"] = failed
+    return snapshot
+
+
 async def async_handle_create_backup(
-    hass: HomeAssistant, call: ServiceCall
+    call: ServiceCall
 ) -> dict[str, Any]:
     """Handle roomba_plus.create_backup.
 
@@ -1475,22 +2017,51 @@ async def async_handle_create_backup(
     maintenance timestamps (filter/brush/pad reset times) legitimately
     belong to this robot and are included here.
     """
+    # TWO PARAMETERS, AND HOME ASSISTANT PASSES ONE.
+    #
+    # `ServiceRegistry._execute_service` calls
+    # `await target(service_call)`. This handler took `(hass, call)`, so
+    # invoking the action raised TypeError -- for as long as it has
+    # existed.
+    #
+    # The eleven handlers that work take `call` alone and read
+    # `call.hass`. Nothing caught the difference: the tests call these
+    # directly with both arguments and never go through the registry
+    # that would have failed.
+    hass = call.hass
     entity_id: str = call.data["entity_id"]
     config_entry = _resolve_config_entry_from_entity(hass, entity_id, "create_backup")
     data = config_entry.runtime_data
     entry_id = config_entry.entry_id
 
-    payloads: dict[str, dict] = {}
+    payloads: dict[str, dict[str, Any]] = {}
     included: list[str] = []
     excluded: list[str] = []
     for attr, prefix in _BACKUP_STORES:
-        store = Store(hass, _BACKUP_STORE_VERSION, f"{prefix}_{entry_id}")
+        store: Store[dict[str, Any]] = Store(hass, _BACKUP_STORE_VERSION, f"{prefix}_{entry_id}")
         raw = await store.async_load()
         if raw is None:
             excluded.append(attr)
             continue
         payloads[prefix] = raw
         included.append(attr)
+
+    # PRIME KEEPS ITS DATA IN IROBOT'S CLOUD, so the local stores above
+    # find almost nothing and a backup would be an empty promise.
+    #
+    # "It is already in the cloud" is not a reason to skip it. A cloud
+    # can change its API, retire a version, or lose an account -- this
+    # project has spent weeks reverse-engineering one that did exactly
+    # the first. A local copy is insurance against precisely the thing
+    # nobody controls.
+    #
+    # Fetched rather than read: room names, schedules and favourites are
+    # not stored on disk, so this is a snapshot taken now rather than a
+    # copy of something kept.
+    prime_snapshot = await _async_prime_snapshot(config_entry)
+    if prime_snapshot:
+        payloads["prime_cloud"] = prime_snapshot
+        included.append("prime_cloud")
 
     manifest = {
         "version": 1,
@@ -1527,7 +2098,7 @@ async def async_handle_create_backup(
 
 
 async def async_handle_restore_backup(
-    hass: HomeAssistant, call: ServiceCall
+    call: ServiceCall
 ) -> dict[str, Any]:
     """Handle roomba_plus.restore_backup.
 
@@ -1536,6 +2107,18 @@ async def async_handle_restore_backup(
     the running integration picks up the restored state immediately — no
     Home Assistant restart required.
     """
+    # TWO PARAMETERS, AND HOME ASSISTANT PASSES ONE.
+    #
+    # `ServiceRegistry._execute_service` calls
+    # `await target(service_call)`. This handler took `(hass, call)`, so
+    # invoking the action raised TypeError -- for as long as it has
+    # existed.
+    #
+    # The eleven handlers that work take `call` alone and read
+    # `call.hass`. Nothing caught the difference: the tests call these
+    # directly with both arguments and never go through the registry
+    # that would have failed.
+    hass = call.hass
     entity_id: str = call.data["entity_id"]
     path: str = call.data["path"]
     config_entry = _resolve_config_entry_from_entity(hass, entity_id, "restore_backup")
@@ -1548,7 +2131,7 @@ async def async_handle_restore_backup(
     for attr, prefix in _BACKUP_STORES:
         if prefix not in payloads:
             continue
-        store = Store(hass, _BACKUP_STORE_VERSION, f"{prefix}_{entry_id}")
+        store: Store[dict[str, Any]] = Store(hass, _BACKUP_STORE_VERSION, f"{prefix}_{entry_id}")
         await store.async_save(payloads[prefix])
         live_store = getattr(data, attr, None)
         if live_store is not None:
@@ -1569,7 +2152,16 @@ async def async_handle_restore_backup(
 def async_remove_services(hass: HomeAssistant) -> None:
     """Remove all Roomba+ domain services (called when last entry unloads)."""
     for svc in (
+        "run_favorite",
+        # Registered from prime_schedule_services, removed here with the
+        # rest -- a test asserts that the two lists agree, which is how
+        # this was caught rather than by a leaked service after reload.
+        "create_schedule",
+        "update_schedule",
+        "delete_schedule",
         SERVICE_CLEAN_ROOM,
+        SERVICE_CLEAN_ZONE,
+        SERVICE_SET_QUIET_HOURS,
         SERVICE_SMART_START,
         SERVICE_CLEAN_OVERDUE_ROOMS,
         SERVICE_AUTO_CLEAN_DIRTY_ROOMS,

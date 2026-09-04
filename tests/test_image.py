@@ -14,6 +14,7 @@ import datetime
 import collections
 import pytest
 from unittest.mock import MagicMock
+from custom_components.roomba_plus.entity import IRobotEntity
 from unittest.mock import AsyncMock
 import homeassistant.helpers.entity_platform as _ep
 import math
@@ -635,6 +636,229 @@ class TestCoverageMapSignal:
         import asyncio
         from custom_components.roomba_plus.image import _async_send_coverage_signal
         assert asyncio.iscoroutinefunction(_async_send_coverage_signal)
+
+
+class TestTerminalMissionImageRefresh:
+    @pytest.mark.asyncio
+    async def test_empty_terminal_refreshes_all_images_once(self):
+        from custom_components.roomba_plus.grid_store import GridStore
+        from custom_components.roomba_plus.image import (
+            RoombaCoverageImage,
+            RoombaMapImage,
+            RoombaRoomsImage,
+            _SIGNAL_COVERAGE_UPDATED,
+        )
+        from homeassistant.util import dt as dt_util
+
+        entry = MagicMock()
+        entry.entry_id = "test_entry"
+        entry.runtime_data = MagicMock()
+        entry.runtime_data.grid_store = GridStore()
+        entry.runtime_data.umf_aligner = None
+        hass = MagicMock()
+        hass.loop = MagicMock()
+        before = datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc)
+        listeners: dict[str, list[Any]] = {}
+
+        def connect(_hass, signal, listener):
+            listeners.setdefault(signal, []).append(listener)
+            return lambda: None
+
+        coverage = RoombaCoverageImage.__new__(RoombaCoverageImage)
+        coverage._config_entry = entry
+        coverage._grid_store = entry.runtime_data.grid_store
+        coverage._cache = b"old"
+        coverage._attr_image_last_updated = before
+        coverage.hass = hass
+        coverage.async_update_token = MagicMock()
+        coverage.async_on_remove = MagicMock()
+        coverage.async_write_ha_state = MagicMock()
+
+        rooms = RoombaRoomsImage.__new__(RoombaRoomsImage)
+        rooms._config_entry = entry
+        rooms._cache = b"old"
+        rooms._attr_image_last_updated = before
+        rooms.hass = hass
+        rooms.async_update_token = MagicMock()
+        rooms.async_on_remove = MagicMock()
+        rooms.async_write_ha_state = MagicMock()
+
+        with (
+            patch.object(IRobotEntity, "async_added_to_hass", new=AsyncMock()),
+            patch(
+                "homeassistant.helpers.dispatcher.async_dispatcher_connect",
+                side_effect=connect,
+            ),
+        ):
+            await coverage.async_added_to_hass()
+            await rooms.async_added_to_hass()
+
+        route = RoombaMapImage.__new__(RoombaMapImage)
+        route.hass = hass
+        route._config_entry = entry
+        route._mission_points = []
+        route._mission_thetas = []
+        route._stuck_mission_points = []
+        route._mission_start_ts = "2026-09-02T10:00:00+00:00"
+        route._mission_checkpoint_mssn_strt_tm = 987654
+        route._last_terminal_mission_key = None
+        route.vacuum_state = {
+            "cleanMissionStatus": {"mssnStrtTm": 987654},
+        }
+        route._cache = b"old"
+        route._attr_image_last_updated = before
+
+        scheduled = []
+
+        def schedule(coro, _loop):
+            scheduled.append(coro)
+            return MagicMock()
+
+        with patch(
+            "custom_components.roomba_plus.image.asyncio.run_coroutine_threadsafe",
+            side_effect=schedule,
+        ):
+            route._handle_mission_end()
+            route._handle_mission_end()
+
+        refresh_coroutines = [
+            coro
+            for coro in scheduled
+            if coro.cr_code.co_name == "_async_send_coverage_signal"
+        ]
+        assert len(refresh_coroutines) == 1
+        signal = _SIGNAL_COVERAGE_UPDATED.format(entry.entry_id)
+
+        def send(_hass, dispatched_signal):
+            for listener in listeners[dispatched_signal]:
+                listener()
+
+        with patch(
+            "homeassistant.helpers.dispatcher.async_dispatcher_send",
+            side_effect=send,
+        ):
+            await refresh_coroutines[0]
+
+        for coro in scheduled:
+            if coro not in refresh_coroutines:
+                coro.close()
+
+        assert route._attr_image_last_updated > before
+        assert route._cache is None
+        assert coverage._attr_image_last_updated > before
+        assert coverage._cache is None
+        coverage.async_write_ha_state.assert_called_once()
+        assert rooms._attr_image_last_updated > before
+        assert rooms._cache is None
+        rooms.async_write_ha_state.assert_called_once()
+        assert len(listeners[signal]) == 2
+
+    @pytest.mark.asyncio
+    async def test_pose_present_terminal_still_feeds_grid_and_refreshes_images(self):
+        """A mission WITH pose data must both feed GridStore (unchanged
+        live path) and fire the same terminal image-refresh signal — the
+        refresh call moved earlier in _handle_mission_end but nothing
+        after it changed."""
+        from custom_components.roomba_plus.grid_store import GridStore
+        from custom_components.roomba_plus.image import (
+            RoombaCoverageImage,
+            RoombaMapImage,
+            _SIGNAL_COVERAGE_UPDATED,
+        )
+
+        entry = MagicMock()
+        entry.entry_id = "test_entry"
+        entry.runtime_data = MagicMock()
+        gs = GridStore()
+        entry.runtime_data.grid_store = gs
+        entry.runtime_data.umf_aligner = None
+        hass = MagicMock()
+        hass.loop = MagicMock()
+        before = datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc)
+        listeners: dict[str, list[Any]] = {}
+
+        def connect(_hass, signal, listener):
+            listeners.setdefault(signal, []).append(listener)
+            return lambda: None
+
+        coverage = RoombaCoverageImage.__new__(RoombaCoverageImage)
+        coverage._config_entry = entry
+        coverage._grid_store = gs
+        coverage._cache = b"old"
+        coverage._attr_image_last_updated = before
+        coverage.hass = hass
+        coverage.async_update_token = MagicMock()
+        coverage.async_on_remove = MagicMock()
+        coverage.async_write_ha_state = MagicMock()
+
+        with (
+            patch.object(IRobotEntity, "async_added_to_hass", new=AsyncMock()),
+            patch(
+                "homeassistant.helpers.dispatcher.async_dispatcher_connect",
+                side_effect=connect,
+            ),
+        ):
+            await coverage.async_added_to_hass()
+
+        route = RoombaMapImage.__new__(RoombaMapImage)
+        route.hass = hass
+        route._config_entry = entry
+        route._renderer = MagicMock()
+        route._renderer._cfg.robot_diameter_mm = 300
+        route._zone_store = None
+        route._map_capability = None
+        route._mission_points = [(0.0, 0.0), (100.0, 100.0)]
+        route._mission_thetas = [0.0, 0.0]
+        route._stuck_mission_points = []
+        route._mission_start_ts = "2026-09-02T10:00:00+00:00"
+        route._mission_checkpoint_mssn_strt_tm = 987654
+        route._last_terminal_mission_key = None
+        route.vacuum_state = {
+            "cleanMissionStatus": {"mssnStrtTm": 987654},
+            "bbmssn": {"nMssn": 77},
+        }
+        route._cache = b"old"
+        route._attr_image_last_updated = before
+
+        scheduled = []
+
+        def schedule(coro, _loop):
+            scheduled.append(coro)
+            return MagicMock()
+
+        with patch(
+            "custom_components.roomba_plus.image.asyncio.run_coroutine_threadsafe",
+            side_effect=schedule,
+        ):
+            route._handle_mission_end()
+
+        assert gs.last_processed_nmssn == 77
+
+        refresh_coroutines = [
+            coro for coro in scheduled
+            if coro.cr_code.co_name == "_async_send_coverage_signal"
+        ]
+        assert len(refresh_coroutines) == 1
+        signal = _SIGNAL_COVERAGE_UPDATED.format(entry.entry_id)
+
+        def send(_hass, dispatched_signal):
+            for listener in listeners[dispatched_signal]:
+                listener()
+
+        with patch(
+            "homeassistant.helpers.dispatcher.async_dispatcher_send",
+            side_effect=send,
+        ):
+            await refresh_coroutines[0]
+
+        for coro in scheduled:
+            if coro not in refresh_coroutines:
+                coro.close()
+
+        assert route._attr_image_last_updated > before
+        assert coverage._attr_image_last_updated > before
+        assert coverage._cache is None
+        coverage.async_write_ha_state.assert_called_once()
 
 
 class TestXvmcCoords:
@@ -2088,3 +2312,821 @@ class TestNullRegressionExplicitNulls:
             {"state": {"reported": {"cleanMissionStatus": status}}}
         )  # `or 0` fallback path — must not raise
         assert entity._last_phase == "run"
+
+
+class TestPrimeMapImage:
+    """NEW (V4/Prime live map) -- minimal coverage of the core
+    behavior, not an exhaustive suite: async_image() returns the
+    cached PNG once a live map update has been processed, and falls
+    back to a valid blank image before the first one arrives."""
+
+    def _entity(self):
+        from custom_components.roomba_plus.image import PrimeMapImage
+        entity = object.__new__(PrimeMapImage)
+        entity._png_bytes = None
+        return entity
+
+    @pytest.mark.asyncio
+    async def test_async_image_returns_blank_before_first_update(self):
+        entity = self._entity()
+        result = await entity.async_image()
+        assert result is not None
+        assert result.startswith(b"\x89PNG")
+
+    @pytest.mark.asyncio
+    async def test_async_image_returns_cached_png_after_update(self):
+        entity = self._entity()
+        entity._png_bytes = b"fake-png-bytes"
+        result = await entity.async_image()
+        assert result == b"fake-png-bytes"
+
+
+class TestPrimeMapImageWatchRetry:
+    """_async_watch_live_map()'s own outer retry loop -- REAL BUG FOUND
+    AND FIXED (architecture review, not a field report): this had the
+    exact same missing-retry gap already found and fixed twice before
+    in PrimeCoordinator/PrimeStatusCoordinator, but this entity had
+    NEVER actually run before this session (Platform.IMAGE was missing
+    from PRIME_PLATFORMS the whole time), so the bug never had a
+    chance to surface via real usage the way the other two did."""
+
+    def _entity(self, prime_robot=None, config_entry=None):
+        from custom_components.roomba_plus.image import PrimeMapImage
+
+        entity = object.__new__(PrimeMapImage)
+        entity._png_bytes = None
+        entity._blid = "TESTBLID"
+        entity.hass = MagicMock()
+        entity._prime_robot = prime_robot or MagicMock()
+        entity._config_entry = config_entry or MagicMock()
+        return entity
+
+    @pytest.mark.asyncio
+    async def test_retries_after_unexpected_exception_instead_of_dying_permanently(self):
+        entity = self._entity()
+        call_count = 0
+
+        def fake_watch_live_map():
+            nonlocal call_count
+            call_count += 1
+
+            async def _gen():
+                if call_count == 1:
+                    raise RuntimeError("simulated unexpected failure")
+                    yield  # pragma: no cover -- unreachable, makes this an async generator
+                raise asyncio.CancelledError
+
+            return _gen()
+
+        entity._prime_robot.watch_live_map = fake_watch_live_map
+
+        with patch("asyncio.sleep", new=AsyncMock()), patch(
+            "custom_components.roomba_plus.image.async_get_clientsession", return_value=MagicMock()
+        ):
+            with pytest.raises(asyncio.CancelledError):
+                await entity._async_watch_live_map()
+
+        assert call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_normal_generator_completion_also_retries_not_tight_loops(self):
+        """The SAME lesson already learned twice before: a generator
+        ending WITHOUT an exception is also anomalous (it's meant to
+        run forever) and must get the same backoff, not an immediate,
+        undelayed re-call that would busy-loop."""
+        entity = self._entity()
+        call_count = 0
+
+        def fake_watch_live_map():
+            nonlocal call_count
+            call_count += 1
+
+            async def _gen():
+                if call_count >= 2:
+                    raise asyncio.CancelledError
+                return
+                yield  # pragma: no cover -- unreachable, makes this an async generator
+
+            return _gen()
+
+        entity._prime_robot.watch_live_map = fake_watch_live_map
+        sleep_calls = []
+
+        async def _fake_sleep(seconds):
+            sleep_calls.append(seconds)
+
+        with patch("asyncio.sleep", new=_fake_sleep), patch(
+            "custom_components.roomba_plus.image.async_get_clientsession", return_value=MagicMock()
+        ):
+            with pytest.raises(asyncio.CancelledError):
+                await entity._async_watch_live_map()
+
+        assert call_count == 2
+        assert sleep_calls == [5.0]  # backoff was actually applied, not skipped
+
+
+class TestPrimeMapImageBackgroundTask:
+    """CONSISTENCY FIX (this session): async_added_to_hass() previously
+    used a bare asyncio.create_task() -- every other background task
+    in this project uses config_entry.async_create_background_task()
+    instead, which ties the task's lifetime to the config entry itself
+    (auto-cancelled on unload/reload by HA's own framework)."""
+
+    @pytest.mark.asyncio
+    async def test_uses_config_entry_background_task_not_bare_asyncio_create_task(self):
+        from custom_components.roomba_plus.image import PrimeMapImage
+
+        entity = object.__new__(PrimeMapImage)
+        entity._blid = "TESTBLID"
+        entity._prime_robot = MagicMock()
+        entity._config_entry = MagicMock()
+        # async_create_background_task() receives the coroutine as an argument
+        # but (being a MagicMock) never awaits/schedules it -- close it
+        # explicitly so this test doesn't leak a "coroutine was never
+        # awaited" warning, same pattern already used elsewhere in this suite.
+        entity._config_entry.async_create_background_task.side_effect = (
+            lambda hass, coro, name, **kw: coro.close()
+        )
+        entity.hass = MagicMock()
+        entity.access_tokens = None
+
+        with patch.object(IRobotEntity, "async_added_to_hass", new=AsyncMock()), patch.object(
+            PrimeMapImage, "async_update_token",
+        ):
+            await entity.async_added_to_hass()
+
+        entity._config_entry.async_create_background_task.assert_called_once()
+        call_kwargs = entity._config_entry.async_create_background_task.call_args
+        assert call_kwargs.kwargs.get("name") == "roomba_plus_prime_live_map_TESTBLID"
+
+
+class TestMissionEndStepOrder:
+    """`_handle_mission_end` is order-sensitive, and getting it wrong
+    has shipped as a real bug four times -- v2.8.2 plus three separate
+    fixes in v3.2.1.
+
+    None of those would have been caught by a test, because the
+    dependencies flow through shared stores as side effects rather than
+    through values. Nothing fails; a store is simply fed something
+    empty, or fed before the data it needs exists, and the symptom
+    surfaces later as a missing room outline or a lost trajectory.
+
+    Reading the source is a blunt instrument, and deliberately so: the
+    constraint IS textual ordering, so that is what gets asserted. A
+    behavioural test would need seven stores wired together to observe
+    the same thing."""
+
+    def _source(self) -> str:
+        import ast
+        import inspect
+
+        from custom_components.roomba_plus import image
+
+        src = inspect.getsource(image)
+        lines = src.splitlines()
+        for node in ast.walk(ast.parse(src)):
+            if isinstance(node, ast.FunctionDef) and node.name == "_handle_mission_end":
+                return "\n".join(lines[node.lineno - 1 : node.end_lineno])
+        raise AssertionError("_handle_mission_end not found")
+
+    def _line_of(self, needle: str) -> int:
+        body = self._source()
+        for i, line in enumerate(body.splitlines()):
+            if needle in line and not line.strip().startswith("#"):
+                return i
+        raise AssertionError(f"{needle!r} not found in _handle_mission_end")
+
+    def test_grid_is_fed_before_the_trajectory_is_recorded(self):
+        """Both read the same pose list. GridStore consumes it first;
+        the trajectory store records the same points afterwards."""
+        assert self._line_of("grid_store.update_from_mission") < self._line_of(
+            "trajectory_store.record_mission"
+        )
+
+    def test_the_trajectory_is_recorded_before_the_points_are_cleared(self):
+        """THE v3.2.1 fix. Clearing first leaves the store recording an
+        empty mission -- no error, no warning, just a permanently blank
+        trajectory for that run."""
+        assert self._line_of("trajectory_store.record_mission") < self._line_of(
+            "self._mission_points = []"
+        )
+
+    def test_the_ordering_contract_is_stated_at_the_top(self):
+        """The constraints were previously discoverable only by reading
+        all fourteen comment blocks in the body. If someone removes the
+        summary, the next ordering bug becomes as expensive to find as
+        the last four were."""
+        import inspect
+
+        from custom_components.roomba_plus.image import RoombaMapImage
+
+        doc = inspect.getdoc(RoombaMapImage._handle_mission_end) or ""
+
+        assert "ORDER-SENSITIVE" in doc
+        assert "BEFORE clearing" in doc, "the pose-clearing constraint must stay stated"
+        assert "GridStore" in doc, "the store-ordering constraint must stay stated"
+
+
+class TestPrimeMapSurvivesRestart:
+    """The last map is stored and restored.
+
+    Prime shows a PNG that iRobot renders, and that arrives only during
+    and after a mission -- so a restart, reload or update leaves the
+    entity with nothing until the robot next runs. Two testers hit this
+    within minutes of updating to a11.
+
+    The a11 change to report `unavailable` rather than a blank white
+    square did not cause it; it made it visible. Both states mean "no
+    map", but one of them looks like a broken image and the other says
+    so."""
+
+    def _entity(self):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.image import PrimeMapImage
+
+        entity = object.__new__(PrimeMapImage)
+        entity.hass = MagicMock()
+        entity._png_bytes = None
+        entity._map_stored_at = None
+        entity._map_store = None
+        entity._config_entry = MagicMock(entry_id="entry1")
+        return entity
+
+    @pytest.mark.asyncio
+    async def test_a_stored_map_is_restored(self):
+        import base64
+        from unittest.mock import AsyncMock, patch
+
+        entity = self._entity()
+        payload = {
+            "png_b64": base64.b64encode(b"PNGDATA").decode("ascii"),
+            "saved_at": "2026-07-28T10:00:00+00:00",
+        }
+
+        with patch("custom_components.roomba_plus.image.Store") as store_cls:
+            store_cls.return_value.async_load = AsyncMock(return_value=payload)
+            await entity._async_restore_png()
+
+        assert entity._png_bytes == b"PNGDATA"
+        assert entity._map_stored_at == "2026-07-28T10:00:00+00:00"
+
+    @pytest.mark.asyncio
+    async def test_no_stored_map_leaves_the_entity_blank(self):
+        """First run on a new install. Unavailable is the honest state."""
+        from unittest.mock import AsyncMock, patch
+
+        entity = self._entity()
+
+        with patch("custom_components.roomba_plus.image.Store") as store_cls:
+            store_cls.return_value.async_load = AsyncMock(return_value=None)
+            await entity._async_restore_png()
+
+        assert entity._png_bytes is None
+
+    @pytest.mark.asyncio
+    async def test_a_corrupt_stored_map_does_not_raise(self):
+        """Truncated storage should cost the map, not the whole image
+        platform. Everything else on that entity keeps working."""
+        from unittest.mock import AsyncMock, patch
+
+        entity = self._entity()
+
+        with patch("custom_components.roomba_plus.image.Store") as store_cls:
+            store_cls.return_value.async_load = AsyncMock(
+                return_value={"png_b64": "not valid base64!!!"}
+            )
+            await entity._async_restore_png()
+
+        assert entity._png_bytes is None
+
+    @pytest.mark.asyncio
+    async def test_a_storage_failure_does_not_raise(self):
+        """Disk problems are not this entity's to solve, and a map is
+        not worth failing setup over."""
+        from unittest.mock import AsyncMock, patch
+
+        entity = self._entity()
+
+        with patch("custom_components.roomba_plus.image.Store") as store_cls:
+            store_cls.return_value.async_load = AsyncMock(side_effect=OSError("disk"))
+            await entity._async_restore_png()
+
+        assert entity._png_bytes is None
+
+    def test_saving_records_when_it_was_saved(self):
+        """So a restored map can be shown as what it is -- the most
+        recent one, not necessarily a current one."""
+        from unittest.mock import patch
+
+        entity = self._entity()
+        entity._map_store = None
+        entity._png_bytes = b"PNGDATA"
+
+        with patch("custom_components.roomba_plus.image.Store"):
+            entity._async_save_png()
+
+        payload = entity._map_save_payload()
+        assert payload["saved_at"]
+        assert payload["png_b64"]
+
+    def test_writes_are_delayed_rather_than_immediate(self):
+        """A mission produces ~26 frames and only the last is ever read
+        back. Writing each one meant roughly 17 MB per mission of pure
+        flash wear, on hardware that is commonly an SD card."""
+        from unittest.mock import MagicMock, patch
+
+        entity = self._entity()
+        entity._map_store = None
+        entity._png_bytes = b"PNGDATA"
+
+        with patch("custom_components.roomba_plus.image.Store") as store_cls:
+            store = MagicMock()
+            store_cls.return_value = store
+            entity._async_save_png()
+
+        store.async_delay_save.assert_called_once()
+        store.async_save.assert_not_called()
+
+    def test_the_store_is_cached_across_frames(self):
+        """A fresh Store each call would restart the delay timer every
+        frame and defeat the coalescing entirely."""
+        from unittest.mock import MagicMock, patch
+
+        entity = self._entity()
+        entity._map_store = None
+        entity._png_bytes = b"PNGDATA"
+
+        with patch("custom_components.roomba_plus.image.Store") as store_cls:
+            store_cls.return_value = MagicMock()
+            entity._async_save_png()
+            entity._async_save_png()
+            entity._async_save_png()
+
+        assert store_cls.call_count == 1
+
+    def test_the_payload_is_taken_when_the_delay_fires(self):
+        """The callback reads the CURRENT frame, so a burst of frames
+        persists the newest rather than the one that scheduled it."""
+        entity = self._entity()
+        entity._png_bytes = b"FIRST"
+
+        callback_payload_later = entity._map_save_payload
+        entity._png_bytes = b"NEWEST"
+
+        import base64
+        assert base64.b64decode(callback_payload_later()["png_b64"]) == b"NEWEST"
+
+    def test_nothing_is_scheduled_when_there_is_no_map(self):
+        """Avoids replacing a good stored map with an empty one."""
+        from unittest.mock import MagicMock, patch
+
+        entity = self._entity()
+        entity._map_store = None
+
+        with patch("custom_components.roomba_plus.image.Store") as store_cls:
+            store_cls.return_value = MagicMock()
+            entity._async_save_png()
+
+        store_cls.assert_not_called()
+
+    def test_the_prime_storage_key_differs_from_the_classic_one(self):
+        """Different contents entirely -- a PNG against renderer state.
+        A shared key would make one silently unreadable as the other."""
+        from custom_components.roomba_plus.image import (
+            _map_storage_key,
+            _prime_map_storage_key,
+        )
+
+        assert _prime_map_storage_key("e1") != _map_storage_key("e1")
+
+
+class TestPrimeMapFlushOnRemoval:
+    """The delayed map write is flushed when the entity goes away.
+
+    async_delay_save means a reload can leave the OLD entity's pending
+    write to land after the NEW one has already loaded -- overwriting a
+    current map with a stale one, which is worse than losing an update.
+    Store.async_save cancels the pending timer as well as writing, so it
+    is both flush and guard.
+
+    Classic solved exactly this for MissionTimerStore in v3.3.0, in its
+    own bug hunt. This entity was written today with the delayed saving
+    copied from that store, and the flush was not copied with it."""
+
+    def _entity(self, *, has_store=True, has_png=True):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from custom_components.roomba_plus.image import PrimeMapImage
+
+        entity = object.__new__(PrimeMapImage)
+        entity._watch_task = None
+        entity._png_bytes = b"PNGDATA" if has_png else None
+        entity._map_stored_at = None
+        entity._map_store = MagicMock(async_save=AsyncMock()) if has_store else None
+        entity._config_entry = MagicMock(entry_id="e1")
+        entity.hass = MagicMock()
+        return entity
+
+    @pytest.mark.asyncio
+    async def test_a_pending_write_is_flushed(self):
+        entity = self._entity()
+
+        await entity.async_will_remove_from_hass()
+
+        entity._map_store.async_save.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_nothing_is_written_without_a_map(self):
+        """Would replace a good stored map with an empty one."""
+        entity = self._entity(has_png=False)
+
+        await entity.async_will_remove_from_hass()
+
+        entity._map_store.async_save.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_no_store_yet_does_not_raise(self):
+        """Removal can happen before any frame arrived, so before the
+        store was ever created."""
+        entity = self._entity(has_store=False)
+
+        await entity.async_will_remove_from_hass()
+
+    @pytest.mark.asyncio
+    async def test_a_failing_flush_does_not_block_removal(self):
+        """Unload must complete. A stale map is recoverable; a config
+        entry stuck mid-unload is not."""
+        entity = self._entity()
+        entity._map_store.async_save.side_effect = OSError("disk full")
+
+        await entity.async_will_remove_from_hass()
+
+    @pytest.mark.asyncio
+    async def test_the_watch_task_is_cancelled_and_waited_for(self):
+        """The flush was inserted ahead of existing cleanup -- which must
+        still happen, or a reload leaks a background task per cycle.
+
+        AND THE TASK IS AWAITED. `cancel()` only requests a stop; it
+        returns before the task has unwound, so the livemap unsubscribe
+        in watch_live_map()'s finally could still be pending when
+        async_unload_entry disconnects the robot on the next line.
+
+        This asserted only the cancel, which is why the missing await
+        went unnoticed.
+        """
+        import asyncio
+
+        entity = self._entity()
+
+        async def _forever():
+            await asyncio.sleep(3600)
+
+        task = asyncio.ensure_future(_forever())
+        entity._watch_task = task
+
+        await entity.async_will_remove_from_hass()
+
+        assert task.cancelled(), "the task was cancelled but never awaited"
+
+    @pytest.mark.asyncio
+    async def test_a_cancelled_task_does_not_raise_out_of_removal(self):
+        """Cancellation is the expected outcome here, not an error --
+        letting CancelledError escape would abort the rest of the unload
+        and leave the robot connected."""
+        import asyncio
+
+        entity = self._entity()
+        task = asyncio.ensure_future(asyncio.sleep(3600))
+        entity._watch_task = task
+
+        await entity.async_will_remove_from_hass()
+
+
+def test_prime_cleaning_map_does_not_advertise_card_rooms():
+    """Only the static Rooms Map is a xiaomi-vacuum-map-card source."""
+    from custom_components.roomba_plus.image import PrimeRoomsImage
+
+    entity = PrimeRoomsImage.__new__(PrimeRoomsImage)
+    entity._include_live = True
+
+    assert entity.extra_state_attributes == {}
+
+
+def test_prime_rooms_map_uses_stable_ids_for_generated_room_config():
+    """The card generator uses the rooms mapping key as its selection ID."""
+    from custom_components.roomba_plus.image import PrimeRoomsImage
+
+    entity = PrimeRoomsImage.__new__(PrimeRoomsImage)
+    entity._include_live = False
+    entity._polygons = {"10": [(0.0, 0.0), (1000.0, 0.0), (1000.0, 1000.0)]}
+    entity._names = {"10": "Kitchen"}
+    entity._preferences = {}
+    entity._renderer = MagicMock()
+    entity._renderer._mm_to_px_fit.side_effect = lambda x, y: (x, y)
+
+    rooms = entity.extra_state_attributes["rooms"]
+    assert list(rooms) == ["10"]
+    assert rooms["10"]["name"] == "Kitchen"
+    assert rooms["10"]["room_id"] == "10"
+
+
+class TestRoomLabelsAreNotGatedOnTheMapSplit:
+    """Splitting the two Prime maps gave the rooms map plain outlines,
+    on the reasoning that xiaomi-vacuum-map-card draws its own overlay.
+    Defensible for the FILLS.
+
+    Carrying it to the labels disabled an explicit user option on
+    exactly the entity the code's own comment says the option exists
+    for: "a plain picture-entity shows an image and nothing else, so for
+    them the names have to be in the picture or they do not exist".
+
+    @chairstacker: "no room shading colors and no names at all (even
+    room names are gone)". The shading is deliberate; the names were
+    not.
+    """
+
+    def test_the_label_branch_does_not_consult_show_room_fills(self):
+        import inspect
+
+        from custom_components.roomba_plus import image
+
+        source = inspect.getsource(image)
+        idx = source.find("CONF_MAP_ROOM_LABELS, DEFAULT_MAP_ROOM_LABELS")
+        assert idx > 0
+        guard = source[max(0, idx - 200):idx]
+
+        assert "show_room_fills and" not in guard, (
+            "room labels are gated on the map split again -- the option "
+            "belongs to the user, not to which of the two maps this is"
+        )
+
+    def test_fills_are_still_split(self):
+        """The other half stays: the card draws its own room overlay,
+        and both at once doubles them up."""
+        import inspect
+
+        from custom_components.roomba_plus import image
+
+        source = inspect.getsource(image)
+
+        assert 'show_room_fills = getattr(self, "_include_live", True)' in source
+        assert "if show_room_fills:" in source
+
+
+class TestRepairIssuesComeFromTheHelper:
+    """`async_create_issue` and `IssueSeverity` live in
+    `homeassistant.helpers.issue_registry`. `homeassistant.components.repairs`
+    has neither.
+
+    `_trigger_zone_issue` imported the components module, so the
+    zones-need-naming prompt raised AttributeError instead of appearing.
+    Found by mypy as "Module has no attribute async_create_issue".
+    """
+
+    def test_nothing_imports_repairs_for_issue_creation(self):
+        import pathlib
+        import re
+
+        offenders = []
+        for path in pathlib.Path("custom_components/roomba_plus").glob("*.py"):
+            text = path.read_text()
+            for m in re.finditer(
+                r"from homeassistant\.components import repairs(?: as (\w+))?", text
+            ):
+                alias = m.group(1) or "repairs"
+                if f"{alias}.async_create_issue" in text:
+                    offenders.append(path.name)
+
+        assert not offenders, (
+            f"{offenders} create repair issues through "
+            f"homeassistant.components.repairs -- it has no "
+            f"async_create_issue; use helpers.issue_registry"
+        )
+
+    def test_the_helper_is_the_one_with_the_function(self):
+        """If Home Assistant ever moves it, this guard is wrong rather
+        than the call sites."""
+        from homeassistant.components import repairs
+        from homeassistant.helpers import issue_registry
+
+        assert hasattr(issue_registry, "async_create_issue")
+        assert not hasattr(repairs, "async_create_issue")
+
+
+class TestPickupIsNotDrift:
+    """v3.2.2 — a carried robot gets a constant offset, not a ramp.
+
+    The dock-anchor ramp assumes error compounds gradually, which is
+    true for odometry and vSLAM error and false for a robot that was
+    lifted. Set one down two metres away and EVERY pose afterwards is
+    off by the same two metres — the first as much as the last. A ramp
+    then under-corrects the start of the segment and drags points that
+    were still accurate away from where the robot actually was.
+
+    `bbrun.nPicks` is already read, stored per mission and documented in
+    callbacks.py as "the robot was physically picked up during this
+    mission". The map never asked; the code comment deferred this
+    "pending real field validation that simple linear interpolation
+    isn't enough".
+    """
+
+    @staticmethod
+    def _segment():
+        return [(0.0, 0.0), (100.0, 0.0), (200.0, 0.0), (300.0, 0.0)]
+
+    def test_a_ramp_barely_moves_the_first_point(self):
+        """The existing behaviour, stated so the difference is visible."""
+        from custom_components.roomba_plus.image import (
+            _interpolate_and_correct_segment,
+        )
+
+        out = _interpolate_and_correct_segment(
+            self._segment(), 900.0, 0.0, 0.0, picked_up=False
+        )
+
+        assert out[0][0] == 0.0, "weight 0 at the first buffered point"
+        assert out[-1][0] == 300.0 + 900.0, "full correction at the last"
+
+    def test_a_pickup_shifts_every_point_equally(self):
+        from custom_components.roomba_plus.image import (
+            _interpolate_and_correct_segment,
+        )
+
+        out = _interpolate_and_correct_segment(
+            self._segment(), 900.0, 0.0, 0.0, picked_up=True
+        )
+        original = self._segment()
+
+        shifts = [a[0] - b[0] for a, b in zip(out, original, strict=False)]
+        assert shifts == [900.0] * 4
+
+    def test_the_default_is_unchanged_behaviour(self):
+        """Callers that do not know must keep the ramp."""
+        from custom_components.roomba_plus.image import (
+            _interpolate_and_correct_segment,
+        )
+
+        assert _interpolate_and_correct_segment(
+            self._segment(), 900.0, 0.0, 0.0
+        ) == _interpolate_and_correct_segment(
+            self._segment(), 900.0, 0.0, 0.0, picked_up=False
+        )
+
+
+class TestSeveralPickupsInOneMission:
+    """A mission can break more than once, and the correction has to
+    say which stretch the dock measurement actually covers.
+
+    The first version of the pickup branch shifted the entire buffered
+    stretch by one offset. That is right for one lift and wrong for two:
+    the second stretch has its own independent offset, so a single shift
+    is as wrong for it as the linear ramp it replaced was for the first.
+
+    What the dock verifies is the position of the LAST segment — the one
+    that ends at the dock. Earlier segments are unverified by that
+    measurement and are left alone rather than corrected on evidence
+    that does not cover them.
+    """
+
+    @staticmethod
+    def _segment():
+        return [(float(i * 100), 0.0) for i in range(10)]
+
+    def test_only_the_stretch_after_the_last_break_moves(self):
+        from custom_components.roomba_plus.image import (
+            _interpolate_and_correct_segment,
+        )
+
+        out = _interpolate_and_correct_segment(
+            self._segment(), 500.0, 0.0, 0.0, picked_up=True, breaks={6}
+        )
+        original = self._segment()
+
+        assert out[:6] == original[:6], "before the break: untouched"
+        for a, b in zip(out[6:], original[6:], strict=False):
+            assert a[0] - b[0] == 500.0
+
+    def test_the_last_break_wins_when_there_are_several(self):
+        from custom_components.roomba_plus.image import (
+            _interpolate_and_correct_segment,
+        )
+
+        out = _interpolate_and_correct_segment(
+            self._segment(), 500.0, 0.0, 0.0, picked_up=True, breaks={3, 7}
+        )
+        original = self._segment()
+
+        assert out[:7] == original[:7]
+        assert out[7][0] - original[7][0] == 500.0
+
+    def test_without_breaks_the_whole_stretch_shifts(self):
+        """One lift, one segment — the case that already worked."""
+        from custom_components.roomba_plus.image import (
+            _interpolate_and_correct_segment,
+        )
+
+        out = _interpolate_and_correct_segment(
+            self._segment(), 500.0, 0.0, 0.0, picked_up=True, breaks=set()
+        )
+        original = self._segment()
+
+        assert all(
+            a[0] - b[0] == 500.0 for a, b in zip(out, original, strict=False)
+        )
+
+    def test_a_ramp_is_unaffected_by_breaks(self):
+        """Drift without a pickup still ramps across the whole stretch:
+        breaks describe where the FRAME changed, and gradual error
+        accumulates regardless."""
+        from custom_components.roomba_plus.image import (
+            _interpolate_and_correct_segment,
+        )
+
+        assert _interpolate_and_correct_segment(
+            self._segment(), 500.0, 0.0, 0.0, picked_up=False, breaks={5}
+        ) == _interpolate_and_correct_segment(
+            self._segment(), 500.0, 0.0, 0.0, picked_up=False
+        )
+
+
+class TestAnchoringBeforeTheGrid:
+    """v3.2.2 — pre-break segments are placed, or left out.
+
+    They were being stamped into the accumulated grid at unverified
+    positions all along: `_mission_points` holds every pose, including
+    those before a discontinuity, and the dock correction deliberately
+    does not touch them. So this is not a new risk over the status quo
+    — it replaces "stamp at an arbitrary wrong offset" with "stamp at a
+    checked offset, or not at all".
+    """
+
+    @staticmethod
+    def _distinctive(ox=0.0, oy=0.0, cell=150.0):
+        """An L-shaped run. A filled rectangle cannot locate itself —
+        shifted a few cells it overlaps almost as well — so a test built
+        on one would measure the single case the method cannot do."""
+        pts = []
+        for row in range(5):
+            for col in range(14):
+                pts.append((ox + col * cell, oy + row * cell))
+        for row in range(14):
+            for col in range(5):
+                pts.append((ox + col * cell, oy + row * cell))
+        return pts
+
+    @staticmethod
+    def _store(cells=None):
+        from unittest.mock import MagicMock
+
+        store = MagicMock()
+        store.cells = cells or {}
+        return store
+
+    def test_a_single_segment_passes_through_untouched(self):
+        from custom_components.roomba_plus.image import _anchored_mission_points
+
+        pts = self._distinctive()
+
+        assert _anchored_mission_points(pts, set(), self._store()) == pts
+
+    def test_a_displaced_segment_is_moved_back(self):
+        from custom_components.roomba_plus.image import _anchored_mission_points
+
+        anchored = self._distinctive()
+        displaced = self._distinctive(ox=450.0, oy=300.0)
+        combined = displaced + anchored
+
+        out = _anchored_mission_points(
+            combined, {len(displaced)}, self._store()
+        )
+
+        # The dock-verified tail is untouched, and the head came back.
+        assert out[-len(anchored):] == anchored
+        assert out[0] == (0.0, 0.0)
+
+    def test_an_unplaceable_segment_is_dropped(self):
+        """Losing a segment's cells costs coverage the next mission
+        re-drives. Writing it at the wrong offset costs data nothing
+        repairs."""
+        from custom_components.roomba_plus.image import _anchored_mission_points
+
+        anchored = self._distinctive()
+        # Two points cannot carry a pattern.
+        combined = [(9e5, 9e5), (9e5 + 10, 9e5)] + anchored
+
+        out = _anchored_mission_points(combined, {2}, self._store())
+
+        assert out == anchored
+
+    def test_the_dock_verified_tail_is_always_kept(self):
+        """Whatever happens to the rest, the segment the dock measured
+        must reach the grid."""
+        from custom_components.roomba_plus.image import _anchored_mission_points
+
+        anchored = self._distinctive()
+        combined = [(9e5, 9e5), (9e5 + 10, 9e5)] + anchored
+
+        out = _anchored_mission_points(combined, {2}, self._store())
+
+        assert out[-len(anchored):] == anchored

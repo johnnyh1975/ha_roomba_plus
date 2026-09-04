@@ -10,6 +10,8 @@ so that internal calculations and thresholds remain in mm throughout.
 
 from __future__ import annotations
 
+from .geometry_utils import point_in_polygon
+
 import logging
 import math
 from typing import TYPE_CHECKING, Any
@@ -68,7 +70,7 @@ class UmfAligner:
         # GS-SMART-UMF (v2.7.0): synthetic DoorMarker objects seeded from cloud
         # traversal data when local pose is unavailable (lewis firmware).
         # Set via set_bootstrap_markers(); used by align() when GS is empty.
-        self._bootstrap_markers: list = []
+        self._bootstrap_markers: list[Any] = []
 
     # ── Properties ────────────────────────────────────────────────────────────
 
@@ -243,7 +245,7 @@ class UmfAligner:
         """Return room name for a UMF-space point, or None if outside all rooms."""
         rid_map = self.rid_to_name()
         for rid, poly in self._room_polygons.items():
-            if _point_in_polygon(x_umf, y_umf, poly):
+            if point_in_polygon(x_umf, y_umf, poly):
                 return rid_map.get(rid, rid)
         return None
 
@@ -390,7 +392,7 @@ class UmfAligner:
         # rebind, same rationale as _build_coord_lookup above: readers on
         # the MQTT render thread iterate room_polygons_umf concurrently
         # with a bootstrap re-align.
-        polygons: dict = {}
+        polygons: dict[str, Any] = {}
         for region in self._regions:
             rid       = region.get("id")
             geometry  = region.get("geometry", {})
@@ -472,7 +474,7 @@ class UmfAligner:
         ty = cy_pose - (sin_r * cx_umf + cos_r * cy_umf)
         return (rot, tx, ty)
 
-    def _validate_transform(self, gs_markers: list | None = None) -> float:
+    def _validate_transform(self, gs_markers: list[Any] | None = None) -> float:
         """Validate transform by measuring how well door candidates align with GS markers.
 
         Transforms each UMF door candidate to pose space using the just-estimated
@@ -538,20 +540,3 @@ def _polygon_area_m2(vertices_mm: list[tuple[float, float]]) -> float | None:
     return round(abs(area_mm2) / 2.0 / 1_000_000.0, 1)
 
 
-def _point_in_polygon(
-    x: float, y: float, polygon: list[tuple[float, float]]
-) -> bool:
-    """Ray-casting point-in-polygon test.
-
-    Returns True when (x, y) is inside the polygon.
-    No external geometry library required.
-    """
-    inside = False
-    px, py = polygon[-1]
-    for qx, qy in polygon:
-        if ((qy > y) != (py > y)) and (
-            x < (px - qx) * (y - qy) / (py - qy) + qx
-        ):
-            inside = not inside
-        px, py = qx, qy
-    return inside

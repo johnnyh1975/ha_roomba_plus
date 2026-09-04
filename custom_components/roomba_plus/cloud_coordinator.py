@@ -31,7 +31,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from homeassistant.util import dt as dt_util
 
 from .cloud_api import AuthenticationError, CloudApiError, IrobotCloudApi
-from .const import SQFT_TO_M2
+from .const import DOMAIN, SQFT_TO_M2
 
 if TYPE_CHECKING:
     from .mission_store import MissionStore
@@ -50,7 +50,7 @@ _MIN_UNAVAILABLE = timedelta(minutes=2)
 
 
 
-def classify_mission_result(record: dict) -> str:
+def classify_mission_result(record: dict[str, Any]) -> str:
     """Classify a raw /missionhistory record into a canonical result string.
 
     Uses the v2.0 classification scheme, which is more granular than the
@@ -131,7 +131,7 @@ def classify_mission_result(record: dict) -> str:
     return "unknown"
 
 
-def _normalize_mission_history(raw: dict) -> dict:
+def _normalize_mission_history(raw: dict[str, Any]) -> dict[str, Any]:
     """Normalize a raw /missionhistory record into a consistent shape.
 
     The iRobot cloud /missionhistory endpoint (confirmed from field logs) returns
@@ -185,7 +185,7 @@ def _normalize_mission_history(raw: dict) -> dict:
     if sqft is None:
         sqft = raw.get("sqft")  # per-mission fallback, marked in attributes
 
-    result: dict = {}
+    result: dict[str, Any] = {}
     if sqft is not None or hr is not None or mn is not None:
         result["runtimeStats"] = {}
         if sqft is not None:
@@ -200,7 +200,7 @@ def _normalize_mission_history(raw: dict) -> dict:
     return result
 
 
-def _aggregate_history(records: list) -> dict:
+def _aggregate_history(records: list[Any]) -> dict[str, Any]:
     """Aggregate a list of individual mission records into totals.
 
     Confirmed field names from field logs (980 firmware v2.4.17-138):
@@ -253,7 +253,7 @@ def _aggregate_history(records: list) -> dict:
             total_sqft += int(sqft)
             has_sqft = True
 
-    result: dict = {
+    result: dict[str, Any] = {
         "bbmssn": {"nMssn": n_mssn},
     }
     if total_min > 0:
@@ -267,7 +267,7 @@ def _aggregate_history(records: list) -> dict:
     return result
 
 
-def _compute_daily_dirt_density(records: list[dict]) -> dict[str, float]:
+def _compute_daily_dirt_density(records: list[dict[str, Any]]) -> dict[str, float]:
     """P4 — Build a per-calendar-date median dirt density dict from raw records.
 
     Called once per cloud fetch; result cached on coordinator so api_views.py
@@ -301,7 +301,7 @@ def _compute_daily_dirt_density(records: list[dict]) -> dict[str, float]:
     return {day: statistics.median(dens) for day, dens in by_day.items()}
 
 
-def _parse_time_estimates(raw: list) -> dict[str, int | None]:
+def _parse_time_estimates(raw: list[Any]) -> dict[str, int | None]:
     """TE1 — Normalise a region's time_estimates list to {one_pass_sec, two_pass_sec}.
 
     Returns None for a key when:
@@ -393,7 +393,10 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             await self.api.authenticate()
         except AuthenticationError as exc:
             raise ConfigEntryAuthFailed(
-                f"iRobot cloud credentials are invalid: {exc}"
+                f"iRobot cloud credentials are invalid: {exc}",
+                translation_domain=DOMAIN,
+                translation_key="cloud_credentials_invalid",
+                translation_placeholders={"error": str(exc)},
             ) from exc
         except (CloudApiError, aiohttp.ClientError, TimeoutError) as exc:
             # v3.3.0 REVIEW-REMAINDER — transient network errors
@@ -402,7 +405,22 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # exactly the transient class the F-RB-4 grace period below
             # was built for.
             # Transient — let HA retry via ConfigEntryNotReady pathway
-            raise UpdateFailed(f"iRobot cloud setup failed: {exc}") from exc
+            #
+            # NEW (this session): translation_key added for consistency/
+            # future-proofing, but currently INERT for UpdateFailed --
+            # verified against homeassistant.helpers.update_coordinator's
+            # actual source: it stores self.last_exception = err and
+            # never reads translation_key/translation_domain anywhere.
+            # No consumer renders this today. Kept anyway since the raw
+            # f-string fallback is unaffected either way, and this is
+            # where the fine-grained CloudApiError subclasses (SSL/
+            # connection/timeout/rate-limited) actually surface.
+            raise UpdateFailed(
+                f"iRobot cloud setup failed: {exc}",
+                translation_domain=DOMAIN,
+                translation_key="cloud_temporarily_unavailable",
+                translation_placeholders={"error": str(exc)},
+            ) from exc
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch current cloud data for this robot."""
@@ -413,6 +431,7 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "favorites": [],
             "automations": {},           # v2.1 F7l: iRobot Genius rules (shape TBD)
             "umf": {},                   # v2.2 F9: UMF floor plan data (SMART robots)
+            "parts": {},                 # consumable counters from /v1/robots/{blid}/parts
         }
         try:
             async with asyncio.timeout(30):
@@ -421,20 +440,80 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 if self._has_pmaps:
                     result["pmaps"] = await self.api.get_pmaps(self.blid)
                     result["favorites"] = await self.api.get_favorites()
-                raw_history = await self.api.get_mission_history(self.blid)
+                # ONE FAILING SUB-FETCH MUST NOT DISCARD THE REST.
+                #
+                # @ScenicSystemsLLC: a ValueError from mission history
+                # escaped the handler below (which catches
+                # CloudApiError, ClientError and TimeoutError) and
+                # killed the whole coroutine -- **after** pmaps and
+                # favourites had been fetched successfully. Python
+                # returns nothing from a raising function, so both were
+                # thrown away every cycle. Favourite buttons went
+                # unavailable and every room map went blank.
+                #
+                # The automations fetch below already had this
+                # treatment, commented "fails gracefully". History did
+                # not, and it is the one carrying more.
+                #
+                # An empty history is a real state -- a robot with no
+                # cloud records looks the same -- so the sensors that
+                # read it already handle it.
+                #
+                # NETWORK FAILURES STILL PROPAGATE. A ClientError or a
+                # timeout means the cloud is unreachable, and the
+                # handler below turns that into the grace period that
+                # keeps the last good data instead of blanking
+                # everything. Swallowing those here would have replaced
+                # a working recovery with an empty result.
+                #
+                # Only a malformed response is caught: the endpoint
+                # answered, and what it sent cannot be read.
+                try:
+                    raw_history = await self.api.get_mission_history(self.blid)
+                except (CloudApiError, aiohttp.ClientError, TimeoutError):
+                    raise
+                except Exception:  # noqa: BLE001
+                    _LOGGER.warning(
+                        "roomba_plus: mission history fetch failed for %s -- "
+                        "keeping pmaps and favourites from this cycle",
+                        self.blid, exc_info=True,
+                    )
+                    raw_history = []
                 # F7l — fetch automations endpoint; fails gracefully
                 try:
                     result["automations"] = await self.api.get_automations()
                 except Exception:  # noqa: BLE001
                     _LOGGER.debug(
-                        "iRobot cloud: automations endpoint unavailable for %s "
+                        # NOT INSTRUMENTED: the message says it -- the endpoint
+                # may not exist for this account type, so a failure is a
+                # property of the account rather than a broken path.
+                "iRobot cloud: automations endpoint unavailable for %s "
                         "(endpoint may not exist for this account type)",
                         self.blid,
                     )
                     result["automations"] = {}
+                # Consumable counters; fails gracefully, same reasoning as
+                # automations above. Gated on nothing: the endpoint is
+                # per-robot rather than per-capability, and a robot that
+                # does not serve it simply answers with an error, which
+                # leaves `parts` empty and creates no entities. Gating on
+                # a cap flag instead would need a flag that iRobot does
+                # not publish for this feature.
+                try:
+                    result["parts"] = await self.api.get_robot_parts(self.blid)
+                except Exception:  # noqa: BLE001
+                    _LOGGER.debug(
+                        "iRobot cloud: parts endpoint unavailable for %s "
+                        "(robot may not report consumable counters)",
+                        self.blid,
+                    )
+                    result["parts"] = {}
         except AuthenticationError as exc:
             raise ConfigEntryAuthFailed(
-                f"iRobot cloud authentication failed: {exc}"
+                f"iRobot cloud authentication failed: {exc}",
+                translation_domain=DOMAIN,
+                translation_key="cloud_credentials_invalid",
+                translation_placeholders={"error": str(exc)},
             ) from exc
         except (CloudApiError, aiohttp.ClientError, TimeoutError) as exc:
             # v3.3.0 REVIEW-REMAINDER — transient network errors
@@ -455,7 +534,12 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     self.blid, exc,
                 )
                 return self.data
-            raise UpdateFailed(f"iRobot cloud update failed: {exc}") from exc
+            raise UpdateFailed(
+                f"iRobot cloud update failed: {exc}",
+                translation_domain=DOMAIN,
+                translation_key="cloud_temporarily_unavailable",
+                translation_placeholders={"error": str(exc)},
+            ) from exc
 
         # F-RB-4 — stamp last success time for future failure-suppression checks.
         self._last_success_time = datetime.now(UTC)
@@ -480,8 +564,8 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # nested_keys: sub-keys one level deep for dict-valued fields.
             _all_keys: set[str] = set()
             _field_coverage: dict[str, int] = {}
-            _array_stats: dict[str, dict] = {}
-            _nested_keys: dict[str, set] = {}
+            _array_stats: dict[str, dict[str, Any]] = {}
+            _nested_keys: dict[str, set[Any]] = {}
 
             for _r in raw_history:
                 if not isinstance(_r, dict):
@@ -549,9 +633,18 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 # Process reversed (oldest first) so _last_nMssn advances correctly.
                 # async_delta_update skips duplicates via _archived_nmssns.
                 if self._mission_archive is not None:
+                    # `config_entry` is non-optional in this
+                    # coordinator's __init__; the base class types it
+                    # `ConfigEntry | None`. Bound once here rather than
+                    # asserted inside the loop.
+                    _entry_id = (
+                        self.config_entry.entry_id
+                        if self.config_entry is not None
+                        else ""
+                    )
                     for _r in reversed(result["mission_history_raw"]):
                         await self._mission_archive.async_delta_update(
-                            _r, self.hass, self.config_entry.entry_id
+                            _r, self.hass, _entry_id
                         )
                 # Aggregate ALL records for lifetime totals.
                 result["mission_history"] = _aggregate_history(raw_history)
@@ -632,6 +725,9 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     )
             except Exception:  # noqa: BLE001
                 _LOGGER.debug(
+                    # NOT INSTRUMENTED: not every map has a UMF, so an
+                    # absent one is a property of the account rather
+                    # than a broken code path.
                     "iRobot cloud: UMF fetch failed for %s — "
                     "obstacle data unavailable this cycle",
                     self.blid,
@@ -687,7 +783,30 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """
         if not self.data:
             return []
-        return self.data.get("mission_history_raw", [])
+        return list(self.data.get("mission_history_raw", []))
+
+    @property
+    def parts(self) -> list[dict[str, Any]]:
+        """Return the consumable-part counters from the last /parts fetch.
+
+        One entry per part the robot tracks, each carrying `part_id`,
+        `count_used` / `count_remaining` (robot runtime minutes) and
+        `last_updated_ts` (epoch seconds of the last reset, including
+        resets performed in iRobot's own app).
+
+        Returns an empty list when the robot does not serve the endpoint,
+        when the fetch failed, or before the first refresh — callers treat
+        all three the same way and create no entities.
+        """
+        if not self.data:
+            return []
+        payload = self.data.get("parts") or {}
+        if not isinstance(payload, dict):
+            return []
+        parts = payload.get("parts")
+        if not isinstance(parts, list):
+            return []
+        return [p for p in parts if isinstance(p, dict) and p.get("part_id") is not None]
 
     @property
     def active_pmap_id(self) -> str | None:
@@ -779,7 +898,7 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     pass
         return None
 
-    def seed_pmap_id_from_local(self, reported_state: dict) -> None:
+    def seed_pmap_id_from_local(self, reported_state: dict[str, Any]) -> None:
         """IA74-PMAP — Seed active_pmap_id from local MQTT pmaps field on startup.
 
         Called once in async_setup_entry after the robot connects, before the
@@ -797,7 +916,7 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """
         if self.data is not None:
             return   # cloud data already present — don't override
-        pmaps: list[dict] = reported_state.get("pmaps", [])
+        pmaps: list[dict[str, Any]] = reported_state.get("pmaps", [])
         if not pmaps:
             return
         best_pid: str | None = None
@@ -846,7 +965,7 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # Try both to be robust — confirmed as a real divergence from
             # live debug data (June 2026): first_region_keys determines which
             # is present. An empty id silently breaks CR4 attribute generation.
-            def _rid(r: dict) -> str:
+            def _rid(r: dict[str, Any]) -> str:
                 return str(r.get("region_id") or r.get("id") or "")
 
             return [
@@ -863,6 +982,49 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 if _rid(region)   # skip entries with no resolvable ID
             ]
         return []
+
+    @property
+    def regions_by_pmap(self) -> dict[str, dict[str, str]]:
+        """{pmap_id: {region_id: name}} for EVERY map, not just the active one.
+
+        THE COMPANION TO `regions`, AND DELIBERATELY NOT A REPLACEMENT.
+        `regions` filters to the active map so a room COMMAND cannot go
+        to the wrong floor (#8) -- that filter is right and stays.
+
+        But @dduff617 (S9+, four Smart Maps) showed the filter is wrong
+        for the other direction: `sensor.<robot>_room_cleaning_history`
+        resolved every historical record against the currently active
+        map, so rooms cleaned on a different map stayed as raw ids --
+        `"2"` and `"5"` beside properly named ones. The iRobot app
+        shows those missions correctly, so the account has the context;
+        we were looking at one map's dictionary.
+
+        Naming a past mission's rooms is not the same question as
+        deciding where to send the robot now, so it gets its own view.
+        Keyed by map, so a caller resolves each record against ITS map
+        and duplicate names on different floors cannot collide.
+        """
+        result: dict[str, dict[str, str]] = {}
+        if not self.data:
+            return result
+        for pmap in self.data.get("pmaps", []):
+            details = pmap.get("active_pmapv_details") or {}
+            pmapv = details.get("active_pmapv") or {}
+            pmap_id = pmapv.get("pmap_id")
+            if not pmap_id:
+                continue
+            names: dict[str, str] = {}
+            for region in details.get("regions") or []:
+                if not isinstance(region, dict):
+                    continue
+                # Same two-key divergence the active-map read handles.
+                rid = str(region.get("region_id") or region.get("id") or "")
+                name = region.get("name") or ""
+                if rid and name:
+                    names[rid] = str(name)
+            if names:
+                result[str(pmap_id)] = names
+        return result
 
     @property
     def zones(self) -> list[dict[str, Any]]:
@@ -885,7 +1047,7 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if not zones_raw:
                 return []
 
-            def _zid(z: dict) -> str:
+            def _zid(z: dict[str, Any]) -> str:
                 return str(z.get("zone_id") or z.get("id") or "")
 
             return [
@@ -929,12 +1091,12 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Return the most recently fetched UMF data, or empty dict."""
         if not self.data:
             return {}
-        return self.data.get("umf", {})
+        return dict(self.data.get("umf", {}))
 
     @property
     def keepout_zones(self) -> list[dict[str, Any]]:
         """Return keep-out zones from the active UMF floor plan."""
-        return self.umf_data.get("keepoutzones", [])
+        return list(self.umf_data.get("keepoutzones", []))
 
     @property
     def region_suggestions(self) -> list[dict[str, Any]]:
@@ -945,7 +1107,7 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         MISSIONSTORE_FIELD_REGISTRY.md) — reliability across many pmaps
         beyond that one sample is unconfirmed, hence the conservative
         score-gating in sensor.py's id_to_display_name()."""
-        return self.umf_data.get("region_suggestions", [])
+        return list(self.umf_data.get("region_suggestions", []))
 
     @property
     def observed_zone_centroids(self) -> list[dict[str, Any]]:
@@ -963,7 +1125,7 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return centroids
 
     async def _fetch_active_umf(
-        self, pmaps: list[dict]
+        self, pmaps: list[dict[str, Any]]
     ) -> dict[str, Any] | None:
         """Fetch UMF floor plan for the active pmap.
 

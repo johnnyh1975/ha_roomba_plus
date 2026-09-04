@@ -44,11 +44,11 @@ def _make_entry(mission_store=None, maintenance_store=None):
     data = MagicMock()
     data.mission_store = mission_store or MissionStore()
     data.maintenance_store = maintenance_store or MaintenanceStore()
-    data.consecutive_declining_speed = 0
-    data.consecutive_battery_warn = 0
+    # Only the two fields that are actually read remain here. Four
+    # siblings were removed with the F6a/F6b scaffolding -- the
+    # fixture kept setting them long after nothing consumed them,
+    # and MagicMock accepted every one without complaint.
     data.cleaning_speed_trend_value = "stable"
-    data.dirt_density_rising = False
-    data.recharge_fraction_value = 5.0
     data.battery_retention_value = 95.0
     data.roomba_reported_state = MagicMock(return_value={"bbrun": {"hr": 100}})
     entry.runtime_data = data
@@ -2159,20 +2159,46 @@ class TestMakeMapUpdatingCallback:
             }
         }
 
-    def test_extracts_bit_64_and_schedules_check(self):
+    def test_wire_67_means_the_map_is_updating(self):
+        """CORRECTED: notReady is a scalar index, not a bitmask.
+
+        This used to feed 64 and assert "bit 64 set". The app decodes
+        notReady as an index into a readiness enum -- wire 67 maps to
+        `DownloadingMap`, which is where the 64 was inferred from, since
+        `67 & 64` is true.
+
+        So was `64 & 64`, and `65`, `66`, `68`, `69`, `70`, `71`: eight
+        unrelated states told the user to wait for a map update.
+        """
         from custom_components.roomba_plus.callbacks import make_map_updating_callback
 
         hass = MagicMock()
         entry = MagicMock()
         cb = make_map_updating_callback(hass, entry)
 
-        cb(self._msg(64))  # bit 64 set
+        cb(self._msg(67))
 
         assert hass.loop.call_soon_threadsafe.call_count == 1
         args = hass.loop.call_soon_threadsafe.call_args[0]
         assert args[1] is hass
         assert args[2] is entry
         assert args[3] is True
+
+    def test_states_that_merely_share_bit_64_do_not_count(self):
+        """The whole point of the correction. Every one of these used to
+        raise "the robot is updating its Smart Map" at a user who could
+        do nothing about it."""
+        from custom_components.roomba_plus.callbacks import make_map_updating_callback
+
+        for wire, meaning in ((64, "FleetDisabled"), (65, "SubscriptionExpired"),
+                              (66, "DeadNavigationBoard"), (69, "TankLeaking")):
+            hass = MagicMock()
+            cb = make_map_updating_callback(hass, MagicMock())
+
+            cb(self._msg(wire))
+
+            args = hass.loop.call_soon_threadsafe.call_args[0]
+            assert args[3] is False, f"wire {wire} ({meaning}) read as map-updating"
 
     def test_other_bits_without_64_means_not_updating(self):
         from custom_components.roomba_plus.callbacks import make_map_updating_callback
@@ -2848,3 +2874,43 @@ class TestCleanupRemovedRepairs:
             _REMOVED_REPAIR_TRANSLATION_KEYS,
         )
         assert len(_REMOVED_REPAIR_TRANSLATION_KEYS) == 20
+
+
+class TestDecodeNotReady:
+    """`cleanMissionStatus.notReady` as the iRobot Home app reads it:
+
+        mReadyState = jsonInt <= 10 ? values()[jsonInt] : values()[jsonInt - 3]
+
+    A scalar index into a 73-entry readiness enum, not a bitmask. This
+    project treated it as a mask for four releases.
+    """
+
+    def _decode(self, raw):
+        from custom_components.roomba_plus.const import decode_not_ready
+
+        return decode_not_ready(raw)
+
+    def test_values_up_to_ten_are_their_own_index(self):
+        for value in range(11):
+            assert self._decode(value) == value
+
+    def test_above_ten_the_offset_applies(self):
+        # Wire 25 and index 22 are the same state (MapVersionMisMatch).
+        assert self._decode(25) == 22
+        assert self._decode(67) == 64
+
+    def test_the_documented_collision_is_not_hidden(self):
+        """Wire 11, 12 and 13 land on 8, 9 and 10 -- and the app cannot
+        tell them apart either. Returned as the colliding index rather
+        than as an error, because that is what the robot's own app would
+        show."""
+        assert self._decode(11) == 8
+        assert self._decode(12) == 9
+        assert self._decode(13) == 10
+
+    def test_anything_that_is_not_a_count_yields_nothing(self):
+        """A robot reporting a string, or a fixture handing back a mock,
+        must not make a caller raise. A wrong refusal is worse than no
+        refusal."""
+        for raw in ("67", None, True, False, -1, 3.5, object()):
+            assert self._decode(raw) is None

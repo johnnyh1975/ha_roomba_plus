@@ -4,8 +4,9 @@ Merged by the v2.8.x test reorganisation from multiple version-named
 test files; see git history for provenance.
 """
 
-
 from __future__ import annotations
+
+
 
 
 
@@ -16,6 +17,7 @@ import sys
 import os
 import tests.conftest
 from custom_components.roomba_plus.sensor import _area_cleaned_today
+from custom_components.roomba_plus.const import ERROR_CODE_LABELS
 from custom_components.roomba_plus.sensor import SENSORS
 from custom_components.roomba_plus.mission_store import MissionStore
 import time as _time_mod
@@ -590,302 +592,7 @@ class TestVacuumMissionPhaseAttributes:
         assert "mission_id" in attrs
 
 
-class TestRecentCompletionRate:
-
-    def test_all_completed(self):
-        from custom_components.roomba_plus.sensor import _raw_completion_rate
-        records = [_rec(done="done")] * 4
-        assert _raw_completion_rate(records) == 100.0
-
-    def test_half_completed(self):
-        from custom_components.roomba_plus.sensor import _raw_completion_rate
-        records = [_rec(done="done")] * 2 + [_rec(done="stuck", pause_id=17)] * 2
-        assert _raw_completion_rate(records) == 50.0
-
-    def test_none_when_empty(self):
-        from custom_components.roomba_plus.sensor import _raw_completion_rate
-        assert _raw_completion_rate([]) is None
-
-    def test_rounded_to_one_decimal(self):
-        from custom_components.roomba_plus.sensor import _raw_completion_rate
-        # 2 of 3 = 66.666...% → 66.7
-        records = [_rec(done="done")] * 2 + [_rec(done="stuck")]
-        assert _raw_completion_rate(records) == 66.7
-
-    def test_zero_percent(self):
-        from custom_components.roomba_plus.sensor import _raw_completion_rate
-        records = [_rec(done="stuck")] * 3
-        assert _raw_completion_rate(records) == 0.0
-
-
-class TestRecentRecharges:
-
-    def test_sums_chrgs(self):
-        from custom_components.roomba_plus.sensor import _raw_recharges
-        records = [_rec(chrgs=2), _rec(chrgs=1), _rec(chrgs=0)]
-        assert _raw_recharges(records) == 3
-
-    def test_none_when_empty(self):
-        from custom_components.roomba_plus.sensor import _raw_recharges
-        assert _raw_recharges([]) is None
-
-    def test_zero_recharges(self):
-        from custom_components.roomba_plus.sensor import _raw_recharges
-        records = [_rec(chrgs=0)] * 5
-        assert _raw_recharges(records) == 0
-
-    def test_handles_missing_chrgs(self):
-        from custom_components.roomba_plus.sensor import _raw_recharges
-        records = [{"done": "done", "classified_result": "completed"}]
-        assert _raw_recharges(records) == 0
-
-
-class TestRecentEvacuations:
-
-    def test_sums_evacs(self):
-        from custom_components.roomba_plus.sensor import _raw_evacuations
-        records = [_rec(evacs=1), _rec(evacs=3), _rec(evacs=0)]
-        assert _raw_evacuations(records) == 4
-
-    def test_none_when_empty(self):
-        from custom_components.roomba_plus.sensor import _raw_evacuations
-        assert _raw_evacuations([]) is None
-
-    def test_zero_evacuations(self):
-        from custom_components.roomba_plus.sensor import _raw_evacuations
-        records = [_rec(evacs=0)] * 3
-        assert _raw_evacuations(records) == 0
-
-
-class TestRecentDirtEvents:
-
-    def test_sums_dirt(self):
-        from custom_components.roomba_plus.sensor import _raw_dirt_events
-        records = [_rec(dirt=5), _rec(dirt=10), _rec(dirt=2)]
-        assert _raw_dirt_events(records) == 17
-
-    def test_none_when_empty(self):
-        from custom_components.roomba_plus.sensor import _raw_dirt_events
-        assert _raw_dirt_events([]) is None
-
-    def test_zero_dirt(self):
-        from custom_components.roomba_plus.sensor import _raw_dirt_events
-        records = [_rec(dirt=0)] * 4
-        assert _raw_dirt_events(records) == 0
-
-
-class TestCloudLastErrorCode:
-
-    def test_returns_pause_id_from_first_error(self):
-        from custom_components.roomba_plus.sensor import _raw_cloud_last_error_code
-        records = [
-            _rec(done="done"),                          # completed — skip
-            _rec(done="stuck", pause_id=17),            # error_17 — match
-            _rec(done="stuck", pause_id=18),            # older error — not used
-        ]
-        assert _raw_cloud_last_error_code(records) == 17
-
-    def test_none_when_no_failed_missions(self):
-        from custom_components.roomba_plus.sensor import _raw_cloud_last_error_code
-        records = [_rec(done="done")] * 3
-        assert _raw_cloud_last_error_code(records) is None
-
-    def test_none_when_empty(self):
-        from custom_components.roomba_plus.sensor import _raw_cloud_last_error_code
-        assert _raw_cloud_last_error_code([]) is None
-
-    def test_stuck_with_pause_id_zero_returns_none(self):
-        """stuck + pauseId=0 → classified as 'stuck', no specific code."""
-        from custom_components.roomba_plus.sensor import _raw_cloud_last_error_code
-        records = [_rec(done="stuck", pause_id=0)]
-        # classified_result = "stuck", pause_id=0 → None
-        assert _raw_cloud_last_error_code(records) is None
-
-    def test_error_224_smart_map(self):
-        from custom_components.roomba_plus.sensor import _raw_cloud_last_error_code
-        records = [_rec(done="stuck", pause_id=224)]
-        assert _raw_cloud_last_error_code(records) == 224
-
-    def test_skips_cancelled_missions(self):
-        from custom_components.roomba_plus.sensor import _raw_cloud_last_error_code
-        records = [
-            _rec(done="cncl", done_raw="usrEnd"),       # cancelled_by_user — skip
-            _rec(done="cncl"),                           # cancelled — skip
-            _rec(done="stuck", pause_id=6),             # error_6 — match
-        ]
-        assert _raw_cloud_last_error_code(records) == 6
-
-
-class TestCloudLastErrorTime:
-
-    def test_returns_datetime_from_timestamp(self):
-        import datetime
-        from custom_components.roomba_plus.sensor import _raw_cloud_last_error_time
-        records = [_rec(done="stuck", pause_id=17, timestamp=1700000000)]
-        result = _raw_cloud_last_error_time(records)
-        assert result is not None
-        assert isinstance(result, datetime.datetime)
-        assert result.year == 2023
-        assert result.tzinfo == datetime.timezone.utc
-
-    def test_none_when_no_failed_missions(self):
-        from custom_components.roomba_plus.sensor import _raw_cloud_last_error_time
-        records = [_rec(done="done", timestamp=1700000000)] * 3
-        assert _raw_cloud_last_error_time(records) is None
-
-    def test_none_when_empty(self):
-        from custom_components.roomba_plus.sensor import _raw_cloud_last_error_time
-        assert _raw_cloud_last_error_time([]) is None
-
-    def test_uses_most_recent_error(self):
-        import datetime
-        from custom_components.roomba_plus.sensor import _raw_cloud_last_error_time
-        # Records newest-first — first error timestamp wins
-        records = [
-            _rec(done="stuck", pause_id=17, timestamp=1700010000),
-            _rec(done="stuck", pause_id=18, timestamp=1700000000),
-        ]
-        result = _raw_cloud_last_error_time(records)
-        expected = datetime.datetime.fromtimestamp(1700010000, tz=datetime.timezone.utc)
-        assert result == expected
-
-
-class TestCloudLastErrorAttrs:
-
-    def test_returns_catalogue_fields(self):
-        from custom_components.roomba_plus.sensor import _raw_cloud_last_error_attrs
-        records = [_rec(done="stuck", pause_id=17)]
-        attrs = _raw_cloud_last_error_attrs(records)
-        assert attrs["error_code"] == 17
-        assert attrs["source"] == "cloud_pauseId"
-        assert "label" in attrs
-        assert "description" in attrs
-        assert "action" in attrs
-
-    def test_empty_when_no_errors(self):
-        from custom_components.roomba_plus.sensor import _raw_cloud_last_error_attrs
-        records = [_rec(done="done")] * 3
-        assert _raw_cloud_last_error_attrs(records) == {}
-
-    def test_error_code_none_for_stuck_no_pause_id(self):
-        from custom_components.roomba_plus.sensor import _raw_cloud_last_error_attrs
-        records = [_rec(done="stuck", pause_id=0)]
-        attrs = _raw_cloud_last_error_attrs(records)
-        assert attrs.get("error_code") is None
-
-
-class TestRechargeMinutesRemainingHelper:
-    """_recharge_minutes_remaining: timestamp-first logic for all firmware."""
-
-    def _call(self, mission: dict, now_ts: int = 1780150000) -> int | None:
-        from custom_components.roomba_plus.sensor import _recharge_minutes_remaining
-        with _utcnow_returning(now_ts):
-            return _recharge_minutes_remaining(mission)
-
-    # ── i7 / lewis firmware path (Thonno's robot) ────────────────────────────
-    # rechrgM=0, rechrgTm set — this was already handled in v2.0.0.
-    # The freeze bug was caused by the missing periodic tick, not this function.
-
-    def test_lewis_computes_from_rechrgTm(self):
-        """i7 (lewis): rechrgM=0, rechrgTm set → compute remaining minutes."""
-        # rechrgTm=1780150205, now=1780150000 → 205 seconds → 3 minutes (rounded)
-        result = self._call({"rechrgM": 0, "rechrgTm": 1780150205}, now_ts=1780150000)
-        assert result == 3
-
-    def test_lewis_field_diagnostics_case(self):
-        """Exact values from Bogdana diagnostics (i755840) — 277s remaining → 5 min."""
-        result = self._call({"rechrgM": 0, "rechrgTm": 1780150205}, now_ts=1780149928)
-        assert result == 5
-
-    def test_lewis_returns_none_when_rechrgTm_in_past(self):
-        """rechrgTm expired → recharge done → None."""
-        result = self._call({"rechrgM": 0, "rechrgTm": 1780149000}, now_ts=1780150000)
-        assert result is None
-
-    def test_lewis_returns_minimum_one_minute(self):
-        """< 30 seconds remaining rounds to 1 min, not 0."""
-        result = self._call({"rechrgM": 0, "rechrgTm": 1780150020}, now_ts=1780150000)
-        assert result == 1
-
-    def test_lewis_returns_none_when_rechrgTm_zero(self):
-        assert self._call({"rechrgM": 0, "rechrgTm": 0}) is None
-
-    # ── 900-series / rechrgTm-priority fix ───────────────────────────────────
-    # On 900/980-series, rechrgM is a static snapshot; rechrgTm is authoritative.
-    # The old code returned rechrgM directly, which never decremented.
-
-    def test_900_prefers_rechrgTm_over_static_rechrgM(self):
-        """900-series: rechrgTm is preferred; static rechrgM is ignored."""
-        # rechrgTm=1780150600, now=1780150000 → 600s → 10 min
-        # Old code would have returned rechrgM=78 (static, wrong)
-        result = self._call({"rechrgM": 78, "rechrgTm": 1780150600}, now_ts=1780150000)
-        assert result == 10
-
-    def test_900_series_value_decrements_over_time(self):
-        """Demonstrate that rechrgTm-based value decrements, rechrgM-based would not."""
-        recharge_end_ts = 1780150000 + 78 * 60  # end = now + 78 min
-        # At t=0: both approaches agree
-        result_t0 = self._call(
-            {"rechrgM": 78, "rechrgTm": recharge_end_ts}, now_ts=1780150000
-        )
-        assert result_t0 == 78
-        # At t+30min: rechrgTm gives 48, old static rechrgM would give 78 (frozen)
-        result_t30 = self._call(
-            {"rechrgM": 78, "rechrgTm": recharge_end_ts},
-            now_ts=1780150000 + 30 * 60,
-        )
-        assert result_t30 == 48  # correctly decremented
-
-    # ── Fallback: very old firmware (rechrgTm absent) ─────────────────────────
-
-    def test_fallback_to_rechrgM_when_rechrgTm_zero(self):
-        """rechrgTm absent / zero → fall back to rechrgM (old firmware)."""
-        result = self._call({"rechrgM": 15, "rechrgTm": 0})
-        assert result == 15
-
-    def test_both_zero_returns_none(self):
-        assert self._call({"rechrgM": 0, "rechrgTm": 0}) is None
-
-    def test_missing_fields(self):
-        assert self._call({}) is None
-
-    def test_none_values(self):
-        assert self._call({"rechrgM": None, "rechrgTm": None}) is None
-
-
-class TestExpireMinutesRemainingHelper:
-    """_expire_minutes_remaining: same timestamp-first logic."""
-
-    def _call(self, mission: dict, now_ts: int = 1780150000) -> int | None:
-        from custom_components.roomba_plus.sensor import _expire_minutes_remaining
-        with _utcnow_returning(now_ts):
-            return _expire_minutes_remaining(mission)
-
-    def test_prefers_expireTm_over_expireM(self):
-        result = self._call({"expireM": 30, "expireTm": 1780150600}, now_ts=1780150000)
-        assert result == 10   # 600s → 10 min, not static expireM=30
-
-    def test_lewis_computes_from_expireTm(self):
-        result = self._call({"expireM": 0, "expireTm": 1780150482}, now_ts=1780150000)
-        assert result == 8   # 482s → 8 min
-
-    def test_lewis_field_diagnostics_case(self):
-        result = self._call({"expireM": 0, "expireTm": 1780150482}, now_ts=1780149928)
-        assert result == 9   # 554s → 9 min
-
-    def test_expired_returns_none(self):
-        result = self._call({"expireM": 30, "expireTm": 1780149000}, now_ts=1780150000)
-        assert result is None
-
-    def test_fallback_to_expireM_when_expireTm_zero(self):
-        result = self._call({"expireM": 30, "expireTm": 0})
-        assert result == 30
-
-    def test_both_zero_returns_none(self):
-        assert self._call({"expireM": 0, "expireTm": 0}) is None
-
-    def test_missing_fields(self):
-        assert self._call({}) is None
+# Moved to a module-specific test file (August 2026).
 
 
 class TestSensorDescriptionsUseHelpers:
@@ -990,81 +697,8 @@ class TestRoombaSensorPeriodicTick:
         assert sensor._unsub_tick is None
 
 
-class TestWifiFloor:
-    """Amendment 8d — wlBars is a 5-element histogram, not a time-series."""
-
-    def test_returns_lowest_nonempty_bucket(self):
-        # [0, 35, 65, 0, 0]: bucket 1 is lowest non-zero → floor = 1
-        records = [{"wlBars": [0, 35, 65, 0, 0]}]
-        assert _raw_wifi_floor(records) == 1
-
-    def test_bucket_zero_populated(self):
-        # [5, 30, 65, 0, 0]: bucket 0 has readings → floor = 0
-        records = [{"wlBars": [5, 30, 65, 0, 0]}]
-        assert _raw_wifi_floor(records) == 0
-
-    def test_all_strong_signal(self):
-        # [0, 0, 0, 40, 60]: only buckets 3/4 → floor = 3
-        records = [{"wlBars": [0, 0, 0, 40, 60]}]
-        assert _raw_wifi_floor(records) == 3
-
-    def test_returns_none_on_empty_list(self):
-        assert _raw_wifi_floor([]) is None
-
-    def test_returns_none_when_wlbars_none(self):
-        assert _raw_wifi_floor([{"wlBars": None}]) is None
-
-    def test_returns_none_when_all_zero_histogram(self):
-        assert _raw_wifi_floor([{"wlBars": [0, 0, 0, 0, 0]}]) is None
-
-    def test_skips_records_without_wlbars(self):
-        records = [{"sqft": 100}, {"wlBars": [0, 0, 70, 30, 0]}]
-        assert _raw_wifi_floor(records) == 2
-
-    def test_must_be_exactly_5_elements(self):
-        # Wrong length histogram — skipped
-        records = [{"wlBars": [70, 60, 80]}, {"wlBars": [0, 0, 0, 40, 60]}]
-        assert _raw_wifi_floor(records) == 3
-
-
-class TestWifiStability:
-    """Amendment 8d — weighted stdev of signal bucket distribution."""
-
-    def test_concentrated_is_low_stdev(self):
-        # All readings in bucket 3 → stdev ≈ 0
-        records = [{"wlBars": [0, 0, 0, 100, 0]}] * 3
-        val = _raw_wifi_stability(records)
-        assert val is not None and val < 0.1
-
-    def test_spread_is_high_stdev(self):
-        # Evenly spread across all 5 buckets → high stdev
-        records = [{"wlBars": [20, 20, 20, 20, 20]}] * 3
-        val = _raw_wifi_stability(records)
-        assert val is not None and val > 0.5
-
-    def test_returns_none_when_fewer_than_3_records(self):
-        records = [{"wlBars": [0, 35, 65, 0, 0]}] * 2
-        assert _raw_wifi_stability(records) is None
-
-    def test_returns_none_on_empty_list(self):
-        assert _raw_wifi_stability([]) is None
-
-    def test_skips_non_5element_histograms(self):
-        # 3-element arrays are invalid — should be skipped
-        records = [{"wlBars": [70, 60, 80]}, {"wlBars": [0, 0, 0, 40, 60]}] * 3
-        val = _raw_wifi_stability(records)
-        # Only the valid 5-element records contribute
-        assert val is not None
-
-    def test_result_is_float(self):
-        records = [{"wlBars": [0, 20, 60, 20, 0]}] * 3
-        result = _raw_wifi_stability(records)
-        assert isinstance(result, float)
-
-    def test_result_rounded_to_2_decimals(self):
-        records = [{"wlBars": [0, 20, 60, 20, 0]}] * 3
-        result = _raw_wifi_stability(records)
-        assert result == round(result, 2)
+# TestWifiFloor and TestWifiStability moved to test_sensor_helpers.py
+# (August 2026) -- the functions they test are defined there.
 
 
 class TestTotalCleanedAreaArchiveSource:
@@ -1138,7 +772,7 @@ class TestTotalCleanedAreaArchiveSource:
         entity = self._make_entity(archive, run_stats_sqft=1000)
 
         result = desc.value_fn(entity)
-        assert result == pytest.approx(92.9, abs=0.1)
+        assert result == pytest.approx(9290.3, abs=0.1)
 
     def test_uses_onboard_counter_when_no_archive_at_all(self):
         from custom_components.roomba_plus.sensor import SENSORS
@@ -1147,7 +781,7 @@ class TestTotalCleanedAreaArchiveSource:
         entity = self._make_entity(archive=None, run_stats_sqft=1000)
 
         result = desc.value_fn(entity)
-        assert result == pytest.approx(92.9, abs=0.1)
+        assert result == pytest.approx(9290.3, abs=0.1)
 
     def test_uses_onboard_counter_when_it_is_larger_than_archive_sum(self):
         """v2.9.0 — explicit user request: the raw onboard counter should
@@ -1163,11 +797,13 @@ class TestTotalCleanedAreaArchiveSource:
         desc = next(s for s in SENSORS if s.key == "total_cleaned_area")
 
         archive = self._make_archive(cumulative_sqft=200.0)  # ≈18.6 m² — smaller
-        entity = self._make_entity(archive, run_stats_sqft=1882)  # ≈174.8 m²
+        # ≈17 481 m² once scaled: `bbrun.sqft` counts in units of
+        # 100 ft², so the onboard counter dwarfs a small archive.
+        entity = self._make_entity(archive, run_stats_sqft=1882)
 
         result = desc.value_fn(entity)
-        assert result == pytest.approx(174.8, abs=0.1), (
-            "Onboard counter (174.8 m²) is larger than the archive's "
+        assert result == pytest.approx(17484.4, abs=0.1), (
+            "Onboard counter (17 484 m²) is larger than the archive's "
             "cumulative total (18.6 m²) and must win — never show a "
             "smaller number than either source independently supports"
         )
@@ -1179,11 +815,17 @@ class TestTotalCleanedAreaArchiveSource:
         from custom_components.roomba_plus.sensor import SENSORS
         desc = next(s for s in SENSORS if s.key == "total_cleaned_area")
 
-        archive = self._make_archive(cumulative_sqft=50_000.0)  # ≈4645 m²
-        entity = self._make_entity(archive, run_stats_sqft=1882)  # ≈174.8 m²
+        # ≈27 871 m². Raised from 50 000 ft² when `bbrun.sqft` gained
+        # its ×100 scaling: the onboard counter now reads 17 484 m²
+        # from the same 1882, so the archive has to clear that to
+        # still be the larger source this test is about.
+        archive = self._make_archive(cumulative_sqft=300_000.0)
+        # ≈17 481 m² once scaled: `bbrun.sqft` counts in units of
+        # 100 ft², so the onboard counter dwarfs a small archive.
+        entity = self._make_entity(archive, run_stats_sqft=1882)
 
         result = desc.value_fn(entity)
-        assert result == pytest.approx(4645.2, abs=1.0)
+        assert result == pytest.approx(27870.9, abs=1.0)
 
     def test_returns_none_when_neither_source_has_data(self):
         """Genuine 'no data anywhere' case (e.g. brand-new install before
@@ -1205,7 +847,7 @@ class TestTotalCleanedAreaArchiveSource:
         entity = self._make_entity(archive, run_stats_sqft=1882)
 
         attrs = desc.extra_attributes_fn(entity)
-        assert attrs["onboard_counter_m2"] == pytest.approx(174.8, abs=0.1)
+        assert attrs["onboard_counter_m2"] == pytest.approx(17484.4, abs=0.1)
         assert attrs["archived_mission_count"] == 5
 
     def test_extra_attributes_staleness_fields_present(self):
@@ -1224,257 +866,11 @@ class TestTotalCleanedAreaArchiveSource:
         assert attrs["onboard_counter_days_unchanged"] == 170.3
 
 
-class TestWifiQualityPct:
-    """v2.9.0 — replaces _raw_wifi_floor as RoombaWifiHealthSensor's primary
-    state. Weighted mean bucket index per mission (full histogram
-    distribution, not just whether the weakest bucket was ever touched),
-    averaged across records, scaled 0.0-4.0 to a genuine 0-100% percentage.
-    """
-
-    def test_all_strongest_bucket_is_100_percent(self):
-        # Every reading in bucket 4 (strongest) → weighted mean = 4.0 → 100%
-        records = [{"wlBars": [0, 0, 0, 0, 100]}]
-        assert _raw_wifi_quality_pct(records) == 100.0
-
-    def test_all_weakest_bucket_is_0_percent(self):
-        # Every reading in bucket 0 (weakest) → weighted mean = 0.0 → 0%
-        records = [{"wlBars": [100, 0, 0, 0, 0]}]
-        assert _raw_wifi_quality_pct(records) == 0.0
-
-    def test_middle_bucket_is_50_percent(self):
-        # All in bucket 2 (middle of 0-4) → weighted mean = 2.0 → 50%
-        records = [{"wlBars": [0, 0, 100, 0, 0]}]
-        assert _raw_wifi_quality_pct(records) == 50.0
-
-    def test_single_brief_dip_does_not_collapse_to_0_percent(self):
-        """The exact bug this fix addresses: a single brief dip into the
-        weakest bucket during an otherwise excellent connection must NOT
-        read as 0% — _raw_wifi_floor() would have returned 0 (bucket index)
-        here, which the old code mislabelled as a percentage."""
-        # Mostly strong signal (bucket 4), one weak reading (bucket 0).
-        records = [{"wlBars": [1, 0, 0, 0, 99]}]
-        val = _raw_wifi_quality_pct(records)
-        assert val is not None and val > 90.0, (
-            "A single brief weak-signal blip must not collapse the "
-            "percentage to near-zero — the weighted mean correctly "
-            "reflects that the connection was excellent almost the "
-            "entire time"
-        )
-
-    def test_averages_across_multiple_missions(self):
-        records = [
-            {"wlBars": [0, 0, 0, 0, 100]},  # mission 1: 100%
-            {"wlBars": [100, 0, 0, 0, 0]},  # mission 2: 0%
-        ]
-        # Average of per-mission weighted means: (4.0 + 0.0) / 2 = 2.0 -> 50%
-        assert _raw_wifi_quality_pct(records) == 50.0
-
-    def test_returns_none_on_empty_list(self):
-        assert _raw_wifi_quality_pct([]) is None
-
-    def test_returns_none_when_no_valid_histograms(self):
-        records = [{"wlBars": None}, {"wlBars": [70, 60, 80]}]  # invalid shapes
-        assert _raw_wifi_quality_pct(records) is None
-
-    def test_skips_non_5element_histograms_but_uses_valid_ones(self):
-        records = [
-            {"wlBars": [70, 60, 80]},          # invalid — skipped
-            {"wlBars": [0, 0, 0, 0, 100]},      # valid — 100%
-        ]
-        assert _raw_wifi_quality_pct(records) == 100.0
-
-    def test_skips_all_zero_histogram(self):
-        """A histogram present but summing to zero (no readings at all)
-        must be skipped, not treated as a 0% mission."""
-        records = [
-            {"wlBars": [0, 0, 0, 0, 0]},        # no data — skipped
-            {"wlBars": [0, 0, 0, 0, 100]},      # valid — 100%
-        ]
-        assert _raw_wifi_quality_pct(records) == 100.0
-
-    def test_result_is_rounded_to_1_decimal(self):
-        records = [{"wlBars": [10, 20, 30, 25, 15]}]
-        result = _raw_wifi_quality_pct(records)
-        assert result == round(result, 1)
-
-    def test_single_record_with_one_mission_minimum(self):
-        """Unlike stability (needs >=3 records), a single mission's
-        quality estimate is still meaningful and must not return None."""
-        records = [{"wlBars": [0, 0, 0, 0, 100]}]
-        assert _raw_wifi_quality_pct(records) is not None
+# TestWifiQualityPct and TestWifiHealthSensorUsesQualityPct moved to
+# test_sensor_cloud.py (August 2026).
 
 
-class TestWifiHealthSensorUsesQualityPct:
-    """RoombaWifiHealthSensor.native_value must use the new weighted-average
-    percentage, with the old floor-based diagnostic moved to an attribute."""
-
-    def test_native_value_uses_quality_pct_not_floor(self):
-        from custom_components.roomba_plus.sensor import RoombaWifiHealthSensor
-
-        coordinator = MagicMock()
-        # A single brief dip — floor would be 0, quality_pct should be high.
-        coordinator.raw_records = [{"wlBars": [1, 0, 0, 0, 99]}]
-
-        sensor = RoombaWifiHealthSensor.__new__(RoombaWifiHealthSensor)
-        sensor._coordinator = coordinator
-
-        val = sensor.native_value
-        assert val is not None and val > 90.0, (
-            "native_value must use the weighted-average quality percentage, "
-            "not the raw worst-bucket-touched floor value"
-        )
-
-    def test_weakest_bucket_observed_attribute_present(self):
-        from custom_components.roomba_plus.sensor import RoombaWifiHealthSensor
-
-        coordinator = MagicMock()
-        coordinator.raw_records = [{"wlBars": [1, 0, 0, 0, 99]}]
-
-        sensor = RoombaWifiHealthSensor.__new__(RoombaWifiHealthSensor)
-        sensor._coordinator = coordinator
-
-        attrs = sensor.extra_state_attributes
-        assert attrs.get("weakest_bucket_observed") == 0, (
-            "The original floor diagnostic must still be available as an "
-            "attribute, just not as the misleading primary percentage"
-        )
-
-    def test_stability_attribute_still_present(self):
-        from custom_components.roomba_plus.sensor import RoombaWifiHealthSensor
-
-        coordinator = MagicMock()
-        coordinator.raw_records = [{"wlBars": [0, 0, 0, 100, 0]}] * 3
-
-        sensor = RoombaWifiHealthSensor.__new__(RoombaWifiHealthSensor)
-        sensor._coordinator = coordinator
-
-        attrs = sensor.extra_state_attributes
-        assert "stability_pct" in attrs
-
-
-class TestMopCleanMode:
-    """v3.1.0 MOP-SENSOR-SLUG-FIX: lowercase slugs, was Capital-Case before."""
-
-    def test_level_1_is_dry(self):
-        e = _entity({"padWetness": {"disposable": 1}})
-        assert _mop_clean_mode(e) == "dry"
-
-    def test_level_2_is_wet(self):
-        e = _entity({"padWetness": {"disposable": 2}})
-        assert _mop_clean_mode(e) == "wet"
-
-    def test_level_3_is_wet(self):
-        e = _entity({"padWetness": {"reusable": 3}})
-        assert _mop_clean_mode(e) == "wet"
-
-    def test_missing_padwetness_is_unknown(self):
-        e = _entity({})
-        assert _mop_clean_mode(e) == "unknown"
-
-    def test_empty_dict_is_unknown(self):
-        e = _entity({"padWetness": {}})
-        assert _mop_clean_mode(e) == "unknown"
-
-    def test_sensor_description_in_sensors(self):
-        keys = [d.key for d in SENSORS]
-        assert "mop_clean_mode" in keys
-
-    def test_filter_fn_requires_padwetness(self):
-        desc = next(d for d in SENSORS if d.key == "mop_clean_mode")
-        assert desc.filter_fn({"padWetness": {}}) is True
-        assert desc.filter_fn({}) is False
-
-
-class TestMopTankStatus:
-    """v3.1.0 MOP-SENSOR-SLUG-FIX: lowercase underscore slugs, was
-    Capital-Case-with-spaces before (spaces were never valid as
-    translation_key state keys, this was a pre-existing hassfest violation)."""
-
-    def test_all_ok_is_ready(self):
-        e = _entity({"mopReady": {"tankPresent": True, "lidClosed": True, "fillRequired": False}})
-        assert _mop_tank_status(e) == "ready"
-
-    def test_fill_required(self):
-        e = _entity({"mopReady": {"tankPresent": True, "lidClosed": True, "fillRequired": True}})
-        assert _mop_tank_status(e) == "fill_tank"
-
-    def test_lid_open_takes_priority_over_fill(self):
-        e = _entity({"mopReady": {"tankPresent": True, "lidClosed": False, "fillRequired": True}})
-        assert _mop_tank_status(e) == "lid_open"
-
-    def test_tank_missing_highest_priority(self):
-        e = _entity({"mopReady": {"tankPresent": False, "lidClosed": False, "fillRequired": True}})
-        assert _mop_tank_status(e) == "tank_missing"
-
-    def test_missing_mopready_is_unknown(self):
-        e = _entity({})
-        assert _mop_tank_status(e) == "unknown"
-
-    def test_non_dict_mopready_is_unknown(self):
-        e = _entity({"mopReady": 1})
-        assert _mop_tank_status(e) == "unknown"
-
-    def test_sensor_description_in_sensors(self):
-        keys = [d.key for d in SENSORS]
-        assert "mop_tank_status" in keys
-
-    def test_filter_fn_requires_mopready(self):
-        desc = next(d for d in SENSORS if d.key == "mop_tank_status")
-        assert desc.filter_fn({"mopReady": {}}) is True
-        assert desc.filter_fn({}) is False
-
-
-class TestMopBehavior:
-    """v3.1.0 MOP-SENSOR-SLUG-FIX: lowercase underscore slugs, combination
-    modes join with "_" instead of the old " + " separator."""
-
-    def test_rank_15_no_mop(self):
-        e = _entity({"rankOverlap": 15})
-        assert _mop_behavior(e) == "no_mop"
-
-    def test_rank_67_standard(self):
-        e = _entity({"rankOverlap": 67})
-        assert _mop_behavior(e) == "standard"
-
-    def test_rank_85_deep(self):
-        e = _entity({"rankOverlap": 85})
-        assert _mop_behavior(e) == "deep"
-
-    def test_unknown_rank(self):
-        e = _entity({"rankOverlap": 99})
-        assert _mop_behavior(e) == "unknown"
-
-    def test_flag_combination_dry_only(self):
-        e = _entity({"padDryAllowed": 1, "padWashAllowed": 0, "padDirtyPause": 0})
-        assert _mop_behavior(e) == "dry"
-
-    def test_flag_combination_dirty_pause_plus_dry_plus_wash(self):
-        e = _entity({"padDirtyPause": 1, "padDryAllowed": 1, "padWashAllowed": 1})
-        assert _mop_behavior(e) == "dirty_pause_dry_wash"
-
-    def test_no_flags_is_unknown(self):
-        e = _entity({"padDryAllowed": 0, "padWashAllowed": 0})
-        assert _mop_behavior(e) == "unknown"
-
-    def test_rankOverlap_takes_precedence_over_flags(self):
-        e = _entity({"rankOverlap": 25, "padDryAllowed": 1})
-        assert _mop_behavior(e) == "extended"
-
-    def test_sensor_description_in_sensors(self):
-        keys = [d.key for d in SENSORS]
-        assert "mop_ars_behavior" in keys
-
-    def test_filter_fn_rankOverlap(self):
-        desc = next(d for d in SENSORS if d.key == "mop_ars_behavior")
-        assert desc.filter_fn({"rankOverlap": 67}) is True
-
-    def test_filter_fn_padDryAllowed(self):
-        desc = next(d for d in SENSORS if d.key == "mop_ars_behavior")
-        assert desc.filter_fn({"padDryAllowed": 1}) is True
-
-    def test_filter_fn_absent_for_vacuums(self):
-        desc = next(d for d in SENSORS if d.key == "mop_ars_behavior")
-        assert desc.filter_fn({"batPct": 85}) is False
+# Moved to test_sensor_helpers.py (August 2026).
 
 
 class TestStateClassFixes:
@@ -1537,52 +933,7 @@ class TestBatteryRetentionNiMHGuard:
         assert desc.filter_fn(state) is True
 
 
-class TestEstimatedBatteryEolNiMHGuard:
-    """estimated_battery_eol filter: only estCap presence matters (v2.5.0)."""
-
-    def _desc(self):
-        from custom_components.roomba_plus.sensor import SENSORS
-        return next(d for d in SENSORS if d.key == "estimated_battery_eol")
-
-    def test_lithium_surfaces(self):
-        desc = self._desc()
-        assert desc.filter_fn({"bbchg3": {"estCap": 2000}, "batteryType": "lipo"}) is True
-
-    def test_nimh_string_now_surfaces(self):
-        """batteryType='nimh' no longer suppressed — filter only checks estCap."""
-        desc = self._desc()
-        assert desc.filter_fn({"bbchg3": {"estCap": 9720}, "batteryType": "nimh"}) is True
-
-    def test_no_battery_type_surfaces(self):
-        desc = self._desc()
-        assert desc.filter_fn({"bbchg3": {"estCap": 2000}}) is True
-
-    def test_980_exact_state_surfaces(self):
-        """980 exact state: sensor now surfaces (batteryType is a part number, not 'nimh')."""
-        desc = self._desc()
-        state = {
-            "bbchg3": {"estCap": 9720, "nLithChrg": 290, "nNimhChrg": 19},
-            "batteryType": "F12432712",
-        }
-        assert desc.filter_fn(state) is True
-
-    def test_zero_baseline_estcap_does_not_crash(self):
-        """_estimated_battery_eol must not ZeroDivisionError on baseline_estcap == 0.
-
-        A corrupted or hand-edited persisted store could hold
-        baseline_estcap: 0. The old `is None` guard would not catch it and the
-        current_pct division would raise ZeroDivisionError, taking down the
-        sensor. The hardened falsy-check returns None instead.
-        """
-        from unittest.mock import MagicMock
-        from custom_components.roomba_plus.sensor import _estimated_battery_eol
-
-        entity = MagicMock()
-        store = MagicMock()
-        store.baseline_estcap = 0  # corrupted persisted value
-        entity._config_entry.runtime_data.maintenance_store = store
-        # Must return None, not raise
-        assert _estimated_battery_eol(entity) is None
+# Moved to test_sensor_helpers.py (August 2026).
 
 
 class TestBatteryCapacityMahUnaffected:
@@ -1620,36 +971,9 @@ class TestRecentHistorySensorTranslationKey:
                 )
 
 
-class TestCloudRawSensorAvailable:
-    def test_unavailable_when_has_cloud_false(self):
-        """Sensor must be unavailable when cloud coordinator is not configured."""
-        sensor = _make_sensor(has_cloud=False, last_update_success=True)
-        assert sensor.available is False
-
-    def test_available_when_cloud_active_and_success(self):
-        """Sensor must be available when cloud is configured and last update succeeded."""
-        sensor = _make_sensor(
-            has_cloud=True,
-            last_update_success=True,
-            coordinator_data={"pmaps": []},
-        )
-        assert sensor.available is True
-
-    def test_unavailable_when_last_update_failed(self):
-        """Sensor must be unavailable when last coordinator update failed."""
-        sensor = _make_sensor(
-            has_cloud=True,
-            last_update_success=False,
-            coordinator_data={"pmaps": []},
-        )
-        assert sensor.available is False
-
-    def test_unavailable_when_coordinator_data_none(self):
-        """Sensor must be unavailable when coordinator has not yet fetched data."""
-        # Pass coordinator_data=None but we need to set it explicitly on the mock
-        sensor = _make_sensor(has_cloud=True, last_update_success=True)
-        sensor._coordinator.data = None
-        assert sensor.available is False
+# TestCloudRawSensorAvailable moved to test_sensor_cloud.py (August
+# 2026). The two classes that followed it there -- CompletionRate and
+# LastMissionTeamId -- stay: they test sensor_helpers and sensor_core.
 
 
 class TestCompletionRateStuckAndResumed:
@@ -1677,115 +1001,7 @@ class TestCompletionRateStuckAndResumed:
         assert self._rate([]) is None
 
 
-class TestLastMissionTeamId:
-    """v3.2.0 TEAM-INDICATOR — _last_mission_team_id reads team_id off the
-    most recent mission record, None-safe when absent or no history yet."""
-
-    def _team_id(self, latest):
-        from custom_components.roomba_plus.sensor import _last_mission_team_id
-
-        class _FakeStore:
-            def latest(self):
-                return latest
-
-        return _last_mission_team_id(_FakeStore())
-
-    def test_returns_team_id_when_present(self):
-        assert self._team_id({"id": "m_1", "team_id": "IplhZn-R"}) == "IplhZn-R"
-
-    def test_returns_none_when_team_id_absent_from_record(self):
-        assert self._team_id({"id": "m_1"}) is None
-
-    def test_returns_none_when_no_mission_history(self):
-        assert self._team_id(None) is None
-
-
-class TestCleaningPerformanceSensor:
-
-    def test_returns_none_without_records(self):
-        s = _make_sensor_v270_consolidated_sensors(RoombaCleaningPerformanceSensor, records=[])
-        assert s.native_value is None
-
-    def test_returns_completion_rate_with_records(self):
-        records = [
-            {"done": "done", "sqft": 300, "runM": 40},
-            {"done": "done", "sqft": 280, "runM": 38},
-            {"done": "hmPostMsn"},
-        ]
-        s = _make_sensor_v270_consolidated_sensors(RoombaCleaningPerformanceSensor, records=records)
-        val = s.native_value
-        assert val is not None
-        assert isinstance(val, float)
-        assert 0 <= val <= 100
-
-    def test_attributes_include_trend(self):
-        # Need ≥6 records for trend to be non-unknown
-        records = [
-            {"done": "done", "sqft": 300, "runM": 40, "startTime": 1700000000 - i * 86400}
-            for i in range(10)
-        ]
-        s = _make_sensor_v270_consolidated_sensors(RoombaCleaningPerformanceSensor, records=records)
-        attrs = s.extra_state_attributes
-        # trend key should be present
-        assert "trend" in attrs
-        assert attrs["trend"] in ("improving", "stable", "declining", "unknown")
-
-    # test_f6a_check_not_rescheduled_when_trend_unchanged removed in v3.5.0:
-    # the performance_degradation Repair Issue it guarded was deleted (the
-    # cleaning_speed_trend sensor already exposes this signal). The sensor no
-    # longer schedules any repair-check side-effect from attribute reads.
-
-
-class TestCleaningAnalytics30dSensor:
-
-    def test_returns_none_without_runtime_stats(self):
-        s = _make_sensor_v270_consolidated_sensors(RoombaCleaningAnalytics30dSensor, data={})
-        assert s.native_value is None
-
-    def test_returns_area_m2_from_runtime_stats(self):
-        data = {"runtimeStats": {"sqft": 10764, "hr": 5, "min": 30}}
-        s = _make_sensor_v270_consolidated_sensors(RoombaCleaningAnalytics30dSensor, data=data)
-        val = s.native_value
-        assert val is not None
-        assert isinstance(val, float)
-        # 10764 sqft × 0.09290304 ≈ 1000.5 m²
-        assert 990 < val < 1010
-
-    def test_attributes_include_time_h(self):
-        data = {"runtimeStats": {"sqft": 5000, "hr": 3, "min": 0}}
-        s = _make_sensor_v270_consolidated_sensors(RoombaCleaningAnalytics30dSensor, data=data)
-        attrs = s.extra_state_attributes
-        assert "time_h" in attrs
-        assert attrs["time_h"] == 3.0
-
-
-class TestWifiHealthSensor:
-
-    def test_returns_none_without_records(self):
-        s = _make_sensor_v270_consolidated_sensors(RoombaWifiHealthSensor, records=[])
-        assert s.native_value is None
-
-    def test_returns_floor_pct_with_wl_bars(self):
-        # wlBars histogram: index 0=weakest, 4=strongest
-        records = [
-            {"wlBars": [0, 10, 60, 30, 0]},
-            {"wlBars": [0, 5,  70, 25, 0]},
-        ]
-        s = _make_sensor_v270_consolidated_sensors(RoombaWifiHealthSensor, records=records)
-        val = s.native_value
-        # Should return something (floor signal % computation)
-        # If records lack valid wlBars, returns None — accept either
-        # With valid data it should return a numeric value
-        if val is not None:
-            assert isinstance(val, (int, float))
-
-    def test_attributes_include_stability(self):
-        records = [{"wlBars": [0, 0, 50, 50, 0]}, {"wlBars": [0, 0, 60, 40, 0]}]
-        s = _make_sensor_v270_consolidated_sensors(RoombaWifiHealthSensor, records=records)
-        attrs = s.extra_state_attributes
-        # stability_pct present when records have wlBars
-        # (may be absent if wlBars computation returns None)
-        assert isinstance(attrs, dict)
+# Moved to test_sensor_helpers.py (August 2026).
 
 
 class TestEventCounts30dSensor:
@@ -1816,39 +1032,33 @@ class TestEventCounts30dSensor:
         assert attrs.get("dirt_events") == 13
 
 
-class TestJobInitiatorLabels:
-    """v3.4.3 — found while building the demand_clean_alert blueprint:
-    JOB_INITIATOR_LABELS had no "demand" mapping, even though
-    DirtThresholdManager/callbacks.py's MS1 override genuinely writes
-    initiator="demand" — silently fell through to the "none" default,
-    making a demand-triggered mission indistinguishable from "no
-    initiator info at all" on this sensor."""
+class TestJobInitiatorStates:
+    """Demand must remain distinct from the no-initiator state."""
 
     def _make_entity(self, initiator: str) -> MagicMock:
         e = MagicMock()
         e.clean_mission_status = {"initiator": initiator}
         return e
 
-    def test_demand_has_its_own_label(self):
+    def test_demand_has_its_own_state(self):
         from custom_components.roomba_plus.sensor import SENSORS
         desc = next(d for d in SENSORS if d.key == "job_initiator")
         e = self._make_entity("demand")
-        assert desc.value_fn(e) == "Demand clean"
+        assert desc.value_fn(e) == "demand"
 
-    def test_demand_label_distinct_from_none_fallback(self):
-        """The actual regression: before the fix, both of these returned
-        the same string ("None"), making them indistinguishable."""
+    def test_demand_state_distinct_from_none_fallback(self):
+        """A demand-triggered mission must not be indistinguishable from none."""
         from custom_components.roomba_plus.sensor import SENSORS
         desc = next(d for d in SENSORS if d.key == "job_initiator")
         demand_result = desc.value_fn(self._make_entity("demand"))
         none_result = desc.value_fn(self._make_entity("none"))
         assert demand_result != none_result
 
-    def test_existing_labels_unaffected(self):
+    def test_existing_states_are_stable(self):
         from custom_components.roomba_plus.sensor import SENSORS
         desc = next(d for d in SENSORS if d.key == "job_initiator")
-        assert desc.value_fn(self._make_entity("schedule")) == "iRobot schedule"
-        assert desc.value_fn(self._make_entity("manual")) == "Robot"
+        assert desc.value_fn(self._make_entity("schedule")) == "schedule"
+        assert desc.value_fn(self._make_entity("manual")) == "manual"
 
 
 
@@ -1892,27 +1102,7 @@ class TestBatteryCycles:
         assert desc.value_fn(e) is None
 
 
-class TestBatteryAgeDays:
-    """_battery_age_days must parse mDate and return days since manufacture."""
-
-    def test_valid_mdate(self):
-        from custom_components.roomba_plus.sensor import _battery_age_days
-        e = MagicMock()
-        e.vacuum_state = {"batInfo": {"mDate": "2022-10-24"}}
-        days = _battery_age_days(e)
-        assert days is not None and days > 500  # battery is over 3 years old
-
-    def test_missing_batInfo_returns_none(self):
-        from custom_components.roomba_plus.sensor import _battery_age_days
-        e = MagicMock()
-        e.vacuum_state = {}
-        assert _battery_age_days(e) is None
-
-    def test_invalid_date_returns_none(self):
-        from custom_components.roomba_plus.sensor import _battery_age_days
-        e = MagicMock()
-        e.vacuum_state = {"batInfo": {"mDate": "bad-date"}}
-        assert _battery_age_days(e) is None
+# Moved to test_sensor_helpers.py (August 2026).
 
 
 class TestLifetimeCompletionRate:
@@ -1935,136 +1125,15 @@ class TestLifetimeCompletionRate:
         assert desc.value_fn(e) is None
 
 
-class TestChannelToBand:
-    def test_ch1_is_24ghz(self):
-        assert _channel_to_band(1) == "2.4 GHz"
-
-    def test_ch6_is_24ghz(self):
-        assert _channel_to_band(6) == "2.4 GHz"
-
-    def test_ch13_is_24ghz(self):
-        assert _channel_to_band(13) == "2.4 GHz"
-
-    def test_ch36_is_5ghz(self):
-        assert _channel_to_band(36) == "5 GHz"
-
-    def test_ch149_is_5ghz(self):
-        assert _channel_to_band(149) == "5 GHz"
-
-    def test_none_returns_none(self):
-        assert _channel_to_band(None) is None
+# TestChannelToBand, TestWifiLastChannelSensor and
+# TestWifiChannelStabilitySensor moved to test_sensor_cloud.py
+# (August 2026).
 
 
-class TestWifiLastChannelSensor:
-    def test_returns_latest_channel(self):
-        archive = _make_archive([
-            _derived(1, wifi_channel=6),
-            _derived(2, wifi_channel=36),   # newer
-        ])
-        sensor = _make_sensor_v280_bat_arch(RoombaWifiLastChannelSensor, archive)
-        # Archive is newest-first: derived[0] = nMssn=2, channel=36
-        assert sensor.native_value == 36
-
-    def test_returns_none_when_no_channel(self):
-        archive = _make_archive([_derived(1, wifi_channel=None)] * 5)
-        sensor = _make_sensor_v280_bat_arch(RoombaWifiLastChannelSensor, archive)
-        assert sensor.native_value is None
-
-    def test_returns_none_when_archive_none(self):
-        sensor = _make_sensor_v280_bat_arch(RoombaWifiLastChannelSensor, None)
-        assert sensor.native_value is None
-
-    def test_band_attribute_24ghz(self):
-        archive = _make_archive([_derived(i, wifi_channel=6) for i in range(1, 6)])
-        sensor = _make_sensor_v280_bat_arch(RoombaWifiLastChannelSensor, archive)
-        attrs = sensor.extra_state_attributes
-        assert attrs.get("band") == "2.4 GHz"
-
-    def test_band_attribute_5ghz(self):
-        archive = _make_archive([_derived(i, wifi_channel=36) for i in range(1, 6)])
-        sensor = _make_sensor_v280_bat_arch(RoombaWifiLastChannelSensor, archive)
-        attrs = sensor.extra_state_attributes
-        assert attrs.get("band") == "5 GHz"
-
-    def test_unavailable_below_5_records(self):
-        archive = _make_archive([_derived(1, wifi_channel=6)])
-        assert archive.record_count == 1
-        sensor = _make_sensor_v280_bat_arch(RoombaWifiLastChannelSensor, archive)
-        # _ArchiveSensor.available requires record_count >= 5
-        assert sensor._archive.record_count < 5
-
-
-class TestWifiChannelStabilitySensor:
-    def test_100pct_when_all_same(self):
-        archive = _make_archive([_derived(i, wifi_channel=6) for i in range(1, 11)])
-        sensor = _make_sensor_v280_bat_arch(RoombaWifiChannelStabilitySensor, archive)
-        assert sensor.native_value == 100.0
-
-    def test_partial_stability(self):
-        # 8 on ch6, 2 on ch36 → 80%
-        records = (
-            [_derived(i, wifi_channel=6) for i in range(1, 9)] +
-            [_derived(i, wifi_channel=36) for i in range(9, 11)]
-        )
-        archive = _make_archive(records)
-        sensor = _make_sensor_v280_bat_arch(RoombaWifiChannelStabilitySensor, archive)
-        assert sensor.native_value == 80.0
-
-    def test_returns_none_when_no_channels(self):
-        archive = _make_archive([_derived(i, wifi_channel=None) for i in range(1, 6)])
-        sensor = _make_sensor_v280_bat_arch(RoombaWifiChannelStabilitySensor, archive)
-        assert sensor.native_value is None
-
-    def test_attributes_dominant_channel(self):
-        records = [_derived(i, wifi_channel=6) for i in range(1, 9)] + \
-                  [_derived(i, wifi_channel=36) for i in range(9, 11)]
-        archive = _make_archive(records)
-        sensor = _make_sensor_v280_bat_arch(RoombaWifiChannelStabilitySensor, archive)
-        attrs = sensor.extra_state_attributes
-        assert attrs["dominant_channel"] == 6
-        assert attrs["dominant_channel_band"] == "2.4 GHz"
-        assert attrs["sample_count"] == 10
-
-
-class TestMissionsPerChargeSensor:
-    def test_high_when_no_recharges(self):
-        archive = _make_archive([_derived(i, recharge_count=0) for i in range(1, 11)])
-        sensor = _make_sensor_v280_bat_arch(RoombaMissionsPerChargeSensor, archive)
-        # 10 missions / (1 + 0) = 10.0
-        assert sensor.native_value == 10.0
-
-    def test_lower_with_recharges(self):
-        # 10 missions, 4 mid-mission recharges → 10 / (1 + 4) = 2.0
-        records = (
-            [_derived(i, recharge_count=1) for i in range(1, 5)] +
-            [_derived(i, recharge_count=0) for i in range(5, 11)]
-        )
-        archive = _make_archive(records)
-        sensor = _make_sensor_v280_bat_arch(RoombaMissionsPerChargeSensor, archive)
-        assert sensor.native_value == 2.0
-
-    def test_returns_none_when_no_recent(self):
-        # Records older than 30 days
-        records = [_derived(i, days_ago=60) for i in range(1, 6)]
-        archive = _make_archive(records)
-        sensor = _make_sensor_v280_bat_arch(RoombaMissionsPerChargeSensor, archive)
-        assert sensor.native_value is None
-
-    def test_attributes_breakdown(self):
-        records = (
-            [_derived(i, recharge_count=1) for i in range(1, 3)] +
-            [_derived(i, recharge_count=0) for i in range(3, 11)]
-        )
-        archive = _make_archive(records)
-        sensor = _make_sensor_v280_bat_arch(RoombaMissionsPerChargeSensor, archive)
-        attrs = sensor.extra_state_attributes
-        assert attrs["missions_30d"] == 10
-        assert attrs["mid_mission_recharges_30d"] == 2
-        assert attrs["single_charge_pct"] == 80.0
-
-    def test_returns_none_when_archive_none(self):
-        sensor = _make_sensor_v280_bat_arch(RoombaMissionsPerChargeSensor, None)
-        assert sensor.native_value is None
+# TestMissionsPerChargeSensor lives in test_sensor_cloud.py. A copy
+# stood here after a bad cut during the August 2026 reorg -- the same
+# five tests ran twice, in two files, which is the kind of duplicate
+# that quietly doubles a suite and proves nothing extra.
 
 
 class TestDockFirmwareVersion:
@@ -2205,55 +1274,9 @@ class TestNavOrientations:
         assert desc.entity_registry_enabled_default is False
 
 
-class TestParseNetinfoAddr:
-    def test_string_format_returned_as_is(self):
-        """i/s/j-series: dotted string → pass through unchanged."""
-        assert _parse_netinfo_addr("192.168.1.5") == "192.168.1.5"
-
-    def test_uint32_192_168_1_1(self):
-        """9-series: uint32 big-endian 0xC0A80101 = 192.168.1.1."""
-        # 192*2^24 + 168*2^16 + 1*2^8 + 1 = 3232235777
-        assert _parse_netinfo_addr(3232235777) == "192.168.1.1"
-
-    def test_uint32_10_0_0_1(self):
-        """10.0.0.1 = 0x0A000001 = 167772161."""
-        assert _parse_netinfo_addr(167772161) == "10.0.0.1"
-
-    def test_uint32_zero_is_0_0_0_0(self):
-        """uint32 0 → '0.0.0.0' (valid but unusual)."""
-        assert _parse_netinfo_addr(0) == "0.0.0.0"
-
-    def test_none_returns_none(self):
-        assert _parse_netinfo_addr(None) is None
-
-    def test_empty_string_returns_none(self):
-        assert _parse_netinfo_addr("") is None
-
-    def test_ip_address_sensor_uses_parser(self):
-        """ip_address sensor value_fn calls _parse_netinfo_addr for uint32."""
-        from unittest.mock import MagicMock
-        from custom_components.roomba_plus.entity import IRobotEntity
-        from custom_components.roomba_plus.sensor import SENSORS
-
-        desc = next(d for d in SENSORS if d.key == "ip_address")
-
-        e = object.__new__(IRobotEntity)
-        e._blid = "test"
-        e._roomba = MagicMock()
-        # Simulate 9-series uint32 addr
-        e.vacuum_state = {"netinfo": {"addr": 3232235777}}
-
-        assert desc.value_fn(e) == "192.168.1.1"
+# TestParseNetinfoAddr moved to test_sensor_helpers.py (August 2026).
 
 
-# ═══════════════════════════════════════════════════════════════════════
-# Merged from test_new_sensors.py (TEST-REORG, v2.9.1). Original module
-# docstring: 'Unit tests for the 7 new sensors added in the latest
-# iteration' — covers _phase_value, _ts_or_none, _mission_elapsed_value,
-# ERROR_CODE_LABELS, signal sensors (SNR/Noise/IP), FW-SENSOR (v2.8.3).
-# ═══════════════════════════════════════════════════════════════════════
-
-# ── Helper: minimal IRobotEntity mock ────────────────────────────────────────
 class _FakeEntity:
     def __init__(self, state: dict, vacuum_state: dict | None = None):
         self._state = state
@@ -2274,96 +1297,7 @@ class _FakeEntity:
 from custom_components.roomba_plus.sensor import _phase_value
 
 
-class TestPhaseValue:
-    def test_idle_when_charging_and_full(self):
-        e = _FakeEntity({"cleanMissionStatus": {"phase": "charge", "cycle": "none"}, "batPct": 100})
-        assert _phase_value(e) == "Idle"
-
-    def test_not_idle_when_charging_not_full(self):
-        e = _FakeEntity({"cleanMissionStatus": {"phase": "charge", "cycle": "none"}, "batPct": 80})
-        assert _phase_value(e) == "Charging"
-
-    def test_stopped_when_cycle_none_phase_stop(self):
-        e = _FakeEntity({"cleanMissionStatus": {"phase": "stop", "cycle": "none"}, "batPct": 50})
-        assert _phase_value(e) == "Stopped"
-
-    def test_running_normal(self):
-        e = _FakeEntity({"cleanMissionStatus": {"phase": "run", "cycle": "clean"}, "batPct": 90})
-        assert _phase_value(e) == "Running"
-
-    def test_stuck(self):
-        e = _FakeEntity({"cleanMissionStatus": {"phase": "stuck", "cycle": "clean"}, "batPct": 60})
-        assert _phase_value(e) == "Stuck"
-
-    def test_unknown_phase_returns_raw(self):
-        e = _FakeEntity({"cleanMissionStatus": {"phase": "mystery", "cycle": "none"}, "batPct": 50})
-        assert _phase_value(e) == "mystery"
-
-    def test_empty_phase_returns_unknown(self):
-        e = _FakeEntity({"cleanMissionStatus": {}, "batPct": 50})
-        assert _phase_value(e) == "Unknown"
-
-    def test_paused(self):
-        e = _FakeEntity({"cleanMissionStatus": {"phase": "pause", "cycle": "clean"}, "batPct": 70})
-        assert _phase_value(e) == "Paused"
-
-
-# ── _ts_or_none ───────────────────────────────────────────────────────────────
-
-from custom_components.roomba_plus.sensor import _ts_or_none
-
-
-class TestTsOrNone:
-    def test_none_input(self):
-        assert _ts_or_none(None) is None
-
-    def test_zero_input(self):
-        assert _ts_or_none(0) is None
-
-    def test_valid_timestamp(self):
-        result = _ts_or_none(1700000000)
-        assert result is not None
-        assert isinstance(result, datetime.datetime)
-
-    def test_negative_timestamp(self):
-        # Negative = before epoch — should still convert
-        result = _ts_or_none(-1)
-        assert result is not None
-
-
-# ── _mission_elapsed_value ────────────────────────────────────────────────────
-
-from custom_components.roomba_plus.sensor import _mission_elapsed_value
-import time
-
-
-class TestMissionElapsedValue:
-    def test_no_timestamp_returns_none(self):
-        e = _FakeEntity({"cleanMissionStatus": {}})
-        assert _mission_elapsed_value(e) is None
-
-    def test_zero_timestamp_returns_none(self):
-        e = _FakeEntity({"cleanMissionStatus": {"mssnStrtTm": 0}})
-        assert _mission_elapsed_value(e) is None
-
-    def test_recent_start_returns_positive(self):
-        ts = int(time.time()) - 300  # 5 minutes ago
-        e = _FakeEntity({"cleanMissionStatus": {"mssnStrtTm": ts}})
-        result = _mission_elapsed_value(e)
-        assert result is not None
-        assert result >= 4.9  # at least ~5 min
-        assert result < 10    # sanity check
-
-    def test_returns_float(self):
-        ts = int(time.time()) - 60
-        e = _FakeEntity({"cleanMissionStatus": {"mssnStrtTm": ts}})
-        result = _mission_elapsed_value(e)
-        assert isinstance(result, float)
-
-
-# ── ERROR_CODE_LABELS ─────────────────────────────────────────────────────────
-
-from custom_components.roomba_plus.const import ERROR_CODE_LABELS
+# Moved to test_sensor_helpers.py (August 2026).
 
 
 class TestErrorCodeLabels:
@@ -2371,7 +1305,11 @@ class TestErrorCodeLabels:
         assert ERROR_CODE_LABELS[0] == "None"
 
     def test_common_errors_present(self):
-        assert ERROR_CODE_LABELS[2] == "Main brushes stuck"
+        # CORRECTED: "Main brushes stuck" is the SKU override the app
+        # applies for the MARCONI prefix only; the default is "Debris
+        # extractors stuck". We were showing the special case to every
+        # robot, and this test pinned it.
+        assert ERROR_CODE_LABELS[2] == "Debris extractors stuck"
         assert ERROR_CODE_LABELS[6] == "Stuck near a cliff"
         assert ERROR_CODE_LABELS[14] == "Bin missing"
         assert ERROR_CODE_LABELS[36] == "Bin full"
@@ -2380,8 +1318,18 @@ class TestErrorCodeLabels:
         assert ERROR_CODE_LABELS[106] == "Battery too warm"
         assert ERROR_CODE_LABELS[119] == "Charging timeout"
 
-    def test_clean_base_error(self):
-        assert ERROR_CODE_LABELS[216] == "Charging base bag full"
+    def test_216_is_the_robots_own_bin(self):
+        """CORRECTED: the wrong part. Enum STARTING_ERROR_BIN_FULL, app
+        text "Bin full" -- the robot's bin, not the Clean Base bag. This
+        sent people to replace a bag when the bin needed emptying."""
+        assert ERROR_CODE_LABELS[216] == "Bin full"
+
+    def test_68_is_a_camera_fault_not_a_map_update(self):
+        """Neither the enum name (CAMERA_HARDWARE_FAILURE) nor the app's
+        text supports "Updating map", and the two agree with each other.
+        A user was told to wait while the robot reported a hardware
+        fault."""
+        assert ERROR_CODE_LABELS[68] == "Camera issue"
 
     def test_total_coverage(self):
         assert len(ERROR_CODE_LABELS) >= 70
@@ -2485,46 +1433,8 @@ class TestSignalSensors:
 
 # ── v2.8.3 — FW-SENSOR ────────────────────────────────────────────────────────
 
-class TestRoombaFirmwareVersionSensor:
-    """FW-SENSOR (v2.8.3) — RoombaFirmwareVersionSensor reads softwareVer."""
+# Moved to a module-specific test file (August 2026).
 
-    def _make_sensor(self, software_ver=None):
-        from custom_components.roomba_plus.sensor import RoombaFirmwareVersionSensor
-        reported = {}
-        if software_ver is not None:
-            reported["softwareVer"] = software_ver
-        s = RoombaFirmwareVersionSensor.__new__(RoombaFirmwareVersionSensor)
-        # Set vacuum_state directly — the cached dict set by IRobotEntity.__init__
-        s.vacuum_state = reported
-        # vacuum attribute needed for new_state_filter (via roomba_reported_state)
-        roomba = MagicMock()
-        roomba.master_state = {"state": {"reported": reported}}
-        s.vacuum = roomba
-        return s
-
-    def test_returns_version_string(self):
-        s = self._make_sensor("3.20.11")
-        assert s.native_value == "3.20.11"
-
-    def test_returns_none_when_absent(self):
-        s = self._make_sensor(None)
-        assert s.native_value is None
-
-    def test_state_filter_gates_on_softwarever(self):
-        s = self._make_sensor()
-        assert s.new_state_filter({"softwareVer": "3.20.11"}) is True
-        assert s.new_state_filter({"signal": {}}) is False
-
-    def test_translation_key(self):
-        from custom_components.roomba_plus.sensor import RoombaFirmwareVersionSensor
-        assert RoombaFirmwareVersionSensor.entity_description.translation_key == "firmware_version"
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# Merged from test_schedule_sensor.py (TEST-REORG, v2.9.1) — tests for
-# RoombaSensor._next_from_schedule2 / _next_from_schedule_v1, exercised
-# against the real methods via freezegun (pytest_freezer's freezer fixture).
-# ═══════════════════════════════════════════════════════════════════════
 
 def _sensor():
     """Minimal RoombaSensor instance — no HA/roombapy setup needed since
@@ -2720,589 +1630,20 @@ def _make_roomba():
     return r
 
 
-def _zone_select(regions=None, zones=None, pmap_id="map1", map_name="Ground floor"):
-    entry = _make_config_entry()
-    roomba = _make_roomba()
-    return CloudSmartZoneSelect(
-        roomba, "test_blid", entry,
-        pmap_id=pmap_id,
-        map_name=map_name,
-        regions=regions or [],
-        zones=zones or [],
-    )
+# The six CloudSmartZoneSelect classes that stood here moved to
+# test_select.py (August 2026) -- they tested `select.py` from a file
+# named for sensors. `_make_config_entry` and `_make_roomba` above stay:
+# tests in this file still use them.
 
 
-# ── CloudSmartZoneSelect — option list ────────────────────────────────────────
+# `_fav_button` and TestFavoriteButton moved to test_button.py
+# (August 2026) -- that file's header claimed button.py had zero
+# coverage, which was true only because its tests were filed here.
 
-class TestCloudSmartZoneSelectOptions:
-    def test_empty_when_no_regions_or_zones(self):
-        sel = _zone_select()
-        assert sel.options == []
 
-    def test_single_region(self):
-        sel = _zone_select(regions=[{"id": "3", "name": "Kitchen", "region_type": "kitchen"}])
-        assert sel.options == ["Kitchen"]
-
-    def test_multiple_regions(self):
-        sel = _zone_select(regions=[
-            {"id": "3", "name": "Kitchen", "region_type": "kitchen"},
-            {"id": "5", "name": "Hallway", "region_type": "hallway"},
-        ])
-        assert sel.options == ["Kitchen", "Hallway"]
-
-    def test_zones_appended_after_regions(self):
-        sel = _zone_select(
-            regions=[{"id": "3", "name": "Kitchen", "region_type": "kitchen"}],
-            zones=[{"id": "z1", "name": "Sofa area", "zone_type": "furniture"}],
-        )
-        assert sel.options == ["Kitchen", "Sofa area"]
-
-    def test_fallback_name_when_missing(self):
-        sel = _zone_select(regions=[{"id": "7"}])
-        assert sel.options == ["Zone 7"]
-
-    def test_fallback_name_empty_string(self):
-        sel = _zone_select(regions=[{"id": "9", "name": ""}])
-        assert sel.options == ["Zone 9"]
-
-    def test_available_when_regions_present(self):
-        sel = _zone_select(regions=[{"id": "1", "name": "Room"}])
-        assert sel.available is True
-
-    def test_not_available_when_empty(self):
-        sel = _zone_select()
-        assert sel.available is False
-
-
-# ── CloudSmartZoneSelect — current_option ─────────────────────────────────────
-
-class TestCloudSmartZoneSelectCurrentOption:
-    def test_defaults_to_first_option(self):
-        sel = _zone_select(regions=[
-            {"id": "3", "name": "Kitchen"},
-            {"id": "5", "name": "Hallway"},
-        ])
-        assert sel.current_option == "Kitchen"
-
-    def test_none_when_no_options(self):
-        sel = _zone_select()
-        assert sel.current_option is None
-
-    def test_selected_persists(self):
-        sel = _zone_select(regions=[
-            {"id": "3", "name": "Kitchen"},
-            {"id": "5", "name": "Hallway"},
-        ])
-        sel._selected = "Hallway"
-        assert sel.current_option == "Hallway"
-
-    def test_invalid_selection_resets_to_first(self):
-        sel = _zone_select(regions=[{"id": "3", "name": "Kitchen"}])
-        sel._selected = "Nonexistent"
-        assert sel.current_option == "Kitchen"
-
-
-# ── CloudSmartZoneSelect — selected_region_id ─────────────────────────────────
-
-class TestCloudSmartZoneSelectRegionId:
-    def test_returns_id_for_selected_name(self):
-        sel = _zone_select(regions=[
-            {"id": "3", "name": "Kitchen"},
-            {"id": "5", "name": "Hallway"},
-        ])
-        sel._selected = "Hallway"
-        assert sel.selected_region_id == "5"
-
-    def test_falls_back_to_first_when_no_selection(self):
-        sel = _zone_select(regions=[{"id": "3", "name": "Kitchen"}])
-        assert sel.selected_region_id == "3"
-
-    def test_none_when_no_regions(self):
-        sel = _zone_select()
-        assert sel.selected_region_id is None
-
-    def test_zone_id_returned_when_zone_selected(self):
-        sel = _zone_select(
-            regions=[{"id": "3", "name": "Kitchen"}],
-            zones=[{"id": "z1", "name": "Sofa area"}],
-        )
-        sel._selected = "Sofa area"
-        assert sel.selected_region_id == "z1"
-
-    def test_selected_pmap_info_contains_pmap_id(self):
-        sel = _zone_select(pmap_id="abc123", regions=[{"id": "1", "name": "R"}])
-        info = sel.selected_pmap_info
-        assert info["pmap_id"] == "abc123"
-
-    def test_selected_pmap_info_pmapv_empty(self):
-        """user_pmapv_id is intentionally empty — SmartZoneButton resolves it live."""
-        sel = _zone_select(regions=[{"id": "1", "name": "R"}])
-        assert sel.selected_pmap_info["user_pmapv_id"] == ""
-
-
-# ── CloudSmartZoneSelect — extra_state_attributes ─────────────────────────────
-
-class TestCloudSmartZoneSelectAttributes:
-    def test_attributes_keys(self):
-        sel = _zone_select(
-            pmap_id="map1", map_name="Ground floor",
-            regions=[{"id": "3", "name": "Kitchen"}],
-        )
-        attrs = sel.extra_state_attributes
-        assert attrs["pmap_id"] == "map1"
-        assert attrs["map_name"] == "Ground floor"
-        assert attrs["region_id"] == "3"
-        assert attrs["region_count"] == 1
-        assert attrs["zone_count"] == 0
-        assert attrs["source"] == "cloud"
-
-    def test_zone_count_correct(self):
-        sel = _zone_select(
-            regions=[{"id": "1", "name": "A"}],
-            zones=[{"id": "z1", "name": "B"}, {"id": "z2", "name": "C"}],
-        )
-        assert sel.extra_state_attributes["zone_count"] == 2
-
-    def test_unique_id_includes_pmap_id(self):
-        sel = _zone_select(pmap_id="xyz789", regions=[{"id": "1", "name": "R"}])
-        assert "xyz789" in sel._attr_unique_id
-
-    # ROOM-SIZE (v2.9.1) — region_areas_m2, sourced from UmfAligner.room_areas_m2.
-
-    def test_region_areas_m2_present_when_aligner_has_matching_rooms(self):
-        entry = _make_config_entry()
-        roomba = _make_roomba()
-        aligner = MagicMock()
-        aligner.room_areas_m2 = {"3": 20.0, "5": 12.0}
-        entry.runtime_data.umf_aligner = aligner
-        sel = CloudSmartZoneSelect(
-            roomba, "test_blid", entry,
-            pmap_id="map1", map_name="Ground floor",
-            regions=[{"id": "3", "name": "Kitchen"}, {"id": "5", "name": "Hallway"}],
-            zones=[],
-        )
-        attrs = sel.extra_state_attributes
-        assert attrs["region_areas_m2"] == {"Kitchen": 20.0, "Hallway": 12.0}
-
-    def test_region_areas_m2_absent_when_no_aligner(self):
-        sel = _zone_select(regions=[{"id": "3", "name": "Kitchen"}])
-        sel._config_entry.runtime_data.umf_aligner = None
-        attrs = sel.extra_state_attributes
-        assert "region_areas_m2" not in attrs
-
-    def test_region_areas_m2_omits_rooms_not_in_aligner(self):
-        """Floors UmfAligner wasn't built for (inactive pmap) get no entry
-        at all, not a zero — graceful degradation, same pattern as
-        region_icons/learning_percentage."""
-        entry = _make_config_entry()
-        roomba = _make_roomba()
-        aligner = MagicMock()
-        aligner.room_areas_m2 = {}  # this pmap's rooms aren't in the aligner
-        entry.runtime_data.umf_aligner = aligner
-        sel = CloudSmartZoneSelect(
-            roomba, "test_blid", entry,
-            pmap_id="other_floor", map_name="First floor",
-            regions=[{"id": "99", "name": "Attic"}],
-            zones=[],
-        )
-        attrs = sel.extra_state_attributes
-        assert "region_areas_m2" not in attrs
-
-    def test_region_areas_m2_survives_aligner_exception(self):
-        """A misbehaving mock/aligner must not break the rest of the attrs."""
-        entry = _make_config_entry()
-        roomba = _make_roomba()
-        aligner = MagicMock()
-        type(aligner).room_areas_m2 = property(lambda self: (_ for _ in ()).throw(RuntimeError))
-        entry.runtime_data.umf_aligner = aligner
-        sel = CloudSmartZoneSelect(
-            roomba, "test_blid", entry,
-            pmap_id="map1", map_name="Ground floor",
-            regions=[{"id": "3", "name": "Kitchen"}],
-            zones=[],
-        )
-        attrs = sel.extra_state_attributes
-        assert "region_areas_m2" not in attrs
-        assert attrs["pmap_id"] == "map1"  # rest of the attrs still intact
-
-
-class TestCloudSmartZoneSelectActiveInactive:
-    """Tests for active vs inactive map distinction."""
-
-    def test_active_map_enabled_by_default(self):
-        sel = _zone_select(regions=[{"id": "1", "name": "R"}])
-        # is_active_map defaults to True
-        assert sel._attr_entity_registry_enabled_default is True
-
-    def test_inactive_map_disabled_by_default(self):
-        entry = _make_config_entry()
-        roomba = _make_roomba()
-        sel = CloudSmartZoneSelect(
-            roomba, "test_blid", entry,
-            pmap_id="old_map", map_name="Ground floor",
-            regions=[{"id": "1", "name": "Kitchen"}],
-            zones=[],
-            is_active_map=False,
-        )
-        assert sel._attr_entity_registry_enabled_default is False
-
-    def test_inactive_map_name_gets_suffix(self):
-        entry = _make_config_entry()
-        roomba = _make_roomba()
-        sel = CloudSmartZoneSelect(
-            roomba, "test_blid", entry,
-            pmap_id="old_map", map_name="Ground floor",
-            regions=[{"id": "1", "name": "Kitchen"}],
-            zones=[],
-            is_active_map=False,
-        )
-        assert "(inactive)" in sel._map_name
-
-    def test_active_map_name_unchanged(self):
-        entry = _make_config_entry()
-        roomba = _make_roomba()
-        sel = CloudSmartZoneSelect(
-            roomba, "test_blid", entry,
-            pmap_id="active_map", map_name="Ground floor",
-            regions=[{"id": "1", "name": "Kitchen"}],
-            zones=[],
-            is_active_map=True,
-        )
-        assert sel._map_name == "Ground floor"
-
-    def test_is_active_map_in_attributes(self):
-        sel = _zone_select(regions=[{"id": "1", "name": "Kitchen"}])
-        assert "is_active_map" in sel.extra_state_attributes
-        assert sel.extra_state_attributes["is_active_map"] is True
-
-    def test_inactive_in_attributes(self):
-        entry = _make_config_entry()
-        roomba = _make_roomba()
-        sel = CloudSmartZoneSelect(
-            roomba, "test_blid", entry,
-            pmap_id="old_map", map_name="Ground floor",
-            regions=[{"id": "1", "name": "Kitchen"}],
-            zones=[],
-            is_active_map=False,
-        )
-        assert sel.extra_state_attributes["is_active_map"] is False
-
-    def test_is_active_map_flag_stored(self):
-        entry = _make_config_entry()
-        roomba = _make_roomba()
-        sel = CloudSmartZoneSelect(
-            roomba, "test_blid", entry,
-            pmap_id="p1", map_name="Home",
-            regions=[{"id": "1", "name": "R"}],
-            zones=[],
-            is_active_map=False,
-        )
-        assert sel._is_active_map is False
-
-
-# ── CloudSmartZoneSelect — no_state_filter ────────────────────────────────────
-
-class TestCloudSmartZoneSelectNoMqttUpdate:
-    def test_new_state_filter_always_false(self):
-        """Cloud entity must not react to MQTT messages."""
-        sel = _zone_select(regions=[{"id": "1", "name": "Room"}])
-        assert sel.new_state_filter({"cleanSchedule2": [{}]}) is False
-        assert sel.new_state_filter({"lastCommand": {}}) is False
-        assert sel.new_state_filter({}) is False
-
-
-# ── FavoriteButton ─────────────────────────────────────────────────────────────
-
-def _fav_button(favorite):
-    entry = _make_config_entry(has_cloud=True)
-    roomba = _make_roomba()
-    return FavoriteButton(roomba, "test_blid", entry, favorite)
-
-
-class TestFavoriteButton:
-    def test_name_from_favorite(self):
-        btn = _fav_button({"favorite_id": "f1", "name": "Morning clean", "commanddefs": []})
-        assert btn._attr_name == "Morning clean"
-
-    def test_unique_id_includes_favorite_id(self):
-        btn = _fav_button({"favorite_id": "fav42", "name": "X", "commanddefs": []})
-        assert "fav42" in btn._attr_unique_id
-
-    def test_visible_by_default_when_not_hidden(self):
-        btn = _fav_button({"favorite_id": "f1", "name": "X", "commanddefs": [], "hidden": False})
-        assert btn._attr_entity_registry_enabled_default is True
-
-    def test_disabled_by_default_when_hidden(self):
-        btn = _fav_button({"favorite_id": "f1", "name": "X", "commanddefs": [], "hidden": True})
-        assert btn._attr_entity_registry_enabled_default is False
-
-    def test_default_enabled_when_hidden_missing(self):
-        btn = _fav_button({"favorite_id": "f1", "name": "X", "commanddefs": []})
-        assert btn._attr_entity_registry_enabled_default is True
-
-    def test_inherits_irobot_entity(self):
-        """FavoriteButton must inherit IRobotEntity for correct device linkage."""
-        from custom_components.roomba_plus.entity import IRobotEntity
-        btn = _fav_button({"favorite_id": "f1", "name": "X", "commanddefs": []})
-        assert isinstance(btn, IRobotEntity)
-
-    def test_has_vacuum_attribute(self):
-        """IRobotEntity provides .vacuum — used in async_press instead of config_entry."""
-        btn = _fav_button({"favorite_id": "f1", "name": "X", "commanddefs": []})
-        assert hasattr(btn, "vacuum")
-
-    @pytest.mark.asyncio
-    async def test_press_sends_command(self):
-        entry = _make_config_entry(has_cloud=True)
-        fav = {
-            "favorite_id": "f1",
-            "name": "Morning",
-            "commanddefs": [{"command": "start", "pmap_id": "map1", "regions": [{"region_id": "3"}]}],
-        }
-        btn = FavoriteButton(_make_roomba(), "test_blid", entry, fav)
-        btn.hass = MagicMock()
-        btn.hass.async_add_executor_job = AsyncMock()
-
-        await btn.async_press()
-
-        btn.hass.async_add_executor_job.assert_called_once()
-        args = btn.hass.async_add_executor_job.call_args[0]
-        # args[0] is the bound method, args[1] is command, args[2] is params
-        assert args[1] == "start"
-        assert args[2]["pmap_id"] == "map1"
-
-    @pytest.mark.asyncio
-    async def test_press_no_commanddefs_logs_warning(self):
-        entry = _make_config_entry(has_cloud=True)
-        fav = {"favorite_id": "f1", "name": "Empty", "commanddefs": []}
-        btn = FavoriteButton(_make_roomba(), "test_blid", entry, fav)
-        btn.hass = MagicMock()
-        btn.hass.async_add_executor_job = AsyncMock()
-
-        with patch("custom_components.roomba_plus.button._LOGGER") as mock_log:
-            await btn.async_press()
-
-        mock_log.warning.assert_called_once()
-        btn.hass.async_add_executor_job.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_press_missing_commanddefs_key(self):
-        """commanddefs key absent — should not raise, should warn."""
-        entry = _make_config_entry(has_cloud=True)
-        fav = {"favorite_id": "f1", "name": "NoCmd"}
-        btn = FavoriteButton(_make_roomba(), "test_blid", entry, fav)
-        btn.hass = MagicMock()
-        btn.hass.async_add_executor_job = AsyncMock()
-
-        await btn.async_press()  # must not raise
-
-        btn.hass.async_add_executor_job.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_press_multi_entry_commanddefs_logs_warning_and_uses_first(self):
-        """Multi-entry commanddefs: warn about the dropped entries, still send entry 0."""
-        entry = _make_config_entry(has_cloud=True)
-        fav = {
-            "favorite_id": "f3",
-            "name": "Multi",
-            "commanddefs": [
-                {"command": "start", "pmap_id": "map1", "regions": [{"region_id": "1"}]},
-                {"command": "start", "pmap_id": "map1", "regions": [{"region_id": "2"}]},
-            ],
-        }
-        btn = FavoriteButton(_make_roomba(), "test_blid", entry, fav)
-        btn.hass = MagicMock()
-        btn.hass.async_add_executor_job = AsyncMock()
-
-        with patch("custom_components.roomba_plus.button._LOGGER") as mock_log:
-            await btn.async_press()
-
-        mock_log.warning.assert_called_once()
-        args = btn.hass.async_add_executor_job.call_args[0]
-        assert args[2]["regions"] == [{"region_id": "1"}]
-
-    @pytest.mark.asyncio
-    async def test_press_single_entry_commanddefs_no_warning(self):
-        """Single-entry commanddefs: no warning should fire."""
-        entry = _make_config_entry(has_cloud=True)
-        fav = {
-            "favorite_id": "f4",
-            "name": "Single",
-            "commanddefs": [{"command": "start", "pmap_id": "map1"}],
-        }
-        btn = FavoriteButton(_make_roomba(), "test_blid", entry, fav)
-        btn.hass = MagicMock()
-        btn.hass.async_add_executor_job = AsyncMock()
-
-        with patch("custom_components.roomba_plus.button._LOGGER") as mock_log:
-            await btn.async_press()
-
-        mock_log.warning.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_press_extracts_params_excluding_command_key(self):
-        """All keys except 'command' become params."""
-        entry = _make_config_entry(has_cloud=True)
-        fav = {
-            "favorite_id": "f2",
-            "name": "Kitchen",
-            "commanddefs": [{"command": "start", "pmap_id": "p1", "ordered": 1}],
-        }
-        btn = FavoriteButton(_make_roomba(), "test_blid", entry, fav)
-        btn.hass = MagicMock()
-        btn.hass.async_add_executor_job = AsyncMock()
-
-        await btn.async_press()
-
-        params = btn.hass.async_add_executor_job.call_args[0][2]
-        assert "command" not in params
-        assert params["pmap_id"] == "p1"
-        assert params["ordered"] == 1
-
-
-# ── select.py: cloud vs MQTT routing in async_setup_entry ─────────────────────
-
-class TestSelectSetupEntryRouting:
-    """Verify that async_setup_entry creates the right entity type."""
-
-    def _cloud_pmap(self):
-        return {
-            "active_pmapv_details": {
-                "active_pmapv": {"pmap_id": "map1"},
-                "map_header": {"name": "Home"},
-                "regions": [{"id": "3", "name": "Kitchen", "region_type": "kitchen"}],
-                "zones": [],
-            }
-        }
-
-    @pytest.mark.asyncio
-    async def test_cloud_active_creates_cloud_select(self):
-        from custom_components.roomba_plus import select as sel_mod
-        from custom_components.roomba_plus.select import CloudSmartZoneSelect, SmartZoneSelect
-        from custom_components.roomba_plus.models import MapCapability
-
-        state = {"pmaps": [{"map1": "v1"}]}
-        entry = _make_config_entry(has_cloud=True, pmaps=[self._cloud_pmap()])
-        entry.runtime_data.map_capability = MapCapability.SMART
-        # active_pmap_id matches the pmap in _cloud_pmap()
-        entry.runtime_data.cloud_coordinator.active_pmap_id = "map1"
-
-        roomba = _make_roomba()
-        roomba.master_state = {"state": {"reported": state}}
-        entry.runtime_data.roomba = roomba
-        entry.runtime_data.blid = "test_blid"
-        entry.runtime_data.zone_store = None
-
-        created = []
-        def sync_add(entities, **kw): created.extend(entities)
-
-        with patch.object(sel_mod, "roomba_reported_state", return_value=state):
-            with patch.object(sel_mod, "has_smart_map", return_value=True):
-                await sel_mod.async_setup_entry(MagicMock(), entry, sync_add)
-
-        cloud_selects = [e for e in created if isinstance(e, CloudSmartZoneSelect)]
-        mqtt_selects = [e for e in created if isinstance(e, SmartZoneSelect)]
-        assert len(cloud_selects) == 1, f"Expected 1 CloudSmartZoneSelect, got {created}"
-        assert len(mqtt_selects) == 0
-        # Active map must be enabled
-        assert cloud_selects[0]._attr_entity_registry_enabled_default is True
-        assert cloud_selects[0]._is_active_map is True
-
-    @pytest.mark.asyncio
-    async def test_inactive_pmap_creates_disabled_select(self):
-        from custom_components.roomba_plus import select as sel_mod
-        from custom_components.roomba_plus.select import CloudSmartZoneSelect
-        from custom_components.roomba_plus.models import MapCapability
-
-        active = self._cloud_pmap()  # pmap_id = "map1"
-        inactive = {
-            "active_pmapv_details": {
-                "active_pmapv": {"pmap_id": "old_map"},
-                "map_header": {"name": "Old Home"},
-                "regions": [{"id": "9", "name": "Garage", "region_type": "garage"}],
-                "zones": [],
-            }
-        }
-        state = {"pmaps": [{"map1": "v1"}, {"old_map": "v2"}]}
-        entry = _make_config_entry(has_cloud=True, pmaps=[active, inactive])
-        entry.runtime_data.map_capability = MapCapability.SMART
-        entry.runtime_data.cloud_coordinator.active_pmap_id = "map1"
-
-        roomba = _make_roomba()
-        roomba.master_state = {"state": {"reported": state}}
-        entry.runtime_data.roomba = roomba
-        entry.runtime_data.blid = "test_blid"
-        entry.runtime_data.zone_store = None
-
-        created = []
-        def sync_add(entities, **kw): created.extend(entities)
-
-        with patch.object(sel_mod, "roomba_reported_state", return_value=state):
-            with patch.object(sel_mod, "has_smart_map", return_value=True):
-                await sel_mod.async_setup_entry(MagicMock(), entry, sync_add)
-
-        cloud_selects = [e for e in created if isinstance(e, CloudSmartZoneSelect)]
-        assert len(cloud_selects) == 2
-
-        active_sel = next(e for e in cloud_selects if e._pmap_id == "map1")
-        inactive_sel = next(e for e in cloud_selects if e._pmap_id == "old_map")
-
-        assert active_sel._attr_entity_registry_enabled_default is True
-        assert inactive_sel._attr_entity_registry_enabled_default is False
-        assert "(inactive)" in inactive_sel._map_name
-
-    @pytest.mark.asyncio
-    async def test_no_cloud_creates_mqtt_select(self):
-        from custom_components.roomba_plus import select as sel_mod
-        from custom_components.roomba_plus.select import CloudSmartZoneSelect, SmartZoneSelect
-        from custom_components.roomba_plus.models import MapCapability
-
-        state = {"pmaps": [{"map1": "v1"}]}
-        entry = _make_config_entry(has_cloud=False)
-        entry.runtime_data.map_capability = MapCapability.SMART
-
-        roomba = _make_roomba()
-        roomba.master_state = {"state": {"reported": state}}
-        entry.runtime_data.roomba = roomba
-        entry.runtime_data.blid = "test_blid"
-        entry.runtime_data.zone_store = None
-
-        created = []
-        def sync_add(entities, **kw): created.extend(entities)
-
-        with patch.object(sel_mod, "roomba_reported_state", return_value=state):
-            with patch.object(sel_mod, "has_smart_map", return_value=True):
-                await sel_mod.async_setup_entry(MagicMock(), entry, sync_add)
-
-        cloud_selects = [e for e in created if isinstance(e, CloudSmartZoneSelect)]
-        mqtt_selects = [e for e in created if isinstance(e, SmartZoneSelect)]
-        assert len(cloud_selects) == 0
-        assert len(mqtt_selects) == 1, f"Expected 1 SmartZoneSelect, got {created}"
-
-    @pytest.mark.asyncio
-    async def test_cloud_active_suppresses_repair_issue(self):
-        """SmartZoneSelect._async_raise_naming_issue must not create issue when cloud active."""
-        from custom_components.roomba_plus.select import SmartZoneSelect
-        from homeassistant.helpers import issue_registry as ir
-
-        entry = _make_config_entry(has_cloud=True)
-        sel = SmartZoneSelect.__new__(SmartZoneSelect)
-        sel._config_entry = entry
-        sel._known_unlabelled = set()
-
-        original_create = ir.async_create_issue
-        calls = []
-        ir.async_create_issue = lambda *a, **kw: calls.append((a, kw))
-        try:
-            await sel._async_raise_naming_issue(["3", "5"])
-        finally:
-            ir.async_create_issue = original_create
-
-        assert calls == [], "async_create_issue should not be called when cloud is active"
-
-
-# ── CloudHistorySensor test helpers ──────────────────────────────────────────
-
+# TestSelectSetupEntryRouting moved to test_select.py (August 2026).
+# The four _make_history* helpers below are COPIED there rather than
+# moved: the cloud-history classes in this file still use them.
 
 def _make_history(sqft: int = 0, hr: int = 0, mn: int = 0, n_mssn: int = 0) -> dict:
     """Build a fake coordinator.data["mission_history"] dict for CloudHistorySensor tests."""
@@ -3343,261 +1684,13 @@ def _make_history_coordinator(history: dict):
 
 # ── 600-series cloud sensor creation (Q1 verification) ───────────────────────
 
-class TestMissionHistoryListResponse:
-    """The /missionhistory API returns a list, not a dict.
-
-    The coordinator must normalize this before storing. The value functions
-    must never receive a list — that was the crash in the bug report.
-    """
-
-    def test_list_response_does_not_crash_sqft(self):
-        """Passing a list to _mh_sqft_to_m2 must not raise AttributeError."""
-        history_list = _make_history_list(sqft=10764)
-        # Before the fix this would crash: 'list' has no attribute 'get'
-        # After the fix the coordinator extracts [0] before passing to value_fn.
-        # Test the value_fn directly to confirm it still handles a dict correctly.
-        history_dict = history_list[0]
-        assert _mh_sqft_to_m2(history_dict) == pytest.approx(1000.0, abs=1)
-
-    def test_list_response_does_not_crash_time(self):
-        history_list = _make_history_list(hr=2, mn=30)
-        assert _mh_total_minutes(history_list[0]) == 150
-
-    def test_list_response_does_not_crash_missions(self):
-        history_list = _make_history_list(n_mssn=99)
-        assert _mh_total_missions(history_list[0]) == 99
-
-    def test_coordinator_normalizes_list_to_dict(self):
-        """Coordinator must store history as a dict, never a list."""
-        cc = _make_history_coordinator(_make_history(sqft=500, hr=5, mn=0, n_mssn=20))
-        history = cc.data["mission_history"]
-        assert isinstance(history, dict), (
-            f"mission_history must be a dict, got {type(history).__name__}"
-        )
-
-    def test_value_fn_receives_dict_not_list(self):
-        """Simulate what native_value does — must not receive a list."""
-        cc = _make_history_coordinator(_make_history(sqft=500))
-        history = cc.data.get("mission_history", {})
-        # This is the exact call that was crashing:
-        result = _mh_sqft_to_m2(history)
-        assert result is not None
-        assert isinstance(result, float)
-
-    def test_empty_list_produces_empty_dict(self):
-        """Empty list from API must produce empty dict, not IndexError."""
-        cc = object.__new__(type('FakeCC', (), {
-            'data': {'mission_history': {}},
-            'last_update_success': True,
-        }))
-        # The coordinator normalizes [] → {} — value fns return None gracefully.
-        assert _mh_sqft_to_m2({}) is None
-        assert _mh_total_minutes({}) is None
-        assert _mh_total_missions({}) is None
 
 
-# ── Value functions — unit tests ───────────────────────────────────────────────
+# The cloud mission-history classes that stood here moved to
+# test_sensor_cloud.py (August 2026) -- nine classes, 46 tests. The
+# _make_history* helpers above stay: TestSensorSetupEntryCloud and
+# TestNextFromScheduleV1 still use them.
 
-class TestMhSqftToM2:
-    def test_converts_sqft_to_m2(self):
-        h = _make_history(sqft=10764)
-        result = _mh_sqft_to_m2(h)
-        assert result == pytest.approx(1000.0, abs=1)
-
-    def test_rounds_to_one_decimal(self):
-        h = _make_history(sqft=100)
-        result = _mh_sqft_to_m2(h)
-        assert result == round(100 / 10.764, 1)
-
-    def test_none_when_sqft_missing(self):
-        assert _mh_sqft_to_m2({}) is None
-
-    def test_none_when_runtimestats_missing(self):
-        assert _mh_sqft_to_m2({"bbmssn": {"nMssn": 5}}) is None
-
-    def test_none_when_runtimestats_is_none(self):
-        assert _mh_sqft_to_m2({"runtimeStats": None}) is None
-
-    def test_zero_sqft(self):
-        h = _make_history(sqft=0)
-        assert _mh_sqft_to_m2(h) == 0.0
-
-    def test_large_value(self):
-        h = _make_history(sqft=50000)
-        result = _mh_sqft_to_m2(h)
-        assert result == pytest.approx(4645.2, abs=1)
-
-
-class TestMhTotalMinutes:
-    def test_converts_hr_min_to_minutes(self):
-        h = _make_history(hr=2, mn=30)
-        assert _mh_total_minutes(h) == 150
-
-    def test_zero_hours(self):
-        h = _make_history(hr=0, mn=45)
-        assert _mh_total_minutes(h) == 45
-
-    def test_zero_minutes(self):
-        h = _make_history(hr=3, mn=0)
-        assert _mh_total_minutes(h) == 180
-
-    def test_none_when_hr_missing(self):
-        h = {"runtimeStats": {"min": 30}}
-        assert _mh_total_minutes(h) is None
-
-    def test_none_when_min_missing(self):
-        h = {"runtimeStats": {"hr": 2}}
-        assert _mh_total_minutes(h) is None
-
-    def test_none_when_runtimestats_missing(self):
-        assert _mh_total_minutes({}) is None
-
-    def test_none_when_runtimestats_none(self):
-        assert _mh_total_minutes({"runtimeStats": None}) is None
-
-    def test_large_values(self):
-        h = _make_history(hr=100, mn=59)
-        assert _mh_total_minutes(h) == 6059
-
-
-class TestMhTotalMissions:
-    def test_returns_nmssn(self):
-        h = _make_history(n_mssn=987)
-        assert _mh_total_missions(h) == 987
-
-    def test_none_when_bbmssn_missing(self):
-        assert _mh_total_missions({}) is None
-
-    def test_none_when_nmssn_missing(self):
-        assert _mh_total_missions({"bbmssn": {}}) is None
-
-    def test_none_when_bbmssn_none(self):
-        assert _mh_total_missions({"bbmssn": None}) is None
-
-    def test_zero_missions(self):
-        h = _make_history(n_mssn=0)
-        assert _mh_total_missions(h) == 0
-
-
-# ── CLOUD_HISTORY_SENSORS descriptions ────────────────────────────────────────
-
-class TestCloudHistorySensorsDescriptions:
-    """Verify the three CLOUD_HISTORY_SENSORS descriptions match current code.
-
-    Keys as of v2.1.x: recent_area_30d, recent_time_30d, lifetime_missions.
-    recent_area_30d and recent_time_30d deliberately have no translation_key —
-    name= alone locks the entity_id slug to English regardless of HA locale.
-    """
-
-    def test_three_sensors_defined(self):
-        assert len(CLOUD_HISTORY_SENSORS) == 3
-
-    def test_keys(self):
-        keys = {d.key for d in CLOUD_HISTORY_SENSORS}
-        assert keys == {"recent_area_30d", "recent_time_30d", "lifetime_missions"}
-
-    def test_lifetime_missions_has_translation_key(self):
-        """lifetime_missions uses translation_key for localised friendly name."""
-        missions = next(d for d in CLOUD_HISTORY_SENSORS if d.key == "lifetime_missions")
-        assert missions.translation_key == "lifetime_missions"
-
-    def test_area_and_time_have_translation_key(self):
-        """recent_area_30d and recent_time_30d must have translation_key set.
-
-        Step 23 (v2.2.0 card audit fix): translation_key locks the entity_id
-        slug to the key string, independent of locale. Without it, fresh installs
-        on non-English HA produce language-specific slugs
-        (e.g. sensor.*_gereinigte_flache_30_t on DE). The key, not the translated
-        name string, is used as the slug when translation_key is present.
-        """
-        for key in ("recent_area_30d", "recent_time_30d"):
-            desc = next(d for d in CLOUD_HISTORY_SENSORS if d.key == key)
-            assert desc.translation_key == key, (
-                f"{key}: translation_key must equal key to lock entity_id slug"
-            )
-
-    def test_area_unit_m2(self):
-        area = next(d for d in CLOUD_HISTORY_SENSORS if d.key == "recent_area_30d")
-        assert area.native_unit_of_measurement == "m²"
-
-    def test_time_unit_minutes(self):
-        from homeassistant.const import UnitOfTime
-        time = next(d for d in CLOUD_HISTORY_SENSORS if d.key == "recent_time_30d")
-        assert time.native_unit_of_measurement == UnitOfTime.MINUTES
-
-    def test_missions_unit(self):
-        missions = next(d for d in CLOUD_HISTORY_SENSORS if d.key == "lifetime_missions")
-        assert missions.native_unit_of_measurement == "missions"
-
-    def test_all_diagnostic(self):
-        from homeassistant.const import EntityCategory
-        for d in CLOUD_HISTORY_SENSORS:
-            assert d.entity_category == EntityCategory.DIAGNOSTIC
-
-
-# ── CloudHistorySensor entity ─────────────────────────────────────────────────
-
-class TestCloudHistorySensorNativeValue:
-    def test_recent_area_value(self):
-        sensor = _make_history_sensor("recent_area_30d", _make_history(sqft=10764))
-        assert sensor.native_value == pytest.approx(1000.0, abs=1)
-
-    def test_recent_time_value(self):
-        sensor = _make_history_sensor("recent_time_30d", _make_history(hr=1, mn=30))
-        assert sensor.native_value == 90
-
-    def test_lifetime_missions_value(self):
-        sensor = _make_history_sensor("lifetime_missions", _make_history(n_mssn=42))
-        assert sensor.native_value == 42
-
-    def test_none_when_no_history_data(self):
-        sensor = _make_history_sensor("recent_area_30d", {})
-        assert sensor.native_value is None
-
-    def test_none_when_coordinator_has_no_data(self):
-        sensor = _make_history_sensor("recent_area_30d", success=False)
-        assert sensor.native_value is None
-
-
-class TestCloudHistorySensorAvailability:
-    def test_available_when_coordinator_ok(self):
-        sensor = _make_history_sensor("recent_area_30d", _make_history(sqft=100))
-        assert sensor.available is True
-
-    def test_unavailable_when_last_update_failed(self):
-        sensor = _make_history_sensor("recent_area_30d", success=False)
-        assert sensor.available is False
-
-    def test_unavailable_when_data_none(self):
-        sensor = _make_history_sensor("recent_area_30d")
-        sensor._coordinator.data = None
-        assert sensor.available is False
-
-
-class TestCloudHistorySensorNoMqttUpdate:
-    def test_new_state_filter_always_false(self):
-        """Cloud sensor must not react to MQTT messages."""
-        sensor = _make_history_sensor("lifetime_missions", _make_history(n_mssn=10))
-        assert sensor.new_state_filter({"bbmssn": {"nMssn": 99}}) is False
-        assert sensor.new_state_filter({}) is False
-
-
-class TestCloudHistorySensorUniqueId:
-    def test_unique_id_contains_key(self):
-        sensor = _make_history_sensor("recent_area_30d", _make_history(sqft=100))
-        assert "recent_area_30d" in sensor._attr_unique_id
-
-    def test_unique_id_contains_blid(self):
-        sensor = _make_history_sensor("lifetime_missions", _make_history(n_mssn=5))
-        assert "test_blid" in sensor._attr_unique_id
-
-    def test_unique_ids_distinct(self):
-        s1 = _make_history_sensor("recent_area_30d", _make_history(sqft=100))
-        s2 = _make_history_sensor("recent_time_30d", _make_history(hr=1, mn=0))
-        assert s1._attr_unique_id != s2._attr_unique_id
-
-
-# ── async_setup_entry integration ─────────────────────────────────────────────
 
 class TestSensorSetupEntryCloud:
     """Verify async_setup_entry creates cloud sensors when has_cloud is True."""
@@ -3667,536 +1760,10 @@ class TestSensorSetupEntryCloud:
 # LAST-MISSION-SUMMARY (v3.1.0)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _make_last_mission_summary_sensor(mission_store=None, cloud_coordinator=None, umf_aligner=None):
-    """Return a RoombaLastMissionSummarySensor backed by the given store."""
-    from custom_components.roomba_plus.sensor import RoombaLastMissionSummarySensor
-    roomba = MagicMock()
-    roomba.master_state = {"state": {"reported": {}}}
-    entry = _make_entry(
-        mission_store=mission_store,
-        cloud_coordinator=cloud_coordinator,
-        umf_aligner=umf_aligner,
-    )
-    sensor = RoombaLastMissionSummarySensor.__new__(RoombaLastMissionSummarySensor)
-    sensor._roomba = roomba
-    sensor._blid = "test_blid"
-    sensor._entry = entry
-    sensor._attr_unique_id = "test_blid_last_mission_summary"
-    return sensor
+# The room-sensor classes and their helpers moved to
+# test_sensor_rooms.py (August 2026) -- five classes, 31 tests.
+# `_store_with` above stays: TestSensorSetupEntryCloud uses it.
 
-
-class TestLastMissionSummarySensor:
-    """LAST-MISSION-SUMMARY (v3.1.0) — sensor that exposes the latest mission record."""
-
-    def test_empty_store_returns_none(self):
-        """No records → native_value is None, all attributes are None."""
-        sensor = _make_last_mission_summary_sensor(mission_store=_store_with())
-        assert sensor.native_value is None
-        attrs = sensor.extra_state_attributes
-        assert attrs["result"] is None
-        assert attrs["duration_min"] is None
-        assert attrs["area_sqft"] is None
-        assert attrs["cleaned_rooms"] is None
-        assert attrs["room_coverage"] is None
-        assert attrs["started_at"] is None
-
-    def test_no_store_returns_none(self):
-        """MissionStore not initialised → native_value is None."""
-        sensor = _make_last_mission_summary_sensor(mission_store=None)
-        assert sensor.native_value is None
-        assert sensor.extra_state_attributes["result"] is None
-
-    def test_completed_mission_all_fields(self):
-        """Completed mission → native_value = 'completed', attributes populated.
-
-        v3.1.1 ROOM-COVERAGE-IN-SUMMARY: cleaned_rooms/room_coverage now come
-        from MissionStore.latest_cleaned_rooms()/latest_room_coverage() via
-        timeline.finEvents, not a literal "last_cleaned_rooms" record key
-        (which never actually exists on a real record — that was the bug
-        this fix corrected). Fixture below uses the same finEvents shape
-        test_mission_store.py's region-map tests use.
-        """
-        record = {
-            "result": "completed",
-            "duration_min": 45,
-            "area_sqft": 320.5,
-            "cleaning_passes": 1,
-            "battery_start_pct": 100,
-            "battery_end_pct": 72,
-            "recharges": 0,
-            "dirt_events": 3,
-            "evacuations": 1,
-            "error_code": None,
-            "initiator": "schedule",
-            "started_at": "2026-06-29T08:00:00",
-            "ended_at": "2026-06-29T08:45:00",
-            "timeline": {
-                "plan": {"upcoming": ["19", "21"]},
-                "finEvents": [
-                    {"type": "room", "room": {"rid": "19", "status": 0,
-                                               "area": 100, "totalArea": 80}},
-                    {"type": "room", "room": {"rid": "21", "status": 0,
-                                               "area": 120, "totalArea": 90}},
-                ],
-            },
-        }
-        cc = MagicMock()
-        cc.regions = [
-            {"id": "19", "name": "Kitchen"},
-            {"id": "21", "name": "Living Room"},
-        ]
-        sensor = _make_last_mission_summary_sensor(
-            mission_store=_store_with(record), cloud_coordinator=cc,
-        )
-
-        assert sensor.native_value == "completed"
-        attrs = sensor.extra_state_attributes
-        assert attrs["duration_min"] == 45
-        assert attrs["area_sqft"] == 320.5
-        assert attrs["cleaned_rooms"] == ["Kitchen", "Living Room"]
-        assert attrs["room_coverage"] == {"Kitchen": 0.8, "Living Room": 0.75}
-        assert attrs["battery_start_pct"] == 100
-        assert attrs["battery_end_pct"] == 72
-        assert attrs["dirt_events"] == 3
-        assert attrs["initiator"] == "schedule"
-        assert attrs["started_at"] == "2026-06-29T08:00:00"
-
-    def test_cleaned_rooms_and_coverage_none_without_region_map_or_umf(self):
-        """v3.1.1: no cloud_coordinator and no aligned umf_aligner →
-        cleaned_rooms/room_coverage stay None (no region source to resolve
-        room names — same gate as vacuum.py's attribute computation).
-        """
-        record = {
-            "result": "completed",
-            "timeline": {
-                "plan": {"upcoming": ["19"]},
-                "finEvents": [
-                    {"type": "room", "room": {"rid": "19", "status": 0,
-                                               "area": 100, "totalArea": 80}},
-                ],
-            },
-        }
-        sensor = _make_last_mission_summary_sensor(mission_store=_store_with(record))
-        attrs = sensor.extra_state_attributes
-        assert attrs["cleaned_rooms"] is None
-        assert attrs["room_coverage"] is None
-
-    def test_cleaned_rooms_and_coverage_use_umf_fallback(self):
-        """v3.1.1: EPHEMERAL robots without cloud use the aligned UmfAligner's
-        rid_to_name() as a fallback region source, same as vacuum.py.
-        """
-        record = {
-            "result": "completed",
-            "timeline": {
-                "plan": {"upcoming": ["5"]},
-                "finEvents": [
-                    {"type": "room", "room": {"rid": "5", "status": 0,
-                                               "area": 50, "totalArea": 40}},
-                ],
-            },
-        }
-        umf = MagicMock()
-        umf.aligned = True
-        umf.rid_to_name.return_value = {"5": "Hallway"}
-        sensor = _make_last_mission_summary_sensor(
-            mission_store=_store_with(record), umf_aligner=umf,
-        )
-
-        attrs = sensor.extra_state_attributes
-        assert attrs["cleaned_rooms"] == ["Hallway"]
-        assert attrs["room_coverage"] == {"Hallway": 0.8}
-
-    def test_error_mission_error_code_populated(self):
-        """Error mission → native_value = 'error', error_code present."""
-        record = {
-            "result": "error",
-            "error_code": 11,
-            "duration_min": 5,
-            "area_sqft": 0,
-        }
-        sensor = _make_last_mission_summary_sensor(mission_store=_store_with(record))
-        assert sensor.native_value == "error"
-        assert sensor.extra_state_attributes["error_code"] == 11
-
-    def test_returns_latest_record_not_first(self):
-        """With multiple records, native_value reflects the last (most recent) record."""
-        older = {"result": "cancelled", "duration_min": 10}
-        newer = {"result": "completed", "duration_min": 55}
-        sensor = _make_last_mission_summary_sensor(
-            mission_store=_store_with(older, newer)
-        )
-        assert sensor.native_value == "completed"
-        assert sensor.extra_state_attributes["duration_min"] == 55
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# ROOM-CLEANING-HISTORY (v3.1.0)
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _make_room_cleaning_history_sensor(mission_store=None):
-    """Return a RoombaRoomCleaningHistorySensor backed by the given store."""
-    from custom_components.roomba_plus.sensor import RoombaRoomCleaningHistorySensor
-    roomba = MagicMock()
-    roomba.master_state = {"state": {"reported": {}}}
-    entry = _make_entry(mission_store=mission_store)
-    sensor = RoombaRoomCleaningHistorySensor.__new__(RoombaRoomCleaningHistorySensor)
-    sensor._roomba = roomba
-    sensor._blid = "test_blid"
-    sensor._entry = entry
-    sensor._attr_unique_id = "test_blid_room_cleaning_history"
-    return sensor
-
-
-class TestRoomCleaningHistorySensor:
-    """ROOM-CLEANING-HISTORY (v3.1.0) — per-room last-clean timestamps."""
-
-    def test_empty_store_returns_zero(self):
-        """No records → native_value = 0, attributes = {}."""
-        sensor = _make_room_cleaning_history_sensor(mission_store=_store_with())
-        assert sensor.native_value == 0
-        assert sensor.extra_state_attributes == {}
-
-    def test_no_store_returns_zero(self):
-        """MissionStore not initialised → native_value = 0."""
-        sensor = _make_room_cleaning_history_sensor(mission_store=None)
-        assert sensor.native_value == 0
-        assert sensor.extra_state_attributes == {}
-
-    def test_single_mission_populates_rooms(self):
-        """Record with last_cleaned_rooms → each room gets ended_at timestamp."""
-        record = {
-            "last_cleaned_rooms": ["Kitchen", "Living Room"],
-            "ended_at": "2026-06-29T08:45:00",
-            "result": "completed",
-        }
-        sensor = _make_room_cleaning_history_sensor(mission_store=_store_with(record))
-        assert sensor.native_value == 2
-        attrs = sensor.extra_state_attributes
-        assert attrs["Kitchen"] == "2026-06-29T08:45:00"
-        assert attrs["Living Room"] == "2026-06-29T08:45:00"
-
-    def test_newest_record_wins_per_room(self):
-        """Multiple records — each room shows its most recent ended_at."""
-        older = {
-            "last_cleaned_rooms": ["Kitchen", "Hallway"],
-            "ended_at": "2026-06-27T09:00:00",
-            "result": "completed",
-        }
-        newer = {
-            "last_cleaned_rooms": ["Kitchen", "Living Room"],
-            "ended_at": "2026-06-29T08:45:00",
-            "result": "completed",
-        }
-        sensor = _make_room_cleaning_history_sensor(
-            mission_store=_store_with(older, newer)
-        )
-        attrs = sensor.extra_state_attributes
-        # Kitchen: newer record wins
-        assert attrs["Kitchen"] == "2026-06-29T08:45:00"
-        # Hallway: only in older record
-        assert attrs["Hallway"] == "2026-06-27T09:00:00"
-        # Living Room: only in newer record
-        assert attrs["Living Room"] == "2026-06-29T08:45:00"
-        assert sensor.native_value == 3
-
-    def test_record_without_rooms_is_skipped(self):
-        """Records lacking last_cleaned_rooms (whole-home missions) are skipped."""
-        whole_home = {
-            "last_cleaned_rooms": None,
-            "ended_at": "2026-06-28T10:00:00",
-            "result": "completed",
-        }
-        room_mission = {
-            "last_cleaned_rooms": ["Bedroom"],
-            "ended_at": "2026-06-29T08:00:00",
-            "result": "completed",
-        }
-        sensor = _make_room_cleaning_history_sensor(
-            mission_store=_store_with(whole_home, room_mission)
-        )
-        assert sensor.native_value == 1
-        assert "Bedroom" in sensor.extra_state_attributes
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# ROOM-SIZE / room_areas (v3.1.0)
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _make_room_areas_sensor(umf_aligner=None, regions=None):
-    """Return a RoombaRoomAreasSensor with the given aligner and cc.regions."""
-    from custom_components.roomba_plus.sensor import RoombaRoomAreasSensor
-    roomba = MagicMock()
-    roomba.master_state = {"state": {"reported": {}}}
-    entry = MagicMock()
-    rd = MagicMock()
-    cc = MagicMock()
-    cc.regions = regions or []
-    rd.umf_aligner = umf_aligner
-    rd.cloud_coordinator = cc if umf_aligner is not None else None
-    entry.runtime_data = rd
-    sensor = RoombaRoomAreasSensor.__new__(RoombaRoomAreasSensor)
-    sensor._roomba = roomba
-    sensor._blid = "test_blid"
-    sensor._entry = entry
-    sensor._attr_unique_id = "test_blid_room_areas"
-    return sensor
-
-
-class TestIdToDisplayName:
-    """v3.2.0 ROOM-TYPE-SUGGEST — _id_to_display_name(), the shared
-    fallback resolver used by ROOM-SIZE and ROOM-ACCESS."""
-
-    def test_none_coordinator_returns_empty(self):
-        from custom_components.roomba_plus.sensor import _id_to_display_name
-        assert _id_to_display_name(None) == {}
-
-    def test_user_set_name_used_directly(self):
-        from custom_components.roomba_plus.sensor import _id_to_display_name
-        cc = MagicMock()
-        cc.regions = [{"id": "1", "name": "Kitchen"}]
-        cc.region_suggestions = []
-        assert _id_to_display_name(cc) == {"1": "Kitchen"}
-
-    def test_falls_back_to_top_suggestion_when_unnamed(self):
-        from custom_components.roomba_plus.sensor import _id_to_display_name
-        cc = MagicMock()
-        cc.regions = []
-        cc.region_suggestions = [
-            {"region_id": "1", "suggested_types": [
-                {"region_type": "living_room", "score": 0.62},
-                {"region_type": "office", "score": 0.17},
-            ]},
-        ]
-        result = _id_to_display_name(cc)
-        assert result["1"] == "Living Room"
-
-    def test_user_name_never_overridden_by_suggestion(self):
-        from custom_components.roomba_plus.sensor import _id_to_display_name
-        cc = MagicMock()
-        cc.regions = [{"id": "1", "name": "My Custom Room"}]
-        cc.region_suggestions = [
-            {"region_id": "1", "suggested_types": [
-                {"region_type": "living_room", "score": 0.9},
-            ]},
-        ]
-        result = _id_to_display_name(cc)
-        assert result["1"] == "My Custom Room"
-
-    def test_negative_top_score_not_used(self):
-        """A negative score (confirmed real in field data — see
-        MISSIONSTORE_FIELD_REGISTRY.md) means "probably NOT this type",
-        not just "less confident" — must not be used as a label."""
-        from custom_components.roomba_plus.sensor import _id_to_display_name
-        cc = MagicMock()
-        cc.regions = []
-        cc.region_suggestions = [
-            {"region_id": "1", "suggested_types": [
-                {"region_type": "dining_room", "score": -0.9484},
-            ]},
-        ]
-        result = _id_to_display_name(cc)
-        assert "1" not in result
-
-    def test_picks_highest_scored_type_among_multiple(self):
-        from custom_components.roomba_plus.sensor import _id_to_display_name
-        cc = MagicMock()
-        cc.regions = []
-        cc.region_suggestions = [
-            {"region_id": "2", "suggested_types": [
-                {"region_type": "hallway", "score": 1.8449},
-                {"region_type": "bathroom", "score": -0.9081},
-            ]},
-        ]
-        result = _id_to_display_name(cc)
-        assert result["2"] == "Hallway"
-
-    def test_no_suggestions_no_fallback(self):
-        from custom_components.roomba_plus.sensor import _id_to_display_name
-        cc = MagicMock()
-        cc.regions = []
-        cc.region_suggestions = []
-        assert _id_to_display_name(cc) == {}
-
-    def test_missing_suggested_types_skipped_gracefully(self):
-        from custom_components.roomba_plus.sensor import _id_to_display_name
-        cc = MagicMock()
-        cc.regions = []
-        cc.region_suggestions = [{"region_id": "1", "suggested_types": []}]
-        assert _id_to_display_name(cc) == {}
-
-
-class TestRoomAreasSensor:
-    """ROOM-SIZE (v3.1.0) — per-room floor area dictionary sensor."""
-
-    def test_no_aligner_returns_zero(self):
-        """umf_aligner=None → native_value=0, attributes={}."""
-        sensor = _make_room_areas_sensor(umf_aligner=None)
-        assert sensor.native_value == 0
-        assert sensor.extra_state_attributes == {}
-
-    def test_areas_translated_to_display_names(self):
-        """rid keys from room_areas_m2 are translated via cc.regions."""
-        aligner = MagicMock()
-        aligner.room_areas_m2 = {"19": 14.3, "21": 22.1}
-        regions = [
-            {"id": "19", "name": "Kitchen"},
-            {"id": "21", "name": "Living Room"},
-        ]
-        sensor = _make_room_areas_sensor(umf_aligner=aligner, regions=regions)
-        assert sensor.native_value == 2
-        attrs = sensor.extra_state_attributes
-        assert attrs["Kitchen"] == 14.3
-        assert attrs["Living Room"] == 22.1
-
-    def test_unknown_rid_falls_back_to_rid(self):
-        """rid without a matching region entry is used as-is as key."""
-        aligner = MagicMock()
-        aligner.room_areas_m2 = {"99": 8.5}
-        sensor = _make_room_areas_sensor(umf_aligner=aligner, regions=[])
-        assert "99" in sensor.extra_state_attributes
-        assert sensor.extra_state_attributes["99"] == 8.5
-
-    def test_empty_room_polygons_returns_zero(self):
-        """Aligner present but no polygons resolved → native_value=0."""
-        aligner = MagicMock()
-        aligner.room_areas_m2 = {}
-        sensor = _make_room_areas_sensor(umf_aligner=aligner, regions=[])
-        assert sensor.native_value == 0
-        assert sensor.extra_state_attributes == {}
-
-
-def _make_room_accessibility_sensor(
-    umf_aligner=None, grid_store=None, mission_archive=None, regions=None,
-):
-    """Return a RoombaRoomAccessibilityScoresSensor with the given
-    collaborators wired in — mirrors _make_room_areas_sensor's pattern."""
-    from custom_components.roomba_plus.sensor import RoombaRoomAccessibilityScoresSensor
-    roomba = MagicMock()
-    roomba.master_state = {"state": {"reported": {}}}
-    entry = MagicMock()
-    rd = MagicMock()
-    cc = MagicMock()
-    cc.regions = regions or []
-    rd.umf_aligner = umf_aligner
-    rd.cloud_coordinator = cc if umf_aligner is not None else None
-    rd.grid_store = grid_store
-    rd.mission_archive = mission_archive
-    entry.runtime_data = rd
-    sensor = RoombaRoomAccessibilityScoresSensor.__new__(RoombaRoomAccessibilityScoresSensor)
-    sensor._roomba = roomba
-    sensor._blid = "test_blid"
-    sensor._entry = entry
-    sensor._attr_unique_id = "test_blid_room_accessibility_scores"
-    return sensor
-
-
-class TestRoomAccessibilityScoresSensor:
-    """ROOM-ACCESS (v3.2.0) — per-room accessibility score dict sensor."""
-
-    def test_no_aligner_returns_zero(self):
-        sensor = _make_room_accessibility_sensor(umf_aligner=None)
-        assert sensor.native_value == 0
-        assert sensor.extra_state_attributes == {}
-
-    def test_no_polygons_returns_zero(self):
-        aligner = MagicMock()
-        aligner.room_polygons_umf = {}
-        sensor = _make_room_accessibility_sensor(umf_aligner=aligner)
-        assert sensor.native_value == 0
-
-    def test_coverage_only_scores_via_gridstore(self):
-        """No grid_store/mission_archive at all — still scores from
-        whatever's available (coverage requires grid_store though, so this
-        specifically checks the "gs is None" branch degrades to {})."""
-        aligner = MagicMock()
-        aligner.room_polygons_umf = {"1": [(0, 0), (100, 0), (100, 100)]}
-        aligner.room_areas_m2 = {"1": 10.0}
-        sensor = _make_room_accessibility_sensor(
-            umf_aligner=aligner, grid_store=None, mission_archive=None,
-        )
-        # No grid_store -> no coverage/stuck signal, no mission_archive ->
-        # no time signal -> room_accessibility_scores gets nothing at all
-        # for this rid -> native_value 0.
-        assert sensor.native_value == 0
-
-    def test_full_pipeline_with_display_name_translation(self):
-        aligner = MagicMock()
-        aligner.room_polygons_umf = {"1": [(0, 0), (100, 0), (100, 100)]}
-        aligner.room_areas_m2 = {"1": 10.0}
-
-        gs = MagicMock()
-        gs.coverage_by_polygon.return_value = {"1": 0.9}
-        gs.stuck_by_polygon.return_value = {"1": 2}
-
-        archive = MagicMock()
-        archive.all_derived_oldest_first.return_value = [
-            {"room_visits": [{"rid": "1", "ts": 0}, {"rid": "1", "ts": 60}]},
-        ]
-
-        regions = [{"id": "1", "name": "Kitchen"}]
-        sensor = _make_room_accessibility_sensor(
-            umf_aligner=aligner, grid_store=gs, mission_archive=archive,
-            regions=regions,
-        )
-        assert sensor.native_value == 1
-        attrs = sensor.extra_state_attributes
-        assert "Kitchen" in attrs
-        assert attrs["Kitchen"]["score"] is not None
-        assert "limiting_factor" in attrs["Kitchen"]
-
-    def test_room_polygons_umf_accessed_as_property_not_method(self):
-        """Regression guard, real bug (field-caught via BouIIIx's debug
-        log, 2026-07-04): sensor.py called aligner.room_polygons_umf()
-        with parentheses, but UmfAligner declares it as a @property (a
-        dict, not callable) — crashed with 'dict' object is not callable
-        on every entity setup. A bare MagicMock() masks this entirely
-        (any attribute access "succeeds"); spec=UmfAligner restricts the
-        mock to the real class's actual interface, so calling a real
-        property as a method raises the same TypeError production code
-        would raise.
-        """
-        from custom_components.roomba_plus.umf_aligner import UmfAligner
-
-        aligner = MagicMock(spec=UmfAligner)
-        aligner.room_polygons_umf = {"1": [(0, 0), (100, 0), (100, 100)]}
-        aligner.room_areas_m2 = {"1": 10.0}
-        sensor = _make_room_accessibility_sensor(
-            umf_aligner=aligner, grid_store=None, mission_archive=None,
-        )
-        # Must not raise TypeError: 'dict' object is not callable.
-        sensor.native_value
-
-    def test_unknown_rid_falls_back_to_rid(self):
-        aligner = MagicMock()
-        aligner.room_polygons_umf = {"99": [(0, 0), (100, 0), (100, 100)]}
-        aligner.room_areas_m2 = {"99": 5.0}
-        gs = MagicMock()
-        gs.coverage_by_polygon.return_value = {"99": 1.0}
-        gs.stuck_by_polygon.return_value = {}
-        sensor = _make_room_accessibility_sensor(
-            umf_aligner=aligner, grid_store=gs, mission_archive=None, regions=[],
-        )
-        assert "99" in sensor.extra_state_attributes
-
-    def test_no_mission_archive_still_scores_from_coverage(self):
-        """time_per_area signal absent (no mission_archive) shouldn't
-        block coverage/stuck-based scoring."""
-        aligner = MagicMock()
-        aligner.room_polygons_umf = {"1": [(0, 0), (100, 0), (100, 100)]}
-        aligner.room_areas_m2 = {"1": 10.0}
-        gs = MagicMock()
-        gs.coverage_by_polygon.return_value = {"1": 1.0}
-        gs.stuck_by_polygon.return_value = {}
-        sensor = _make_room_accessibility_sensor(
-            umf_aligner=aligner, grid_store=gs, mission_archive=None,
-        )
-        assert sensor.native_value == 1
-        assert sensor.extra_state_attributes["1"]["score"] == 100.0
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# PRIMARY-SLIM (v3.1.0)
-# ─────────────────────────────────────────────────────────────────────────────
 
 class TestPrimarySlim:
     """PRIMARY-SLIM (v3.1.0) — verify entity_category assignments on SENSORS tuple."""
@@ -4243,163 +1810,8 @@ def _make_reloc_sensor(rps=None):
 # RESET-DIAGNOSTICS (v3.2.0)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _make_reset_diagnostics_sensor(vacuum_state: dict):
-    """Return a RoombaResetDiagnosticsSensor with the given vacuum_state."""
-    from custom_components.roomba_plus.sensor import RoombaResetDiagnosticsSensor
-    roomba = MagicMock()
-    roomba.master_state = {"state": {"reported": vacuum_state}}
-    sensor = RoombaResetDiagnosticsSensor.__new__(RoombaResetDiagnosticsSensor)
-    sensor._roomba = roomba
-    sensor._blid = "test_blid"
-    sensor.vacuum_state = vacuum_state
-    sensor._attr_unique_id = "test_blid_reset_diagnostics"
-    return sensor
+# Moved to a module-specific test file (August 2026).
 
-
-class TestResetDiagnosticsSensor:
-    """RESET-DIAGNOSTICS (v3.2.0) — bbrstinfo reset-cause breakdown."""
-
-    def test_native_value_is_safety_reset_count(self):
-        sensor = _make_reset_diagnostics_sensor({
-            "bbrstinfo": {"nNavRst": 87, "nMobRst": 78, "nSafRst": 4, "safCauses": [18, 18, 21, 21]}
-        })
-        assert sensor.native_value == 4
-
-    def test_none_when_bbrstinfo_absent(self):
-        sensor = _make_reset_diagnostics_sensor({})
-        assert sensor.native_value is None
-        assert sensor.extra_state_attributes == {
-            "nav_resets": None, "mobility_resets": None,
-            "safety_resets": None, "safety_reset_causes": None,
-        }
-
-    def test_attributes_full_breakdown(self):
-        sensor = _make_reset_diagnostics_sensor({
-            "bbrstinfo": {"nNavRst": 87, "nMobRst": 78, "nSafRst": 4, "safCauses": [18, 18, 21, 21]}
-        })
-        attrs = sensor.extra_state_attributes
-        assert attrs["nav_resets"] == 87
-        assert attrs["mobility_resets"] == 78
-        assert attrs["safety_resets"] == 4
-        assert attrs["safety_reset_causes"] == [18, 18, 21, 21]
-        assert "oom_resets" not in attrs
-
-    def test_oom_resets_included_only_when_present(self):
-        """nOomRst confirmed j-series-only (absent on Braava) — must not
-        appear as None/0 on robots whose firmware never reports it."""
-        sensor = _make_reset_diagnostics_sensor({
-            "bbrstinfo": {"nNavRst": 197, "nOomRst": 2, "nMobRst": 199, "nSafRst": 0, "safCauses": []}
-        })
-        attrs = sensor.extra_state_attributes
-        assert attrs["oom_resets"] == 2
-
-    def test_no_oom_resets_key_on_braava(self):
-        sensor = _make_reset_diagnostics_sensor({
-            "bbrstinfo": {"nNavRst": 87, "nMapLoadRst": 0, "nMobRst": 78, "nSafRst": 4, "safCauses": []}
-        })
-        assert "oom_resets" not in sensor.extra_state_attributes
-
-
-def _make_health_trend_sensor(rps):
-    """Return a RoombaHealthScoreTrendSensor with the given robot_profile_store
-    (or None) wired into runtime_data."""
-    from custom_components.roomba_plus.sensor import RoombaHealthScoreTrendSensor
-    roomba = MagicMock()
-    roomba.master_state = {"state": {"reported": {}}}
-    entry = MagicMock()
-    entry.runtime_data.robot_profile_store = rps
-    sensor = RoombaHealthScoreTrendSensor.__new__(RoombaHealthScoreTrendSensor)
-    sensor._roomba = roomba
-    sensor._blid = "test_blid"
-    sensor._config_entry = entry
-    sensor._attr_unique_id = "test_blid_health_score_trend"
-    return sensor
-
-
-class TestHealthScoreTrendSensor:
-    """L10 (v3.2.0) — RoombaHealthScoreTrendSensor delegates to
-    RobotProfileStore.health_score_trend() / .health_score_declining_days().
-    """
-
-    def test_native_value_none_when_no_profile_store(self):
-        sensor = _make_health_trend_sensor(None)
-        assert sensor.native_value is None
-        assert sensor.extra_state_attributes == {}
-
-    def test_native_value_none_when_not_enough_history(self):
-        from custom_components.roomba_plus.robot_profile_store import RobotProfileStore
-        rps = RobotProfileStore()
-        rps.record_health_score(80.0, "2026-06-01")
-        sensor = _make_health_trend_sensor(rps)
-        assert sensor.native_value is None
-
-    def test_native_value_reflects_declining_trend(self):
-        """v3.2.0 bug-hunt fix — 36 stable reference days keeps the
-        exclusion buffer (30 days) clean of the decline; 14 declining
-        days matches the Repair Issue's own trigger threshold."""
-        from custom_components.roomba_plus.robot_profile_store import RobotProfileStore
-        import datetime as _dt
-        rps = RobotProfileStore()
-        d0 = _dt.date(2026, 6, 1)
-        dates = [(d0 + _dt.timedelta(days=i)).isoformat() for i in range(36 + 14)]
-        for d in dates[:36]:
-            rps.record_health_score(85.0, d)
-        for d in dates[36:]:
-            rps.record_health_score(40.0, d)
-        sensor = _make_health_trend_sensor(rps)
-        assert sensor.native_value == "declining"
-
-    def test_attributes_expose_baseline_and_declining_days(self):
-        from custom_components.roomba_plus.robot_profile_store import RobotProfileStore
-        import datetime as _dt
-        rps = RobotProfileStore()
-        d0 = _dt.date(2026, 6, 1)
-        dates = [(d0 + _dt.timedelta(days=i)).isoformat() for i in range(36 + 14)]
-        for d in dates[:36]:
-            rps.record_health_score(85.0, d)
-        for d in dates[36:]:
-            rps.record_health_score(40.0, d)
-        sensor = _make_health_trend_sensor(rps)
-        attrs = sensor.extra_state_attributes
-        assert attrs["baseline_ready"] is True
-        assert attrs["days_recorded"] == 50
-        assert attrs["declining_days"] == 14
-        assert attrs["days_until_ready"] == 0
-
-    def test_days_until_ready_counts_down_before_baseline_ready(self):
-        """v3.2.0 UX fix — days_recorded alone required the user to
-        already know the 44-day threshold and do the subtraction
-        themselves. This makes it explicit."""
-        from custom_components.roomba_plus.robot_profile_store import RobotProfileStore
-        rps = RobotProfileStore()
-        for i in range(10):
-            rps.record_health_score(80.0, f"2026-06-{i + 1:02d}")
-        sensor = _make_health_trend_sensor(rps)
-        attrs = sensor.extra_state_attributes
-        assert attrs["baseline_ready"] is False
-        assert attrs["days_recorded"] == 10
-        assert attrs["days_until_ready"] == 34
-
-
-class TestRelocalisationRateSensor:
-    """L9-MAP (v3.1.0) — self-calibrating relocalisation rate sensor."""
-
-    def test_no_rps_returns_none(self):
-        """robot_profile_store=None → native_value=None, safe empty attributes."""
-        sensor = _make_reloc_sensor(rps=None)
-        assert sensor.native_value is None
-        attrs = sensor.extra_state_attributes
-        assert attrs["baseline"] is None
-        assert attrs["percentile_rank"] is None
-
-    def test_not_ready_returns_none(self):
-        """Baseline not yet established (< 15 missions) → native_value=None."""
-        from custom_components.roomba_plus.robot_profile_store import RobotProfileStore
-        rps = RobotProfileStore()
-        for _ in range(5):
-            rps.update_reloc_baseline(0)
-        sensor = _make_reloc_sensor(rps=rps)
-        assert sensor.native_value is None
 
     def test_ready_returns_window_mean(self):
         """Baseline established → native_value is the recent window's mean."""
@@ -4494,105 +1906,382 @@ class TestMopSensorSlugConsistency:
 # v3.3.0 ROOM-SCHED — rooms_overdue sensor
 # ─────────────────────────────────────────────────────────────────────────────
 
-class TestRoomsOverdueSensor:
-    """v3.3.0 ROOM-SCHED — state/attributes wiring of the merged rule
-    plus the DIRT-VEL self-calibration attributes."""
+# TestRoomsOverdueSensor and TestDirtCorrelationSensor moved to
+# test_sensor_rooms.py (August 2026).
 
-    def _sensor(self, records, options=None, rps=None):
-        from custom_components.roomba_plus.sensor import RoombaRoomsOverdueSensor
-        from custom_components.roomba_plus.mission_store import MissionStore
-        entity = object.__new__(RoombaRoomsOverdueSensor)
+
+# Moved to a module-specific test file (August 2026).
+
+
+class TestConsumablePartsAppearWhenDiscovered:
+    """Parts get sensors as they are discovered, not only at setup.
+
+    A first version added them once during setup and called the rest a
+    known limitation. That was too convenient: the parts fetch is
+    best-effort, so a cloud hiccup at startup would have meant the user
+    never saw these sensors until they reloaded the config entry -- for
+    a failure that resolves itself within hours.
+
+    Home Assistant supports adding entities later; not doing so was a
+    choice, not a constraint."""
+
+    def _wire(self, initial):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.sensor import _add_discovered_parts
+
+        added: list = []
+        listeners: list = []
+
+        data = MagicMock()
+        data.blid = "BLID"
+        data.prime_parts_coordinator.data = initial
+        data.prime_parts_coordinator.async_add_listener = (
+            lambda cb: listeners.append(cb) or (lambda: None)
+        )
         entry = MagicMock()
-        entry.options = options or {}
-        ms = MissionStore()
-        ms._records = records
-        data = entry.runtime_data
-        data.mission_store = ms
-        data.has_cloud = True
-        data.cloud_coordinator.regions = [
-            {"id": "7", "name": "Kitchen"}, {"id": "9", "name": "Hall"},
-        ]
-        data.robot_profile_store = rps
-        entity._config_entry = entry
-        return entity
 
-    @staticmethod
-    def _rec(i, ended, rids):
-        return {"id": f"m_{i}", "ended_at": ended,
-                "timeline": {"finEvents": [
-                    {"type": "room", "room": {"rid": r, "status": 0}}
-                    for r in rids]}}
+        _add_discovered_parts(MagicMock(), data, entry, lambda gen: added.extend(gen))
+        return data, added, listeners
 
-    def test_state_counts_overdue_and_attrs_expose_merge(self):
-        recs = [self._rec(i, f"2026-06-{d}T10:00:00+00:00", ["7"])
-                for i, d in enumerate(["20", "22", "24", "26"])]
-        sensor = self._sensor(
-            recs, options={"room_schedule": {"Kitchen": "daily"}}
+    def test_parts_present_at_setup_get_sensors_immediately(self):
+        _data, added, _listeners = self._wire({"filter": object(), "dirt_bag": object()})
+
+        assert len(added) == 2
+
+    def test_nothing_at_setup_creates_nothing_yet(self):
+        """The failed-fetch case. No sensors, no crash."""
+        _data, added, _listeners = self._wire({})
+
+        assert added == []
+
+    def test_a_later_refresh_creates_them(self):
+        """THE case the first version could not handle: the fetch failed
+        at startup and succeeded an hour later."""
+        data, added, listeners = self._wire({})
+        assert added == []
+
+        data.prime_parts_coordinator.data = {"filter": object()}
+        listeners[0]()
+
+        assert len(added) == 1
+
+    def test_a_part_is_never_added_twice(self):
+        """The listener fires on every refresh. Without the guard, a
+        robot would accumulate duplicate entities all day."""
+        data, added, listeners = self._wire({"filter": object()})
+        assert len(added) == 1
+
+        for _ in range(5):
+            listeners[0]()
+
+        assert len(added) == 1
+
+    def test_a_newly_appearing_part_joins_the_existing_ones(self):
+        """A dirt bag showing up after someone attaches a self-emptying
+        base -- a real reason for the set to grow mid-life."""
+        data, added, listeners = self._wire({"filter": object()})
+
+        data.prime_parts_coordinator.data = {"filter": object(), "dirt_bag": object()}
+        listeners[0]()
+
+        assert len(added) == 2
+
+    def test_no_coordinator_is_survivable(self):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.sensor import _add_discovered_parts
+
+        data = MagicMock()
+        data.prime_parts_coordinator = None
+
+        _add_discovered_parts(MagicMock(), data, MagicMock(), lambda gen: list(gen))
+
+
+class TestBraavaVersusMoppingRobots:
+    """`is_mop()` answers "can it mop" and was being used to ask "has it
+    no brushes". On a Braava those coincide, which is why thirteen brush
+    and bin gates were written as `not is_mop(state)` and nobody noticed.
+
+    On a Combo they do not: it has a pad AND brushes, so it would lose
+    its filter sensors to a question about mopping.
+
+    Nobody found this in the field because every tester's robot sits
+    cleanly on one side -- Braava m6, i-series, s9, 900-series. It needs
+    a Classic Combo, and nobody in the group owns one.
+    """
+
+    def _state(self, sku=None, pad=False):
+        state = {}
+        if sku:
+            state["sku"] = sku
+        if pad:
+            state["detectedPad"] = "reusableDry"
+        return state
+
+    def test_a_braava_is_both(self):
+        from custom_components.roomba_plus.const import is_braava, is_mop
+
+        state = self._state("m611020", pad=True)
+        assert is_mop(state) is True
+        assert is_braava(state) is True
+
+    def test_a_combo_mops_but_is_not_a_braava(self):
+        """The case the split exists for. It has brushes and a filter."""
+        from custom_components.roomba_plus.const import is_braava, is_mop
+
+        state = self._state("c355020", pad=True)
+        assert is_mop(state) is True
+        assert is_braava(state) is False
+
+    def test_vacuums_are_neither(self):
+        from custom_components.roomba_plus.const import is_braava, is_mop
+
+        for sku in ("i755840", "R980020", "s955020", "j915020"):
+            state = self._state(sku)
+            assert is_mop(state) is False
+            assert is_braava(state) is False, sku
+
+    def test_no_sku_falls_back_to_the_old_reading(self):
+        """A capability flag can go missing on a robot that has the
+        hardware; a SKU cannot go missing on a robot that has one. When
+        it does, falling back costs nothing -- on a Braava the old
+        reading was already right."""
+        from custom_components.roomba_plus.const import is_braava
+
+        assert is_braava(self._state(pad=True)) is True
+        assert is_braava(self._state()) is False
+
+    def test_a_combo_keeps_its_filter_sensors(self):
+        """The gates that moved. A robot that mops still has a filter."""
+        from custom_components.roomba_plus.sensor_core import SENSORS
+
+        state = self._state("c355020", pad=True)
+        keys = {
+            d.key for d in SENSORS
+            if d.key in ("filter_wear_rate", "filter_days_until_due")
+            and d.filter_fn(state)
+        }
+        assert keys == {"filter_wear_rate", "filter_days_until_due"}
+
+    def test_a_braava_is_unaffected_by_the_gates_that_moved(self):
+        """The point of choosing SKU prefix over a capability flag: no
+        robot anyone actually owns changes behaviour."""
+        from custom_components.roomba_plus.sensor_core import SENSORS
+
+        state = self._state("m611020", pad=True)
+        moved = {"filter_wear_rate", "filter_days_until_due"}
+        assert not [d for d in SENSORS if d.key in moved and d.filter_fn(state)]
+
+    def test_observed_while_doing_this_two_filter_sensors_are_ungated(self):
+        """`filter_remaining_hours` and `filter_last_replaced` carry no
+        gate at all, so a Braava gets them -- and a Braava has no filter.
+
+        Pre-existing, untouched here, and pinned rather than fixed: it is
+        a different question from the brush/pad split and deserves its
+        own decision. Without this test it would look like the split
+        missed something.
+        """
+        from custom_components.roomba_plus.sensor_core import SENSORS
+
+        state = self._state("m611020", pad=True)
+        shown = {
+            d.key for d in SENSORS
+            if d.key.startswith("filter_") and d.filter_fn(state)
+        }
+        assert shown == {"filter_remaining_hours", "filter_last_replaced"}
+
+    def test_the_brush_slot_is_still_either_or(self):
+        """Not an oversight. MaintenanceStore has one slot for brush OR
+        pad, so a Combo getting both sensors would read one number
+        twice -- worse than one unambiguous sensor. Documented at the
+        gate; fixing it needs a second store slot."""
+        from custom_components.roomba_plus.sensor_core import SENSORS
+
+        state = self._state("c355020", pad=True)
+        shown = {
+            d.key for d in SENSORS
+            if d.key in ("brush_last_replaced", "pad_last_replaced")
+            and d.filter_fn(state)
+        }
+        assert shown == {"pad_last_replaced"}
+
+
+# ── from test_sensor_resilience.py ───────────────────────────────────────
+#
+# Three tests about filter_fn and value_fn surviving malformed states.
+# They are about sensors, and the file about sensors is here -- a separate
+# file for "the resilience ones" is a distinction nobody makes when
+# looking for a sensor test.
+
+
+import copy
+from unittest.mock import MagicMock
+
+import pytest
+
+from custom_components.roomba_plus.sensor import SENSORS
+
+
+REAL_980_STATE = {
+    "batPct": 100,
+    "batteryType": "F12432712",
+    "bbchg": {"nChgOk": 325, "nLithF": 0, "aborts": [1, 1, 1]},
+    "bbchg3": {"avgMin": 415, "hOnDock": 30557, "nAvail": 1160, "estCap": 9720,
+               "nLithChrg": 290, "nNimhChrg": 36, "nDocks": 229},
+    "bbmssn": {"nMssn": 425, "nMssnOk": 135, "nMssnC": 182, "nMssnF": 108,
+               "aMssnM": 94, "aCycleM": 42},
+    "bbrun": {"hr": 438, "min": 5, "sqft": 1903, "nStuck": 168, "nScrubs": 958,
+              "nPicks": 1099, "nPanics": 1544, "nCliffsF": 6968,
+              "nCliffsR": 3555, "nMBStll": 24, "nWStll": 23, "nCBump": 0},
+    "bin": {"present": True, "full": False},
+    "binPause": True,
+    "cap": {"pose": 1, "ota": 2, "multiPass": 2, "carpetBoost": 1, "pp": 1,
+            "binFullDetect": 1, "maps": 1, "edge": 1, "eco": 1},
+    "carpetBoost": True,
+    "cleanMissionStatus": {"cycle": "none", "phase": "charge", "error": 0,
+                           "sqft": 0, "mssnM": 0, "nMssn": 425, "notReady": 0,
+                           "initiator": ""},
+    "dock": {"known": True},
+    "hardwareRev": 3,
+    "mapUploadAllowed": True,
+    "name": "Roomba",
+    "noAutoPasses": False,
+    "openOnly": False,
+    "pose": {"point": {"x": 0, "y": 0}, "theta": 0},
+    "schedHold": False,
+    "signal": {"rssi": -47, "snr": 42},
+    "sku": "R980040",
+    "softwareVer": "v2.4.17-138",
+    "twoPass": False,
+    "vacHigh": False,
+    "wifistat": {"rssi": -47},
+}
+
+
+def _all_none(state):
+    return {k: None for k in state}
+
+
+def _empty_subdicts(state):
+    return {k: ({} if isinstance(v, dict) else v) for k, v in state.items()}
+
+
+def _null_subdicts(state):
+    out = copy.deepcopy(state)
+    for k in ("bbrun", "bbchg3", "bbmssn", "cleanMissionStatus", "bin", "cap",
+              "pose", "signal", "wifistat", "dock", "bbchg"):
+        if k in out:
+            out[k] = None
+    return out
+
+
+def _missing_subdicts(state):
+    return {k: v for k, v in state.items() if not isinstance(v, dict)}
+
+
+SHAPES = {
+    "REAL": REAL_980_STATE,
+    "all-none": _all_none(REAL_980_STATE),
+    "empty-subdicts": _empty_subdicts(REAL_980_STATE),
+    "null-subdicts": _null_subdicts(REAL_980_STATE),
+    "missing-subdicts": _missing_subdicts(REAL_980_STATE),
+    "empty-dict": {},
+}
+
+
+class TestSensorFilterFnResilience:
+    """No filter_fn may raise on any reported-state shape — a single crash in
+    the async_setup_entry list comprehension takes down the whole platform."""
+
+    @pytest.mark.parametrize("shape_name", list(SHAPES))
+    def test_all_filter_fns_survive_shape(self, shape_name):
+        state = SHAPES[shape_name]
+        failures = []
+        for desc in SENSORS:
+            fn = getattr(desc, "filter_fn", None)
+            if fn is None:
+                continue
+            try:
+                fn(state)
+            except Exception as e:  # noqa: BLE001
+                failures.append(f"{desc.key}: {type(e).__name__}: {e}")
+        assert not failures, (
+            f"{len(failures)} filter_fn crash(es) on '{shape_name}' state:\n"
+            + "\n".join(failures)
         )
-        with patch("custom_components.roomba_plus.sensor_rooms.dt_util") as dt_m:
-            from homeassistant.util import dt as real_dt
-            dt_m.now.return_value = real_dt.parse_datetime(
-                "2026-07-04T10:00:00+00:00"
-            )
-            assert sensor.native_value == 1
-            attrs = sensor.extra_state_attributes
-        k = attrs["rooms"]["Kitchen"]
-        assert k["source"] == "configured" and k["status"] == "overdue"
-        assert attrs["overdue_rooms"] == ["Kitchen"]
 
-    def test_self_calibration_attributes_with_name_resolution(self):
-        from custom_components.roomba_plus.robot_profile_store import (
-            RobotProfileStore,
+    def test_real_state_surfaces_sensors(self):
+        """Sanity: the real 980 state should surface a healthy number of
+        sensors (filter_fn → True), proving the test state is realistic."""
+        surfaced = sum(
+            1 for d in SENSORS
+            if getattr(d, "filter_fn", None) and d.filter_fn(REAL_980_STATE)
         )
-        rps = RobotProfileStore()
-        rps.room_dirt_index = {"7": 3.0, "9": 1.0}    # median 2.0
-        rps.room_dirt_velocity = {"7": 2.0, "9": 0.25}
-        sensor = self._sensor([], rps=rps)
-        attrs = sensor.extra_state_attributes
-        # rid → display name resolved; Kitchen suggested daily (1.0 < 1.5)
-        assert attrs["suggested_interval_days"] == {"Kitchen": 1.0, "Hall": 8.0}
-        assert attrs["daily_suggested"] == ["Kitchen"]
-        # Already configured daily → drops out of the suggestion
-        sensor._config_entry.options = {"room_schedule": {"Kitchen": "daily"}}
-        assert sensor.extra_state_attributes["daily_suggested"] == []
+        # A 980 with full bbrun/bbchg/bbmssn should surface many sensors
+        assert surfaced >= 10
 
 
-class TestDirtCorrelationSensor:
-    """v3.3.0 CROSS-CORR — |r| > 0.3 sensor gate and strongest-entity
-    selection."""
+class TestSensorValueFnResilience:
+    """value_fn(entity) resilience is covered comprehensively by the per-sensor
+    test files (test_sensors.py etc.), which build properly-wired entities.
 
-    def _sensor(self, results):
-        from custom_components.roomba_plus.sensor import (
-            RoombaDirtCorrelationSensor,
+    A platform-wide value_fn stress test was evaluated here but a minimal mock
+    entity cannot distinguish a real crash from MagicMock-arithmetic noise (a
+    value_fn reading entity._config_entry.runtime_data.* gets a MagicMock, and
+    `MagicMock / int` raises TypeError that would not occur with a real
+    entity). The meaningful platform-failure guard is the filter_fn test above:
+    filter_fn takes the raw state dict directly and runs in the single list
+    comprehension that can take down the whole platform.
+
+    This placeholder documents that the value_fn path is intentionally covered
+    elsewhere rather than with an unreliable platform-wide mock.
+    """
+
+    def test_real_state_is_well_formed(self):
+        """Guard the test fixture itself: the reconstructed 980 state has the
+        sub-dicts the value_fns expect, so the per-sensor tests that reuse
+        similar shapes stay representative of real field data."""
+        for key in ("bbrun", "bbchg3", "bbmssn", "cleanMissionStatus"):
+            assert isinstance(REAL_980_STATE[key], dict)
+        assert REAL_980_STATE["bbrun"]["hr"] == 438
+        assert REAL_980_STATE["bbmssn"]["nMssn"] == 425
+
+
+class TestTheOnboardAreaCounterIsScaled:
+    """`bbrun.sqft` is not square feet. It counts in units of 100 ft².
+
+    A 900-series reporting `sqft: 1947` over `hr: 450` gives 0.40 m² per
+    operating hour read as square feet. A 980 cleans 30–60. The time
+    counters on the same robot are consistent, so the fault is in the
+    area field alone.
+
+    dorita980's own README example — `sqft: 251` over `hr: 103` on a
+    different robot — gives 0.23 m²/h the same way, and 22.6 with the
+    factor. Two robots, one plausible reading.
+
+    Not protocol-proven: two field observations and one prior
+    implementation (@ia74's `roomba_rest980`, which applies the factor
+    in one code path and not in another). Applied because the
+    uncorrected value has no reading under which it is true.
+    """
+
+    def test_the_real_robots_numbers_come_out_plausible(self):
+        """The two values this was derived from, as a regression fence."""
+        from custom_components.roomba_plus.const import (
+            BBRUN_SQFT_SCALE,
+            SQFT_TO_M2,
         )
-        from custom_components.roomba_plus.robot_profile_store import (
-            RobotProfileStore,
-        )
-        entity = object.__new__(RoombaDirtCorrelationSensor)
-        entry = MagicMock()
-        rps = RobotProfileStore()
-        rps.correlation_results = MagicMock(return_value=results)
-        entry.runtime_data.robot_profile_store = rps
-        entity._config_entry = entry
-        return entity
 
-    def test_gate_and_strongest_selection(self):
-        s = self._sensor({
-            "sensor.humidity": {"r": 0.61, "n": 42},
-            "sensor.pollen": {"r": -0.72, "n": 35},
-            "sensor.temp": {"r": 0.10, "n": 50},      # below |0.3| gate
-            "sensor.new": {"r": None, "n": 12},       # below n gate
-        })
-        # Strongest |r| wins — the negative pollen correlation
-        assert s.native_value == -0.72
-        attrs = s.extra_state_attributes
-        assert attrs["strongest_entity"] == "sensor.pollen"
-        assert attrs["by_entity"]["sensor.new"] == {"r": None, "n": 12}
+        ours = 1947 * BBRUN_SQFT_SCALE * SQFT_TO_M2 / 450.5
+        theirs = 251 * BBRUN_SQFT_SCALE * SQFT_TO_M2 / 103.0
 
-    def test_none_when_nothing_passes(self):
-        s = self._sensor({
-            "sensor.temp": {"r": 0.25, "n": 60},
-            "sensor.new": {"r": None, "n": 5},
-        })
-        assert s.native_value is None
-        assert s.extra_state_attributes["strongest_entity"] is None
+        assert 30 < ours < 60, f"{ours:.1f} m²/h is not a plausible rate"
+        assert 15 < theirs < 60, f"{theirs:.1f} m²/h is not a plausible rate"
+
+    def test_without_the_factor_both_are_absurd(self):
+        """The negative control: proves the factor is doing work."""
+        from custom_components.roomba_plus.const import SQFT_TO_M2
+
+        assert 1947 * SQFT_TO_M2 / 450.5 < 1.0
+        assert 251 * SQFT_TO_M2 / 103.0 < 1.0

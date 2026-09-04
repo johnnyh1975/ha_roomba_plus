@@ -250,6 +250,19 @@ class GeometryStore:
     """
 
     def __init__(self) -> None:
+        self._reset()
+
+    def _reset(self) -> None:
+        """Back to an empty store.
+
+        Called from `__init__` and from the load path when a stored
+        payload will not parse -- a half-loaded store is worse than an
+        empty one.
+
+        This used to be `self.__init__()`. It works, and it is unsound
+        the moment anybody subclasses: the instance would run the
+        subclass constructor rather than this one.
+        """
         self.door_markers: list[DoorMarker] = []
         self.walls: list[UserWall] = []
         self.doors: list[UserDoor] = []
@@ -271,8 +284,8 @@ class GeometryStore:
         Silently starts clean on missing data or version mismatch — the store
         accumulates from the next mission rather than crashing.
         """
-        store = Store(hass, _HA_STORE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
-        data: dict | None = await store.async_load()
+        store: Store[dict[str, Any]] = Store(hass, _HA_STORE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
+        data: dict[str, Any] | None = await store.async_load()
         if not data:
             _LOGGER.debug("GeometryStore: no persisted geometry for %s", entry_id)
             return
@@ -292,11 +305,11 @@ class GeometryStore:
         except Exception as exc:  # noqa: BLE001
             _LOGGER.warning("GeometryStore: failed to load geometry for %s: %s", entry_id, exc)
             # Reset to clean state — don't leave partially loaded data
-            self.__init__()
+            self._reset()
 
     async def async_save(self, hass: HomeAssistant, entry_id: str) -> None:
         """Persist current geometry to hass.storage."""
-        store = Store(hass, _HA_STORE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
+        store: Store[dict[str, Any]] = Store(hass, _HA_STORE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
         await store.async_save(self._to_dict())
         _LOGGER.debug(
             "GeometryStore: saved %d markers, %d walls for %s",
@@ -487,7 +500,7 @@ class GeometryStore:
             ],
         }
 
-    def _restore_from_dict(self, data: dict) -> None:
+    def _restore_from_dict(self, data: dict[str, Any]) -> None:
         """Restore store state from a previously serialised dict.
 
         Called by async_load after version check. Separated to allow direct
@@ -536,7 +549,10 @@ class GeometryStore:
     def _find_close_marker(self, cx: float, cy: float) -> DoorMarker | None:
         """Return the closest existing DoorMarker within DOOR_CLUSTER_TOL_MM."""
         best: DoorMarker | None = None
-        best_dist = DOOR_CLUSTER_TOL_MM
+        # `float`, because that is what `math.hypot` returns. The
+        # initial value is an int constant used as a ceiling, which
+        # fixed the inferred type at int.
+        best_dist: float = DOOR_CLUSTER_TOL_MM
         for marker in self.door_markers:
             dist = math.hypot(cx - marker.cx, cy - marker.cy)
             if dist < best_dist:

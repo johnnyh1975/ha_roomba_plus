@@ -12,7 +12,9 @@ https://github.com/tonylofgren/aurora-smart-home
 """
 from __future__ import annotations
 
+import importlib
 import logging
+import re
 import statistics
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -23,13 +25,24 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
-from .const import SQFT_TO_M2
+from .const import extract_region_id, SQFT_TO_M2
 
 _LOGGER = logging.getLogger(__name__)
 
 STORAGE_KEY_PREFIX = "roomba_plus_missions"
 STORAGE_VERSION = 1
 MAX_RECORDS = 365
+
+_SEGMENT_SUFFIX_RE = re.compile(r"_r\d+$")
+# Replay pulses (stale MQTT re-delivery of a terminal event) arrive within
+# seconds of the terminal record; a genuine 980/900-series multi-recharge
+# segment resume happens after minutes of charging. Mirrors callbacks.py's
+# _CLOUD_CATCHUP_MISSION_MATCH_SEC (120 s).
+_MISSION_REPLAY_MATCH_SEC = 120
+
+_TERMINAL_REPLAY_IMMUTABLE_FIELDS = frozenset({
+    "id", "started_at", "ended_at", "duration_min", "initiator", "result",
+})
 
 
 class BackfillResult(NamedTuple):
@@ -112,13 +125,32 @@ class MissionStore:
         # Provides a stable baseline for consecutive_anomalous when local
         # records are insufficient (< 20 missions).  Not persisted — computed
         # fresh from MissionArchive each time async_setup_entry runs.
-        self.archive_baseline: dict | None = None
+        self.archive_baseline: dict[str, Any] | None = None
         # v3.3.0 STORE-ENCAP — lazy full-history id index for
         # append_validated(). None until first use; kept in sync by all
         # append paths afterwards. Not persisted (rebuilt on demand).
         self._record_ids: set[str] | None = None
 
     # ── Public read API (v3.3.0 STORE-ENCAP) ────────────────────────────────
+
+    @property
+    def completed_count(self) -> int:
+        """Missions that ran to a proper finish.
+
+        `stuck_and_resumed` counts: the robot recovered and carried on,
+        so the run has a perimeter pass like any other. A cancelled or
+        errored run does not, which is why RoomSegStore waits on this
+        number rather than on the raw mission count -- a mask edge from
+        an aborted run is rougher and further from the real walls.
+
+        Same result values the wear and history aggregations already
+        treat as complete, so one definition serves all of them.
+        """
+        return sum(
+            1
+            for r in self.records
+            if r.get("result") in ("completed", "stuck_and_resumed")
+        )
 
     @property
     def records(self) -> Sequence[dict[str, Any]]:
@@ -137,8 +169,8 @@ class MissionStore:
 
     async def async_load(self, hass: HomeAssistant, entry_id: str) -> None:
         """Load persisted records from hass.storage."""
-        store = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
-        data: dict | None = await store.async_load()
+        store: Store[dict[str, Any]] = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
+        data: dict[str, Any] | None = await store.async_load()
         if not data:
             _LOGGER.debug("MissionStore: no persisted data for %s", entry_id)
             return
@@ -151,7 +183,17 @@ class MissionStore:
 
     async def async_save(self, hass: HomeAssistant, entry_id: str) -> None:
         """Persist current records to hass.storage."""
-        store = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
+        # `hass=None` IS A DOCUMENTED NO-OP, not an error. Callers that
+        # hold only a config entry resolve hass through
+        # `prime_mission_sync._hass_of()`, whose own docstring says a
+        # None return means "skip persistence, keep memory" -- and that
+        # every caller handles it. This one did not.
+        #
+        # Records stay in memory for the next attempt rather than
+        # crashing the sync that produced them.
+        if hass is None:
+            return
+        store: Store[dict[str, Any]] = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
         await store.async_save({"records": self._records})
 
     # ── Write ─────────────────────────────────────────────────────────────────
@@ -197,6 +239,70 @@ class MissionStore:
         if self._record_ids is not None and record.get("id"):
             self._record_ids.add(record["id"])
         self._trim()
+
+    def update_terminal_fields(self, mission_id: str, incoming: dict[str, Any]) -> bool:
+        """Merge a replay/enrichment pulse into mission_id's existing
+        terminal record, in place.
+
+        A same-id append with a fresh ended_at is not always a genuine
+        multi-recharge segment (see async_append above): once a record's
+        own result is already terminal, a later call for the same base id
+        is the mission replaying or self-enriching post-completion, not a
+        new segment — duration_min, initiator, started_at, ended_at, id
+        and result are exactly what a stale replay's re-derived wall-clock
+        would corrupt, so only additive fields are merged.
+
+        Returns True if a terminal record was found and merged into
+        (caller must not also call async_append); False if no record for
+        this id exists yet, the matching record's own result is not yet
+        terminal (still-completing multi-recharge segment — caller falls
+        back to the normal async_append segment logic), or the terminal
+        record's ended_at is far enough from the incoming record that
+        this is a genuine later recharge segment rather than a replay.
+        """
+        for existing in reversed(self._records):
+            if self.base_mission_id(existing.get("id")) != mission_id:
+                continue
+            if not self.is_terminal_result(existing.get("result")):
+                continue
+            if not self._is_replay_window(existing, incoming):
+                continue
+            for field, value in incoming.items():
+                if (
+                    field in _TERMINAL_REPLAY_IMMUTABLE_FIELDS
+                    or field == "npicks_delta"
+                    or value is None
+                ):
+                    continue
+                if existing.get(field) is None or (
+                    field == "zones" and not existing.get(field)
+                ):
+                    existing[field] = value
+            incoming_npicks = incoming.get("npicks_delta") or 0
+            if incoming_npicks > (existing.get("npicks_delta") or 0):
+                existing["npicks_delta"] = incoming_npicks
+            return True
+        return False
+
+    @staticmethod
+    def _is_replay_window(existing: dict[str, Any], incoming: dict[str, Any]) -> bool:
+        """True when incoming is a re-delivery of existing's terminal event
+        rather than a genuine later recharge segment: a replay arrives
+        within MQTT re-delivery latency of the terminal record, while a
+        real segment resume happens after minutes of charging.
+        """
+        if not isinstance(incoming.get("ended_at"), str):
+            return False
+        if not isinstance(existing.get("ended_at"), str):
+            return False
+        existing_dt = dt_util.parse_datetime(existing["ended_at"])
+        incoming_dt = dt_util.parse_datetime(incoming["ended_at"])
+        if existing_dt is None or incoming_dt is None:
+            return False
+        return (
+            abs((incoming_dt - existing_dt).total_seconds())
+            <= _MISSION_REPLAY_MATCH_SEC
+        )
 
     def append_validated(self, record: dict[str, Any]) -> bool:
         """Append with FULL-history id dedup + MAX_RECORDS trim.
@@ -312,6 +418,11 @@ class MissionStore:
         whatever's appropriate for their transport (ServiceValidationError
         for the service, 404 for the REST view).
         """
+        # Annotated because the first branch fixes the type: the
+        # override is a plain dict, the two lookups below both return
+        # `dict | None`, and the `is None` check two lines down is what
+        # actually handles it.
+        record: dict[str, Any] | None
         if record_override is not None:
             record = record_override
         elif mission_id is not None:
@@ -334,7 +445,16 @@ class MissionStore:
             "anomaly_reason": reason,
             "robot_lifted": npicks_delta > 0,
             "error_code": record.get("error_code"),
-            "recommended_action": self._ANOMALY_RECOMMENDATIONS.get(reason),
+            # `reason` may be None -- one line above records exactly
+            # that as `is_anomalous`. A dict lookup with None is a miss,
+            # which is the right answer for a mission that was not
+            # anomalous, so this reads it as the optional it is rather
+            # than guarding a lookup that already handles it.
+            "recommended_action": (
+                self._ANOMALY_RECOMMENDATIONS.get(reason)
+                if reason is not None
+                else None
+            ),
         }
 
     # All result values that represent a stuck/failure event.
@@ -344,6 +464,30 @@ class MissionStore:
     ERROR_RESULTS: frozenset[str] = frozenset({
         "error", "stuck", "stuck_and_resumed", "stuck_and_abandoned"
     })
+
+    @staticmethod
+    def is_terminal_result(result: Any) -> bool:
+        """True once a mission has a settled result.
+
+        Cloud import persists ``unknown`` for unrecognised but completed
+        vendor outcomes; it is settled too. Only the explicit in-progress
+        placeholder remains eligible for normal multi-segment append logic.
+        """
+        return (
+            isinstance(result, str)
+            and bool(result)
+            and result != "in_progress"
+        )
+
+    @staticmethod
+    def base_mission_id(record_id: Any) -> str:
+        """Strip a trailing multi-recharge-segment "_rN" suffix (see
+        async_append), returning the id every segment of one physical
+        mission shares.
+        """
+        if not isinstance(record_id, str):
+            return ""
+        return _SEGMENT_SUFFIX_RE.sub("", record_id)
 
     def query(
         self,
@@ -413,7 +557,7 @@ class MissionStore:
         Returns a dict keyed by date. Days with no missions are omitted.
         """
         from collections import defaultdict
-        buckets: dict[date, list[dict]] = defaultdict(list)
+        buckets: dict[date, list[dict[str, Any]]] = defaultdict(list)
         for r in self.query(days):
             dt = dt_util.parse_datetime(r.get("started_at", ""))
             if dt:
@@ -478,30 +622,38 @@ class MissionStore:
         self,
         rid_list: list[str],
         region_map: dict[str, str],
+        record_map: dict[str, str] | None = None,
     ) -> list[str]:
         """Resolve region IDs to display names via region_map.
 
         Unknown IDs are returned as their raw ID string — data is never
         silently dropped. Name changes in the Smart Map are reflected
         automatically since region_map is passed at read time, not stored.
+
+        `record_map` IS THE MISSION'S OWN MAP, and it is tried first.
+        @dduff617 (S9+, four Smart Maps) saw historical rooms rendered
+        as raw ids -- `"2"`, `"5"` -- beside correctly named ones,
+        because every record was resolved against whichever map happens
+        to be ACTIVE NOW. A mission run on another floor has no entry
+        there, so its ids survived unresolved.
+
+        The active map stays as the fallback: it is the right answer
+        for records with no map recorded (older entries, EPHEMERAL
+        tier), and it was the only behaviour before this.
         """
-        return [region_map.get(rid, rid) for rid in rid_list]
+        lookup = {**region_map, **(record_map or {})}
+        return [lookup.get(rid, rid) for rid in rid_list]
 
     @staticmethod
-    def extract_rid(item: Any) -> str:
-        """Extract a region ID from a plan.upcoming entry.
+    def extract_rid(region: Any) -> str | None:
+        """Delegates to const.extract_region_id.
 
-        Handles two confirmed formats:
-        - String (some firmware/app versions): "23"
-        - Object (lewis 22.52.10+): {"type": "rid", "rid": "23"}
-          Also accepts {"region_id": "23"} as a fallback.
-
-        Returns an empty string when neither format is recognisable so the
-        caller can filter it out.
+        The two were byte-identical for a long time. Kept as a
+        forwarder rather than deleted because callbacks.py calls it
+        through the class in three places, and a rename there would
+        touch code that has nothing to do with this cleanup.
         """
-        if isinstance(item, dict):
-            return str(item.get("rid") or item.get("region_id") or "")
-        return str(item) if item is not None else ""
+        return extract_region_id(region)
 
     # v3.3.0 STORE-ENCAP — deprecated private alias. 18 test call sites
     # still use the old name; removal earmarked for SENSOR-SPLIT (v3.4.0)
@@ -535,10 +687,36 @@ class MissionStore:
             return None
         return self._record_room_names(latest, effective_map)
 
+    @staticmethod
+    def _record_region_map(
+        rec: dict[str, Any],
+        by_pmap: dict[str, dict[str, str]] | None,
+    ) -> dict[str, str] | None:
+        """{region_id: name} for the map THIS mission ran on, or None.
+
+        `pmaps_info` is `[{pmap_id, pmapv_id, ...}]` for the mission --
+        stored since v3.3.0 and, until @dduff617's report, not used for
+        naming. Same first-entry read as mission_map.py::146.
+
+        None means "no map recorded for this record", which is a real
+        state (older entries, EPHEMERAL tier) and not an error -- the
+        caller falls back to the active map, the behaviour that was
+        there before.
+        """
+        pmaps_info = rec.get("pmaps_info")
+        if not by_pmap or not isinstance(pmaps_info, list) or not pmaps_info:
+            return None
+        first = pmaps_info[0] if isinstance(pmaps_info[0], dict) else {}
+        pmap_id = first.get("pmap_id")
+        if not pmap_id:
+            return None
+        return by_pmap.get(str(pmap_id))
+
     def _record_room_names(
         self,
         rec: dict[str, Any],
         effective_map: dict[str, str],
+        by_pmap: dict[str, dict[str, str]] | None = None,
     ) -> list[str] | None:
         """Room names cleaned in ONE record, completion order.
 
@@ -573,7 +751,12 @@ class MissionStore:
                     seen[rid] = len(ordered)
                     ordered.append(rid)
             if ordered:
-                return self._resolve_region_ids(ordered, effective_map)
+                # THE MISSION'S OWN MAP, from the pmaps_info this record
+                # already stores. Falls back to the active map when the
+                # record has none -- older entries and EPHEMERAL tier.
+                return self._resolve_region_ids(
+                    ordered, effective_map, self._record_region_map(rec, by_pmap)
+                )
         imported = rec.get("last_cleaned_rooms")
         if isinstance(imported, list) and imported:
             return [str(r) for r in imported if isinstance(r, str)]
@@ -601,8 +784,11 @@ class MissionStore:
         upcoming = (timeline.get("plan") or {}).get("upcoming")
         if not upcoming:
             return None
-        rids = [self._extract_rid(r) for r in upcoming]
-        rids = [r for r in rids if r]   # drop empty strings from unrecognised formats
+        # NARROWED BY THE FILTER, and now typed as such. `_extract_rid`
+        # returns `str | None`, the next line drops everything falsy,
+        # and mypy kept the optional through the reassignment.
+        raw_rids = [self._extract_rid(r) for r in upcoming]
+        rids: list[str] = [r for r in raw_rids if r]
         if not rids:
             return None
         return self._resolve_region_ids(rids, effective_map)
@@ -674,6 +860,7 @@ class MissionStore:
         self,
         region_map: dict[str, str] | None = None,
         umf_regions: dict[str, str] | None = None,
+        regions_by_pmap: dict[str, dict[str, str]] | None = None,
     ) -> dict[str, str]:
         """Return the most recent clean timestamp per room across all records.
 
@@ -702,16 +889,95 @@ class MissionStore:
             # flows into room_coverage_health's parse_datetime calls.
             if not ended_at or not isinstance(ended_at, str):
                 continue
-            rooms = self._record_room_names(rec, effective_map) or []
+            rooms = self._record_room_names(rec, effective_map, regions_by_pmap) or []
             for room in rooms:
                 if room not in result:
                     result[room] = ended_at
+        return result
+
+    @staticmethod
+    def record_region_ids(rec: dict[str, Any]) -> list[str]:
+        """The raw region ids one record cleaned, completion order.
+
+        THE ID-KEYED COUNTERPART TO _record_room_names, WHICH RESOLVES
+        TO NAMES. Names are right for a human-readable summary and
+        wrong for a per-region entity: rename a room in the iRobot app
+        and a name-keyed entity loses its history, because the key it
+        was built on no longer exists.
+
+        Same finEvents read and the same status filter, stopping one
+        step earlier.
+
+        PRIME RECORDS ARE A DIFFERENT SHAPE, and reading only the
+        Classic one returned [] for every Prime mission -- so the
+        per-region sensors would all have sat at "unknown" forever,
+        looking like a robot that had never cleaned anything.
+
+        `prime_mission_sync` does not store a `timeline` at all. It
+        walks the library's timeline OBJECTS (attributes, and the field
+        is `region_id`, not `rid`) and keeps the result as
+        `room_durations_sec` -- `{region_id: seconds}`. A region with
+        recorded time in a finished mission is a region that was
+        cleaned, which is the same fact finEvents carries.
+        """
+        timeline = rec.get("timeline")
+        if isinstance(timeline, dict):
+            ordered: list[str] = []
+            seen: set[str] = set()
+            for ev in timeline.get("finEvents") or []:
+                if not isinstance(ev, dict) or ev.get("type") != "room":
+                    continue
+                room = ev.get("room") or {}
+                if room.get("status") not in (0, 6):   # 0=complete, 6=after-recovery
+                    continue
+                rid = str(room.get("rid", ""))
+                if rid and rid not in seen:
+                    seen.add(rid)
+                    ordered.append(rid)
+            if ordered:
+                return ordered
+
+        # Prime: {region_id: seconds}. Insertion order is the order the
+        # sync wrote them, which follows the timeline.
+        durations = rec.get("room_durations_sec")
+        if isinstance(durations, dict):
+            return [str(rid) for rid in durations if str(rid)]
+        return []
+
+    def region_last_cleaned(self) -> dict[str, str]:
+        """{"<pmap_id>/<region_id>": ended_at} newest-first, first wins.
+
+        KEYED BY MAP AND REGION TOGETHER, because a region id alone is
+        not unique across maps -- @dduff617's four-map account has ids
+        that repeat, and merging them would attribute one floor's clean
+        to another's room. The same reasoning that made the history fix
+        resolve per map.
+
+        Records with no map recorded (older entries, EPHEMERAL tier)
+        are keyed on the id alone; a caller that knows its map looks up
+        the qualified form first and falls back.
+        """
+        result: dict[str, str] = {}
+        for rec in self._records:
+            ended_at = rec.get("ended_at")
+            if not ended_at or not isinstance(ended_at, str):
+                continue
+            pmaps_info = rec.get("pmaps_info")
+            pmap_id = ""
+            if isinstance(pmaps_info, list) and pmaps_info:
+                first = pmaps_info[0] if isinstance(pmaps_info[0], dict) else {}
+                pmap_id = str(first.get("pmap_id") or "")
+            for rid in self.record_region_ids(rec):
+                key = f"{pmap_id}/{rid}" if pmap_id else rid
+                if key not in result:
+                    result[key] = ended_at
         return result
 
     def room_visit_counts(
         self,
         region_map: dict[str, str] | None = None,
         umf_regions: dict[str, str] | None = None,
+        regions_by_pmap: dict[str, dict[str, str]] | None = None,
     ) -> dict[str, int]:
         """v3.3.0 SMART-ORDER — number of recorded cleanings per room
         across the whole local window. Public accessor (STORE-ENCAP):
@@ -720,7 +986,12 @@ class MissionStore:
         effective_map = region_map if region_map else (umf_regions or {})
         counts: dict[str, int] = {}
         for rec in self._records:
-            for room in self._record_room_names(rec, effective_map) or []:
+            # Per-map resolution -- see room_cleaning_history. Counting
+            # a raw id as its own room splits one room's visits across
+            # two entries on a multi-map account.
+            for room in self._record_room_names(
+                rec, effective_map, regions_by_pmap
+            ) or []:
                 counts[room] = counts.get(room, 0) + 1
         return counts
 
@@ -730,6 +1001,7 @@ class MissionStore:
         now_iso: str,
         region_map: dict[str, str] | None = None,
         umf_regions: dict[str, str] | None = None,
+        regions_by_pmap: dict[str, dict[str, str]] | None = None,
     ) -> dict[str, dict[str, Any]]:
         """v3.3.0 ROOM-SCHED — the ONE home for the overdue rule, shared
         by sensor.*_rooms_overdue and the clean_overdue_rooms service
@@ -753,7 +1025,8 @@ class MissionStore:
         from .const import ROOM_SCHEDULE_INTERVALS
 
         health = self.room_coverage_health(
-            now_iso, region_map=region_map, umf_regions=umf_regions
+            now_iso, region_map=region_map, umf_regions=umf_regions,
+            regions_by_pmap=regions_by_pmap,
         )
         config = config or {}
         result: dict[str, dict[str, Any]] = {}
@@ -794,6 +1067,7 @@ class MissionStore:
         min_intervals: int = 3,
         region_map: dict[str, str] | None = None,
         umf_regions: dict[str, str] | None = None,
+        regions_by_pmap: dict[str, dict[str, str]] | None = None,
     ) -> dict[str, dict[str, Any]]:
         """v3.2.0 COVERAGE-FREQ — is each room being cleaned in its OWN
         normal rhythm, self-calibrated per room rather than against a
@@ -835,7 +1109,15 @@ class MissionStore:
             ended_at = rec.get("ended_at")
             # v3.3.0 ROOM-SCHED foundation fix — derive, don't read the
             # never-written stored field (see room_cleaning_history).
-            rooms: list[str] = self._record_room_names(rec, effective_map) or []
+            # Per-map resolution, same as room_cleaning_history: a
+            # room cleaned on another Smart Map resolves against ITS
+            # map, not whichever is active now. Without this, rooms
+            # from other floors arrive as raw ids and are counted as
+            # separate, never-cleaned "rooms" -- inflating the
+            # overdue count on any multi-map account.
+            rooms: list[str] = self._record_room_names(
+                rec, effective_map, regions_by_pmap
+            ) or []
             # v3.2.0 full-review fix — defence in depth alongside the
             # import-gate type validation in api_views.py: a store that
             # was ALREADY poisoned with a non-string timestamp (imported
@@ -856,7 +1138,12 @@ class MissionStore:
         now_dt = dt_util.parse_datetime(now_iso)
         result: dict[str, dict[str, Any]] = {}
 
-        for room, last_clean_iso in self.room_cleaning_history(region_map, umf_regions).items():
+        # THE NAMES COME FROM HERE, not from the loop above -- so this
+        # call needs the per-map view too. Passing it to the loop and
+        # not to this line left every name resolved the old way.
+        for room, last_clean_iso in self.room_cleaning_history(
+            region_map, umf_regions, regions_by_pmap
+        ).items():
             last_dt = dt_util.parse_datetime(last_clean_iso)
             if now_dt is None or last_dt is None:
                 continue
@@ -951,8 +1238,28 @@ class MissionStore:
                 dt = dt_util.parse_datetime(r.get("started_at", ""))
                 if dt:
                     completed_dates.add(dt_util.as_local(dt).date())
+        # THE STREAK MUST NOT RESET AT MIDNIGHT.
+        #
+        # @chairstacker: 0 just after midnight on a robot with a long
+        # history. The old loop started at `today`, so a day with no
+        # mission yet -- every day, until the robot runs -- put the
+        # first step out of the set and returned 0 immediately. It
+        # threw away the whole run the moment one empty day appeared,
+        # including the ordinary gap between last night and now.
+        #
+        # "Clean streak" means the current unbroken run. Not having
+        # cleaned *yet today* does not break it; a whole day missed
+        # does. So the streak is allowed to end either today or
+        # yesterday, and only a gap before that stops the count.
+        if not completed_dates:
+            return 0
+
+        day = today if today in completed_dates else today - timedelta(days=1)
+        if day not in completed_dates:
+            # Nothing today or yesterday -- the run is genuinely broken.
+            return 0
+
         streak = 0
-        day = today
         while day in completed_dates:
             streak += 1
             day -= timedelta(days=1)
@@ -977,7 +1284,7 @@ class MissionStore:
         if len(areas) < 5:
             return None
         areas.sort()
-        return areas[int(len(areas) * 0.75)]
+        return float(areas[int(len(areas) * 0.75)])
 
     def wear_data(self, days: int) -> list[dict[str, Any]]:
         """Return daily bbrun.hr snapshots for the last `days` days.
@@ -1035,10 +1342,18 @@ class MissionStore:
         return round(max(0.0, rate), 2)
 
     @staticmethod
-    def _merge_cloud_fields(local: dict, cloud: dict) -> bool:
+    def _merge_cloud_fields(
+        local: dict[str, Any],
+        cloud: dict[str, Any],
+        allow_result_rewrite: bool = True,
+    ) -> bool:
         """Copy missing analytics fields from a cloud record into a local record.
 
         Only copies when the local field is absent or None — never overwrites.
+
+        allow_result_rewrite=False freezes a settled result against the
+        B1/B1-EXT corrections below — used when the local record is already
+        terminal and nothing may rewrite its identity.
 
         B1 — error 224 result correction: when the cloud record reveals
         pauseId=224 and the local result is 'stuck', correct the result to
@@ -1076,11 +1391,14 @@ class MissionStore:
         Returns True if any field was written.
         """
         wrote = False
+        already_corrected = bool(local.get("result_corrected_from_cloud"))
+        rewrite_allowed = allow_result_rewrite and not already_corrected
 
         # B1 — error 224 result correction (before generic scalar merge).
         pause_id = int(cloud.get("pauseId", 0) or 0)
-        if pause_id == 224 and local.get("result") == "stuck":
+        if rewrite_allowed and pause_id == 224 and local.get("result") == "stuck":
             local["result"] = "error"
+            local["result_corrected_from_cloud"] = True
             if local.get("error_code") is None:
                 local["error_code"] = 224
             wrote = True
@@ -1090,14 +1408,16 @@ class MissionStore:
         done_raw = (cloud.get("done_raw") or "").strip()
         local_result = local.get("result")
 
-        if done == "bat" and local_result in ("completed", "stuck_and_resumed"):
+        if rewrite_allowed and done == "bat" and local_result in ("completed", "stuck_and_resumed"):
             local["result"] = "error"
+            local["result_corrected_from_cloud"] = True
             if local.get("error_code") is None and pause_id > 0:
                 local["error_code"] = pause_id
             wrote = True
 
-        elif done_raw == "usrEnd" and local_result in ("completed", "stuck_and_resumed"):
+        elif rewrite_allowed and done_raw == "usrEnd" and local_result in ("completed", "stuck_and_resumed"):
             local["result"] = "cancelled"
+            local["result_corrected_from_cloud"] = True
             wrote = True
 
         for field in _CLOUD_MERGE_SCALAR:
@@ -1111,7 +1431,7 @@ class MissionStore:
         return wrote
 
     @staticmethod
-    def _backfill_area_sqft(local: dict) -> bool:
+    def _backfill_area_sqft(local: dict[str, Any]) -> bool:
         """Set local["area_sqft"] from local["sqft"] when the canonical
         field is still absent but the raw cloud field is present.
 
@@ -1134,7 +1454,7 @@ class MissionStore:
 
     # ── L3 — Mission anomaly detection ────────────────────────────────────────
 
-    def compute_rolling_stats(self, days: int = 30) -> dict | None:
+    def compute_rolling_stats(self, days: int = 30) -> dict[str, Any] | None:
         """Compute rolling mean/std for duration_min and area_sqft.
 
         L3 — Returns None when fewer than 20 missions are available (insufficient
@@ -1182,7 +1502,7 @@ class MissionStore:
         }
 
     @staticmethod
-    def compute_archive_stats(derived_records: list[dict]) -> dict | None:
+    def compute_archive_stats(derived_records: list[dict[str, Any]]) -> dict[str, Any] | None:
         """Compute anomaly-detection baseline from ARC1 archive derived records.
 
         L3-ARC (v2.8.0) — identical contract to compute_rolling_stats() but
@@ -1256,8 +1576,8 @@ class MissionStore:
 
     def anomaly_reason(
         self,
-        record: dict,
-        stats: dict,
+        record: dict[str, Any],
+        stats: dict[str, Any],
         profile: Any = None,
     ) -> str | None:
         """v3.2.0 ANOMALY-EXPLAIN — same four conditions as is_anomalous()
@@ -1330,8 +1650,8 @@ class MissionStore:
 
     def is_anomalous(
         self,
-        record: dict,
-        stats: dict,
+        record: dict[str, Any],
+        stats: dict[str, Any],
         profile: Any = None,
     ) -> bool:
         """Return True when a record is statistically anomalous.
@@ -1366,7 +1686,7 @@ class MissionStore:
 
     def backfill_from_cloud(
         self,
-        cloud_records: list[dict],
+        cloud_records: list[dict[str, Any]],
         tolerance_sec: int = 120,
     ) -> BackfillResult:
         """Correct local MissionStore records using cloud /missionhistory timestamps.
@@ -1404,7 +1724,7 @@ class MissionStore:
             return BackfillResult(corrected=0, enriched=0)
 
         # Build index of cloud records keyed by end timestamp for O(1) lookup.
-        cloud_by_end: dict[int, dict] = {}
+        cloud_by_end: dict[int, dict[str, Any]] = {}
         for cr in cloud_records:
             ts = cr.get("timestamp")
             if ts is not None:
@@ -1425,7 +1745,7 @@ class MissionStore:
             local_end_ts = int(ended_dt.timestamp())
 
             # Find nearest cloud record within tolerance
-            best_cr: dict | None = None
+            best_cr: dict[str, Any] | None = None
             best_delta = tolerance_sec + 1
             for cloud_ts, cr in cloud_by_end.items():
                 delta = abs(cloud_ts - local_end_ts)
@@ -1459,6 +1779,16 @@ class MissionStore:
                 delta_start = float("inf")
 
             # Always merge analytics fields regardless of timestamp delta.
+            # A settled result is frozen: the B1/B1-EXT corrections may only
+            # apply to records that are not yet terminal (see
+            # update_terminal_fields' freeze contract).
+            # Result corrections (B1/B1-EXT) are EXEMPT from the terminal
+            # freeze by design: the local MQTT classification is provably
+            # wrong (battery death / user cancel / 224-abort) and the cloud
+            # is the first authoritative truth — a correction applies once
+            # per record. The freeze protects timing/identity fields below;
+            # _merge_cloud_fields' result_corrected_from_cloud marker makes
+            # repeat mutation impossible (no error<->cancelled oscillation).
             merge_wrote = self._merge_cloud_fields(local, best_cr)
 
             # area_sqft is the canonical local name; "sqft" above is the
@@ -1477,8 +1807,21 @@ class MissionStore:
             if merge_wrote or area_wrote:
                 enriched += 1
 
+            terminal = self.is_terminal_result(local.get("result"))
+            # 980/900-series firmware resets mssnStrtTm to 0 at mission end:
+            # the local record may be stuck with started_at == ended_at and
+            # duration_min == 0 forever. That degenerate signature is exactly
+            # what the cloud correction below exists for, so it stays eligible
+            # even once terminal.
+            degenerate_980 = (
+                local.get("started_at") == local.get("ended_at")
+                or not local.get("duration_min")
+            )
+
             # Only correct timestamps when they differ meaningfully (> 5 min).
             if delta_start < 300:
+                continue
+            if terminal and not degenerate_980:
                 continue
 
             new_duration = max(0, round(
@@ -1508,7 +1851,7 @@ class MissionStore:
 
     def merge_latest_from_cloud(
         self,
-        cloud_records: list[dict],
+        cloud_records: list[dict[str, Any]],
         tolerance_sec: int = 120,
     ) -> bool:
         """Merge cloud analytics fields into the most recent local record.
@@ -1537,7 +1880,7 @@ class MissionStore:
 
         local_end_ts = int(ended_dt.timestamp())
 
-        best_cr: dict | None = None
+        best_cr: dict[str, Any] | None = None
         best_delta = tolerance_sec + 1
         for cr in cloud_records:
             ts = cr.get("timestamp")
@@ -1585,11 +1928,25 @@ class MissionStore:
                 StatisticData,
                 StatisticMetaData,
             )
-            # mean_type required from HA 2026.11 — pass as integer (0 = NONE)
-            # to avoid import dependency on StatisticsMeanType which may not
-            # exist in older HA versions. StatisticMetaData is a TypedDict so
-            # it accepts any value without type checking.
-            _mean_type_none = 0
+            # mean_type is required from HA 2026.11 and the enum that
+            # names its values does not exist in older releases, so the
+            # import is attempted and falls back to the literal.
+            #
+            # 0 is StatisticMeanType.NONE. Passing the bare int worked
+            # until mypy checked against a HA new enough to declare the
+            # field's type -- at which point "TypedDicts accept any
+            # value" stopped being true for this key.
+            # Resolved at runtime rather than imported: the name does
+            # not exist on older HA, and a `try: import` still has to
+            # type-check against whichever version mypy is pointed at --
+            # so it fails on one of the two no matter which way round.
+            _models = importlib.import_module(
+                "homeassistant.components.recorder.models"
+            )
+            _mean_type_none = getattr(_models, "StatisticMeanType", None)
+            _mean_type_none = (
+                _mean_type_none.NONE if _mean_type_none is not None else 0
+            )
         except ImportError:
             _LOGGER.debug(
                 "MissionStore: recorder not available -- skipping statistics backfill"
@@ -1598,14 +1955,19 @@ class MissionStore:
 
         import inspect as _inspect
 
-        async def _import_stats(meta, stats):
+        async def _import_stats(meta: Any, stats: Any) -> None:
             """Call async_add_external_statistics, handling both sync and async variants."""
             result = async_add_external_statistics(hass, meta, stats)
             if _inspect.isawaitable(result):
                 await result
 
-        def _make_meta(name, statistic_id, unit):
-            return StatisticMetaData(
+        def _make_meta(name: str, statistic_id: str, unit: str | None) -> Any:
+            # FORWARD-COMPATIBLE ON PURPOSE. `mean_type` and
+            # `unit_class` are required from HA 2026.11 and unknown to
+            # the version pinned here, so mypy reports them as extra
+            # keys against the older TypedDict. Removing them would
+            # break the newer HA; the ignore goes when the pin moves.
+            return StatisticMetaData(  # type: ignore[typeddict-unknown-key]
                 has_mean=False,
                 has_sum=True,
                 mean_type=_mean_type_none,  # 0 = NONE (no mean), required from HA 2026.11

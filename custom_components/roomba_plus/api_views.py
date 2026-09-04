@@ -46,26 +46,50 @@ _LOGGER = logging.getLogger(__name__)
 _VALID_FORMATS = {"summary", "records", "hazards", "export", "zone_coverage_health"}
 
 
-def _build_local_zones_index(mission_store_records: list[dict]) -> dict[int, list[str]]:
+def _build_local_zones_index(mission_store_records: list[dict[str, Any]]) -> dict[int, list[str]]:
     """Build a ts -> zone-names index from local MissionStore records.
 
     F4a -- used to inject zone names into cloud records which carry zones=[].
-    Keys are integer Unix timestamps of ended_at. Tolerance matching is done
-    at the call site (120 s window).
+    Keys are integer Unix timestamps. Tolerance matching is done at the
+    call site.
+
+    KEYED ON START TIME, NOT END TIME, and that is @scenicsystemsllc's
+    finding turned around.
+
+    He reported that the 120-second tolerance fails when a recharge
+    pushes the two sides' `ended` timestamps apart: a robot that runs
+    out of battery, docks, charges and resumes ends its mission an hour
+    or more after the moment either side first called it over. Two
+    minutes of tolerance cannot bridge that, and widening it would start
+    matching neighbouring missions instead.
+
+    His suggested fix was to match on mission id. That is not available:
+    the cloud records this reads carry `startTime`, `timestamp`,
+    `runM`, `durationM`, `doneM` and `pauseId` -- no mission id at all.
+
+    But his own reasoning gives the answer. **A recharge moves the end,
+    never the start.** Both sides carry a start, and the same two-minute
+    window that was too tight for ends is comfortable for starts.
     """
     index: dict[int, list[str]] = {}
     for r in mission_store_records:
-        ended_str = r.get("ended_at", "")
+        # FALLS BACK TO `ended_at` when a record has no start.
+        #
+        # Older MissionStore records predate `started_at`, and a record
+        # with only an end is still worth matching -- just on the weaker
+        # key. Skipping it would trade one failure mode for another and
+        # lose zones that used to be injected correctly.
+        started_str = r.get("started_at") or r.get("ended_at", "")
         zones = r.get("zones") or []
-        if not ended_str or not zones:
+        if not started_str or not zones:
             continue
         try:
-            ended_dt = datetime.datetime.fromisoformat(ended_str)
+            started_dt = datetime.datetime.fromisoformat(started_str)
         except (ValueError, TypeError):
             continue
-        if ended_dt.tzinfo is None:
-            ended_dt = ended_dt.replace(tzinfo=datetime.timezone.utc)
-        index[int(ended_dt.timestamp())] = list(zones)
+        if started_dt.tzinfo is None:
+            started_dt = started_dt.replace(tzinfo=datetime.timezone.utc)
+        index[int(started_dt.timestamp())] = list(zones)
     return index
 
 
@@ -76,11 +100,17 @@ def _inject_zones(
 ) -> dict[str, Any]:
     """Return record with zones populated from local MissionStore when available.
 
-    F4a -- matches on the cloud record's ended_at ISO string against the
-    local ended_at index within tolerance_sec.  If a match is found and the
+    F4a -- matches on the cloud record's STARTED_AT against the local
+    started_at index within tolerance_sec. If a match is found and the
     local record has zone names, they replace the empty zones list.
+
+    ON START, NOT END. A mission that runs the battery down docks,
+    charges and resumes, and its `ended` timestamps drift far apart
+    between the two sources -- @scenicsystemsllc reported exactly that
+    against the 120-second window. A recharge moves the end and never
+    the start.
     """
-    end_ts_str = record.get("ended_at")
+    end_ts_str = record.get("started_at") or record.get("ended_at")
     if not end_ts_str or not local_zones_index:
         return record
 
@@ -437,10 +467,11 @@ class MissionHistoryView(HomeAssistantView):
                 else None
             )
             # v3.3.0 ROOM-SCHED foundation fix — derive rooms per record
-            result = data.mission_store.room_coverage_health(
+            if data.mission_store is None:
+                return self.json({"rooms": []})
+            return self.json(data.mission_store.room_coverage_health(
                 dt_util.now().isoformat(), region_map=_region_map, umf_regions=_umf
-            )
-            return self.json(result)
+            ))
 
         # -- format=hazards ---------------------------------------------------
         # F9 — returns GridStore stuck hotspots and UMF-seeded obstacle zones.
@@ -455,9 +486,14 @@ class MissionHistoryView(HomeAssistantView):
                 return self.json([])
             hazards = data.grid_store.hotspots()
             # Append UMF-seeded observed zones (source="robot_learned")
-            if data.has_cloud:
+            cloud = data.cloud_coordinator
+            if cloud is not None and cloud.data is not None:
+                # `has_cloud` is exactly this test, written as a
+                # property -- so it answers the question and narrows
+                # nothing. Reading through a local carries the type
+                # to the accesses below.
                 import math
-                for centroid in data.cloud_coordinator.observed_zone_centroids:
+                for centroid in cloud.observed_zone_centroids:
                     x = centroid.get("x") or 0.0
                     y = centroid.get("y") or 0.0
                     hazards.append({
@@ -472,7 +508,7 @@ class MissionHistoryView(HomeAssistantView):
                         "source":      "robot_learned",
                     })
                 # v2.3.0 Step 8 / Gap B — keepout zone centroids
-                for zone in data.cloud_coordinator.keepout_zones:
+                for zone in cloud.keepout_zones:
                     cx = zone.get("cx") or zone.get("centroid_x") or zone.get("x")
                     cy = zone.get("cy") or zone.get("centroid_y") or zone.get("y")
                     if cx is not None and cy is not None:
@@ -526,7 +562,7 @@ class MissionHistoryView(HomeAssistantView):
         # backup / migration purposes.  Schema is frozen at version 1;
         # new fields added in later versions carry null defaults.
         if fmt == "export":
-            records_out: list[dict] = []
+            records_out: list[dict[str, Any]] = []
             if data.mission_store is not None:
                 records_out = list(data.mission_store.records)
             blid = entry.data.get("blid", "")
@@ -540,18 +576,21 @@ class MissionHistoryView(HomeAssistantView):
 
         # -- format=records ---------------------------------------------------
         # F7o -- distinguish coordinator failure from genuinely empty data.
-        if data.has_cloud and not data.cloud_coordinator.last_update_success:
+        _cc = data.cloud_coordinator
+        if _cc is not None and _cc.data is not None and not _cc.last_update_success:
             return self.json_message("Cloud coordinator unavailable", status_code=503)
 
         # Build local zone index for F4a injection into cloud records
         local_zones_index: dict[int, list[str]] = {}
         if data.mission_store is not None:
-            local_zones_index = _build_local_zones_index(data.mission_store.records)
+            local_zones_index = _build_local_zones_index(
+            list(data.mission_store.records) if data.mission_store else []
+        )
 
-        if data.has_cloud and data.cloud_coordinator.raw_records:
+        if _cc is not None and _cc.data is not None and _cc.raw_records:
             unified = [
                 _cloud_record_to_unified(r)
-                for r in data.cloud_coordinator.raw_records
+                for r in _cc.raw_records
             ]
             # F4a -- inject zone names from local store into cloud records
             if local_zones_index:
@@ -718,7 +757,10 @@ class MissionPathView(HomeAssistantView):
             id_to_name = {
                 r["id"]: r["name"] for r in cc.regions if r.get("id") and r.get("name")
             }
-        elif getattr(data, "room_seg_store", None) is not None:
+        elif data.room_seg_store is not None:
+            # Asking the attribute directly rather than through
+            # `getattr(..., None)`: the store is a declared field, and
+            # only the direct test narrows it.
             id_to_name = {
                 rid: room.name
                 for rid, room in data.room_seg_store.rooms.items()
@@ -780,7 +822,7 @@ class MissionHistoryImportView(HomeAssistantView):
                 status_code=400,
             )
 
-        incoming: list[dict] = body.get("records", [])
+        incoming: list[dict[str, Any]] = body.get("records", [])
         if not isinstance(incoming, list):
             return self.json_message("records must be a list", status_code=400)
 
@@ -803,7 +845,7 @@ class MissionHistoryImportView(HomeAssistantView):
         skipped = 0
         errors: list[str] = []
 
-        def _record_type_errors(rec: dict) -> str | None:
+        def _record_type_errors(rec: dict[str, Any]) -> str | None:
             """v3.2.0 full-review fix — field-TYPE validation, previously
             absent entirely: a record only needed an `id` to be accepted,
             so e.g. `\"ended_at\": 12345` (int instead of ISO string) was
@@ -890,11 +932,11 @@ class HouseholdSummaryView(HomeAssistantView):
             days = 28
 
         entries = hass.config_entries.async_entries(DOMAIN)
-        robots: list[dict] = []
+        robots: list[dict[str, Any]] = []
         total_missions = 0
         total_completed = 0
         total_area: float | None = None
-        floors: dict[str, dict] = {}
+        floors: dict[str, dict[str, Any]] = {}
 
         for entry in entries:
             if not hasattr(entry, "runtime_data") or entry.runtime_data is None:
@@ -1169,7 +1211,7 @@ class MissionMapJsonView(HomeAssistantView):
         # Current room polygons as rendering context (names resolved) —
         # deliberately the CURRENT map version: room shapes are the
         # backdrop, the mission's own data is the coverage layer.
-        rooms: dict[str, list] = {}
+        rooms: dict[str, list[Any]] = {}
         aligner = data.umf_aligner
         if aligner is not None and aligner.aligned:
             name_of = aligner.rid_to_name()
@@ -1207,7 +1249,7 @@ class MissionMapPngView(HomeAssistantView):
         if err is not None:
             return self.json_message(err[1], status_code=err[0])
         hass: HomeAssistant = request.app["hass"]
-        rooms: list[list] = []
+        rooms: list[list[Any]] = []
         aligner = data.umf_aligner
         if aligner is not None and aligner.aligned:
             rooms = list(aligner.room_polygons_umf.values())
@@ -1225,7 +1267,7 @@ class MissionMapPngView(HomeAssistantView):
 
 async def _mission_map_payload(
     request: web.Request, entry_id: str, record_id: str
-):
+) -> Any:
     """Shared record-resolution + fetch + error mapping for both
     MISSION-MAP views (one rule set, two output formats).
 

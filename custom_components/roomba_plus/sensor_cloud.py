@@ -9,10 +9,12 @@ No behaviour change vs. v3.3.1.
 """
 from __future__ import annotations
 
+import datetime
+
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 import logging
 
 from homeassistant.components.sensor import (
@@ -30,7 +32,6 @@ from homeassistant.core import callback
 from homeassistant.helpers.typing import StateType
 
 from homeassistant.util import dt as dt_util
-
 from .const import (
     SQFT_TO_M2,
 )
@@ -63,7 +64,7 @@ def _mh_sqft_to_m2(history: dict[str, Any]) -> StateType:
     sqft = (history.get("runtimeStats") or {}).get("sqft")
     if sqft is None:
         return None
-    return round(sqft / 10.764, 1)
+    return cast('str | int | float | None', round(sqft / 10.764, 1))
 
 
 def _mh_total_minutes(history: dict[str, Any]) -> StateType:
@@ -77,7 +78,7 @@ def _mh_total_minutes(history: dict[str, Any]) -> StateType:
     mn = stats.get("min")
     if hr is None or mn is None:
         return None
-    return hr * 60 + mn
+    return cast('str | int | float | None', hr * 60 + mn)
 
 
 def _mh_total_missions(history: dict[str, Any]) -> StateType:
@@ -154,7 +155,7 @@ def _raw_completion_rate(records: list[dict[str, Any]]) -> StateType:
     """Return completion rate (%) across the API window records."""
     if not records:
         return None
-    completed = sum(1 for r in records if r.get("done") == "done")
+    completed = sum(1 for r in records if r.get("classified_result") == "completed")
     return round(completed / len(records) * 100, 1)
 
 
@@ -179,52 +180,72 @@ def _raw_dirt_events(records: list[dict[str, Any]]) -> StateType:
     return sum(int(r.get("dirt", 0) or 0) for r in records)
 
 
+def _cloud_last_error_record(records: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Newest failed/stuck record within the entity's 30-day framing.
+
+    `records` is a count-based API window (cloud_api.get_mission_history),
+    not itself bounded to 30 days, so a candidate older than
+    event_counts_30d's own framing is skipped rather than surfaced as if it
+    were recent. Shared by state, timestamp and catalogue attributes so the
+    three never disagree about which error (if any) is current.
+    """
+    cutoff = dt_util.utcnow() - datetime.timedelta(days=30)
+    for r in records:
+        classified = r.get("classified_result", "")
+        if not (classified.startswith("error_") or classified == "stuck"):
+            continue
+        ts = r.get("timestamp")
+        if ts:
+            error_time = datetime.datetime.fromtimestamp(
+                int(ts), tz=datetime.timezone.utc
+            )
+            if error_time < cutoff:
+                continue
+        return r
+    return None
+
+
 def _raw_cloud_last_error_code(records: list[dict[str, Any]]) -> StateType:
     """Return the pauseId from the most recent failed mission record."""
-    for r in records:
-        classified = r.get("classified_result", "")
-        if classified.startswith("error_") or classified == "stuck":
-            pause_id = int(r.get("pauseId", 0) or 0)
-            return pause_id if pause_id > 0 else None
-    return None
+    r = _cloud_last_error_record(records)
+    if r is None:
+        return None
+    pause_id = int(r.get("pauseId", 0) or 0)
+    return pause_id if pause_id > 0 else None
 
 
-def _raw_cloud_last_error_time(records: list[dict[str, Any]]) -> StateType:
+def _raw_cloud_last_error_time(records: list[dict[str, Any]]) -> datetime.datetime | None:
     """Return the end timestamp of the most recent failed mission as a datetime."""
-    for r in records:
-        classified = r.get("classified_result", "")
-        if classified.startswith("error_") or classified == "stuck":
-            ts = r.get("timestamp")
-            if ts:
-                import datetime
-                return datetime.datetime.fromtimestamp(
-                    int(ts), tz=datetime.timezone.utc
-                )
-    return None
+    r = _cloud_last_error_record(records)
+    if r is None:
+        return None
+    ts = r.get("timestamp")
+    if not ts:
+        return None
+    return datetime.datetime.fromtimestamp(int(ts), tz=datetime.timezone.utc)
 
 
 def _raw_cloud_last_error_attrs(records: list[dict[str, Any]]) -> dict[str, Any]:
     """Return ERROR_CATALOGUE label + action for the most recent cloud error."""
     from .const import ERROR_CATALOGUE
-    for r in records:
-        classified = r.get("classified_result", "")
-        if classified.startswith("error_") or classified == "stuck":
-            pause_id = int(r.get("pauseId", 0) or 0)
-            catalogue = ERROR_CATALOGUE.get(pause_id, {})
-            return {
-                "error_code": pause_id or None,
-                "label": catalogue.get("label", ""),
-                "description": catalogue.get("description", ""),
-                "action": catalogue.get("action", ""),
-                "source": "cloud_pauseId",
-            }
-    return {}
+    r = _cloud_last_error_record(records)
+    if r is None:
+        return {}
+    pause_id = int(r.get("pauseId", 0) or 0)
+    catalogue = ERROR_CATALOGUE.get(pause_id, {})
+    return {
+        "error_code": pause_id or None,
+        "label": catalogue.get("label", ""),
+        "description": catalogue.get("description", ""),
+        "action": catalogue.get("action", ""),
+        "source": "cloud_pauseId",
+    }
 
 
 import statistics as _statistics
 
 
-def _raw_cleaning_speed(records: list[dict]) -> StateType:
+def _raw_cleaning_speed(records: list[dict[str, Any]]) -> StateType:
     """F5a — median cleaning speed (m²/min) across the API window.
 
     Cloud API returns sqft — converted to m² (× SQFT_TO_M2) for consistency
@@ -244,7 +265,7 @@ def _raw_cleaning_speed(records: list[dict]) -> StateType:
     return round(_statistics.median(speeds), 2)
 
 
-def _raw_dirt_density(records: list[dict]) -> StateType:
+def _raw_dirt_density(records: list[dict[str, Any]]) -> StateType:
     """F5b — median dirt events per m² across the API window.
 
     Cloud API returns sqft — converted to m² (÷ SQFT_TO_M2) for consistency.
@@ -263,8 +284,82 @@ def _raw_dirt_density(records: list[dict]) -> StateType:
     return round(_statistics.median(densities), 3)
 
 
+def _raw_dirt_density_trend(records: list[dict[str, Any]]) -> StateType:
+    """Dirt density trend: rising / stable / falling / unknown.
+
+    THE INPUT `_classify_dirt_cause` WAS WAITING FOR. That classifier
+    was written before this existed, so it could not be called at all --
+    it needs a direction and this module produced only a per-record
+    density.
+
+    Deliberately the same shape as `_raw_cleaning_speed_trend`: median
+    of the 5 most recent against the previous 10, a 10% threshold, and
+    the same gap filter. Those numbers were judged once for the speed
+    trend; inventing different ones here would mean two windows
+    disagreeing about the same history, and the pair is compared against
+    each other.
+
+    Records must be newest-first (cloud API order), as there.
+    """
+    filtered: list[float] = []
+    prev_ts: float | None = None
+    skip_remaining = 0
+
+    for r in records:
+        ts_raw = r.get("startTime") or r.get("timestamp")
+        ts = float(ts_raw) if ts_raw else None
+        if ts is not None and prev_ts is not None:
+            # The first cleans after a long absence are catching-up runs
+            # on an abnormally dirty floor -- exactly the false "rising"
+            # this classifier must not report as brush wear.
+            if (prev_ts - ts) / 86400 > 7:
+                skip_remaining = 3
+        if skip_remaining > 0:
+            skip_remaining -= 1
+            if ts is not None:
+                prev_ts = ts
+            continue
+        # Same formula as `_raw_dirt_density`, inline: a shared helper
+        # for five lines would be a third place to keep in step.
+        dirt = r.get("dirt")
+        sqft = r.get("sqft")
+        if dirt is not None and sqft and float(sqft) > 0:
+            filtered.append(float(dirt) / (float(sqft) * SQFT_TO_M2))
+        if ts is not None:
+            prev_ts = ts
+
+    if len(filtered) < 6:
+        return "unknown"
+    recent = _statistics.median(filtered[:5])
+    older = _statistics.median(filtered[5:min(15, len(filtered))])
+    if older == 0:
+        return "unknown"
+    delta = (recent - older) / older
+    if delta > 0.10:
+        return "rising"
+    if delta < -0.10:
+        return "falling"
+    return "stable"
+
+
 def _classify_dirt_cause(dirt_trend: str, speed_trend: str) -> str:
     """Classify the most probable cause of rising dirt density.
+
+    **UNCALLED, AND IT CANNOT BE CALLED YET.** It needs a dirt TREND and
+    this module produces only a dirt DENSITY (`_raw_dirt_density`) --
+    one number per record, with nothing computing a direction over
+    time. The speed half exists (`_raw_cleaning_speed_trend`) and is
+    already surfaced as an attribute.
+
+    So this is half a feature rather than a disconnected one: the logic
+    was written before the input it needs. Building the missing trend is
+    a real change with its own judgement calls (window length, how many
+    records make a direction), not a wiring fix.
+
+    Kept because the classification itself is the hard part and is
+    sound: rising dirt with declining speed is debris the brush is not
+    picking up, and rising dirt with steady speed is a dirty floor.
+    That distinction is worth having when somebody builds the trend.
 
     F5b — 3-signal classification eliminating threshold-based guessing:
       brush_wear  — debris not captured, sensor re-fires (rising dirt + declining speed)
@@ -277,7 +372,7 @@ def _classify_dirt_cause(dirt_trend: str, speed_trend: str) -> str:
     return "unknown"
 
 
-def _raw_recharge_fraction(records: list[dict]) -> StateType:
+def _raw_recharge_fraction(records: list[dict[str, Any]]) -> StateType:
     """F5c — median recharge fraction (chrgM / durationM) across window.
 
     Uses the cloud `chrgM` field (minutes recharging mid-mission) divided by
@@ -300,7 +395,7 @@ def _raw_recharge_fraction(records: list[dict]) -> StateType:
     return round(_statistics.median(fractions), 1)
 
 
-def _raw_cleaning_speed_trend(records: list[dict]) -> StateType:
+def _raw_cleaning_speed_trend(records: list[dict[str, Any]]) -> StateType:
     """F5e — cleaning speed trend: improving / stable / declining / unknown.
 
     Compares median of 5 most-recent vs previous 10 records.
@@ -403,26 +498,27 @@ class CloudRawSensor(IRobotEntity, SensorEntity):
             )
             CloudRawSensor._sc1_warned.add(key)
         value = self.entity_description.value_fn(self._coordinator.raw_records)
-        # F6a/F6b — cache values to RoombaData for repair check functions
+        # Caches cleaning_speed_trend_value, which IS still read (by the
+        # F6a-successor logic further down this same file).
+        #
+        # TWO SIBLING BRANCHES REMOVED HERE (this session): they cached
+        # recharge_fraction_value and dirt_density_rising, and nothing
+        # anywhere read either one. v3.5.0 removed the Repair Issues
+        # they fed (battery_recharge_high is still listed in
+        # repairs.py's _REMOVED_REPAIR_TRANSLATION_KEYS) but left the
+        # data scaffolding standing.
+        #
+        # The dirt-density branch was not merely dead storage: it ran a
+        # median over up to ten mission records on every sensor update,
+        # for a consumer that had not existed for two minor versions.
+        #
+        # What made it hard to spot: the comment above claimed "this now
+        # only maintains the cached values other code reads". That was
+        # already untrue when it was written, and a comment asserting a
+        # consumer is precisely what stops anyone checking for one.
         data = self._config_entry.runtime_data
         if key == "cleaning_speed_trend":
             data.cleaning_speed_trend_value = str(value) if value else None
-        elif key == "recent_recharge_fraction":
-            data.recharge_fraction_value = float(value) if value is not None else None
-        elif key == "recent_dirt_density":
-            # Update dirt_density_rising flag for F6a cause classification
-            records = self._coordinator.raw_records
-            if records and len(records) >= 6:
-                import statistics as _stat
-                densities = [
-                    float(r["dirt"]) / float(r["sqft"])
-                    for r in records
-                    if r.get("dirt") is not None and r.get("sqft") and float(r["sqft"]) > 0
-                ]
-                if len(densities) >= 6:
-                    recent = _stat.median(densities[:5])
-                    older  = _stat.median(densities[5:])
-                    data.dirt_density_rising = (recent / older > 1.10) if older > 0 else False
         return value
 
     @property
@@ -619,21 +715,6 @@ class _ConsolidatedCloudSensor(IRobotEntity, SensorEntity):
         data = self._config_entry.runtime_data
         data.cleaning_speed_trend_value = trend_value
 
-    def _cache_and_check_f6b(
-        self, recharge_value: float | None, dirt_rising: bool | None
-    ) -> None:
-        """Cache recharge_fraction_value + dirt_density_rising.
-
-        v3.5.0: the battery_recharge_high Repair Issue was removed (the
-        mission_recharge_minutes sensor already surfaces this signal); this
-        now only maintains the cached values other code reads.
-        """
-        data = self._config_entry.runtime_data
-        data.recharge_fraction_value = recharge_value
-        if dirt_rising is not None:
-            data.dirt_density_rising = dirt_rising
-
-
 class RoombaCleaningPerformanceSensor(_ConsolidatedCloudSensor):
     """SC1 — Cleaning performance: completion rate + speed + trend + streak.
 
@@ -671,6 +752,26 @@ class RoombaCleaningPerformanceSensor(_ConsolidatedCloudSensor):
             trend = _raw_cleaning_speed_trend(records)
             if trend is not None:
                 attrs["trend"] = trend
+
+            # WHY THE FLOOR IS GETTING DIRTIER, which one trend alone
+            # cannot say.
+            #
+            # Rising dirt with DECLINING speed is debris the brush is
+            # not picking up -- the sensor re-fires on the same mess and
+            # the robot slows down carrying it. Rising dirt with steady
+            # speed is a floor that is genuinely dirtier.
+            #
+            # `_classify_dirt_cause` has held that distinction since
+            # v3.2 and could never be called: it needs a dirt TREND and
+            # this module produced only a per-record density. Both halves
+            # exist now.
+            dirt_trend = _raw_dirt_density_trend(records)
+            if dirt_trend is not None:
+                attrs["dirt_trend"] = dirt_trend
+                if dirt_trend == "rising" and trend is not None:
+                    attrs["dirt_cause"] = _classify_dirt_cause(
+                        str(dirt_trend), str(trend)
+                    )
             # B1/B2-PRE — cache cleaning_speed_trend_value for F6a Repair and
             # RobotHealthSensor Signal 3.  Migrated from the now-deactivated
             # CloudRawSensor(key="cleaning_speed_trend") side-effect.
@@ -741,25 +842,22 @@ class RoombaCleaningAnalytics30dSensor(_ConsolidatedCloudSensor):
             rf = _raw_recharge_fraction(records)
             if rf is not None:
                 attrs["recharge_pct"] = rf
-            # B1/B2-PRE — cache recharge_fraction_value + dirt_density_rising for
-            # F6b Repair and F6a cause classification.  Migrated from the now-
-            # deactivated CloudRawSensor side-effects (keys "recent_recharge_fraction"
-            # and "recent_dirt_density").  Idempotent: F6b check only on change.
-            dirt_rising: bool | None = None
-            if len(records) >= 6:
-                densities = [
-                    float(r["dirt"]) / float(r["sqft"])
-                    for r in records
-                    if r.get("dirt") is not None and r.get("sqft") and float(r["sqft"]) > 0
-                ]
-                if len(densities) >= 6:
-                    recent = _statistics.median(densities[:5])
-                    older  = _statistics.median(densities[5:])
-                    dirt_rising = (recent / older > 1.10) if older > 0 else False
-            self._cache_and_check_f6b(
-                float(rf) if rf is not None else None,
-                dirt_rising,
-            )
+            # A SECOND COPY of the dirt-density median lived here and was
+            # removed with the first (this session). Both fed
+            # recharge_fraction_value and dirt_density_rising, which
+            # nothing has read since v3.5.0 removed the Repair Issues
+            # they existed for.
+            #
+            # Note the shape of the mistake: the work had already been
+            # MIGRATED once ("Migrated from the now-deactivated
+            # CloudRawSensor side-effects") -- someone deactivated the
+            # original, carefully moved the computation to a new home,
+            # and nobody asked whether anything still consumed the
+            # result. Migrating dead code preserves it more effectively
+            # than leaving it alone would have.
+            #
+            # dirt_density and recharge_pct are still exposed as
+            # attributes above; only the unread caching is gone.
         return attrs
 
 
@@ -1025,7 +1123,7 @@ class RoombaHealthScoreTrendSensor(IRobotEntity, SensorEntity):
         rps = self._rps
         if rps is None:
             return None
-        return rps.health_score_trend()
+        return cast('str | int | float | None', rps.health_score_trend())
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -1083,7 +1181,7 @@ class _ArchiveSensor(_ConsolidatedCloudSensor):
     """
 
     @property
-    def _archive(self):
+    def _archive(self) -> Any:
         return getattr(self._config_entry.runtime_data, "mission_archive", None)
 
     @property
@@ -1107,12 +1205,12 @@ class RoombaWifiLastChannelSensor(_ArchiveSensor):
     )
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
-    def __init__(self, roomba, blid, coordinator, config_entry):
+    def __init__(self, roomba: Any, blid: str, coordinator: Any, config_entry: Any) -> None:
         super().__init__(roomba, blid, coordinator, config_entry)
         self._attr_unique_id = f"{self.robot_unique_id}_wifi_last_channel"
 
     @property
-    def native_value(self):
+    def native_value(self) -> Any:
         arc = self._archive
         if arc is None:
             return None
@@ -1120,7 +1218,7 @@ class RoombaWifiLastChannelSensor(_ArchiveSensor):
         return latest[0].get("wifi_channel") if latest else None
 
     @property
-    def extra_state_attributes(self):
+    def extra_state_attributes(self) -> dict[str, Any]:
         arc = self._archive
         if arc is None:
             return {}
@@ -1144,12 +1242,12 @@ class RoombaWifiChannelStabilitySensor(_ArchiveSensor):
     _attr_native_unit_of_measurement = PERCENTAGE
     _attr_state_class = SensorStateClass.MEASUREMENT
 
-    def __init__(self, roomba, blid, coordinator, config_entry):
+    def __init__(self, roomba: Any, blid: str, coordinator: Any, config_entry: Any) -> None:
         super().__init__(roomba, blid, coordinator, config_entry)
         self._attr_unique_id = f"{self.robot_unique_id}_wifi_channel_stability"
 
     @property
-    def native_value(self):
+    def native_value(self) -> Any:
         arc = self._archive
         if arc is None:
             return None
@@ -1160,7 +1258,7 @@ class RoombaWifiChannelStabilitySensor(_ArchiveSensor):
         return round(dominant_count / len(series) * 100, 1)
 
     @property
-    def extra_state_attributes(self):
+    def extra_state_attributes(self) -> dict[str, Any]:
         arc = self._archive
         if arc is None:
             return {}
@@ -1190,12 +1288,12 @@ class RoombaMissionsPerChargeSensor(_ArchiveSensor):
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_state_class = SensorStateClass.MEASUREMENT
 
-    def __init__(self, roomba, blid, coordinator, config_entry):
+    def __init__(self, roomba: Any, blid: str, coordinator: Any, config_entry: Any) -> None:
         super().__init__(roomba, blid, coordinator, config_entry)
         self._attr_unique_id = f"{self.robot_unique_id}_missions_per_charge"
 
     @property
-    def native_value(self):
+    def native_value(self) -> Any:
         arc = self._archive
         if arc is None:
             return None
@@ -1206,7 +1304,7 @@ class RoombaMissionsPerChargeSensor(_ArchiveSensor):
         return round(len(recent) / max(1, 1 + total_recharges), 2)
 
     @property
-    def extra_state_attributes(self):
+    def extra_state_attributes(self) -> dict[str, Any]:
         arc = self._archive
         if arc is None:
             return {}

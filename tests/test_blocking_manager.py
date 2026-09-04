@@ -22,6 +22,7 @@ from custom_components.roomba_plus.const import (
     DEFAULT_BLOCKING_BEHAVIOR,
     DEFAULT_BLOCKING_TIMEOUT_MIN,
 )
+from custom_components.roomba_plus.models import ConnectionType
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -80,10 +81,48 @@ def _make_entry(sensors: list[str], behavior: str = "abort", timeout: int = 30):
         entry_id = "test_entry"
 
         class runtime_data:
+            # ACCURACY FIX (this session): was missing connection_type
+            # entirely -- real RoombaData defaults to LOCAL_PUSH, and
+            # _do_start() now branches on this field. Every existing
+            # test using this fixture that patches _do_start() away
+            # (see TestOverride) was unaffected either way, but any
+            # future test exercising the real method needs this to be
+            # accurate, not just absent-and-hope-nothing-reads-it.
+            connection_type = ConnectionType.LOCAL_PUSH
+
+            # ACCURACY FIX: `_do_start` now branches on `prime_robot`
+            # rather than on `connection_type` -- the two agree, and
+            # only the value narrows. A Classic entry has None here, and
+            # a fixture that omits the field entirely does not describe
+            # a Classic robot; it describes one that is neither.
+            prime_robot = None
+
             class roomba:
                 @staticmethod
                 def start():
                     pass
+            blid = "TEST1234"
+    return _Entry()
+
+
+def _make_prime_entry(sensors: list[str], behavior: str = "abort", timeout: int = 30):
+    """NEW (this session) -- Prime/CLOUD_ONLY counterpart to
+    _make_entry(), for the _do_start() branch that used to
+    unconditionally assume a Classic entry and would crash for a real
+    Prime config entry (data.roomba is None)."""
+    from unittest.mock import AsyncMock
+
+    class _Entry:
+        options = {
+            CONF_BLOCKING_SENSORS: sensors,
+            CONF_BLOCKING_BEHAVIOR: behavior,
+            CONF_BLOCKING_TIMEOUT_MIN: timeout,
+        }
+        entry_id = "test_entry"
+
+        class runtime_data:
+            connection_type = ConnectionType.CLOUD_ONLY
+            prime_robot = AsyncMock()
             blid = "TEST1234"
     return _Entry()
 
@@ -336,3 +375,118 @@ class TestStateConstants:
 
     def test_off_is_not_unusable(self):
         assert "off" not in _UNUSABLE_STATES
+
+
+class TestDoStartConnectionTypeBranching:
+    """NEW (this session) -- _do_start()'s real body, not patched away
+    (see TestOverride above, which patches it entirely and so never
+    actually exercised any of this). Was Classic-only before this
+    session: unconditionally called data.roomba.start, which is None
+    on any real Prime config entry."""
+
+    @pytest.mark.asyncio
+    async def test_classic_whole_house_calls_roomba_start(self):
+        hass = _FakeHass({})
+        entry = _make_entry([])
+        started = []
+        # `send_command("start")`, because that is what roombapy has.
+        # This fixture used to set `.start` on the mock -- an attribute
+        # `roombapy.Roomba` does not define -- so the test supplied the
+        # very thing the production path was missing.
+        entry.runtime_data.roomba.send_command = (
+            lambda cmd: started.append(cmd)
+        )
+        bm = BlockingManager(hass, entry)
+
+        await bm._do_start(None)
+
+        assert started == ["start"]
+
+    @pytest.mark.asyncio
+    async def test_prime_whole_house_calls_send_simple_command(self):
+        hass = _FakeHass({})
+        entry = _make_prime_entry([])
+        bm = BlockingManager(hass, entry)
+
+        await bm._do_start(None)
+
+        entry.runtime_data.prime_robot.send_simple_command.assert_awaited_once_with("start")
+
+    @pytest.mark.asyncio
+    async def test_prime_room_targeted_sends_nothing_and_does_not_crash(self):
+        """REAL CRASH AVOIDED (this session): before this fix, a Prime
+        entry reaching this branch at all (e.g. via a stale automation
+        built before rooms were disallowed upstream) would hit
+        AttributeError on data.roomba being None. Now it logs and
+        returns cleanly -- consistent with services.py's own
+        async_handle_smart_start() raising a clear ServiceValidationError
+        one layer up, for the same underlying reason (Prime room-
+        targeting isn't supported yet)."""
+        hass = _FakeHass({})
+        entry = _make_prime_entry([])
+        bm = BlockingManager(hass, entry)
+
+        await bm._do_start(["Kitchen"])
+
+        entry.runtime_data.prime_robot.send_simple_command.assert_not_awaited()
+        assert not any(
+            call for call in hass._fired_events
+        )  # nothing fired; no exception raised is the main assertion here
+
+
+class TestNonBinarySensorBlockers:
+    """@chairstacker blocks missions on "house state" -- vacation or
+    guest mode -- which in Home Assistant is an `input_boolean`, not a
+    sensor.
+
+    The check reads `state.state` against {"on", "home", "true"} and
+    never cared which domain produced it; only the config picker was
+    limited to `binary_sensor`. These pin that the manager side works
+    for the domains the picker now offers, so the two cannot drift
+    apart.
+    """
+
+    def test_an_input_boolean_blocks(self):
+        hass = _FakeHass({"input_boolean.vacation_mode": "on"})
+        entry = _make_entry(["input_boolean.vacation_mode"])
+        bm = BlockingManager(hass, entry)
+        assert "input_boolean.vacation_mode" in bm.blocking_entities
+
+    def test_an_input_boolean_off_does_not_block(self):
+        hass = _FakeHass({"input_boolean.vacation_mode": "off"})
+        entry = _make_entry(["input_boolean.vacation_mode"])
+        bm = BlockingManager(hass, entry)
+        assert bm.blocking_entities == []
+
+    def test_a_person_at_home_blocks(self):
+        """"home" is already in the active set -- "do not run while I
+        am in" is the same question as "do not run while this is on"."""
+        hass = _FakeHass({"person.chairstacker": "home"})
+        entry = _make_entry(["person.chairstacker"])
+        bm = BlockingManager(hass, entry)
+        assert "person.chairstacker" in bm.blocking_entities
+
+    def test_a_schedule_helper_blocks_while_on(self):
+        hass = _FakeHass({"schedule.quiet_hours": "on"})
+        entry = _make_entry(["schedule.quiet_hours"])
+        bm = BlockingManager(hass, entry)
+        assert "schedule.quiet_hours" in bm.blocking_entities
+
+    def test_mixed_domains_work_together(self):
+        """A real setup is not one domain: a door sensor and a mode
+        toggle in the same list."""
+        hass = _FakeHass({
+            "binary_sensor.door": "off",
+            "input_boolean.guest_mode": "on",
+        })
+        entry = _make_entry(["binary_sensor.door", "input_boolean.guest_mode"])
+        bm = BlockingManager(hass, entry)
+        assert bm.blocking_entities == ["input_boolean.guest_mode"]
+
+    def test_an_unavailable_helper_does_not_block(self):
+        """Same rule as for sensors: an unusable entity must not wedge
+        the robot -- it would be blocked with nothing to point at."""
+        hass = _FakeHass({"input_boolean.vacation_mode": "unavailable"})
+        entry = _make_entry(["input_boolean.vacation_mode"])
+        bm = BlockingManager(hass, entry)
+        assert bm.blocking_entities == []

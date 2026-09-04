@@ -114,8 +114,7 @@ class RoombaOptimalCleanWindow(IRobotEntity, SensorEntity):
     _attr_state_class = None  # timestamp sensors have no state_class
 
     def __init__(self, roomba: Any, blid: str, config_entry: Any) -> None:
-        super().__init__(roomba, blid)
-        self._config_entry = config_entry
+        super().__init__(roomba, blid, config_entry)
         self._attr_unique_id = f"{self.robot_unique_id}_optimal_clean_window"
 
     @property
@@ -319,7 +318,7 @@ class RoombaResetDiagnosticsSensor(IRobotEntity, SensorEntity):
     field presence.
     """
 
-    _attr_translation_key = "reset_diagnostics"
+    _attr_translation_key = "reset_diagnostics_summary"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_has_entity_name = True
     _attr_state_class = SensorStateClass.MEASUREMENT

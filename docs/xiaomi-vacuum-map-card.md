@@ -31,7 +31,7 @@ There are two ways to set up the room overlay, depending on your XVMC version:
 
 - **XVMC v2.4.1 or newer (recommended):** the native Roomba+ platform is built
   in. Pick it as the `vacuum_platform` and let XVMC generate the room config for
-  you — no manual coordinates. See **[Path A](#path-a--xvmc-v241-recommended)**.
+  you — no manual coordinates. See **[Path A](#path-a--xvmc-v241-recommended-once-merged)**.
 - **XVMC older than v2.4.1:** the Roomba+ platform isn't available, so you define
   `predefined_selections` manually. The coordinates come straight from the
   `rooms` attribute — no measurement needed. See
@@ -141,6 +141,25 @@ Roomba+ creates a `Rooms Map` image entity. Depending on when the integration wa
 | Upgraded from earlier version | `image.{prefix}_rooms_cleaning_map` |
 
 Both are the same entity with the same attributes. Check **Developer Tools → States** and filter for `image.` to find yours. The examples below use `image.roomba_rooms_map` — substitute your actual entity name.
+
+### If you have a Prime robot
+
+Prime robots (Roomba Max, Combo 400-series) create **three** image entities, and
+only one of them is the card source:
+
+| Entity | Use it for |
+|---|---|
+| `image.{prefix}_rooms_map` | **The card.** Carries `calibration_points` and selectable rooms |
+| `image.{prefix}_cleaning_map` | A picture-entity showing the clean in progress. Deliberately carries no calibration points, so it cannot be a card source |
+| `image.{prefix}_map` | The raw live map, before rendering |
+
+The Rooms Map draws the live cleaning layers as well, so you do not lose the
+progress view by using it — the card takes one raster source and cannot stack a
+second image on top.
+
+**Room ids are stable on Prime.** Renaming a room in the iRobot app does not
+break a saved card configuration: the card sends the room's id, not its name.
+Room and zone names both come from the robot's own map data.
 
 ---
 
@@ -315,7 +334,7 @@ The `rooms` attribute and calibration are only accurate once UmfAligner confiden
 ## XVMC platform template (reference)
 
 The native `roomba_plus` platform template is what
-[Path A](#path-a--xvmc-v241-recommended) uses once available. **Merge status
+[Path A](#path-a--xvmc-v241-recommended-once-merged) uses once available. **Merge status
 note:** release notes for XVMC v2.4.1 credited this platform's addition, but
 as of this writing it isn't present in the upstream repository's `master`
 branch (checked directly against the source) — a PR is pending. If Path A

@@ -60,7 +60,7 @@ _RATE_LIMIT_SLEEP = 2.0    # seconds between pagination requests
 
 # ── Helpers (pure functions, no HA imports needed) ─────────────────────────
 
-def _classify_result(record: dict) -> str:
+def _classify_result(record: dict[str, Any]) -> str:
     """Classify a raw /missionhistory record into a canonical result string.
 
     Mirrors cloud_coordinator.classify_mission_result but kept here to avoid
@@ -85,7 +85,7 @@ def _classify_result(record: dict) -> str:
     return "unknown"
 
 
-def _wl_floor(wl_bars: list | None) -> int | None:
+def _wl_floor(wl_bars: list[Any] | None) -> int | None:
     """Return median signal bucket (0–4) from wlBars 5-element histogram."""
     if not isinstance(wl_bars, list) or len(wl_bars) < 5:
         return None
@@ -101,14 +101,14 @@ def _wl_floor(wl_bars: list | None) -> int | None:
     return len(wl_bars) - 1
 
 
-def _wl_stability(wl_bars: list | None) -> float | None:
+def _wl_stability(wl_bars: list[Any] | None) -> float | None:
     """Return fraction of readings in the dominant signal bucket (0.0–1.0)."""
     if not isinstance(wl_bars, list) or len(wl_bars) < 5:
         return None
     total = sum(wl_bars)
     if total == 0:
         return None
-    return round(max(wl_bars) / total, 3)
+    return float(round(max(wl_bars) / total, 3))
 
 
 def _extract_rid(item: Any) -> str:
@@ -155,8 +155,8 @@ def _safe_float(val: Any, default: float = 0.0) -> float:
 
 def _dedup_by_nmssn(
     derived: list[dict[str, Any]],
-    timeline: list[list[list]],
-) -> tuple[list[dict[str, Any]], list[list[list]], int]:
+    timeline: list[list[list[Any]]],
+) -> tuple[list[dict[str, Any]], list[list[list[Any]]], int]:
     """Collapse duplicate nMssn entries in the co-indexed derived/timeline
     lists, keeping the first occurrence of each nMssn.
 
@@ -179,7 +179,7 @@ def _dedup_by_nmssn(
     """
     seen: set[int] = set()
     out_derived: list[dict[str, Any]] = []
-    out_timeline: list[list[list]] = []
+    out_timeline: list[list[list[Any]]] = []
     removed = 0
     for i, rec in enumerate(derived):
         n_mssn = _safe_int(rec.get("nMssn"))
@@ -207,9 +207,9 @@ class MissionArchive:
         # Layer 1: derived records, newest first (index 0 = most recent)
         self._derived: list[dict[str, Any]] = []
         # Layer 2: compact event timelines, co-indexed with _derived
-        self._timeline: list[list[list]] = []
+        self._timeline: list[list[list[Any]]] = []
         # Layer 3: raw finEvents for anomalous missions, keyed by nMssn
-        self._raw: dict[int, list] = {}
+        self._raw: dict[int, list[Any]] = {}
         # Set of all archived nMssn values — O(1) dedup for initial load + delta
         self._archived_nmssns: set[int] = set()
         # Highest nMssn seen — used by sensors and REST API
@@ -248,8 +248,8 @@ class MissionArchive:
 
     async def async_load(self, hass: HomeAssistant, entry_id: str) -> None:
         """Load persisted archive from hass.storage."""
-        store = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
-        data: dict | None = await store.async_load()
+        store: Store[dict[str, Any]] = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
+        data: dict[str, Any] | None = await store.async_load()
         if not data:
             _LOGGER.debug("MissionArchive: no persisted data for %s", entry_id)
             return
@@ -363,7 +363,7 @@ class MissionArchive:
 
     async def async_save(self, hass: HomeAssistant, entry_id: str) -> None:
         """Persist current archive to hass.storage."""
-        store = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
+        store: Store[dict[str, Any]] = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
         await store.async_save({
             "version": STORAGE_VERSION,
             "last_nMssn": self._last_nMssn,
@@ -405,7 +405,7 @@ class MissionArchive:
         _LOGGER.info(
             "MissionArchive: starting initial load for %s", entry_id
         )
-        all_raw: list[dict] = []
+        all_raw: list[dict[str, Any]] = []
         before_ts: int | None = None
         pages_fetched = 0
 
@@ -618,9 +618,9 @@ class MissionArchive:
 
     def _parse_derived(self, raw: dict[str, Any]) -> dict[str, Any]:
         """Extract 26 computed signals from a raw /missionhistory record."""
-        timeline: dict = raw.get("timeline") or {}
-        fin_events: list = timeline.get("finEvents") or []
-        plan: dict = timeline.get("plan") or {}
+        timeline: dict[str, Any] = raw.get("timeline") or {}
+        fin_events: list[Any] = timeline.get("finEvents") or []
+        plan: dict[str, Any] = timeline.get("plan") or {}
 
         # ── Planned room order from timeline.plan.upcoming ─────────────────
         upcoming = plan.get("upcoming") or []
@@ -628,7 +628,7 @@ class MissionArchive:
 
         # ── Parse all finEvents in a single pass ───────────────────────────
         traversal_rids: list[str] = []
-        rooms_completed: dict[str, dict] = {}
+        rooms_completed: dict[str, dict[str, Any]] = {}
         rooms_interrupted: list[str] = []
         # v3.2.0 ROOM-ACCESS — every "room" finEvent's (rid, ts), regardless
         # of status, in original finEvents order. Confirmed via a real
@@ -761,16 +761,16 @@ class MissionArchive:
 
     # ── Parsing: Layer 2 (compact timeline) ───────────────────────────────
 
-    def _parse_timeline(self, raw: dict[str, Any]) -> list[list]:
+    def _parse_timeline(self, raw: dict[str, Any]) -> list[list[Any]]:
         """Build compact event sequence from timeline.finEvents.
 
         Format: list of [event_type, data_dict].
         plan entry is prepended when upcoming rooms are present.
         """
-        events: list[list] = []
-        timeline: dict = raw.get("timeline") or {}
-        plan: dict = timeline.get("plan") or {}
-        fin_events: list = timeline.get("finEvents") or []
+        events: list[list[Any]] = []
+        timeline: dict[str, Any] = raw.get("timeline") or {}
+        plan: dict[str, Any] = timeline.get("plan") or {}
+        fin_events: list[Any] = timeline.get("finEvents") or []
 
         # Prepend plan entry
         upcoming = plan.get("upcoming") or []
@@ -969,7 +969,7 @@ class MissionArchive:
                 totals[rid] = totals.get(rid, 0) + delta
         return totals
 
-    def raw_finEvents(self, n_mssn: int) -> list | None:
+    def raw_finEvents(self, n_mssn: int) -> list[Any] | None:
         """Return Layer 3 raw finEvents for a given mission number, or None."""
         return self._raw.get(n_mssn)
 

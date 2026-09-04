@@ -29,7 +29,7 @@ from .const import (
     has_smart_map,
 )
 from .entity import IRobotEntity
-from .models import RoombaConfigEntry
+from .models import ConnectionType, RoombaConfigEntry
 from .zone_naming import collect_region_ids, unlabelled_zone_ids
 
 def resolve_zone_name(
@@ -84,12 +84,128 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up select entities."""
+    data = config_entry.runtime_data
+
+    # BOTH BRANCHES USE THIS, so it cannot live inside one of them.
+    #
+    # @utkjmitch (#79): importing it inside the CLOUD_ONLY branch binds
+    # the name as local to the WHOLE function. On a Classic entry that
+    # branch never runs, so the name is local-but-unbound and the
+    # mopping append below raises UnboundLocalError -- taking every
+    # select on that robot with it, including the cleaning-mode select
+    # the append was adding.
+    #
+    # It needed a Classic robot that reports `padWetness` to surface:
+    # cloud-only households never reach the append, and a vac-only
+    # Classic robot never passes the gate. He had one of each on the
+    # same install.
+    #
+    # Still function-scoped, so the no-top-level-Prime-imports rule
+    # holds. His diagnosis and his fix, verbatim.
+    from .select_prime import PrimeCleaningModeSelect  # noqa: PLC0415
+
+    # PRIME BRANCH. Everything below reads roomba_reported_state(), which
+    # a Prime robot has no equivalent for -- the Classic descriptions
+    # would all evaluate against an empty dict and either all appear or
+    # none would.
+    if data.connection_type is ConnectionType.CLOUD_ONLY:
+        from .prime_coordinator import get_prime_capability_flags  # noqa: PLC0415
+        from .select_prime import (  # noqa: PLC0415
+            PRIME_SELECTS,
+            PrimeMapSelect,
+            PrimeSettingSelect,
+        )
+
+        from .select_prime import (  # noqa: PLC0415
+            _autoevac_options,
+            _pad_wash_heat_options,
+            _reported_wetness,
+            _wetness_options,
+            _robot_sku,
+            _settings_keys,
+            _sku_narrowed,
+        )
+
+        cap, dock_cap = get_prime_capability_flags(config_entry)
+        # WHICH SETTINGS THIS ROBOT ACTUALLY HAS, read from its own
+        # rw-settings key list rather than inferred from a table.
+        #
+        # @utkjmitch's Y351020 has auto-evac hardware and NO
+        # `autoevacFreq` key, and the iRobot app offers him no
+        # frequency control either. His reading is the one that fits:
+        # the key set tracks what is USER-CONFIGURABLE on the SKU, not
+        # what is installed. A capability flag cannot answer this.
+        #
+        # None means the shadow has not arrived -- offer everything, the
+        # same fail-open contract used for capabilities. An empty set
+        # would hide every control on a slow first connection.
+        present = _settings_keys(config_entry)
+        sku = _robot_sku(config_entry)
+
+        selects = []
+        for description in PRIME_SELECTS:
+            # Same "None means unknown, only an explicit 0 means absent"
+            # contract the switches use: a robot that has not reported
+            # its capabilities yet should get the entity, not lose it.
+            if not (
+                description.cap_attr is None
+                or cap is None
+                or getattr(cap, description.cap_attr, None) != 0
+            ):
+                continue
+            if present is not None and description.wire_key not in present:
+                continue
+            # TWO CONTROLS HAVE DOCK- OR ROBOT-DEPENDENT OPTION SETS.
+            # Everything else offers its full map.
+            if description.wire_key == "autoevacFreq":
+                values: dict[int, str] | None = _autoevac_options(cap)
+            elif description.wire_key == "pwHeat":
+                values = _pad_wash_heat_options(dock_cap)
+            elif description.wire_key == "padWetness.padPlate":
+                # WIDENED BY WHAT THE ROBOT REPORTS, because the ceiling
+                # here is a guess and a guess must not hide a real
+                # setting. Four is the highest anyone has seen.
+                values = _wetness_options(_reported_wetness(config_entry))
+            else:
+                # THREE CONTROLS ARE NARROWED BY PRODUCT MODE. Five SKUs
+                # see shorter interval and duration lists than the enums
+                # declare, and two of those five -- V1 and Z1 -- only
+                # became recognisable as Prime in the same session these
+                # controls were built.
+                narrowed = _sku_narrowed(
+                    description.wire_key, sku, description.values
+                )
+                values = (
+                    narrowed if narrowed != description.values else None
+                )
+            # A capability level can narrow the set to nothing --
+            # `taskEndOnly` offers no choice at all. A select with no
+            # options is worse than no select.
+            if values is not None and not values:
+                continue
+            selects.append(
+                PrimeSettingSelect(data.blid, config_entry, description, values)
+            )
+        async_add_entities(selects)
+        # Always, even on a single-map account: an entity that appears
+        # and disappears as maps come and go is worse than a select with
+        # one option, because an automation pointing at a vanished entity
+        # fails for a reason unrelated to automations.
+        async_add_entities([
+            PrimeMapSelect(data.blid, config_entry),
+            # Asked for by a user: the app offers vacuum / mop / both
+            # when starting a clean, and this had a suction control and
+            # nothing for the mode.
+            PrimeCleaningModeSelect(data.blid, config_entry),
+        ])
+        return
+
     roomba = config_entry.runtime_data.roomba
     blid = config_entry.runtime_data.blid
     state = roomba_reported_state(roomba)
     data = config_entry.runtime_data
 
-    entities = []
+    entities: list[Any] = []
 
     # Cleaning passes: present when noAutoPasses is in state
     if "noAutoPasses" in state:
@@ -146,12 +262,33 @@ async def async_setup_entry(
                         )
                     )
         else:
-            entities.append(SmartZoneSelect(roomba, blid, config_entry))
+            smart_zone_select = SmartZoneSelect(roomba, blid, config_entry)
+            entities.append(smart_zone_select)
 
     # v1.9.0 — Braava Pad Wetness selects
     if "padWetness" in state:
         entities.append(DisposablePadWetnessSelect(roomba, blid))
         entities.append(ReusablePadWetnessSelect(roomba, blid))
+
+        # AND THE CLEANING MODE, which Classic never had.
+        #
+        # @ia74 asked how to start mopping and could not find a way.
+        # The send path was already there -- ClassicRoomCleaning puts
+        # `operatingMode` in a region command's params when a caller
+        # names one -- but the select that names one sat in the
+        # CLOUD_ONLY branch, so a Classic user had nowhere to say it.
+        # The wire was connected at one end.
+        #
+        # Gated on the same signal as the wetness selects above: a
+        # robot that reports `padWetness` is a robot that mops. Better
+        # than a capability flag we would have to guess at, and it is
+        # the gate this file already trusts for exactly this question.
+        #
+        # His own capture is what makes the values safe: the iRobot app
+        # sends `operatingMode: 6` with `padWetness` for vacuum-and-mop
+        # on a Classic robot -- not the 32 that is field-verified on
+        # Prime. `cleaning_modes_for()` keeps the two apart.
+        entities.append(PrimeCleaningModeSelect(blid, config_entry))
 
     async_add_entities(entities)
 
@@ -173,7 +310,7 @@ class RoombaPlusSelectDescription(SelectEntityDescription):
     unique_id_suffix: str
     options: list[str]
     current_option_fn: Callable[[dict[str, Any]], str | None]
-    select_fn: Callable[["SimpleRoombaSelect", str], Coroutine]
+    select_fn: Callable[["SimpleRoombaSelect", str], Coroutine[Any, Any, Any]]
     state_filter_keys: tuple[str, ...]
 
 
@@ -378,7 +515,7 @@ class ZoneSelect(IRobotEntity, SelectEntity):
 
     def __init__(
         self,
-        roomba,
+        roomba: Any,
         blid: str,
         config_entry: RoombaConfigEntry,
     ) -> None:
@@ -447,12 +584,11 @@ class SmartZoneSelect(IRobotEntity, SelectEntity):
 
     def __init__(
         self,
-        roomba,
+        roomba: Any,
         blid: str,
         config_entry: RoombaConfigEntry,
     ) -> None:
-        super().__init__(roomba, blid)
-        self._config_entry = config_entry
+        super().__init__(roomba, blid, config_entry)
         self._attr_unique_id = f"{self.robot_unique_id}_smart_zone_select"
         self._selected: str | None = None
         # Track which region_ids we have already raised an issue for so we
@@ -502,9 +638,9 @@ class SmartZoneSelect(IRobotEntity, SelectEntity):
         """
         from .const import CONF_SMART_ZONE_ALIASES
         options = self._config_entry.options
-        aliases: dict = options.get(CONF_SMART_ZONE_ALIASES, {})
-        zone_data: dict = options.get("smart_zone_data", {})
-        labels: dict = options.get("smart_zone_labels", {})
+        aliases: dict[str, Any] = options.get(CONF_SMART_ZONE_ALIASES, {})
+        zone_data: dict[str, Any] = options.get("smart_zone_data", {})
+        labels: dict[str, Any] = options.get("smart_zone_labels", {})
         local_name = zone_data.get(region_id, {}).get("name") if region_id in zone_data else None
         return resolve_zone_name(region_id, aliases, None, local_name, labels)
 
@@ -514,7 +650,7 @@ class SmartZoneSelect(IRobotEntity, SelectEntity):
     def options(self) -> list[str]:
         """Return labelled options list, excluding hidden zones."""
         from .const import CONF_SMART_ZONE_HIDDEN
-        hidden_ids: list = self._config_entry.options.get(CONF_SMART_ZONE_HIDDEN, [])
+        hidden_ids: list[Any] = self._config_entry.options.get(CONF_SMART_ZONE_HIDDEN, [])
         return [
             self._region_label(rid)
             for rid in self._collect_region_ids()
@@ -545,7 +681,7 @@ class SmartZoneSelect(IRobotEntity, SelectEntity):
         return ids[0] if ids else None
 
     @property
-    def selected_pmap_info(self) -> dict:
+    def selected_pmap_info(self) -> dict[str, Any]:
         """Return pmap_id and user_pmapv_id from the most recent known source."""
         # Try lastCommand first (most recent)
         last = self.vacuum_state.get("lastCommand", {})
@@ -574,7 +710,7 @@ class SmartZoneSelect(IRobotEntity, SelectEntity):
 
     # ── Push update wiring ────────────────────────────────────────────────────
 
-    def new_state_filter(self, new_state: dict) -> bool:
+    def new_state_filter(self, new_state: dict[str, Any]) -> bool:
         return "cleanSchedule2" in new_state or "lastCommand" in new_state
 
     def on_message(self, json_data: dict[str, Any]) -> None:
@@ -607,7 +743,7 @@ class SmartZoneSelect(IRobotEntity, SelectEntity):
             # vacuum_state may no longer contain the regions.
             captured = sorted(new_unlabelled)
             self.hass.loop.call_soon_threadsafe(
-                lambda ids=captured: self.hass.async_create_task(
+                lambda ids=captured: self.hass.async_create_task(  # type: ignore[misc]
                     self._async_raise_naming_issue(ids)
                 )
             )
@@ -650,7 +786,7 @@ class SmartZoneSelect(IRobotEntity, SelectEntity):
         # Exclude hidden zone IDs from the repair issue — users have explicitly
         # chosen to hide these zones and should not be prompted to name them.
         from .const import CONF_SMART_ZONE_HIDDEN
-        hidden_ids: set = set(new_options.get(CONF_SMART_ZONE_HIDDEN, []))
+        hidden_ids: set[Any] = set(new_options.get(CONF_SMART_ZONE_HIDDEN, []))
         unlabelled = [
             rid for rid in new_options["discovered_zone_ids"]
             if rid not in hidden_ids
@@ -720,8 +856,7 @@ class CloudSmartZoneSelect(IRobotEntity, SelectEntity):
         zones: list[dict[str, Any]],
         is_active_map: bool = True,
     ) -> None:
-        super().__init__(roomba, blid)
-        self._config_entry = config_entry
+        super().__init__(roomba, blid, config_entry)
         self._pmap_id = pmap_id
         self._regions = regions   # list of {id, name, region_type}
         self._zones = zones       # list of {id, name, zone_type}
@@ -746,10 +881,10 @@ class CloudSmartZoneSelect(IRobotEntity, SelectEntity):
         """
         from .const import CONF_SMART_ZONE_ALIASES, CONF_SMART_ZONE_HIDDEN
         options = self._config_entry.options
-        aliases: dict = options.get(CONF_SMART_ZONE_ALIASES, {})
-        hidden_ids: list = options.get(CONF_SMART_ZONE_HIDDEN, [])
-        labels: dict = options.get("smart_zone_labels", {})
-        zone_data: dict = options.get("smart_zone_data", {})
+        aliases: dict[str, Any] = options.get(CONF_SMART_ZONE_ALIASES, {})
+        hidden_ids: list[Any] = options.get(CONF_SMART_ZONE_HIDDEN, [])
+        labels: dict[str, Any] = options.get("smart_zone_labels", {})
+        zone_data: dict[str, Any] = options.get("smart_zone_data", {})
 
         items = []
         for r in self._regions:
@@ -798,7 +933,7 @@ class CloudSmartZoneSelect(IRobotEntity, SelectEntity):
         """Return the region/zone id for the currently selected option."""
         for item in self._all_items():
             if item["name"] == self._selected:
-                return item["id"]
+                return str(item["id"])
         items = self._all_items()
         return items[0]["id"] if items else None
 

@@ -24,6 +24,13 @@ from unittest.mock import MagicMock
 from unittest.mock import patch
 import pytest
 
+# MODULE SCOPE, not inside the test: the `hass` fixture rebuilds the
+# custom-integration module space, so an import in a test body that uses
+# it no longer resolves.
+from custom_components.roomba_plus.const import (
+    CONF_BLID, CONF_IROBOT_PASSWORD, CONF_IROBOT_USERNAME,
+        )
+
 
 class TestCF2PmapResolution:
     """CF2: pmap_id resolved before the 'elif not current_pmap_id' validation."""
@@ -105,11 +112,21 @@ def _make_options_flow(room_seg_store=None):
     config_entry.entry_id = "test_entry"
     flow._config_entry = config_entry
     try:
-        flow.config_entry = config_entry
-    except RuntimeError:
-        pass  # newer HA deprecates direct assignment; _config_entry above suffices
+        flow._config_entry = config_entry
+    except (RuntimeError, AttributeError):
+        # HA deprecated direct assignment, then removed the setter
+        # entirely (2026.x raises AttributeError rather than
+        # RuntimeError). `_config_entry` above is what the flow reads,
+        # so both are survivable.
+        pass
     flow.hass = MagicMock()
     flow.hass.async_create_task = MagicMock()
+    # HA 2026.x: `config_entry` resolves through `_config_entry_id`,
+    # which is `self.handler`, then looks the entry up on hass. Setting
+    # the attribute directly stopped working -- the setter is gone -- so
+    # the flow has to be given the same two things a real one gets.
+    flow.handler = config_entry.entry_id
+    flow.hass.config_entries.async_get_known_entry.return_value = config_entry
     return flow
 
 
@@ -123,7 +140,7 @@ class TestBuildZoneIndexOptionsEphemeral:
             "room_2": SegRoom(id="room_2", name="Bedroom", confirmed=True),
         }
         flow = _make_options_flow(rss)
-        data = flow.config_entry.runtime_data
+        data = flow._config_entry.runtime_data
         opts = flow._build_zone_index_options(data, {})
         values = {o["value"] for o in opts}
         assert values == {"room_1", "room_2"}
@@ -134,7 +151,7 @@ class TestBuildZoneIndexOptionsEphemeral:
         rss = RoomSegStore()
         rss.rooms = {"room_1": SegRoom(id="room_1", name="Kitchen", confirmed=False)}
         flow = _make_options_flow(rss)
-        data = flow.config_entry.runtime_data
+        data = flow._config_entry.runtime_data
         opts = flow._build_zone_index_options(data, {})
         assert "unconfirmed" in opts[0]["label"]
 
@@ -144,7 +161,7 @@ class TestBuildZoneIndexOptionsEphemeral:
         rss = RoomSegStore()
         rss.rooms = {"room_1": SegRoom(id="room_1", name="Kitchen", confirmed=True, hidden=True)}
         flow = _make_options_flow(rss)
-        data = flow.config_entry.runtime_data
+        data = flow._config_entry.runtime_data
         opts = flow._build_zone_index_options(data, {})
         assert "hidden" in opts[0]["label"]
 
@@ -155,13 +172,13 @@ class TestBuildZoneIndexOptionsEphemeral:
         rss.rooms = {"room_1": SegRoom(id="room_1", name="Kitchen", confirmed=True)}
         flow = _make_options_flow(rss)
         flow._pending_zone_edits = {"room_1": {"display_name": "Office"}}
-        data = flow.config_entry.runtime_data
+        data = flow._config_entry.runtime_data
         opts = flow._build_zone_index_options(data, {})
         assert opts[0]["label"].startswith("Office")
 
     def test_no_room_seg_store_returns_empty(self):
         flow = _make_options_flow(None)
-        data = flow.config_entry.runtime_data
+        data = flow._config_entry.runtime_data
         assert flow._build_zone_index_options(data, {}) == []
 
 
@@ -172,7 +189,7 @@ class TestResolveCurrentZoneNameEphemeral:
         rss = RoomSegStore()
         rss.rooms = {"room_1": SegRoom(id="room_1", name="Kitchen", confirmed=True)}
         flow = _make_options_flow(rss)
-        data = flow.config_entry.runtime_data
+        data = flow._config_entry.runtime_data
         assert flow._resolve_current_zone_name("room_1", data, {}) == "Kitchen"
 
     def test_unknown_room_id_falls_back_to_generic_label(self):
@@ -180,7 +197,7 @@ class TestResolveCurrentZoneNameEphemeral:
 
         rss = RoomSegStore()
         flow = _make_options_flow(rss)
-        data = flow.config_entry.runtime_data
+        data = flow._config_entry.runtime_data
         assert flow._resolve_current_zone_name("room_99", data, {}) == "Zone room_99"
 
 
@@ -191,7 +208,7 @@ class TestResolveCurrentZoneHiddenEphemeral:
         rss = RoomSegStore()
         rss.rooms = {"room_1": SegRoom(id="room_1", name="Kitchen", hidden=True)}
         flow = _make_options_flow(rss)
-        data = flow.config_entry.runtime_data
+        data = flow._config_entry.runtime_data
         assert flow._resolve_current_zone_hidden("room_1", data, {}) is True
 
     def test_visible_room_returns_false(self):
@@ -200,7 +217,7 @@ class TestResolveCurrentZoneHiddenEphemeral:
         rss = RoomSegStore()
         rss.rooms = {"room_1": SegRoom(id="room_1", name="Kitchen", hidden=False)}
         flow = _make_options_flow(rss)
-        data = flow.config_entry.runtime_data
+        data = flow._config_entry.runtime_data
         assert flow._resolve_current_zone_hidden("room_1", data, {}) is False
 
 
@@ -367,12 +384,18 @@ class TestReauthConfirmForm:
 
     @pytest.mark.asyncio
     async def test_valid_credentials_update_entry_and_abort(self):
+        # PATCHES HA'S OWN METHOD RATHER THAN SATISFYING IT. In HA
+        # 2026.x `async_update_reload_and_abort` looks the entry up in
+        # the real registry, so a MagicMock entry raises `UnknownEntry`
+        # -- and building a genuine one would mean standing up a
+        # full instance to test one branch of our own code.
+        #
+        # What this test is actually about is that the reauth step calls
+        # UPDATE-and-reload rather than create, and with which arguments.
+        # Patching the method records exactly that.
         """Successful reauth must update the EXISTING entry (never create a
         new one) and reload it — the actual point of using
         async_update_reload_and_abort() over async_create_entry()."""
-        from custom_components.roomba_plus.const import (
-            CONF_BLID, CONF_IROBOT_PASSWORD, CONF_IROBOT_USERNAME,
-        )
         flow, reauth_entry = _make_reauth_flow(reauth_entry_data={
             CONF_BLID: "31B8091051311850",
             CONF_IROBOT_USERNAME: "old@example.com",
@@ -380,7 +403,10 @@ class TestReauthConfirmForm:
         })
         mock_api = MagicMock()
         mock_api.authenticate = AsyncMock()
-        with patch(
+        with patch.object(
+            type(flow), "async_update_reload_and_abort",
+            return_value={"type": "abort", "reason": "reauth_successful"},
+        ) as mock_update, patch(
             "custom_components.roomba_plus.config_flow.IrobotCloudApi",
             return_value=mock_api,
         ), patch(
@@ -394,18 +420,27 @@ class TestReauthConfirmForm:
 
         mock_api.authenticate.assert_awaited_once()
         assert result["type"] == "abort"
-        # async_update_reload_and_abort calls async_update_entry with
-        # KEYWORD args (entry=..., data=...), not positional — verified
-        # against HA's own source before writing this assertion.
-        flow.hass.config_entries.async_update_entry.assert_called_once()
-        call_kwargs = flow.hass.config_entries.async_update_entry.call_args.kwargs
-        assert call_kwargs["entry"] is reauth_entry
-        assert call_kwargs["data"][CONF_IROBOT_USERNAME] == "new@example.com"
-        assert call_kwargs["data"][CONF_IROBOT_PASSWORD] == "new_password"
-        # The reload half — async_schedule_reload is sync (a @callback), not
-        # awaited, despite the "async_" prefix; also verified against source.
-        flow.hass.config_entries.async_schedule_reload.assert_called_once_with(
-            reauth_entry.entry_id
+        # WHAT THIS TEST IS ABOUT: the reauth step must UPDATE the
+        # existing entry rather than create a new one, and pass the new
+        # credentials through.
+        #
+        # It used to assert on `async_update_entry` and
+        # `async_schedule_reload` -- HA's internals, one layer below the
+        # call we make. That worked until 2026.x made
+        # `async_update_reload_and_abort` look the entry up in the real
+        # registry, at which point a MagicMock entry raised
+        # `UnknownEntry` before reaching either.
+        #
+        # Asserting on our own call instead is both more honest and
+        # stable across HA versions: whether it delegates to
+        # `async_update_entry` is not our contract.
+        mock_update.assert_called_once()
+        call_kwargs = mock_update.call_args.kwargs
+        assert call_kwargs["data"][CONF_IROBOT_USERNAME] == (
+            "new@example.com"
+        )
+        assert call_kwargs["data"][CONF_IROBOT_PASSWORD] == (
+            "new_password"
         )
 
     @pytest.mark.asyncio
@@ -449,3 +484,464 @@ class TestReauthConfirmForm:
             })
         assert result["errors"] == {"base": "cannot_connect"}
         flow.hass.config_entries.async_update_entry.assert_not_called()
+
+
+class TestAsyncStepSettingsBranchesByConnectionType:
+    """NEW (this session) -- Prime (CLOUD_ONLY) entries used to land on
+    the SAME settings form as Classic, showing fields that mean
+    nothing for Prime at all (map size/scale, correlation entities --
+    all Classic-only rendering concepts). Now branches: Prime gets its
+    own minimal form."""
+
+    @pytest.mark.asyncio
+    async def test_prime_shows_only_the_calendar_toggle(self):
+        from custom_components.roomba_plus.models import ConnectionType
+
+        flow = _make_options_flow()
+        flow._config_entry.runtime_data.connection_type = ConnectionType.CLOUD_ONLY
+        flow.async_show_form = MagicMock(side_effect=lambda **kw: kw)
+
+        result = await flow.async_step_settings(None)
+
+        schema_keys = {str(k) for k in result["data_schema"].schema.keys()}
+        assert any("enable_schedule_calendar" in k for k in schema_keys)
+        assert not any("map_size_px" in k for k in schema_keys)
+        assert not any("correlation_entities" in k for k in schema_keys)
+
+    @pytest.mark.asyncio
+    async def test_classic_shows_existing_fields_plus_the_calendar_toggle(self):
+        flow = _make_options_flow()
+        flow.async_show_form = MagicMock(side_effect=lambda **kw: kw)
+
+        result = await flow.async_step_settings(None)
+
+        schema_keys = {str(k) for k in result["data_schema"].schema.keys()}
+        assert any("map_size_px" in k for k in schema_keys)
+        assert any("enable_schedule_calendar" in k for k in schema_keys)
+
+    @pytest.mark.asyncio
+    async def test_prime_settings_save_writes_calendar_option(self):
+        from custom_components.roomba_plus.models import ConnectionType
+
+        flow = _make_options_flow()
+        flow._config_entry.runtime_data.connection_type = ConnectionType.CLOUD_ONLY
+        flow.async_create_entry = MagicMock(side_effect=lambda **kw: kw)
+
+        await flow.async_step_settings({"enable_schedule_calendar": False})
+
+        flow.async_create_entry.assert_called_once()
+        saved = flow.async_create_entry.call_args.kwargs["data"]
+        assert saved["enable_schedule_calendar"] is False
+
+
+class TestValidateInput:
+    """`validate_input` is the gatekeeper for manual setup, and was
+    entirely untested.
+
+    Its error paths matter more than its happy path: a failure here
+    stops a user at the very first screen, before they have any entity
+    to inspect or log to read. Both of the ways it can fail --
+    unreachable device and a robot that never reports its state --
+    surface to the user as the same single error, so the code has to
+    map them correctly or the message is a lie."""
+
+    def _data(self):
+        from homeassistant.const import CONF_DELAY, CONF_HOST, CONF_PASSWORD
+
+        from custom_components.roomba_plus.const import CONF_BLID
+
+        return {
+            CONF_HOST: "192.168.1.50",
+            CONF_BLID: "TESTBLID",
+            CONF_PASSWORD: "secret",
+            CONF_DELAY: 1,
+        }
+
+    @pytest.mark.asyncio
+    async def test_a_successful_connection_returns_name_and_session(self):
+        from custom_components.roomba_plus import config_flow
+        from homeassistant.const import CONF_HOST
+
+        from custom_components.roomba_plus.const import ROOMBA_SESSION
+
+        hass = MagicMock()
+        hass.async_add_executor_job = AsyncMock(return_value=MagicMock())
+
+        with patch.object(config_flow, "async_connect_or_timeout",
+                          AsyncMock(return_value={ROOMBA_SESSION: "sess", "name": "Rosie"})), \
+             patch.object(config_flow, "async_disconnect_or_timeout", AsyncMock()):
+            result = await config_flow.validate_input(hass, self._data())
+
+        assert result["name"] == "Rosie"
+        assert result[CONF_HOST] == "192.168.1.50"
+
+    @pytest.mark.asyncio
+    async def test_an_unreachable_robot_propagates_cannot_connect(self):
+        """The user typed a wrong address, or the robot is asleep. This
+        must reach the flow as CannotConnect so it can show the
+        'cannot connect' message rather than a traceback."""
+        from custom_components.roomba_plus import config_flow
+        # From the PACKAGE, not from .__init__ -- importing the latter
+        # explicitly creates a second module object, so its CannotConnect
+        # is a different class than the one config_flow catches.
+        from custom_components.roomba_plus import CannotConnect
+
+        hass = MagicMock()
+        hass.async_add_executor_job = AsyncMock(return_value=MagicMock())
+
+        with patch.object(config_flow, "async_connect_or_timeout",
+                          AsyncMock(side_effect=CannotConnect)), \
+             pytest.raises(CannotConnect):
+            await config_flow.validate_input(hass, self._data())
+
+    @pytest.mark.asyncio
+    async def test_it_always_disconnects_after_a_successful_probe(self):
+        """The probe opens a real connection. Leaving it open would hold
+        the robot's single local slot, and the robot only accepts one --
+        the next thing the user does would then fail for a reason with
+        no visible connection to this step."""
+        from custom_components.roomba_plus import config_flow
+        from custom_components.roomba_plus.const import ROOMBA_SESSION
+
+        hass = MagicMock()
+        hass.async_add_executor_job = AsyncMock(return_value=MagicMock())
+        disconnect = AsyncMock()
+
+        with patch.object(config_flow, "async_connect_or_timeout",
+                          AsyncMock(return_value={ROOMBA_SESSION: "s", "name": "R"})), \
+             patch.object(config_flow, "async_disconnect_or_timeout", disconnect):
+            await config_flow.validate_input(hass, self._data())
+
+        disconnect.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_the_password_is_not_returned(self):
+        """Whatever this returns ends up in the config entry and in
+        diagnostics downloads. The password is already stored
+        separately; echoing it here would duplicate a secret into a
+        second place for no benefit."""
+        from custom_components.roomba_plus import config_flow
+        from homeassistant.const import CONF_PASSWORD
+
+        from custom_components.roomba_plus.const import ROOMBA_SESSION
+
+        hass = MagicMock()
+        hass.async_add_executor_job = AsyncMock(return_value=MagicMock())
+
+        with patch.object(config_flow, "async_connect_or_timeout",
+                          AsyncMock(return_value={ROOMBA_SESSION: "s", "name": "R"})), \
+             patch.object(config_flow, "async_disconnect_or_timeout", AsyncMock()):
+            result = await config_flow.validate_input(hass, self._data())
+
+        assert CONF_PASSWORD not in result
+
+
+class TestCloudCredentialsStep:
+    """The optional iRobot cloud login. Four distinct failure modes,
+    each with its own message, none previously tested.
+
+    This is where the distinctions earn their keep: "wrong password",
+    "you have been rate-limited", "your system clock or certificates
+    are off" and "the network is down" call for four different actions
+    from the user. Collapsing any of them into a generic "cannot
+    connect" sends someone re-typing a password that was correct.
+
+    Also worth guarding: this step is OPTIONAL. Leaving it blank has to
+    create the entry, because cloud access only adds enrichment -- a
+    robot works without it, and a user who cannot log in must still end
+    up with a working integration."""
+
+    def _flow(self):
+        from custom_components.roomba_plus.config_flow import RoombaPlusConfigFlow
+
+        flow = object.__new__(RoombaPlusConfigFlow)
+        flow.hass = MagicMock()
+        flow.hass.config.country = "DE"
+        flow.name = "Rosie"
+        flow._pending_config = {"blid": "B"}
+        flow.async_show_form = MagicMock(return_value={"type": "form"})
+        flow.async_create_entry = MagicMock(return_value={"type": "create_entry"})
+        return flow
+
+    async def _submit(self, flow, exc=None):
+        from custom_components.roomba_plus import config_flow
+        from custom_components.roomba_plus.const import (
+            CONF_IROBOT_PASSWORD, CONF_IROBOT_USERNAME,
+        )
+
+        api = MagicMock()
+        api.authenticate = AsyncMock(side_effect=exc)
+        with patch.object(config_flow, "IrobotCloudApi", return_value=api), \
+             patch("homeassistant.helpers.aiohttp_client.async_get_clientsession", MagicMock()):
+            return await flow.async_step_cloud_credentials({
+                CONF_IROBOT_USERNAME: "user@example.com",
+                CONF_IROBOT_PASSWORD: "pw",
+            })
+
+    @pytest.mark.asyncio
+    async def test_a_wrong_password_says_so_specifically(self):
+        from custom_components.roomba_plus.cloud_api import AuthenticationError
+
+        flow = self._flow()
+
+        await self._submit(flow, AuthenticationError())
+
+        assert flow.async_show_form.call_args.kwargs["errors"] == {
+            "base": "invalid_cloud_credentials"
+        }
+
+    @pytest.mark.asyncio
+    async def test_rate_limiting_is_not_reported_as_bad_credentials(self):
+        """THE distinction that matters most here: iRobot's auth has
+        been rate-limiting aggressively since late 2024. Telling that
+        user their password is wrong sends them changing a working
+        password, which makes things worse."""
+        from custom_components.roomba_plus.cloud_api import RateLimitedError
+
+        flow = self._flow()
+
+        await self._submit(flow, RateLimitedError())
+
+        assert flow.async_show_form.call_args.kwargs["errors"] == {
+            "base": "cloud_rate_limited"
+        }
+
+    @pytest.mark.asyncio
+    async def test_a_certificate_problem_gets_its_own_message(self):
+        """Local trust-store problems look like auth failures and are
+        not -- the fix is on the user's machine, not in their account."""
+        from custom_components.roomba_plus.cloud_api import SSLCertificateError
+
+        flow = self._flow()
+
+        await self._submit(flow, SSLCertificateError())
+
+        assert flow.async_show_form.call_args.kwargs["errors"] == {
+            "base": "cloud_ssl_certificate_error"
+        }
+
+    @pytest.mark.asyncio
+    async def test_any_other_api_failure_falls_back_to_cannot_connect(self):
+        from custom_components.roomba_plus.cloud_api import CloudApiError
+
+        flow = self._flow()
+
+        await self._submit(flow, CloudApiError())
+
+        assert flow.async_show_form.call_args.kwargs["errors"] == {"base": "cannot_connect"}
+
+    @pytest.mark.asyncio
+    async def test_valid_credentials_create_the_entry(self):
+        flow = self._flow()
+
+        await self._submit(flow, exc=None)
+
+        flow.async_create_entry.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_leaving_it_blank_still_creates_the_entry(self):
+        """Cloud access is enrichment, not a requirement. A user who
+        skips this must still end up with a working robot."""
+        from custom_components.roomba_plus.const import (
+            CONF_IROBOT_PASSWORD, CONF_IROBOT_USERNAME,
+        )
+
+        flow = self._flow()
+
+        await flow.async_step_cloud_credentials({
+            CONF_IROBOT_USERNAME: "", CONF_IROBOT_PASSWORD: "",
+        })
+
+        flow.async_create_entry.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_a_failed_login_does_not_store_the_credentials(self):
+        """Storing credentials that are known not to work would make
+        every later cloud call fail for a reason nobody can see."""
+        from custom_components.roomba_plus.cloud_api import AuthenticationError
+        from custom_components.roomba_plus.const import CONF_IROBOT_USERNAME
+
+        flow = self._flow()
+
+        await self._submit(flow, AuthenticationError())
+
+        flow.async_create_entry.assert_not_called()
+        assert CONF_IROBOT_USERNAME not in flow._pending_config
+
+
+class TestLinkStep:
+    """The pairing step: the user holds HOME until the robot beeps, and
+    the integration reads the password straight off the device.
+
+    Its two fallbacks to manual entry are the interesting part. This is
+    the step people actually get stuck on -- the timing window is short,
+    older firmware behaves differently, and some networks block the
+    port entirely. Falling back cleanly is the difference between "type
+    your password here instead" and a dead end."""
+
+    def _flow(self, *, name=None):
+        from custom_components.roomba_plus.config_flow import RoombaPlusConfigFlow
+
+        flow = object.__new__(RoombaPlusConfigFlow)
+        flow.hass = MagicMock()
+        flow.host = "192.168.1.50"
+        flow.blid = "TESTBLID"
+        flow.name = name
+        flow._pending_config = {}
+        flow.async_show_form = MagicMock(return_value={"type": "form"})
+        flow.async_abort = MagicMock(return_value={"type": "abort"})
+        flow.async_step_link_manual = AsyncMock(return_value={"type": "manual"})
+        flow.async_step_cloud_credentials = AsyncMock(return_value={"type": "cloud"})
+        return flow
+
+    async def _run(self, flow, *, password="pw", raises=None, validate=None):
+        from custom_components.roomba_plus import config_flow
+
+        flow.hass.async_add_executor_job = AsyncMock(
+            side_effect=raises, return_value=password
+        )
+        with patch.object(config_flow, "RoombaPassword", MagicMock()), \
+             patch.object(config_flow, "validate_input",
+                          AsyncMock(**(validate or {"return_value": {"name": "Rosie"}}))):
+            return await flow.async_step_link({})
+
+    @pytest.mark.asyncio
+    async def test_an_unreachable_port_falls_back_to_manual_entry(self):
+        """Some networks block the password port outright. A dead end
+        here would strand the user with no way forward at all."""
+        flow = self._flow()
+
+        result = await self._run(flow, raises=OSError("connection refused"))
+
+        assert result == {"type": "manual"}
+
+    @pytest.mark.asyncio
+    async def test_an_empty_password_also_falls_back(self):
+        """The robot answers but returns nothing -- typically the HOME
+        button was not held long enough, or was held too long. Same
+        recovery, different cause."""
+        flow = self._flow()
+
+        result = await self._run(flow, password="")
+
+        assert result == {"type": "manual"}
+
+    @pytest.mark.asyncio
+    async def test_a_successful_pairing_moves_on_to_the_cloud_step(self):
+        flow = self._flow(name="Rosie")
+
+        result = await self._run(flow)
+
+        assert result == {"type": "cloud"}
+
+    @pytest.mark.asyncio
+    async def test_the_password_is_carried_into_the_pending_config(self):
+        flow = self._flow(name="Rosie")
+
+        await self._run(flow, password="secret-from-robot")
+
+        assert flow._pending_config["password"] == "secret-from-robot"
+
+    @pytest.mark.asyncio
+    async def test_a_robot_that_never_reports_its_name_aborts_clearly(self):
+        """Distinct from the fallbacks above: the password worked, so
+        manual entry would not help. Aborting with a reason beats
+        looping the user back to a step that cannot succeed."""
+        # From the PACKAGE, not from .__init__ -- importing the latter
+        # explicitly creates a second module object, so its CannotConnect
+        # is a different class than the one config_flow catches.
+        from custom_components.roomba_plus import CannotConnect
+
+        flow = self._flow(name=None)
+
+        result = await self._run(flow, validate={"side_effect": CannotConnect})
+
+        assert result == {"type": "abort"}
+        assert flow.async_abort.call_args.kwargs["reason"] == "cannot_connect"
+
+    @pytest.mark.asyncio
+    async def test_a_known_name_skips_the_extra_probe(self):
+        """Discovery already supplies the name. Probing again would open
+        a second connection to a robot that only has one slot."""
+        from custom_components.roomba_plus import config_flow
+
+        flow = self._flow(name="Already Known")
+        flow.hass.async_add_executor_job = AsyncMock(return_value="pw")
+
+        with patch.object(config_flow, "RoombaPassword", MagicMock()), \
+             patch.object(config_flow, "validate_input", AsyncMock()) as validate:
+            await flow.async_step_link({})
+
+        validate.assert_not_awaited()
+
+
+class TestBlockingSensorPickerOffersHelperDomains:
+    """The picker and the manager must agree on which domains count.
+
+    @chairstacker could not select `input_boolean.vacation_mode` as a
+    blocker even though the manager would have handled it: the check
+    reads `state.state` and never cared about the domain, but the
+    picker was pinned to `binary_sensor`. A picker that offers less
+    than the manager accepts is an artificial limit.
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_picker_accepts_more_than_binary_sensor(self):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.const import CONF_BLOCKING_SENSORS
+
+        flow = _make_options_flow()
+        flow.async_show_form = MagicMock(side_effect=lambda **kw: kw)
+
+        result = await flow.async_step_blocking_sensors(None)
+
+        selector_config = next(
+            value.config
+            for key, value in result["data_schema"].schema.items()
+            if CONF_BLOCKING_SENSORS in str(key)
+        )
+        domains = selector_config["domain"]
+
+        assert "binary_sensor" in domains
+        assert "input_boolean" in domains, (
+            "a house-state toggle is the case this was widened for"
+        )
+
+
+class TestRegionSensorsOptionIsOfferedOnBothTiers:
+    """The per-region entities are opt-in, and the opt-in has to exist
+    on both generations.
+
+    Giving Prime users a switch and Classic users none -- for identical
+    data, from the same store -- is the split this project keeps having
+    to unpick later. Checked by asking both schemas, because a source
+    check passes whether or not the field is in the form.
+    """
+
+    @pytest.mark.asyncio
+    async def test_both_settings_forms_offer_it(self):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.const import CONF_REGION_SENSORS
+        from custom_components.roomba_plus.models import ConnectionType
+
+        for connection_type in (ConnectionType.CLOUD_ONLY, ConnectionType.LOCAL_PUSH):
+            flow = _make_options_flow()
+            flow._config_entry.runtime_data.connection_type = connection_type
+            flow.async_show_form = MagicMock(side_effect=lambda **kw: kw)
+
+            result = await flow.async_step_settings(None)
+            keys = {str(k) for k in result["data_schema"].schema}
+
+            assert any(CONF_REGION_SENSORS in k for k in keys), (
+                f"{connection_type} settings form does not offer "
+                f"{CONF_REGION_SENSORS}"
+            )
+
+    def test_it_defaults_to_off(self):
+        """@dduff617's four maps would otherwise mean dozens of
+        entities nobody asked for."""
+        from custom_components.roomba_plus.const import DEFAULT_REGION_SENSORS
+
+        assert DEFAULT_REGION_SENSORS is False

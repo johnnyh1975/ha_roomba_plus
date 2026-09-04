@@ -33,8 +33,10 @@ def _make_tracker(map_capability_value: str = "smart"):
     return tracker, roomba, entry
 
 
-def _set_state(roomba, phase: str = "", pose: dict | None = None):
-    reported: dict = {"cleanMissionStatus": {"phase": phase}}
+def _set_state(
+    roomba, phase: str = "", pose: dict | None = None, error: int = 0
+):
+    reported: dict = {"cleanMissionStatus": {"phase": phase, "error": error}}
     if pose is not None:
         reported["pose"] = pose
     roomba.master_state = {"state": {"reported": reported}}
@@ -46,12 +48,12 @@ class TestLocationNameDockedFallback:
     def test_docked_phase_shows_docked_label(self):
         tracker, roomba, _ = _make_tracker()
         _set_state(roomba, phase="charge")
-        assert tracker.location_name == "Angedockt"
+        assert tracker.state == "Angedockt"
 
     def test_idle_empty_phase_shows_docked_label(self):
         tracker, roomba, _ = _make_tracker()
         _set_state(roomba, phase="")
-        assert tracker.location_name == "Angedockt"
+        assert tracker.state == "Angedockt"
 
 
 class TestLocationNameNullRegression:
@@ -63,19 +65,73 @@ class TestLocationNameNullRegression:
         tracker, roomba, _ = _make_tracker()
         roomba.master_state = {"state": {"reported": {"cleanMissionStatus": None}}}
         # Falls through to the empty-phase branch, same as a docked robot.
-        assert tracker.location_name == "Angedockt"
+        assert tracker.state == "Angedockt"
 
     def test_docked_label_respects_language(self):
         tracker, roomba, _ = _make_tracker()
         tracker.hass.config.language = "en"
         _set_state(roomba, phase="stop")
-        assert tracker.location_name == "Docked"
+        assert tracker.state == "Docked"
 
     def test_unknown_language_falls_back_to_english(self):
         tracker, roomba, _ = _make_tracker()
         tracker.hass.config.language = "ja"
         _set_state(roomba, phase="charge")
-        assert tracker.location_name == "Docked"
+        assert tracker.state == "Docked"
+
+
+class TestLocaleLabelsCoverAllShippedTranslations:
+    """de/en were the only tables filled in; the other six shipped
+    locales (es/fr/it/nl/pl/pt) silently fell back to English state
+    text regardless of the user's Home Assistant language."""
+
+    def test_docked_label_in_polish(self):
+        tracker, roomba, _ = _make_tracker()
+        tracker.hass.config.language = "pl"
+        _set_state(roomba, phase="charge")
+        assert tracker.state == "Zadokowany"
+
+    def test_stuck_label_in_polish(self):
+        tracker, roomba, _ = _make_tracker()
+        tracker.hass.config.language = "pl"
+        _set_state(roomba, phase="stuck")
+        assert tracker.state == "Utknął"
+
+    def test_error_label_in_polish(self):
+        tracker, roomba, _ = _make_tracker()
+        tracker.hass.config.language = "pl"
+        _set_state(roomba, phase="stop", error=1010)
+        assert tracker.state == "Błąd"
+
+    def test_active_fallback_label_in_polish(self):
+        tracker, roomba, _ = _make_tracker(map_capability_value="ephemeral")
+        tracker.hass.config.language = "pl"
+        _set_state(roomba, phase="run")
+        assert tracker.state == "Sprzątanie"
+
+    def test_docked_label_in_spanish(self):
+        tracker, roomba, _ = _make_tracker()
+        tracker.hass.config.language = "es"
+        _set_state(roomba, phase="charge")
+        assert tracker.state == "Acoplado"
+
+    def test_stuck_label_in_spanish(self):
+        tracker, roomba, _ = _make_tracker()
+        tracker.hass.config.language = "es"
+        _set_state(roomba, phase="stuck")
+        assert tracker.state == "Atascado"
+
+    def test_error_label_in_spanish(self):
+        tracker, roomba, _ = _make_tracker()
+        tracker.hass.config.language = "es"
+        _set_state(roomba, phase="stop", error=1010)
+        assert tracker.state == "Error"
+
+    def test_active_fallback_label_in_spanish(self):
+        tracker, roomba, _ = _make_tracker(map_capability_value="ephemeral")
+        tracker.hass.config.language = "es"
+        _set_state(roomba, phase="run")
+        assert tracker.state == "Limpiando"
 
 
 class TestLocationNameSmartTier:
@@ -89,7 +145,7 @@ class TestLocationNameSmartTier:
             "custom_components.roomba_plus.sensor._resolve_smart_tier_room_state",
             return_value={"current_room": "Kitchen", "next_room": "Hallway"},
         ):
-            assert tracker.location_name == "Kitchen"
+            assert tracker.state == "Kitchen"
 
     def test_falls_back_to_active_label_when_room_unknown(self):
         """No room resolved (e.g. no MTS mission, or estimates entirely
@@ -101,7 +157,7 @@ class TestLocationNameSmartTier:
             "custom_components.roomba_plus.sensor._resolve_smart_tier_room_state",
             return_value={},
         ):
-            assert tracker.location_name == "Unterwegs"
+            assert tracker.state == "Unterwegs"
 
 
 class TestLocationNameEphemeralTier:
@@ -116,12 +172,12 @@ class TestLocationNameEphemeralTier:
     def test_active_mission_shows_generic_fallback_not_none(self):
         tracker, roomba, _ = _make_tracker(map_capability_value="ephemeral")
         _set_state(roomba, phase="run")
-        assert tracker.location_name == "Unterwegs"
+        assert tracker.state == "Unterwegs"
 
     def test_docked_shows_docked_label_same_as_smart_tier(self):
         tracker, roomba, _ = _make_tracker(map_capability_value="ephemeral")
         _set_state(roomba, phase="charge")
-        assert tracker.location_name == "Angedockt"
+        assert tracker.state == "Angedockt"
 
     def test_extension_point_returns_none_today(self):
         """Documents current behaviour explicitly — once EPHEMERAL room/
@@ -239,3 +295,388 @@ class TestEntityRegistryEnabledDefault:
         tracker, _, _ = _make_tracker()
         assert tracker.entity_registry_enabled_default is True
 
+
+
+class TestPrimeReadsItsPhaseFromTheShadow:
+    """@chairstacker (#70): the tracker always said "Docked" on a Prime
+    robot, whatever it was doing.
+
+    `roomba_reported_state(self.vacuum)` returns `{}` when there is no
+    local robot — which is every Prime entry — so the phase was always
+    empty, the docked guard always matched, and `_resolve_room()`'s own
+    Prime branch was unreachable.
+    """
+
+    @staticmethod
+    def _tracker(phase):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.models import ConnectionType
+        from custom_components.roomba_plus.device_tracker import (
+            RoombaDeviceTracker,
+        )
+
+        tracker = RoombaDeviceTracker.__new__(RoombaDeviceTracker)
+        tracker.vacuum = None
+        tracker._prime_rooms = {}
+        coordinator = SimpleNamespace(
+            data={"ro-currentstate": {"cleanMissionStatus": {"phase": phase}}}
+        )
+        tracker.hass = MagicMock()
+        tracker.hass.config.language = 'en'
+        tracker._config_entry = MagicMock()
+        tracker._config_entry.runtime_data = SimpleNamespace(
+            connection_type=ConnectionType.CLOUD_ONLY,
+            prime_status_coordinator=coordinator,
+            prime_live_rooms=None,
+        )
+        return tracker
+
+    def test_a_running_prime_robot_is_not_reported_as_docked(self):
+        tracker = self._tracker("run")
+
+        assert tracker.state != "Docked"
+
+    def test_a_docked_prime_robot_still_is(self):
+        tracker = self._tracker("charge")
+
+        assert tracker.state == "Docked"
+
+
+class TestTheRoomNameCacheRefillsWhenEmpty:
+    """@chairstacker (#70 follow-up): the tracker reported rooms in a38
+    and reported "Room 16" — the number, not the name.
+
+    `async_added_to_hass` fetches the room list once, at setup. On a
+    cold start the map bundle has usually not been built yet, so the
+    cache stays empty and every room falls through to `Room {id}`
+    forever.
+    """
+
+    @staticmethod
+    def _tracker(cached):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.device_tracker import (
+            RoombaDeviceTracker,
+        )
+
+        tracker = RoombaDeviceTracker.__new__(RoombaDeviceTracker)
+        tracker._prime_rooms = dict(cached)
+        tracker.hass = MagicMock()
+        tracker.async_write_ha_state = MagicMock()
+        return tracker
+
+    def test_an_empty_cache_triggers_a_refetch(self):
+        tracker = self._tracker({})
+
+        tracker._handle_prime_update()
+
+        tracker.async_write_ha_state.assert_called_once()
+        tracker.hass.async_create_task.assert_called_once()
+
+    def test_a_filled_cache_does_not(self):
+        """A robot with named rooms must not refetch the list on every
+        coordinator message."""
+        tracker = self._tracker({"Kitchen": "MAP-1/16"})
+
+        tracker._handle_prime_update()
+
+        tracker.async_write_ha_state.assert_called_once()
+        tracker.hass.async_create_task.assert_not_called()
+
+
+class TestZonesReachTheTrackerCache:
+    """@chairstacker (#70): the tracker showed nothing while a zone was
+    being cleaned.
+
+    He assumed the missing zone names from #47 were the cause. They are
+    not. `available_rooms()` reads `rooms_metadata`, which carries rooms
+    and not zones — so a zone-targeted mission produced a region id that
+    matched nothing in the cache. This would still be empty if every
+    zone on his map had a name.
+
+    Two mechanisms, and an earlier fix covered only one of them.
+    """
+
+    @staticmethod
+    def _tracker(rooms, zone_names):
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from custom_components.roomba_plus.device_tracker import (
+            RoombaDeviceTracker,
+        )
+
+        tracker = RoombaDeviceTracker.__new__(RoombaDeviceTracker)
+        tracker._prime_rooms = {}
+        entry = MagicMock()
+        entry.runtime_data.prime_room_names = zone_names
+        tracker._config_entry = entry
+        tracker.hass = MagicMock()
+
+        backend = MagicMock()
+        backend.available_rooms = AsyncMock(return_value=dict(rooms))
+        return tracker, backend, patch
+
+    async def _refresh(self, rooms, zone_names):
+        tracker, backend, patch = self._tracker(rooms, zone_names)
+        with patch(
+            "custom_components.roomba_plus.room_cleaning."
+            "async_get_room_cleaning_backend",
+            return_value=backend,
+        ):
+            await tracker._async_refresh_prime_rooms()
+        return tracker._prime_rooms
+
+    @pytest.mark.asyncio
+    async def test_a_zone_reaches_the_cache(self):
+        cache = await self._refresh(
+            rooms={"Kitchen": "MAP/10"},
+            zone_names={"101": "Guest Access Zone"},
+        )
+
+        assert cache.get("Guest Access Zone") == "101"
+
+    @pytest.mark.asyncio
+    async def test_rooms_win_a_name_collision(self):
+        """A room's name comes from the map's own metadata; a zone's
+        comes from whatever the last command called it."""
+        cache = await self._refresh(
+            rooms={"Kitchen": "MAP/10"},
+            zone_names={"999": "Kitchen"},
+        )
+
+        assert cache["Kitchen"] == "MAP/10"
+
+    @pytest.mark.asyncio
+    async def test_rooms_still_arrive(self):
+        """The zone merge must not disturb what already worked."""
+        cache = await self._refresh(rooms={"Kitchen": "MAP/10"}, zone_names={})
+
+        assert cache == {"Kitchen": "MAP/10"}
+
+
+class TestAZoneCleanIsNamedToo:
+    """@chairstacker (#64): during a zone mission the tracker read
+    "Cleaning" — its fallback for "somewhere, unknown" — while his own
+    diagnostics carried all seven zone names under
+    `region_names.merged`.
+
+    A timeline event has three place fields: `room` and `travel`, both
+    keyed `region_id`, and `zone`, keyed `zone_id`. Only the first two
+    were read, so a zone mission produced no id — and a name lookup
+    with nothing to look up.
+
+    Three rounds of explanation called this a protocol gap. It was a
+    field nobody read, which is the same shape as `zone_layers` and
+    `pd_state` this week.
+    """
+
+    @staticmethod
+    def _resolve(event_kwargs, names):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.device_tracker import (
+            RoombaDeviceTracker,
+        )
+
+        tracker = RoombaDeviceTracker.__new__(RoombaDeviceTracker)
+        tracker._prime_rooms = names
+
+        event = MagicMock()
+        event.room = event_kwargs.get("room")
+        event.travel = event_kwargs.get("travel")
+        event.zone = event_kwargs.get("zone")
+        report = MagicMock()
+        report.event = [event]
+
+        data = MagicMock()
+        data.prime_coordinator.data = report
+        return tracker._resolve_prime_room(data)
+
+    @staticmethod
+    def _zone(zone_id):
+        from unittest.mock import MagicMock
+
+        z = MagicMock()
+        z.zone_id = zone_id
+        return z
+
+    @staticmethod
+    def _room(region_id):
+        from unittest.mock import MagicMock
+
+        r = MagicMock()
+        r.region_id = region_id
+        return r
+
+    def test_a_zone_event_resolves_to_its_name(self):
+        """Zone 107 is the one his last recorded mission targeted."""
+        name = self._resolve(
+            {"room": None, "travel": None, "zone": self._zone("107")},
+            {"Guest Access Zone": "107"},
+        )
+
+        assert name == "Guest Access Zone"
+
+    def test_a_room_event_still_resolves(self):
+        name = self._resolve(
+            {"room": self._room("10"), "travel": None, "zone": None},
+            {"Kitchen": "MAP/10"},
+        )
+
+        assert name == "Kitchen"
+
+    def test_neither_present_resolves_nothing(self):
+        assert self._resolve(
+            {"room": None, "travel": None, "zone": None}, {"Kitchen": "10"}
+        ) is None
+
+
+class TestAStuckRobotDoesNotSayCleaning:
+    """@utkjmitch's Combo (Y3-series) went `stuck` at 11:52, drained for six hours,
+    declared battery-low, and stopped transmitting at 36%.
+
+    Nine days later this entity still read "Cleaning" — because `stuck`
+    is not a mission-end phase (correctly; the mission did not end) so
+    it fell through to the active label, and because the last value any
+    entity received stays until a new one arrives.
+
+    Not added to MISSION_END_PHASES: that set means "the mission
+    finished" and drives history and statistics. A stuck robot's mission
+    did not finish. This is a display question.
+    """
+
+    def test_stuck_reports_stuck(self):
+        tracker, roomba, _ = _make_tracker()
+        tracker.hass.config.language = "en"
+        _set_state(roomba, phase="stuck")
+
+        assert tracker.state == "Stuck"
+
+    def test_stuck_does_not_say_cleaning(self):
+        """The regression itself, in his words."""
+        tracker, roomba, _ = _make_tracker()
+        tracker.hass.config.language = "en"
+        _set_state(roomba, phase="stuck")
+
+        assert tracker.state != "Cleaning"
+
+    def test_a_running_mission_is_untouched(self):
+        tracker, roomba, _ = _make_tracker(map_capability_value="ephemeral")
+        tracker.hass.config.language = "en"
+        _set_state(roomba, phase="run")
+
+        assert tracker.state == "Cleaning"
+
+    def test_docked_is_untouched(self):
+        tracker, roomba, _ = _make_tracker()
+        tracker.hass.config.language = "en"
+        _set_state(roomba, phase="charge")
+
+        assert tracker.state == "Docked"
+
+
+class TestAnErrorIsNotAnArrival:
+    """@utkjmitch: his robot finished a mission, drove home, aborted the
+    final approach two inches short of a powered dock, and sat there
+    flashing red with error 1010.
+
+    `device_tracker` said **"Docked."**
+
+    `stop` is a mission-end phase and a failed docking reports exactly
+    that, so the entity concluded arrival from the mission having ended.
+    Last week the same entity said "Cleaning" for nine days about a
+    robot that had stopped transmitting: one root, states derived from
+    what should follow rather than from what the robot reports.
+    """
+
+    def test_an_error_is_reported_as_an_error(self):
+        tracker, roomba, _ = _make_tracker()
+        tracker.hass.config.language = "en"
+        _set_state(roomba, phase="stop", error=1010)
+
+        assert tracker.state == "Error"
+
+    def test_it_does_not_claim_docked(self):
+        """The regression itself."""
+        tracker, roomba, _ = _make_tracker()
+        tracker.hass.config.language = "en"
+        _set_state(roomba, phase="stop", error=1010)
+
+        assert tracker.state != "Docked"
+
+    def test_a_clean_dock_still_says_docked(self):
+        """A mission that ended without error is an arrival."""
+        tracker, roomba, _ = _make_tracker()
+        tracker.hass.config.language = "en"
+        _set_state(roomba, phase="charge", error=0)
+
+        assert tracker.state == "Docked"
+
+    def test_an_error_mid_mission_wins_over_the_room(self):
+        tracker, roomba, _ = _make_tracker(map_capability_value="ephemeral")
+        tracker.hass.config.language = "en"
+        _set_state(roomba, phase="run", error=6)
+
+        assert tracker.state == "Error"
+
+
+class TestZonesReachTheNameCacheToo:
+    """@chairstacker: rooms resolved to names, zones stayed as
+    `Room 100`.
+
+    The cache merges two sources — `available_rooms()` for rooms, and
+    the flat `prime_room_names` for zones. The merge was correct. The
+    **refetch gate** was not: it fired only while the cache was empty.
+
+    Rooms arrive first, from map metadata. Zones arrive later, once a
+    map build has filled `prime_room_names`. So the first room to land
+    closed the gate, and no zone was ever picked up.
+    """
+
+    @staticmethod
+    def _should_refetch(cached, flat, seen=frozenset()):
+        """The gate, as the tracker evaluates it.
+
+        Compares against the region ids the merge has SEEN, not against
+        the cache. Two earlier versions of this fix got it wrong:
+
+        - counting entries: `cached` is keyed by name and `flat` by
+          region id, so two regions sharing a name made the flat table
+          permanently larger
+        - subtracting the cache: the merge legitimately skips unnamed
+          regions and names a room already holds, so those stayed
+          "missing" forever
+
+        Both refetched on every coordinator message.
+        """
+        return not cached or bool({str(r) for r in flat} - seen)
+
+    def test_rooms_present_but_zones_pending_still_refetches(self):
+        """His exact state: eight rooms cached, zones now available."""
+        cached = {f"Room {i}": str(i) for i in range(10, 18)}
+        flat = {**{str(i): f"Room {i}" for i in range(10, 18)},
+                "100": "Clean Kitchen", "101": "Testing Zone 01"}
+
+        assert self._should_refetch(cached, flat, seen=set(map(str, range(10, 18))))
+
+    def test_an_empty_cache_still_refetches(self):
+        assert self._should_refetch({}, {})
+
+    def test_a_complete_cache_does_not(self):
+        """The behaviour the old gate was protecting: no refetch on
+        every coordinator message once everything is known."""
+        cached = {"Kitchen": "10", "Clean Kitchen": "100"}
+        flat = {"10": "Kitchen", "100": "Clean Kitchen"}
+
+        assert not self._should_refetch(cached, flat, seen={"10", "100"})
+
+    def test_two_regions_sharing_a_name_settle(self):
+        """The bug in the first fix: by count this stays true forever,
+        because the cache can only hold one entry per name."""
+        flat = {"10": "Kitchen", "11": "Kitchen"}
+        cached = {"Kitchen": "MAP-A/10"}
+
+        assert not self._should_refetch(cached, flat, seen={"10", "11"})

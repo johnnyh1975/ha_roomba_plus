@@ -26,27 +26,75 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.util import dt as dt_util
 
 from . import roomba_reported_state
 from .const import (
+    CONSUMABLE_ROLES,
     CONF_BLOCKING_SENSORS,
-    CONF_BRUSH_HOURS,
-    CONF_FILTER_HOURS,
-    DEFAULT_BRUSH_HOURS,
-    DEFAULT_FILTER_HOURS,
+    MAP_UPDATING_NOT_READY,
     DOMAIN,
     EVENT_STUCK,
+    MAINTENANCE_ACTION_SLUGS,
     MQTT_WATCHDOG_SECONDS,
     MQTT_WATCHDOG_START_GRACE_SECONDS,
     has_smart_map,
     is_mop,
 )
 from .entity import IRobotEntity
-from .models import RoombaConfigEntry
+from .models import ConnectionType, RoombaConfigEntry
+from .sensor_prime import _blocking_faults, get_localized_error_entry
+from .prime_schedule_switch import quiet_hours_windows
 
 PARALLEL_UPDATES = 0
 
-_NOT_READY_MAP_SAVING: int = 64  # notReady bitmask bit 6
+#: CORRECTED (a22). notReady is not a bitmask -- it is a scalar index,
+#: and 67 means DownloadingMap. A local copy of the same magic number is
+#: why the first sweep for the shared constant did not reach this file:
+#: grepping for the name finds call sites, not duplicated values.
+_NOT_READY_MAP_SAVING: int = MAP_UPDATING_NOT_READY
+
+
+def _prime_reports_tank(config_entry: RoombaConfigEntry) -> bool:
+    """True if the robot reports a tankPresent field at all.
+
+    Deliberately checks for the KEY, not its value: False means "the
+    tank is currently out", which is exactly what the sensor exists to
+    show. Only a missing key means this robot has no onboard tank at
+    all -- as on a Combo whose water lives in the Clean Base.
+
+    THAT LAST SENTENCE IS DISPROVEN, BY THE TESTER WHO PROMPTED IT.
+
+    This rule replaced a `cap.scrub` gate after @chairstacker got a tank
+    sensor for a tank he does not have. Field presence looked like the
+    honest answer: the robot itself would say.
+
+    It does not. His 405 reports `tankPresent: true` and:
+
+      - the iRobot app shows NO water level for the robot, only for the
+        dock's two tanks
+      - the robot has NO fill port on its body
+      - the value does not move when either dock tank is removed
+
+    So the field is present, constant, and describes nothing. A robot
+    with no tank reports one as present.
+
+    KEPT ANYWAY, AND NOT BECAUSE THE RULE SURVIVED. Nothing else
+    distinguishes a robot with a tank from one without: there is no
+    capability flag for it, `cap.ppWetLvl` describes pad wetness the
+    DOCK applies, and `dock.cap.fr` is about the dock refilling itself.
+    Removing the sensor for every Prime robot on one robot's evidence
+    would take a working reading away from any robot where the field is
+    real -- and none has been observed either way.
+
+    WHAT WOULD SETTLE IT: one robot where `tankPresent` goes False when
+    a tank is pulled. That is a working sensor and this stays. Until
+    then it is documented as unreliable rather than quietly trusted,
+    which is the difference between a caveat and a lie."""
+    coordinator = getattr(config_entry.runtime_data, "prime_status_coordinator", None)
+    data = getattr(coordinator, "data", None) or {}
+    current = data.get("ro-currentstate") or {}
+    return "tankPresent" in current
 
 
 async def async_setup_entry(
@@ -55,11 +103,75 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up binary sensors for this Roomba."""
-    roomba = config_entry.runtime_data.roomba
-    blid = config_entry.runtime_data.blid
+    data = config_entry.runtime_data
+
+    # NEW (V4/Prime): separate path -- battery/bin/tank presence comes
+    # from PrimeStatusCoordinator's named-shadow data (CurrentStateShadow),
+    # not roomba_reported_state()'s Classic shape. See sensor_prime.py's
+    # own module docstring for why this project keeps CLOUD_ONLY entities
+    # deliberately separate from the Classic SENSORS/RoombaSensor-style
+    # machinery rather than threading branches through it.
+    if data.connection_type is ConnectionType.CLOUD_ONLY:
+        if data.prime_status_coordinator is not None:
+            from .prime_coordinator import get_prime_capability_flags
+
+            cap, _dock_cap = get_prime_capability_flags(config_entry)
+
+            entities: list[BinarySensorEntity] = [
+                PrimeBinPresentSensor(data.blid, config_entry),
+                PrimeRobotConnectivitySensor(data.blid, config_entry),
+                # NEW (this session): ro-currentstate.dock.error-backed,
+                # confirmed type (int), no real error value observed yet.
+                PrimeDockErrorSensor(data.blid, config_entry),
+            ]
+            # CORRECTED (this session, from a field report): gate on the
+            # robot actually REPORTING a tank, not on it being able to mop.
+            #
+            # This used to check `cap.scrub != 0`. A tester's Combo can
+            # mop -- so it passed -- but its water lives in the Clean
+            # Base, not in the robot. He got a sensor for a tank he does
+            # not have.
+            #
+            # Mop capability and an onboard tank coincide on most
+            # hardware, which is exactly why this survived. The field
+            # the sensor actually reads is `tankPresent`; if the robot
+            # never reports it, there is nothing to show.
+            #
+            # Absent field means no entity. A present field means one,
+            # whatever its value -- False is a real answer ("the tank is
+            # out"), only absence means "this robot has no such thing".
+            # THE GATE STAYS FIELD-BASED, and this is a deliberate
+            # divergence from PR #76.
+            #
+            # That PR reintroduces `cap.scrub == 0` here as the disable
+            # condition. `cap.scrub` is about SCRUBBING; `tankPresent`
+            # is about the robot having a tank. They coincide on most
+            # hardware, which is why the same reading survived once
+            # before -- until @chairstacker got a tank sensor for a tank
+            # he does not have, his water being in the Clean Base.
+            #
+            # Field presence answers the question the sensor asks.
+            if _prime_reports_tank(config_entry):
+                entities.append(PrimeTankPresentSensor(data.blid, config_entry))
+            # NO CAPABILITY GATE. The four blocking codes are not
+            # hardware-specific: 286 (robot off the floor) applies to
+            # every robot, and a vacuum-only model can still report the
+            # pad-plate pair if a plate is fitted. Gating this would
+            # withhold the answer from exactly the robot whose owner
+            # cannot work out why a command was refused.
+            entities.append(PrimeStartBlockedSensor(data.blid, config_entry))
+            # NOT GATED. Any household can carry quiet hours; one that
+            # has none reports an empty list and the sensor sits `off`
+            # rather than being withheld.
+            entities.append(PrimeQuietHoursSensor(data.blid, config_entry))
+            async_add_entities(entities)
+        return
+
+    roomba = data.roomba
+    blid = data.blid
     state = roomba_reported_state(roomba)
 
-    entities: list[IRobotEntity] = []
+    entities = []
 
     # Bin full: only create when the robot reports bin.full
     if "full" in (state.get("bin") or {}):
@@ -146,14 +258,14 @@ class RoombaBinStatus(IRobotEntity, BinarySensorEntity):
     _attr_device_class = BinarySensorDeviceClass.PROBLEM
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
-    def __init__(self, roomba, blid: str) -> None:
+    def __init__(self, roomba: Any, blid: str) -> None:
         super().__init__(roomba, blid)
         self._attr_unique_id = f"{self.robot_unique_id}_bin_full"
 
     @property
     def is_on(self) -> bool:
         """Return True when the bin is full."""
-        return (roomba_reported_state(self.vacuum).get("bin") or {}).get("full", False)
+        return bool((roomba_reported_state(self.vacuum).get("bin") or {}).get("full", False))
 
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:
         return "bin" in new_state
@@ -173,10 +285,21 @@ class RoombaBinPresentStatus(IRobotEntity, BinarySensorEntity):
         translation_key="bin_present",
     )
 
-    _attr_device_class = BinarySensorDeviceClass.PRESENCE
+    # CORRECTED (this session, real field report -- chairstacker):
+    # BinarySensorDeviceClass.PRESENCE makes HA display this as
+    # "Home"/"Away", which is meaningless (and actively confusing) for a
+    # water tank -- that device class exists for people/device trackers.
+    # Removing it displays a plain On/Off instead. SAFE for existing
+    # automations: a binary_sensor's STATE is always "on"/"off"
+    # regardless of device_class; device_class only changes the label
+    # the frontend renders. Applied to all five physical-component
+    # presence sensors (bin + mop tank, Classic and V4/Prime alike) --
+    # the same wrong label affected every one of them equally, and
+    # fixing only the one that happened to be reported would have left
+    # the others inconsistent for no reason.
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
-    def __init__(self, roomba, blid: str) -> None:
+    def __init__(self, roomba: Any, blid: str) -> None:
         super().__init__(roomba, blid)
         self._attr_unique_id = f"{self.robot_unique_id}_bin_present"
 
@@ -207,7 +330,7 @@ class RoombaConnectionStatus(IRobotEntity, BinarySensorEntity):
     _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
-    def __init__(self, roomba, blid: str) -> None:
+    def __init__(self, roomba: Any, blid: str) -> None:
         super().__init__(roomba, blid)
         self._attr_unique_id = f"{self.robot_unique_id}_connected"
 
@@ -252,7 +375,7 @@ class RoombaMopReadyStatus(IRobotEntity, BinarySensorEntity):
     _attr_device_class = BinarySensorDeviceClass.PROBLEM
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
-    def __init__(self, roomba, blid: str) -> None:
+    def __init__(self, roomba: Any, blid: str) -> None:
         super().__init__(roomba, blid)
         self._attr_unique_id = f"{self.robot_unique_id}_mop_ready"
 
@@ -297,10 +420,21 @@ class RoombaMopTankPresentStatus(IRobotEntity, BinarySensorEntity):
         translation_key="mop_tank_present",
     )
 
-    _attr_device_class = BinarySensorDeviceClass.PRESENCE
+    # CORRECTED (this session, real field report -- chairstacker):
+    # BinarySensorDeviceClass.PRESENCE makes HA display this as
+    # "Home"/"Away", which is meaningless (and actively confusing) for a
+    # water tank -- that device class exists for people/device trackers.
+    # Removing it displays a plain On/Off instead. SAFE for existing
+    # automations: a binary_sensor's STATE is always "on"/"off"
+    # regardless of device_class; device_class only changes the label
+    # the frontend renders. Applied to all five physical-component
+    # presence sensors (bin + mop tank, Classic and V4/Prime alike) --
+    # the same wrong label affected every one of them equally, and
+    # fixing only the one that happened to be reported would have left
+    # the others inconsistent for no reason.
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
-    def __init__(self, roomba, blid: str) -> None:
+    def __init__(self, roomba: Any, blid: str) -> None:
         super().__init__(roomba, blid)
         self._attr_unique_id = f"{self.robot_unique_id}_mop_tank_present"
 
@@ -334,7 +468,7 @@ class RoombaMopLidClosedStatus(IRobotEntity, BinarySensorEntity):
     _attr_device_class = BinarySensorDeviceClass.OPENING
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
-    def __init__(self, roomba, blid: str) -> None:
+    def __init__(self, roomba: Any, blid: str) -> None:
         super().__init__(roomba, blid)
         self._attr_unique_id = f"{self.robot_unique_id}_mop_lid_closed"
 
@@ -399,7 +533,7 @@ class RoombaMapSavingStatus(IRobotEntity, BinarySensorEntity):
             .get("cleanMissionStatus", {})
             .get("notReady") or 0
         )
-        return bool(not_ready & _NOT_READY_MAP_SAVING)
+        return not_ready == _NOT_READY_MAP_SAVING
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -443,30 +577,30 @@ class RoombaMaintenanceDue(IRobotEntity, BinarySensorEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Return which consumables are due and how many hours overdue each is.
-
-        overdue_by_hours values are 0 when exactly at threshold, positive when
-        past it. This is useful for automations that escalate alerts based on
-        how long maintenance has been deferred.
-        """
+        """Return due consumables, overdue hours, and action slugs."""
         due = self._due_items()
         overdue: dict[str, int] = {}
         store = self._entry.runtime_data.maintenance_store
         if store and due:
             current_hr = (self.vacuum_state.get("bbrun") or {}).get("hr", 0)
-            options = self._entry.options
-            if "filter" in due:
-                threshold = options.get(CONF_FILTER_HOURS, DEFAULT_FILTER_HOURS)
-                hours_since_reset = current_hr - store.filter_reset_hr
-                overdue["filter"] = max(0, hours_since_reset - threshold)
-            brush_key = "pad" if is_mop(self.vacuum_state) else "brush"
-            if brush_key in due:
-                threshold = options.get(CONF_BRUSH_HOURS, DEFAULT_BRUSH_HOURS)
-                hours_since_reset = current_hr - store.brush_reset_hr
-                overdue[brush_key] = max(0, hours_since_reset - threshold)
+            is_mop_device = is_mop(self.vacuum_state)
+            for role, spec in CONSUMABLE_ROLES.items():
+                part = (
+                    spec.mop_due_key
+                    if spec.mop_due_key and is_mop_device
+                    else spec.due_key
+                )
+                if part in due:
+                    reset_hr = getattr(store, f"{spec.slot}_reset_hr")
+                    threshold = store.threshold_hours(role, self._entry.options)
+                    overdue[part] = max(0, (current_hr - reset_hr) - threshold)
         return {
             "due": due,
             "overdue_by_hours": overdue,
+            "required_actions": {
+                part: MAINTENANCE_ACTION_SLUGS[part]
+                for part in due
+            },
         }
 
     def _due_items(self) -> list[str]:
@@ -480,7 +614,7 @@ class RoombaMaintenanceDue(IRobotEntity, BinarySensorEntity):
         store = self._entry.runtime_data.maintenance_store
         if not store:
             return []
-        return store.due_items(self.vacuum_state, self._entry.options)
+        return store.due_items(dict(self.vacuum_state), self._entry.options)
 
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:
         return "bbrun" in new_state
@@ -577,7 +711,20 @@ class RoombaScheduleHoldActive(IRobotEntity, BinarySensorEntity):
         translation_key="schedule_hold_active",
     )
 
-    _attr_device_class = BinarySensorDeviceClass.RUNNING
+    # NO device class, deliberately (this session).
+    #
+    # This was BinarySensorDeviceClass.RUNNING, which makes Home
+    # Assistant render the states as "Running"/"Not running" -- nonsense
+    # for a HOLD. A tester reported the sensor showing Off while a
+    # scheduled run was underway and reasonably read that as a bug; Off
+    # is correct (nothing is holding the schedule back), but nothing in
+    # how it presents itself says so.
+    #
+    # Same mistake as the presence device class that was on the tank and
+    # bin sensors until a7, where it rendered as "Home"/"Away". A device
+    # class only changes the label, never the state, so removing it
+    # cannot break an automation -- it just stops the entity describing
+    # itself wrongly.
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, roomba: Any, blid: str, config_entry: RoombaConfigEntry) -> None:
@@ -649,7 +796,18 @@ class RoombaMopTankPresentDirect(IRobotEntity, BinarySensorEntity):
         translation_key="mop_tank_present_direct",
     )
 
-    _attr_device_class = BinarySensorDeviceClass.PRESENCE
+    # CORRECTED (this session, real field report -- chairstacker):
+    # BinarySensorDeviceClass.PRESENCE makes HA display this as
+    # "Home"/"Away", which is meaningless (and actively confusing) for a
+    # water tank -- that device class exists for people/device trackers.
+    # Removing it displays a plain On/Off instead. SAFE for existing
+    # automations: a binary_sensor's STATE is always "on"/"off"
+    # regardless of device_class; device_class only changes the label
+    # the frontend renders. Applied to all five physical-component
+    # presence sensors (bin + mop tank, Classic and V4/Prime alike) --
+    # the same wrong label affected every one of them equally, and
+    # fixing only the one that happened to be reported would have left
+    # the others inconsistent for no reason.
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, roomba: Any, blid: str) -> None:
@@ -691,7 +849,7 @@ class RoombaMidMissionRecharge(IRobotEntity, BinarySensorEntity):
     @property
     def is_on(self) -> bool:
         status = roomba_reported_state(self.vacuum).get("cleanMissionStatus", {})
-        return (
+        return bool(
             status.get("phase") == "charge"
             and status.get("cycle", "none") != "none"
         )
@@ -772,8 +930,7 @@ class RoombaDemandCleanBlocked(IRobotEntity, BinarySensorEntity):
     _attr_entity_category = None  # reclassified DIAG→MAIN (v2.6.0)
 
     def __init__(self, roomba: Any, blid: str, config_entry: Any) -> None:
-        super().__init__(roomba, blid)
-        self._config_entry = config_entry
+        super().__init__(roomba, blid, config_entry)
         self._attr_unique_id = f"{self.robot_unique_id}_demand_clean_blocked"
 
     @property
@@ -788,7 +945,7 @@ class RoombaDemandCleanBlocked(IRobotEntity, BinarySensorEntity):
         if dtm is None:
             return None
         blocked, _ = dtm.gate_blocked()
-        return blocked
+        return bool(blocked)
 
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:
         return "cleanMissionStatus" in new_state
@@ -1191,3 +1348,548 @@ class RoombaLayoutChangeDetected(IRobotEntity, BinarySensorEntity):
             "candidate_count": len(candidates),
         }
 
+
+
+class _PrimeStatusSensorBase(IRobotEntity):
+    """Shared base for V4/Prime binary sensors reading from
+    PrimeStatusCoordinator's named-shadow data (see prime_coordinator.py's
+    own docstring). Not itself a full entity -- concrete subclasses mix
+    this in alongside BinarySensorEntity."""
+
+    def __init__(
+        self, blid: str, config_entry: RoombaConfigEntry, *, disabled: bool = False
+    ) -> None:
+        IRobotEntity.__init__(self, roomba=None, blid=blid, config_entry=config_entry)
+        self._config_entry = config_entry
+        # CREATED BUT DISABLED, rather than not created (PR #76,
+        # @jouwdan).
+        #
+        # A capability a robot reports as absent used to mean no entity
+        # at all. That hides the decision: nothing tells the owner the
+        # entity was considered and withheld, and nothing lets them
+        # override a capability report that is wrong for their hardware.
+        #
+        # Registered-but-disabled says both. It also avoids the orphan
+        # problem -- an entity that appears and disappears as a
+        # capability flips leaves a dead registry entry behind, which is
+        # exactly the "Unmanageable" row @chairstacker found for a
+        # favourite.
+        self._attr_entity_registry_enabled_default = not disabled
+
+    @property
+    def _current_state(self) -> Any:
+        """Parses CurrentStateShadow from the coordinator's raw
+        ro-currentstate data, or None if not seeded/available yet."""
+        from roombapy_prime.models import CurrentStateShadow
+
+        coordinator = self._config_entry.runtime_data.prime_status_coordinator
+        if coordinator is None or coordinator.data is None:
+            return None
+        raw = coordinator.data.get("ro-currentstate")
+        if raw is None:
+            return None
+        return CurrentStateShadow.from_json(raw)
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        coordinator = self._config_entry.runtime_data.prime_status_coordinator
+        if coordinator is not None:
+            self.async_on_remove(coordinator.async_add_listener(self.schedule_update_ha_state))
+
+
+class PrimeBinPresentSensor(_PrimeStatusSensorBase, BinarySensorEntity):
+    """V4/Prime equivalent of RoombaBinPresentStatus above -- same
+    entity_description/device_class/translation_key, so it presents
+    identically regardless of connection type. Reads
+    CurrentStateShadow.bin.present (confirmed live, chairstacker) --
+    matching the same "present": true structure as roomba_reported_state()'s
+    own "bin" dict, just from a different transport."""
+
+    entity_description = BinarySensorEntityDescription(
+        key="bin_present",
+        name="Bin present",
+        translation_key="bin_present",
+    )
+    # CORRECTED (this session, real field report -- chairstacker):
+    # BinarySensorDeviceClass.PRESENCE makes HA display this as
+    # "Home"/"Away", which is meaningless (and actively confusing) for a
+    # water tank -- that device class exists for people/device trackers.
+    # Removing it displays a plain On/Off instead. SAFE for existing
+    # automations: a binary_sensor's STATE is always "on"/"off"
+    # regardless of device_class; device_class only changes the label
+    # the frontend renders. Applied to all five physical-component
+    # presence sensors (bin + mop tank, Classic and V4/Prime alike) --
+    # the same wrong label affected every one of them equally, and
+    # fixing only the one that happened to be reported would have left
+    # the others inconsistent for no reason.
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(
+        self, blid: str, config_entry: RoombaConfigEntry, *, disabled: bool = False
+    ) -> None:
+        super().__init__(blid, config_entry, disabled=disabled)
+        self._attr_unique_id = f"{self.robot_unique_id}_bin_present"
+
+    @property
+    def is_on(self) -> bool | None:
+        state = self._current_state
+        if state is None or state.bin is None:
+            return None
+        return bool(state.bin.present)
+
+
+class PrimeTankPresentSensor(_PrimeStatusSensorBase, BinarySensorEntity):
+    """THE ROBOT's water tank -- NOT the dock's (issue #27, RESOLVED).
+
+    @chairstacker removed both DOCK tanks on a Roomba 405 and this
+    sensor kept reading "present". It was right to: the app keeps three
+    separate values, and `tankPresent` is the first of them.
+
+        kTankLevel             the robot's own tank   <- this sensor
+        kDockStateTankLevel    dock clean water
+        kDockStateGWTankLevel  dock grey (dirty) water
+
+    The app's own error strings confirm the split, and are specific
+    where the pad strings were generic:
+
+        "Dock Clean Tank: missing / low / drain issue / possible leak"
+        "Dock Dirty Tank: missing / full / clog / pump issue"
+        "%s's tank is missing."            <- the robot's
+        "Tank missing: switched to vacuum only"
+
+    So nothing here was broken, and the name was the whole problem: a
+    sensor called "mop tank present" on a robot whose dock has two tanks
+    reads as though it covers them.
+
+    RENAMED accordingly. Dock tank levels would be separate entities
+    fed by `gwTankLvl` and a clean-water sibling -- neither appears in
+    any capture yet, including from the dock that has them. Whether that
+    dock does not report them or they arrive somewhere this integration
+    does not read is the open question now, and it is a different one.
+
+    V4/Prime equivalent of RoombaMopTankPresentStatus above -- same
+    entity_description/device_class/translation_key. Reads
+    CurrentStateShadow.tank_present directly (confirmed live,
+    chairstacker: a plain boolean, genuinely distinct from any numeric
+    tank-fill-level field -- see that field's own docstring)."""
+
+    entity_description = BinarySensorEntityDescription(
+        key="mop_tank_present",
+        name="Mop tank present",
+        translation_key="mop_tank_present",
+    )
+    # CORRECTED (this session, real field report -- chairstacker):
+    # BinarySensorDeviceClass.PRESENCE makes HA display this as
+    # "Home"/"Away", which is meaningless (and actively confusing) for a
+    # water tank -- that device class exists for people/device trackers.
+    # Removing it displays a plain On/Off instead. SAFE for existing
+    # automations: a binary_sensor's STATE is always "on"/"off"
+    # regardless of device_class; device_class only changes the label
+    # the frontend renders. Applied to all five physical-component
+    # presence sensors (bin + mop tank, Classic and V4/Prime alike) --
+    # the same wrong label affected every one of them equally, and
+    # fixing only the one that happened to be reported would have left
+    # the others inconsistent for no reason.
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(
+        self, blid: str, config_entry: RoombaConfigEntry, *, disabled: bool = False
+    ) -> None:
+        super().__init__(blid, config_entry, disabled=disabled)
+        self._attr_unique_id = f"{self.robot_unique_id}_mop_tank_present"
+
+    @property
+    def is_on(self) -> bool | None:
+        state = self._current_state
+        if state is None:
+            return None
+        return bool(state.tank_present)
+
+
+
+class PrimeDockErrorSensor(_PrimeStatusSensorBase, BinarySensorEntity):
+    """V4/Prime dock error indicator. Reads
+    CurrentStateShadow.dock.error (confirmed live as an int, chairstacker
+    -- always 0 in the one real capture seen so far, no actual error
+    condition has ever been observed). NEW translation key -- no
+    confirmed-equivalent Classic sensor found for this specific,
+    dock-scoped error code (distinct from mission-level error codes).
+    is_on is True for any nonzero value -- the specific MEANING of a
+    given nonzero code is unconfirmed, so the raw value is also
+    exposed as an extra_state_attribute for anyone who needs it."""
+
+    entity_description = BinarySensorEntityDescription(
+        key="prime_dock_error",
+        translation_key="prime_dock_error",
+    )
+    _attr_device_class = BinarySensorDeviceClass.PROBLEM
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(
+        self, blid: str, config_entry: RoombaConfigEntry, *, disabled: bool = False
+    ) -> None:
+        super().__init__(blid, config_entry, disabled=disabled)
+        self._attr_unique_id = f"{self.robot_unique_id}_prime_dock_error"
+
+    @property
+    def is_on(self) -> bool | None:
+        state = self._current_state
+        if state is None or state.dock is None or state.dock.error is None:
+            return None
+        return bool(state.dock.error != 0)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        state = self._current_state
+        if state is None or state.dock is None:
+            return {}
+        attrs: dict[str, Any] = {"raw_error_code": state.dock.error}
+
+        # THE NAMED REASON, where the code is one of the 86 confirmed
+        # DockState members.
+        #
+        # This is how a dock reports a missing water tank -- there is no
+        # presence field for it. The dock state model has thirteen
+        # fields and none of them is a tankPresent equivalent; the app
+        # reads the error instead:
+        #
+        #     650  PAD_WASH_CLEAR_FLUID_TANK_MISSING_ERROR   clean water
+        #     653  PAD_WASH_GREY_WATER_TANK_MISSING_ERROR    grey water
+        #     450  FLUID_REPLENISHMENT_TANK_MISSING_ERROR
+        #
+        # That resolves issue #27 completely. A tester removed both dock
+        # tanks and watched `tankPresent` stay true -- correctly, since
+        # that field is the ROBOT's tank. What he was looking for would
+        # have appeared here.
+        # ONLY WHEN THERE IS AN ERROR. Zero maps to
+        # DOCK_NO_COMMON_ERROR, and putting that beside a sensor already
+        # reading "off" adds a word without adding information.
+        if not state.dock.error:
+            return attrs
+
+        try:
+            from roombapy_prime.models.robot_info import (  # noqa: PLC0415
+                DockState,
+            )
+
+            attrs["error_name"] = DockState(state.dock.error).name
+        except (ValueError, ImportError):
+            # An unlisted code. Deliberately not guessed at -- the raw
+            # value above is still there, and a wrong name in an error
+            # attribute is worse than none.
+            pass
+
+        return attrs
+
+
+class PrimeRobotConnectivitySensor(IRobotEntity, BinarySensorEntity):
+    """The robot's OWN reported connection to the AWS IoT broker --
+    read from the named shadow "rw-constatus" (ConnectionStatusShadow),
+    confirmed live (chairstacker) with a real bool value via Ghidra
+    decompilation of the app's own constructor signature.
+
+    Deliberately distinct from PrimeConnectionHealthSensor
+    (sensor_prime.py): that one reflects THIS integration's own
+    connection to the robot (this library's watch_mission_timeline()
+    health); this one reflects the ROBOT's own self-reported
+    connectivity, from a completely different data source
+    (PrimeStatusCoordinator's rw-constatus, not PrimeCoordinator's
+    mission timeline). The two could legitimately disagree -- e.g. if
+    our own connection is fine but the robot itself has briefly lost
+    its own link to AWS IoT, or vice versa."""
+
+    entity_description = BinarySensorEntityDescription(
+        key="connected",
+        name="Connected",
+        translation_key="connected",
+    )
+    _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:
+        IRobotEntity.__init__(self, roomba=None, blid=blid, config_entry=config_entry)
+        self._config_entry = config_entry
+        self._attr_unique_id = f"{self.robot_unique_id}_connected"
+
+    @property
+    def is_on(self) -> bool | None:
+        from roombapy_prime.models import ConnectionStatusShadow
+
+        coordinator = self._config_entry.runtime_data.prime_status_coordinator
+        if coordinator is None or coordinator.data is None:
+            return None
+        raw = coordinator.data.get("rw-constatus")
+        if raw is None:
+            return None
+        return bool(ConnectionStatusShadow.from_json(raw).connected)
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        coordinator = self._config_entry.runtime_data.prime_status_coordinator
+        if coordinator is not None:
+            self.async_on_remove(coordinator.async_add_listener(self.schedule_update_ha_state))
+
+
+class PrimeStartBlockedSensor(_PrimeStatusSensorBase, BinarySensorEntity):
+    """Whether a fault currently stops a mission from starting.
+
+    FOUR CODES, AND THE APP CHECKS EXACTLY THESE FOUR (`blockFault`,
+    app 3.0.0). Three of them do not mean the robot is broken -- they
+    mean one half of what you would ask is impossible right now:
+
+        287  pad plate fitted      -> mop works, vacuum does not
+        290  pad plate missing     -> vacuum works, mop does not
+        234  plate fitted, no cloth -> vacuum works, mop does not
+        286  robot off the floor   -> neither
+
+    NOT A DIAGNOSTIC ENTITY, unlike almost everything else on this
+    platform. A diagnostic entity is hidden from the dashboard by
+    default, and the whole value here is being told before sending a
+    command that will be refused. `sensor.*_prime_error` already carries
+    these details as attributes and is diagnostic -- which is why it was
+    not enough on its own.
+
+    IT REPORTS AND DOES NOT GATE. A vacuum command against 287 still
+    goes out. The app takes the other route and greys out every dock
+    control once a task begins, so a drying cycle it started cannot be
+    stopped there -- @chairstacker calls that the big drawback of the
+    new UI, and this project deliberately does not copy it.
+
+    READS BOTH SOURCES, because a readiness REFUSAL leaves `error` at 0
+    and puts its codes in `cond_not_ready` instead. Checking one of the
+    two would miss the case this sensor exists for.
+    """
+
+    entity_description = BinarySensorEntityDescription(
+        key="prime_start_blocked",
+        translation_key="prime_start_blocked",
+        device_class=BinarySensorDeviceClass.PROBLEM,
+    )
+
+    def __init__(
+        self, blid: str, config_entry: RoombaConfigEntry, *, disabled: bool = False
+    ) -> None:
+        super().__init__(blid, config_entry, disabled=disabled)
+        self._attr_unique_id = f"{self.robot_unique_id}_prime_start_blocked"
+
+    @property
+    def _blocking(self) -> dict[int, frozenset[str]]:
+        state = self._current_state
+        return _blocking_faults(None if state is None else state.clean_mission_status)
+
+    @property
+    def is_on(self) -> bool | None:
+        state = self._current_state
+        if state is None:
+            return None
+        return bool(self._blocking)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """The same three answers the error sensor carries, beside a
+        state a dashboard shows on its own.
+
+        Duplicated on purpose: an automation branching on this sensor
+        should not have to read a second, hidden entity to find out
+        WHICH mode is still possible."""
+        blocking = self._blocking
+        if not blocking:
+            return {}
+        language = (
+            getattr(getattr(self, "hass", None), "config", None)
+            and self.hass.config.language
+        ) or "en"
+        available = set().union(*blocking.values())
+        texts = [
+            t
+            for t in (
+                get_localized_error_entry(code, language).get("label")
+                for code in sorted(blocking)
+            )
+            if t
+        ]
+        attrs: dict[str, Any] = {
+            "blocked_modes": sorted({"vacuum", "mop"} - available),
+            "available_modes": sorted(available),
+            "blocking_faults": sorted(blocking),
+        }
+        if texts:
+            attrs["blocked_reason"] = " · ".join(texts)
+        return attrs
+
+
+def _minutes_to_clock(value: Any) -> str | None:
+    """Minutes since midnight as HH:MM.
+
+    The DND endpoint counts minutes; the schedule container carries hour
+    and minute as separate fields. Two shapes for one clock time, and
+    the sensor compares against a string, so both are normalised before
+    anything looks at them."""
+    try:
+        minutes = int(value)
+    except (TypeError, ValueError):
+        return None
+    if not 0 <= minutes < 1440:
+        return None
+    return f"{minutes // 60:02d}:{minutes % 60:02d}"
+
+
+class PrimeQuietHoursSensor(IRobotEntity, BinarySensorEntity):
+    """Whether the robot is inside a Do Not Disturb window right now.
+
+    THE INFORMATION WAS ALREADY BEING PARSED AND DISCARDED. Quiet hours
+    arrive in the same household container as cleaning schedules, and
+    the schedule switches skip them on purpose -- toggling one rewrites
+    the whole container, so a switch there would let a user overwrite
+    quiet hours we only partly understood. Skipping made the switches
+    right and left the window invisible.
+
+    READ ONLY ON PURPOSE. `roombapy-prime` has `set_dnd_settings()`, so
+    writing is available and deliberately unused: a Prime robot has been
+    observed CLEANING inside its own quiet-hours window. The setting
+    reads back and its effect is unproven, and a control that appears to
+    work and does nothing is worse than no control.
+
+    So this publishes the window and an automation enforces it -- which
+    is what the robot is not reliably doing. `windows` carries every
+    interval, so an automation can also act ahead of one rather than
+    only during it.
+
+    NOT A CAPABILITY QUESTION. Every robot's household can carry quiet
+    hours; a household that has none simply reports an empty list, and
+    the sensor sits `off` rather than being withheld.
+
+    THERE ARE TWO SOURCES AND THIS READS THE OTHER ONE.
+    `get_dnd_settings()` is a dedicated endpoint returning `daily_start`,
+    `daily_end`, `ends_at` and `status` -- exactly the shape the
+    `set_quiet_hours` action WRITES. This sensor instead reads the
+    household schedule container, where quiet hours also appear.
+    
+    THAT CHOICE WAS MADE FOR THE WRONG REASON: the container was already
+    being parsed and filtered, so the data was to hand. Convenience is
+    not a source-selection argument, and the write path and the read
+    path now disagree about where the truth lives.
+
+    @jouwdan's validation run confirms the dedicated endpoint answers on
+    a real Prime account, which removes the one excuse for not using it.
+    Left as it is for now because switching sources is a behaviour
+    change and this shipped an hour ago -- but the endpoint is the
+    better source, and `status` in particular is a field this has no
+    equivalent for.
+
+    NAMED "In quiet hours", NOT "Quiet hours", BECAUSE THE SWITCH
+    EXISTS. `switch.*_prime_quiet_hours_active` is Do Not Disturb as an
+    ad-hoc control; this is whether a SCHEDULED window covers right now.
+    They answer different questions and can legitimately disagree -- the
+    switch on, this off, because no window covers the moment.
+
+    The first names were "Quiet hours" and "Quiet hours active", which
+    a user would reasonably read as one thing and its state. A
+    contradiction between two entities is confusing; a contradiction
+    between two entities with near-identical names is a bug report.
+    """
+
+    _attr_translation_key = "prime_quiet_hours"
+    _attr_icon = "mdi:sleep"
+
+    def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:
+        IRobotEntity.__init__(
+            self, roomba=None, blid=blid, config_entry=config_entry
+        )
+        self._config_entry = config_entry
+        self._attr_unique_id = f"{self.robot_unique_id}_prime_quiet_hours"
+
+    @property
+    def _windows(self) -> list[dict[str, Any]]:
+        """Windows from the DND endpoint, falling back to the container.
+
+        THE ENDPOINT IS THE SAME PLACE `set_quiet_hours` WRITES, which
+        is the reason to prefer it. Reading the schedule container was
+        the first implementation and it can disagree with a successful
+        write -- a user setting a window and seeing the sensor not move.
+
+        `daily_start` and `daily_end` are minutes since midnight; the
+        container carries hour and minute separately. Both end up as
+        HH:MM here so the caller never has to know which arrived.
+        """
+        coordinator = getattr(
+            self._config_entry.runtime_data, "prime_schedule_coordinator", None
+        )
+        if coordinator is None:
+            return []
+        dnd = getattr(coordinator, "quiet_hours", None)
+        start = getattr(dnd, "daily_start", None)
+        end = getattr(dnd, "daily_end", None)
+        if start is not None and end is not None:
+            clock_start = _minutes_to_clock(start)
+            clock_end = _minutes_to_clock(end)
+            # A VALUE OUTSIDE 0-1439 IS NOT A TIME, and a window with
+            # `None` for one end is worse than no window: `is_on` skips
+            # it either way, but it renders in the attributes as a
+            # quiet-hours period the robot never reported.
+            if clock_start is None or clock_end is None:
+                return []
+            return [{
+                "start": clock_start,
+                "end": clock_end,
+                # The endpoint has no per-window enabled flag: a window
+                # it reports IS the household's window. `None` rather
+                # than True, so the "unknown counts as active" rule
+                # below applies unchanged.
+                "enabled": None,
+                "source": "dnd endpoint",
+            }]
+        if coordinator.data is None:
+            return []
+        return quiet_hours_windows(coordinator.data)
+
+    @property
+    def is_on(self) -> bool | None:
+        """Inside an enabled window, by local clock.
+
+        A DISABLED WINDOW IS NOT A WINDOW. The user switched it off in
+        the app; reporting quiet hours for it would be reporting a
+        setting rather than a state.
+
+        `enabled is None` COUNTS AS ACTIVE, and that is a decision
+        rather than a fall-through. The schedule switches treat None as
+        "unanswered" and build no switch, because writing back a
+        schedule we never saw would overwrite it. Here nothing is
+        written, so the question is only which way to be wrong.
+        Reporting quiet hours that may not apply costs a missed cleaning
+        window; reporting none that do costs a robot running at night.
+
+        Windows that cross midnight are the normal case for quiet hours
+        and are handled by comparing against both ends rather than
+        assuming start < end.
+        """
+        windows = self._windows
+        if not windows:
+            return False
+        now = dt_util.now().strftime("%H:%M")
+        for window in windows:
+            if window.get("enabled") is False:
+                continue
+            start, end = window.get("start"), window.get("end")
+            if not start or not end:
+                continue
+            if start <= end:
+                if start <= now < end:
+                    return True
+            elif now >= start or now < end:
+                return True
+        return False
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {"windows": self._windows}
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        coordinator = getattr(
+            self._config_entry.runtime_data, "prime_schedule_coordinator", None
+        )
+        if coordinator is not None:
+            self.async_on_remove(
+                coordinator.async_add_listener(self.schedule_update_ha_state)
+            )

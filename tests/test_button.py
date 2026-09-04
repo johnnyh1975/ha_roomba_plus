@@ -4,11 +4,11 @@ No test_button.py existed before this; button.py had zero test coverage
 across the project. Scoped here to the one class touched by the
 ZoneStore -> RoomSegStore swap, not a full audit of every button class.
 """
-from unittest.mock import MagicMock, AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from custom_components.roomba_plus.button import ZoneCleanButton
+from custom_components.roomba_plus.button import FavoriteButton, ZoneCleanButton
 from custom_components.roomba_plus.room_seg_store import RoomSegStore, SegRoom
 
 
@@ -133,3 +133,336 @@ class TestMaintenanceResetButtonCurrentHrNullRegression:
         btn = object.__new__(FilterResetButton)
         btn.vacuum_state = {"bbrun": None}
         assert btn._current_hr() == 0
+
+
+class TestDockButtonAvailability:
+    """The rules come from the app's own res/raw availability specs.
+
+    Until now this class had no `available` at all: every dock button was
+    pressable whenever the capability existed. @chairstacker pressed Wash
+    Pad with a tank removed, the robot spoke a complaint and the dock
+    reported 671 -- the app would not have offered the button, because
+    pw_state was not 601.
+    """
+
+    def _button(self, key, *, dock=None, cycle=None):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock, PropertyMock, patch
+
+        from custom_components.roomba_plus.button_prime import (
+            PRIME_DOCK_COMMANDS,
+            PrimeDockButton,
+        )
+
+        command = next(c for c in PRIME_DOCK_COMMANDS if c.key == key)
+        button = PrimeDockButton.__new__(PrimeDockButton)
+        button._command = command
+        button._config_entry = MagicMock()
+        state = SimpleNamespace(
+            dock=SimpleNamespace(**dock) if dock is not None else None,
+            mission=SimpleNamespace(cycle=cycle),
+        )
+        with patch.object(
+            PrimeDockButton, "_current_state", new_callable=PropertyMock
+        ) as current, patch.object(
+            type(button).__mro__[1], "available", new_callable=PropertyMock
+        ) as parent:
+            current.return_value = state
+            parent.return_value = True
+            return button.available
+
+    def test_wash_pad_only_when_the_dock_says_601(self):
+        base = {"error": None, "pd_state": None}
+        assert self._button("prime_wash_pad", dock={"pw_state": 601, **base}) is True
+        # 671 is the state @chairstacker's dock reported with a tank out.
+        assert self._button("prime_wash_pad", dock={"pw_state": 671, **base}) is False
+        assert self._button("prime_wash_pad", dock={"pw_state": 602, **base}) is False
+
+    def test_start_and_stop_drying_have_opposite_rules(self):
+        """The one control where the app's rule inverts: stopping is
+        offered while drying RUNS, starting while it does not."""
+        base = {"error": None, "pw_state": None}
+        assert self._button("prime_start_pad_dry", dock={"pd_state": 701, **base}) is True
+        assert self._button("prime_stop_pad_dry", dock={"pd_state": 701, **base}) is False
+        assert self._button("prime_stop_pad_dry", dock={"pd_state": 702, **base}) is True
+        assert self._button("prime_start_pad_dry", dock={"pd_state": 702, **base}) is False
+
+    def test_empty_bin_follows_the_evac_states(self):
+        base = {"error": None, "pw_state": None, "pd_state": None}
+        assert self._button("prime_empty_bin", dock={"state": 301, **base}) is True
+        assert self._button("prime_empty_bin", dock={"state": 355, **base}) is True
+        # 351-354 are the evac faults: bag missing, clog, seal, bag full.
+        assert self._button("prime_empty_bin", dock={"state": 353, **base}) is False
+
+    def test_a_dock_error_blocks_every_control(self):
+        for key in ("prime_wash_pad", "prime_empty_bin", "prime_start_pad_dry"):
+            assert self._button(
+                key, dock={"error": 505, "pw_state": 601, "pd_state": 701, "state": 301}
+            ) is False, key
+
+    def test_a_running_mission_blocks_every_control(self):
+        """The dock will not wash, dry or empty while the robot is out."""
+        dock = {"error": None, "pw_state": 601, "pd_state": 701, "state": 301}
+        for cycle in ("clean", "spot", "dock"):
+            assert self._button("prime_wash_pad", dock=dock, cycle=cycle) is False, cycle
+        assert self._button("prime_wash_pad", dock=dock, cycle="none") is True
+
+    def test_unknown_means_available(self):
+        """Deliberate. Taking function away from a working robot because
+        a field is missing is the worse mistake, and this project has
+        made it before by gating on a capability flag instead of on a
+        field being present."""
+        assert self._button("prime_wash_pad", dock=None) is True
+        assert self._button(
+            "prime_wash_pad", dock={"error": None, "pw_state": None}
+        ) is True
+
+    def test_an_int_enum_compares_like_its_value(self):
+        """DockState is an IntEnum on the model and a plain int on older
+        payloads. Both have to work."""
+        from enum import IntEnum
+
+        class FakeState(IntEnum):
+            PAD_WASH_OKAY = 601
+
+        assert self._button(
+            "prime_wash_pad", dock={"error": None, "pw_state": FakeState.PAD_WASH_OKAY}
+        ) is True
+
+
+class TestClassicFavouritesAreFilteredToo:
+    """@scenicsystemsllc (#80) has **three Classic robots** and saw the
+    same favourites on all of them, including "Vacuum Everywhere" on a
+    mop-only Braava.
+
+    `/user/favorites` is an ACCOUNT endpoint — it returns every
+    favourite in the household. The Classic setup built a button for
+    each one on every robot.
+
+    #80 was fixed once, in the Prime path. This one was never touched,
+    so a fix that read as complete covered neither of the two paths
+    that create his entities.
+    """
+
+    def test_the_classic_builder_filters(self):
+        import inspect
+
+        from custom_components.roomba_plus import button
+
+        source = inspect.getsource(button.async_setup_entry)
+
+        assert "_raw_favorite_is_for" in source, (
+            "the Classic favourite loop must filter by robot -- "
+            "/user/favorites is account-wide"
+        )
+
+    def test_both_builders_use_the_same_check(self):
+        """One rule, two platforms. Two separate implementations is how
+        #80 came to be fixed in one place and not the other."""
+        import inspect
+
+        from custom_components.roomba_plus import button, button_prime
+
+        classic = inspect.getsource(button.async_setup_entry)
+        prime = inspect.getsource(button_prime.build_prime_favorite_buttons)
+
+        assert "_raw_favorite_is_for" in classic
+        assert "_raw_favorite_is_for" in prime
+
+
+# ============================================================================
+# FAVOURITE BUTTONS
+#
+# Moved here from test_sensors.py (August 2026). This file's own header
+# says button.py "had zero test coverage" -- it did have some, filed
+# under sensors, where nobody looked.
+#
+# `_make_config_entry` and `_make_roomba` are COPIED, not moved: tests
+# still in test_sensors.py use them. Two copies of a fixture beats a
+# cross-file import between test modules.
+# ============================================================================
+
+
+def _make_config_entry(has_cloud: bool = False, favorites=None, pmaps=None):
+    """Return a minimal mock config entry."""
+    entry = MagicMock()
+    entry.unique_id = "test_blid"
+    entry.options = {}
+    entry.data = {"blid": "test_blid"}
+
+    cc = MagicMock()
+    cc.data = {
+        "pmaps": pmaps or [],
+        "favorites": favorites or [],
+        "mission_history": {},
+    }
+    cc.active_pmap_id = (pmaps[0].get("active_pmapv_details", {}).get("active_pmapv", {}).get("pmap_id") if pmaps else None)
+    runtime = MagicMock()
+    runtime.has_cloud = has_cloud
+    runtime.cloud_coordinator = cc if has_cloud else None
+    entry.runtime_data = runtime
+    return entry
+
+
+def _make_roomba():
+    r = MagicMock()
+    r.master_state = {"state": {"reported": {}}}
+    return r
+
+
+# The six CloudSmartZoneSelect classes that stood here moved to
+# test_select.py (August 2026) -- they tested `select.py` from a file
+# named for sensors. `_make_config_entry` and `_make_roomba` above stay:
+# tests in this file still use them.
+
+
+
+def _fav_button(favorite):
+    entry = _make_config_entry(has_cloud=True)
+    roomba = _make_roomba()
+    return FavoriteButton(roomba, "test_blid", entry, favorite)
+
+
+class TestFavoriteButton:
+    def test_name_from_favorite(self):
+        btn = _fav_button({"favorite_id": "f1", "name": "Morning clean", "commanddefs": []})
+        assert btn._attr_name == "Morning clean"
+
+    def test_unique_id_includes_favorite_id(self):
+        btn = _fav_button({"favorite_id": "fav42", "name": "X", "commanddefs": []})
+        assert "fav42" in btn._attr_unique_id
+
+    def test_visible_by_default_when_not_hidden(self):
+        btn = _fav_button({"favorite_id": "f1", "name": "X", "commanddefs": [], "hidden": False})
+        assert btn._attr_entity_registry_enabled_default is True
+
+    def test_disabled_by_default_when_hidden(self):
+        btn = _fav_button({"favorite_id": "f1", "name": "X", "commanddefs": [], "hidden": True})
+        assert btn._attr_entity_registry_enabled_default is False
+
+    def test_default_enabled_when_hidden_missing(self):
+        btn = _fav_button({"favorite_id": "f1", "name": "X", "commanddefs": []})
+        assert btn._attr_entity_registry_enabled_default is True
+
+    def test_inherits_irobot_entity(self):
+        """FavoriteButton must inherit IRobotEntity for correct device linkage."""
+        from custom_components.roomba_plus.entity import IRobotEntity
+        btn = _fav_button({"favorite_id": "f1", "name": "X", "commanddefs": []})
+        assert isinstance(btn, IRobotEntity)
+
+    def test_has_vacuum_attribute(self):
+        """IRobotEntity provides .vacuum — used in async_press instead of config_entry."""
+        btn = _fav_button({"favorite_id": "f1", "name": "X", "commanddefs": []})
+        assert hasattr(btn, "vacuum")
+
+    @pytest.mark.asyncio
+    async def test_press_sends_command(self):
+        entry = _make_config_entry(has_cloud=True)
+        fav = {
+            "favorite_id": "f1",
+            "name": "Morning",
+            "commanddefs": [{"command": "start", "pmap_id": "map1", "regions": [{"region_id": "3"}]}],
+        }
+        btn = FavoriteButton(_make_roomba(), "test_blid", entry, fav)
+        btn.hass = MagicMock()
+        btn.hass.async_add_executor_job = AsyncMock()
+
+        await btn.async_press()
+
+        btn.hass.async_add_executor_job.assert_called_once()
+        args = btn.hass.async_add_executor_job.call_args[0]
+        # args[0] is the bound method, args[1] is command, args[2] is params
+        assert args[1] == "start"
+        assert args[2]["pmap_id"] == "map1"
+
+    @pytest.mark.asyncio
+    async def test_press_no_commanddefs_logs_warning(self):
+        entry = _make_config_entry(has_cloud=True)
+        fav = {"favorite_id": "f1", "name": "Empty", "commanddefs": []}
+        btn = FavoriteButton(_make_roomba(), "test_blid", entry, fav)
+        btn.hass = MagicMock()
+        btn.hass.async_add_executor_job = AsyncMock()
+
+        with patch("custom_components.roomba_plus.button._LOGGER") as mock_log:
+            await btn.async_press()
+
+        mock_log.warning.assert_called_once()
+        btn.hass.async_add_executor_job.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_press_missing_commanddefs_key(self):
+        """commanddefs key absent — should not raise, should warn."""
+        entry = _make_config_entry(has_cloud=True)
+        fav = {"favorite_id": "f1", "name": "NoCmd"}
+        btn = FavoriteButton(_make_roomba(), "test_blid", entry, fav)
+        btn.hass = MagicMock()
+        btn.hass.async_add_executor_job = AsyncMock()
+
+        await btn.async_press()  # must not raise
+
+        btn.hass.async_add_executor_job.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_press_multi_entry_commanddefs_logs_warning_and_uses_first(self):
+        """Multi-entry commanddefs: warn about the dropped entries, still send entry 0."""
+        entry = _make_config_entry(has_cloud=True)
+        fav = {
+            "favorite_id": "f3",
+            "name": "Multi",
+            "commanddefs": [
+                {"command": "start", "pmap_id": "map1", "regions": [{"region_id": "1"}]},
+                {"command": "start", "pmap_id": "map1", "regions": [{"region_id": "2"}]},
+            ],
+        }
+        btn = FavoriteButton(_make_roomba(), "test_blid", entry, fav)
+        btn.hass = MagicMock()
+        btn.hass.async_add_executor_job = AsyncMock()
+
+        with patch("custom_components.roomba_plus.button._LOGGER") as mock_log:
+            await btn.async_press()
+
+        mock_log.warning.assert_called_once()
+        args = btn.hass.async_add_executor_job.call_args[0]
+        assert args[2]["regions"] == [{"region_id": "1"}]
+
+    @pytest.mark.asyncio
+    async def test_press_single_entry_commanddefs_no_warning(self):
+        """Single-entry commanddefs: no warning should fire."""
+        entry = _make_config_entry(has_cloud=True)
+        fav = {
+            "favorite_id": "f4",
+            "name": "Single",
+            "commanddefs": [{"command": "start", "pmap_id": "map1"}],
+        }
+        btn = FavoriteButton(_make_roomba(), "test_blid", entry, fav)
+        btn.hass = MagicMock()
+        btn.hass.async_add_executor_job = AsyncMock()
+
+        with patch("custom_components.roomba_plus.button._LOGGER") as mock_log:
+            await btn.async_press()
+
+        mock_log.warning.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_press_extracts_params_excluding_command_key(self):
+        """All keys except 'command' become params."""
+        entry = _make_config_entry(has_cloud=True)
+        fav = {
+            "favorite_id": "f2",
+            "name": "Kitchen",
+            "commanddefs": [{"command": "start", "pmap_id": "p1", "ordered": 1}],
+        }
+        btn = FavoriteButton(_make_roomba(), "test_blid", entry, fav)
+        btn.hass = MagicMock()
+        btn.hass.async_add_executor_job = AsyncMock()
+
+        await btn.async_press()
+
+        params = btn.hass.async_add_executor_job.call_args[0][2]
+        assert "command" not in params
+        assert params["pmap_id"] == "p1"
+        assert params["ordered"] == 1
+
+
+# ── select.py: cloud vs MQTT routing in async_setup_entry ─────────────────────
+

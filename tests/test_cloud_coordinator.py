@@ -334,14 +334,14 @@ class TestResolveRoomsWithCloudPmapId:
     """Verify that cloud_pmap_id takes priority over the MQTT cascade."""
 
     def test_cloud_pmap_id_used_for_empty_stored_pmap(self):
-        from custom_components.roomba_plus.services import _resolve_rooms
+        from custom_components.roomba_plus.room_cleaning import _resolve_rooms
         data = {"21": {"name": "Corridor", "pmap_id": ""}}
         state = {}  # no MQTT pmap data at all
         result = _resolve_rooms(data, ["Corridor"], state, cloud_pmap_id="cloud_map_123")
         assert result == [("21", "cloud_map_123")]
 
     def test_cloud_pmap_id_overrides_mqtt_cascade(self):
-        from custom_components.roomba_plus.services import _resolve_rooms
+        from custom_components.roomba_plus.room_cleaning import _resolve_rooms
         data = {"21": {"name": "Corridor", "pmap_id": ""}}
         state = {"lastCommand": {"pmap_id": "mqtt_map"}, "pmaps": [{"mqtt_map": "v1"}]}
         result = _resolve_rooms(data, ["Corridor"], state, cloud_pmap_id="cloud_map_123")
@@ -349,14 +349,14 @@ class TestResolveRoomsWithCloudPmapId:
 
     def test_stored_pmap_id_still_used_over_cloud(self):
         """Stored pmap_id in zone_data takes priority over everything."""
-        from custom_components.roomba_plus.services import _resolve_rooms
+        from custom_components.roomba_plus.room_cleaning import _resolve_rooms
         data = {"21": {"name": "Corridor", "pmap_id": "stored_map"}}
         state = {}
         result = _resolve_rooms(data, ["Corridor"], state, cloud_pmap_id="cloud_map_123")
         assert result == [("21", "stored_map")]
 
     def test_no_cloud_pmap_falls_back_to_mqtt(self):
-        from custom_components.roomba_plus.services import _resolve_rooms
+        from custom_components.roomba_plus.room_cleaning import _resolve_rooms
         data = {"21": {"name": "Corridor", "pmap_id": ""}}
         state = {"lastCommand": {"pmap_id": "mqtt_pmap"}}
         result = _resolve_rooms(data, ["Corridor"], state, cloud_pmap_id=None)
@@ -364,7 +364,7 @@ class TestResolveRoomsWithCloudPmapId:
 
     def test_empty_cloud_pmap_treated_as_none(self):
         """cloud_pmap_id='' should not override the MQTT fallback."""
-        from custom_components.roomba_plus.services import _resolve_rooms
+        from custom_components.roomba_plus.room_cleaning import _resolve_rooms
         data = {"21": {"name": "Corridor", "pmap_id": ""}}
         state = {"lastCommand": {"pmap_id": "mqtt_pmap"}}
         result = _resolve_rooms(data, ["Corridor"], state, cloud_pmap_id="")
@@ -1376,7 +1376,7 @@ class TestResolvepmapvPriority:
 
     def test_prefers_lastcommand_when_pmap_matches(self):
         """When lastCommand.pmap_id matches, its user_pmapv_id is returned."""
-        from custom_components.roomba_plus.services import _resolve_pmapv_id
+        from custom_components.roomba_plus.room_cleaning import _resolve_pmapv_id
 
         state = {
             "lastCommand": {
@@ -1392,7 +1392,7 @@ class TestResolvepmapvPriority:
 
     def test_falls_back_to_pmaps_when_pmap_differs(self):
         """When lastCommand has a different pmap_id, state.pmaps is used."""
-        from custom_components.roomba_plus.services import _resolve_pmapv_id
+        from custom_components.roomba_plus.room_cleaning import _resolve_pmapv_id
 
         state = {
             "lastCommand": {
@@ -1607,27 +1607,33 @@ class TestReviewRemainderErrorPaths:
     @pytest.mark.asyncio
     async def test_login_rejects_incomplete_credentials(self):
         """Fix B: missing CognitoId (or any of the four signing keys) must
-        raise AuthenticationError at login, not KeyError at first request."""
-        from unittest.mock import MagicMock, AsyncMock
+        raise at login, not KeyError at first request. The actual gate
+        logic now lives in roombapy-prime (see its own
+        test_login_irobot_missing_single_credential_key_raises) --
+        this test's job since the v3.6.0 login consolidation is only to
+        confirm this module correctly propagates that failure.
+
+        DELIBERATE BEHAVIOR CHANGE (v3.6.0): previously expected
+        AuthenticationError here -- same bucket as "your password is
+        wrong". That was misleading: a malformed/incomplete server
+        response isn't fixed by re-entering the same, correct
+        credentials. Now expects the generic CloudApiError instead,
+        matching roombapy-prime's own categorization (this gate raises
+        plain AuthError there, not AuthCredentialsError)."""
+        from unittest.mock import AsyncMock, MagicMock, patch
         from custom_components.roomba_plus.cloud_api import (
-            AuthenticationError, IrobotCloudApi,
+            AuthenticationError, CloudApiError, IrobotCloudApi,
         )
-        api = IrobotCloudApi.__new__(IrobotCloudApi)
-        api._deployment = {"httpBase": "https://api.example"}
-        api._app_id = "app"
-        api._device_id = "dev"
-        resp = MagicMock()
-        resp.text = AsyncMock(return_value=(
-            '{"credentials": {"AccessKeyId": "AK", "SecretKey": "SK", '
-            '"SessionToken": "ST"}, "robots": {}}'
-        ))
-        ctx = MagicMock()
-        ctx.__aenter__ = AsyncMock(return_value=resp)
-        ctx.__aexit__ = AsyncMock(return_value=False)
-        api._session = MagicMock()
-        api._session.post = MagicMock(return_value=ctx)
-        with pytest.raises(AuthenticationError, match="CognitoId"):
-            await api._login_irobot("uid", "sig", "ts")
+        from roombapy_prime import AuthError as PrimeAuthError
+
+        api = IrobotCloudApi("user@test.com", "pass123", MagicMock())
+        with patch(
+            "custom_components.roomba_plus.cloud_api._prime_login",
+            new=AsyncMock(side_effect=PrimeAuthError("Missing 'CognitoId' in iRobot credentials response")),
+        ):
+            with pytest.raises(CloudApiError, match="CognitoId") as excinfo:
+                await api.authenticate()
+            assert not isinstance(excinfo.value, AuthenticationError)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1695,3 +1701,81 @@ class TestActivePmapvDetailsNullRegression:
         assert cc.active_pmap_id == "p2"
         result = cc.regions
         assert result and result[0]["pmap_id"] == "p2"
+
+
+class TestOneFailingSubFetchKeepsTheRest:
+    """@ScenicSystemsLLC (a39): a ValueError from mission history
+    escaped the handler — which catches CloudApiError, ClientError and
+    TimeoutError, not ValueError — and killed the coroutine **after**
+    pmaps and favourites had been fetched.
+
+    Python returns nothing from a raising function, so both were thrown
+    away every cycle. Favourite buttons went unavailable and every room
+    map went blank, on three robots.
+    """
+
+    def test_the_history_fetch_is_isolated(self):
+        import inspect
+
+        from custom_components.roomba_plus import cloud_coordinator
+
+        source = inspect.getsource(cloud_coordinator)
+        i = source.find("raw_history = await self.api.get_mission_history")
+        assert i > 0
+
+        before = source[max(0, i - 600):i]
+        assert "try:" in before, (
+            "the history fetch must be isolated -- a malformed response "
+            "there discards pmaps and favourites already fetched"
+        )
+
+    def test_network_errors_still_propagate(self):
+        """A ClientError means the cloud is unreachable, and the outer
+        handler turns that into the grace period that keeps the last
+        good data. Swallowing it here would replace a working recovery
+        with an empty result."""
+        import inspect
+
+        from custom_components.roomba_plus import cloud_coordinator
+
+        source = inspect.getsource(cloud_coordinator)
+        i = source.find("raw_history = await self.api.get_mission_history")
+        block = source[i:i + 400]
+
+        assert "raise" in block
+        assert "aiohttp.ClientError" in block
+
+
+class TestMissionHistoryIsNotWrappedInDict:
+    """a39 declared `dict[str, Any]` and wrapped the response in
+    `dict()` to match the annotation. The endpoint returns a list of
+    mission records, so every refresh raised `dictionary update
+    sequence element #0 has length 31; 2 is required`.
+
+    The caller checks `isinstance(raw_history, list)` — the shape was
+    documented in the code that reads it, and the annotation contradicted
+    it.
+    """
+
+    def test_the_response_is_returned_unwrapped(self):
+        import inspect
+
+        from custom_components.roomba_plus.cloud_api import IrobotCloudApi
+
+        source = inspect.getsource(IrobotCloudApi.get_mission_history)
+
+        assert "dict(await" not in source, (
+            "the endpoint returns a list of records; dict() reads each "
+            "one as a key/value pair and raises"
+        )
+
+    def test_the_consumer_expects_a_list(self):
+        """If this ever stops being true, the annotation above is wrong
+        rather than the wrapper."""
+        import inspect
+
+        from custom_components.roomba_plus import cloud_coordinator
+
+        source = inspect.getsource(cloud_coordinator)
+
+        assert "isinstance(raw_history, list)" in source

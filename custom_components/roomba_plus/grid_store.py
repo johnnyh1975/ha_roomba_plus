@@ -16,6 +16,8 @@ No HA dependencies at import time beyond hass.storage — fully unit-testable.
 """
 from __future__ import annotations
 
+from .geometry_utils import point_in_polygon
+
 import logging
 import math
 from typing import Any
@@ -71,9 +73,54 @@ def _mm_to_cell(x_mm: float, y_mm: float) -> tuple[int, int]:
     )
 
 
+def _densified(
+    pose_points: list[tuple[float, float]],
+    radius_mm: float,
+    max_break_mm: float = 1200.0,
+    breaks: set[int] | None = None,
+) -> list[tuple[float, float]]:
+    """Insert intermediate points so consecutive disks overlap.
+
+    `breaks` holds indices where the renderer recorded a discontinuity:
+    the point at that index does not connect to the one before it. Those
+    steps are never filled -- the robot was somewhere else, and painting
+    a corridor between would invent floor it never crossed.
+
+    THE DISTANCE FALLBACK IS A GUESS AND SAYS SO. Without break
+    information a long step is ambiguous: fast driving at a slow message
+    rate looks exactly like a small relocalisation. 1200 mm splits them
+    somewhere plausible and nowhere measured. When `breaks` is supplied
+    it decides instead, because it comes from a threshold that
+    calibrates itself against this robot's own stream.
+    """
+    if len(pose_points) < 2:
+        return list(pose_points)
+    step = max(radius_mm, CELL_SIZE_MM / 2.0)
+    out: list[tuple[float, float]] = [pose_points[0]]
+    # enumerate, not .index(): a lookup by value returns the FIRST
+    # matching point, and a robot revisits positions constantly -- every
+    # break after the first repeat would have been read off the wrong
+    # index. The index here is the position of the SECOND point of the
+    # pair, which is what `breaks` is keyed on.
+    for idx, ((x0, y0), (x1, y1)) in enumerate(
+        zip(pose_points, pose_points[1:], strict=False), start=1
+    ):
+        dist = math.hypot(x1 - x0, y1 - y0)
+        connected = (
+            idx not in breaks if breaks is not None else dist <= max_break_mm
+        )
+        if step < dist and connected:
+            for i in range(1, int(dist / step)):
+                f = i * step / dist
+                out.append((x0 + (x1 - x0) * f, y0 + (y1 - y0) * f))
+        out.append((x1, y1))
+    return out
+
+
 def _disk_filled_cells(
     pose_points: list[tuple[float, float]],
     radius_mm: float,
+    breaks: set[int] | None = None,
 ) -> set[tuple[int, int]]:
     """v2.9.0 (DISK-FILL) — every cell within radius_mm of ANY pose point.
 
@@ -89,6 +136,24 @@ def _disk_filled_cells(
     """
     touched: set[tuple[int, int]] = set()
     cell_radius = int(radius_mm // CELL_SIZE_MM) + 1
+    # ALONG THE PATH, NOT JUST AT THE POINTS.
+    #
+    # Stamping only where poses landed leaves holes between them. On a
+    # real 980 poses arrive ~1.8 s apart, so up to 542 mm at full speed
+    # -- against a 170 mm footprint radius, that is ~200 mm of floor
+    # between consecutive disks that the robot demonstrably drove over
+    # and the grid records as never visited.
+    #
+    # Those holes are not harmless: they are exactly the edge class
+    # that concentrates at doorways, where segmentation decides. A gap
+    # in a threshold reads as a wall and splits a room that is not
+    # split.
+    #
+    # Only legitimate BETWEEN two connected poses. A discontinuity
+    # means the robot was somewhere else, not that it drove the line
+    # between -- so callers pass the two ends of a real step, and the
+    # break marking upstream is what keeps a jump from being filled in.
+    pose_points = _densified(pose_points, radius_mm, breaks=breaks)
     for x_mm, y_mm in pose_points:
         cx, cy = _mm_to_cell(x_mm, y_mm)
         # The cell containing the point itself is always touched, even if
@@ -143,11 +208,12 @@ class GridStore:
         # Format: {(gx, gy): {"count": int, "times": [(weekday, hour), ...]}}
         # "times" accumulates (weekday, hour) of each stuck event for pattern detection.
         # Backward-compatible: async_load migrates plain-int v1 values to {"count": N, "times": []}.
-        self._stuck: dict[tuple[int, int], dict] = {}
+        self._stuck: dict[tuple[int, int], dict[str, Any]] = {}
         # P3: edge_coverage_ratio cache keyed by edge_depth_mm — invalidated when
         # _cells changes. Keyed dict (not scalar) so multiple edge_depth values
         # can coexist safely if future callers use non-default parameters.
         self._edge_ratio_cache: dict[float, float] = {}
+        self._last_valid_edge_coverage_ratio: float | None = None
         # v3.2.0 FURNITURE — rolling per-cell coverage-history bitmask
         # (bit 0 = most recent mission) + a companion age counter so a
         # freshly-tracked cell (fewer than _FURNITURE_WINDOW_BITS missions
@@ -208,8 +274,8 @@ class GridStore:
         around to slowly decay out over many missions.
         """
         from homeassistant.helpers.storage import Store
-        store = Store(hass, _HA_STORE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
-        data: dict | None = await store.async_load()
+        store: Store[dict[str, Any]] = Store(hass, _HA_STORE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
+        data: dict[str, Any] | None = await store.async_load()
         if not data:
             _LOGGER.debug("GridStore: no persisted data for %s", entry_id)
             return
@@ -279,6 +345,15 @@ class GridStore:
             # legitimate backfill candidate, which is the correct behaviour
             # for a robot upgrading onto this feature for the first time).
             self._last_processed_nmssn = int(data.get("last_processed_nmssn", 0) or 0)
+            last_valid_ratio = data.get("last_valid_edge_coverage_ratio")
+            self._last_valid_edge_coverage_ratio = (
+                float(last_valid_ratio)
+                if isinstance(last_valid_ratio, (int, float))
+                and not isinstance(last_valid_ratio, bool)
+                and math.isfinite(last_valid_ratio)
+                and 0.0 <= last_valid_ratio <= 1.0
+                else None
+            )
         except (KeyError, ValueError, IndexError, TypeError, AttributeError) as exc:
             _LOGGER.warning("GridStore: failed to load — %s; starting empty", exc)
             self._cells = {}
@@ -288,11 +363,12 @@ class GridStore:
             self._furniture_dismissed_at = {}
             self._structure_cells = {}
             self._last_processed_nmssn = 0
+            self._last_valid_edge_coverage_ratio = None
 
     async def async_save(self, hass: Any, entry_id: str) -> None:
         """Persist current grid to hass.storage."""
         from homeassistant.helpers.storage import Store
-        store = Store(hass, _HA_STORE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
+        store: Store[dict[str, Any]] = Store(hass, _HA_STORE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
         await store.async_save({
             "version": PAYLOAD_VERSION,
             "cells": {f"{gx},{gy}": w for (gx, gy), w in self._cells.items()},
@@ -313,6 +389,7 @@ class GridStore:
                 f"{gx},{gy}": w for (gx, gy), w in self._structure_cells.items()
             },
             "last_processed_nmssn": self._last_processed_nmssn,
+            "last_valid_edge_coverage_ratio": self._last_valid_edge_coverage_ratio,
         })
 
     # ── Write ──────────────────────────────────────────────────────────────────
@@ -323,6 +400,7 @@ class GridStore:
         stuck_points: list[tuple[float, float]],
         stuck_wh: tuple[int, int] | None = None,
         robot_radius_mm: float | None = None,
+        breaks: set[int] | None = None,
     ) -> None:
         """Apply EMA decay to all cells, then add visit increments for this mission.
 
@@ -546,36 +624,29 @@ class GridStore:
         bounding box. A low ratio with high total coverage indicates
         the robot is over-cleaning the centre and under-covering edges.
 
-        Returns None when fewer than 10 cells exist (insufficient data), or
-        when the bounding box itself is too small for the edge/centre
-        distinction to be meaningful — v2.8.2: a robot confined to e.g. a
-        1m x 1m patch (heavily fragmented exploration, or genuinely a tiny
-        space) would otherwise have *every* cell within edge_depth_mm of
-        some side, producing a near-1.0 ratio that looks like "excellent
-        edge coverage" but is really just "there is no centre region to
-        compare against". Requiring each bbox dimension to exceed
-        4 * edge_depth_mm guarantees a real interior exists.
-        P3: result is cached by edge_depth_mm and invalidated by update_from_mission;
-        safe to call repeatedly during a mission without re-computing on every pose
-        update. Keyed by edge_depth_mm so different callers with different parameters
-        each get their own correct cached value.
+        Returns the most recently valid default-depth ratio when the current
+        grid lacks enough cells or extent for a meaningful calculation.
+        Non-default depths return None for non-computable grids.
+        Results are cached by edge_depth_mm and invalidated by
+        update_from_mission.
         """
-        # P3: return cached result when available (invalidated by update_from_mission)
         cached = self._edge_ratio_cache.get(edge_depth_mm)
         if cached is not None:
             return cached
+        last_valid = (
+            self._last_valid_edge_coverage_ratio
+            if edge_depth_mm == 300.0
+            else None
+        )
         if len(self._cells) < 10:
-            return None
+            return last_valid
         bbox = self.bounding_box_mm()
         if bbox is None:
-            return None
+            return last_valid
         x_min, x_max, y_min, y_max = bbox
-        # v2.8.2 — bbox too small for the edge/centre distinction to mean
-        # anything (see docstring). Mirrors the "insufficient data" None
-        # return above rather than caching a misleading number.
         _min_span = 4.0 * edge_depth_mm
         if (x_max - x_min) < _min_span or (y_max - y_min) < _min_span:
-            return None
+            return last_valid
         edge_count = 0
         for (gx, gy) in self._cells:
             x_mm, y_mm = _cell_to_mm(gx, gy)
@@ -588,6 +659,8 @@ class GridStore:
                 edge_count += 1
         result = round(edge_count / len(self._cells), 4)
         self._edge_ratio_cache[edge_depth_mm] = result
+        if edge_depth_mm == 300.0:
+            self._last_valid_edge_coverage_ratio = result
         return result
 
     def hotspots(
@@ -736,13 +809,25 @@ class GridStore:
             times = v.get("times", [])
             if not times:
                 continue  # no time data — cannot determine pattern
-            slot_counts: Counter = Counter(tuple(t) for t in times)
+            # `Counter[tuple[int, int]]`, because that is what goes in.
+            # Each `t` is a (weekday, hour) pair and this counted them
+            # under a `str` annotation -- so the value read back out was
+            # typed as a string and assigned into a dict of coordinate
+            # pairs. Two wrong types cancelling each other out.
+            slot_counts: Counter[tuple[int, ...]] = Counter(
+                tuple(t) for t in times
+            )
             (most_common_slot, most_common_count) = slot_counts.most_common(1)[0]
             # Use count (not len(times)) as denominator so seeded/migrated
             # entries with sparse time data don't inflate the percentage.
             denom = max(len(times), v["count"])
             if most_common_count / denom >= dominant_pct:
-                patterns[cell] = most_common_slot
+                # A stored slot is a (weekday, hour) pair. Anything else
+                # is a malformed record rather than a pattern, and
+                # dropping it is better than storing a tuple of the
+                # wrong shape in a dict the callers index by [0] and [1].
+                if len(most_common_slot) == 2:
+                    patterns[cell] = (most_common_slot[0], most_common_slot[1])
 
         return patterns if patterns else None
 
@@ -803,7 +888,7 @@ class GridStore:
                     cx, cy = _cell_to_mm(gx, gy)
                     if not (min_x <= cx <= max_x and min_y <= cy <= max_y):
                         continue
-                    if not _point_in_polygon_grid(cx, cy, polygon):
+                    if not point_in_polygon(cx, cy, polygon):
                         continue
                     total += 1
                     score = self._cells.get((gx, gy))
@@ -850,7 +935,7 @@ class GridStore:
                 cx, cy = _cell_to_mm(gx, gy)
                 if not (min_x <= cx <= max_x and min_y <= cy <= max_y):
                     continue
-                if not _point_in_polygon_grid(cx, cy, polygon):
+                if not point_in_polygon(cx, cy, polygon):
                     continue
                 count += v.get("count", 0)
             result[rid] = count
@@ -1037,7 +1122,14 @@ class GridStore:
         x_min, x_max, y_min, y_max = bbox
         span_x = max(x_max - x_min, CELL_SIZE_MM)
         span_y = max(y_max - y_min, CELL_SIZE_MM)
-        scale = size_px / max(span_x, span_y)
+        # THE SPAN IS CORNER-TO-CORNER, so the last cell's own width has
+        # to fit beyond it. Without this, `scale` maps the outermost cell
+        # centre exactly onto the canvas edge and its body falls off --
+        # previously the bottom row, and after the y-flip below the top
+        # row. One row of cells was always missing, in either
+        # orientation, which is invisible without a landmark to check
+        # against.
+        scale = size_px / (max(span_x, span_y) + CELL_SIZE_MM)
 
         img = Image.new("RGBA", (size_px, size_px), (255, 255, 255, 0))
         draw = ImageDraw.Draw(img)
@@ -1050,8 +1142,33 @@ class GridStore:
         for (gx, gy), weight in self._cells.items():
             x_mm, y_mm = _cell_to_mm(gx, gy)
             px = int((x_mm - x_min) * scale)
-            py = int((y_mm - y_min) * scale)
+            # Y-FLIP, the same one RoombaRoomsImage.to_px() applies.
+            #
+            # This measured downward from the bottom of the grid while
+            # every other map in the integration measures downward from
+            # the top, so the coverage heatmap has been upside down
+            # against all of them since it was written.
+            #
+            # Nobody noticed because it has no landmark -- no dock icon,
+            # no room outlines, nothing to be upside down relative to.
+            # @pk-1966 (#78) marked four known places on his coverage and
+            # room maps and it fell out at once: y matched `1 - y` on all
+            # four while x kept its order, which is a vertical flip and
+            # not the rotation it looks like.
+            #
+            # Nothing else needed changing: everything that computes from
+            # the grid works in millimetres or cell indices, both of
+            # which are orientation-neutral. This was one line in one
+            # renderer.
             cell_px = max(2, int(CELL_SIZE_MM * scale))
+            # MEASURED FROM y_max, not from size_px.
+            #
+            # `size_px - (y - y_min) * scale` looks like the same flip
+            # and puts the topmost cell at -cell_px, off the canvas: the
+            # bbox has no padding, so the highest cell's own span
+            # consumes the full height. Anchoring on y_max instead
+            # places that cell's top-left corner at 0, where it belongs.
+            py = int((y_max - y_mm) * scale)
             if (gx, gy) in hotspot_cells:
                 colour: tuple[int, int, int, int] = (220, 50, 50, 220)
             else:
@@ -1069,20 +1186,3 @@ class GridStore:
         return buf.getvalue()
 
 
-def _point_in_polygon_grid(
-    x: float, y: float, polygon: list[tuple[float, float]]
-) -> bool:
-    """Ray-casting point-in-polygon test for grid cell centres.
-
-    Module-level (not on GridStore) so umf_aligner.py can import the same
-    algorithm independently without cross-import. Returns True when inside.
-    """
-    inside = False
-    px, py = polygon[-1]
-    for qx, qy in polygon:
-        if ((qy > y) != (py > y)) and (
-            x < (px - qx) * (y - qy) / (py - qy) + qx
-        ):
-            inside = not inside
-        px, py = qx, qy
-    return inside

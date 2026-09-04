@@ -1,0 +1,414 @@
+"""Comprehensive PRIME_PLATFORMS coverage test.
+
+REAL BUG THIS IS BUILT TO PREVENT: PrimeBinPresentSensor/
+PrimeTankPresentSensor/PrimeRobotConnectivitySensor (binary_sensor.py)
+and PrimeCarpetBoostSwitch (switch.py) were built and unit-tested in
+isolation, but PRIME_PLATFORMS (const.py) was never updated to include
+their platforms — meaning HA never actually called either module's
+async_setup_entry() for a real CLOUD_ONLY config entry, so none of
+these entities were ever created for a real user despite fully working,
+individually-tested code existing for them. Caught only by manually
+reviewing a real field tester's own screenshots (which never showed
+these entities), not by any test.
+
+TWO DIRECTIONS, BOTH NEEDED (an earlier version of this file only had
+the first one, which turned out to have the SAME structural flaw as
+the original bug: a second, separately-maintained list that could
+drift out of sync just as easily as PRIME_PLATFORMS itself did):
+
+1. FORWARD: for every platform actually listed in PRIME_PLATFORMS,
+   calling that module's own async_setup_entry() against a realistic
+   CLOUD_ONLY config_entry must produce at least one entity. Iterates
+   PRIME_PLATFORMS directly -- no separate list to drift.
+
+2. BACKWARD (the direction the original bug needed): scans every
+   platform .py file for a literal "ConnectionType.CLOUD_ONLY"
+   reference -- any file that has one is a module claiming to support
+   CLOUD_ONLY, and must have a corresponding entry in PRIME_PLATFORMS.
+   THIS is what would have caught the original bug: binary_sensor.py
+   and switch.py both had real CLOUD_ONLY branches, fully coded and
+   unit-tested, while PRIME_PLATFORMS simply never listed them.
+"""
+from __future__ import annotations
+
+import importlib
+from pathlib import Path
+from unittest.mock import MagicMock
+
+from homeassistant.const import Platform
+import pytest
+
+from custom_components.roomba_plus.const import PRIME_PLATFORMS
+from custom_components.roomba_plus.models import ConnectionType
+
+INTEGRATION_DIR = Path(__file__).parent.parent / "custom_components" / "roomba_plus"
+
+# Maps a Platform enum value to its own platform module's filename --
+# NOT a duplicate risk-of-drift list like the removed
+# _EXPECTED_MINIMUM_ENTITIES was: this is a STATIC, structural fact
+# about Home Assistant's own platform-name convention (Platform.SENSOR
+# always means sensor.py, for every HA integration, not just this
+# one) -- it cannot itself silently drift the way a maintained "which
+# platforms does OUR integration support" list can.
+_PLATFORM_TO_MODULE: dict[Platform, str] = {
+    Platform.VACUUM: "vacuum",
+    Platform.SENSOR: "sensor",
+    Platform.BINARY_SENSOR: "binary_sensor",
+    Platform.SWITCH: "switch",
+    Platform.CALENDAR: "calendar",
+    Platform.TODO: "todo",
+    Platform.IMAGE: "image",
+    Platform.BUTTON: "button",
+    Platform.SELECT: "select",
+    Platform.DEVICE_TRACKER: "device_tracker",
+}
+
+
+def _make_cloud_only_config_entry() -> MagicMock:
+    """A single, realistic CLOUD_ONLY config_entry, explicit about
+    every attribute each platform's own CLOUD_ONLY branch actually
+    reads (deliberately NOT relying on MagicMock's own
+    auto-attribute-generation for anything a real async_setup_entry
+    branches on, e.g. prime_status_coordinator -- an accidentally
+    "truthy" auto-generated MagicMock there would mask whether that
+    guard is real)."""
+    config_entry = MagicMock()
+    # The maintenance list is opt-in (CONF_ENABLE_MAINTENANCE_LIST,
+    # default off), so a realistic entry for THIS check is one where the
+    # user asked for it -- otherwise the class reads as unreachable when
+    # it is merely unrequested. The guard's own message says to add the
+    # data here rather than exempt the class, and it is right.
+    config_entry.options = {"enable_maintenance_list": True}
+    data = config_entry.runtime_data
+    data.connection_type = ConnectionType.CLOUD_ONLY
+    data.blid = "TESTBLID"
+    data.roomba = None
+    data.prime_robot = MagicMock()
+    data.prime_coordinator = MagicMock()
+    data.prime_status_coordinator = MagicMock()
+    data.prime_status_coordinator.data = {}
+    data.prime_household_id = "hh1"
+    return config_entry
+
+
+def _platform_files_referencing_cloud_only() -> set[str]:
+    """Every platform .py file (direct children of the integration
+    directory, matching a name in _PLATFORM_TO_MODULE's own values)
+    that contains a literal "ConnectionType.CLOUD_ONLY" reference --
+    a module claiming CLOUD_ONLY support, regardless of whether
+    PRIME_PLATFORMS agrees."""
+    referencing: set[str] = set()
+    for module_name in _PLATFORM_TO_MODULE.values():
+        path = INTEGRATION_DIR / f"{module_name}.py"
+        if path.exists() and "ConnectionType.CLOUD_ONLY" in path.read_text():
+            referencing.add(module_name)
+    return referencing
+
+
+class TestForwardEveryListedPlatformCreatesEntities:
+    """Direction 1: PRIME_PLATFORMS -> does it actually work."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("platform", PRIME_PLATFORMS)
+    async def test_platform_creates_at_least_one_entity(self, platform: Platform) -> None:
+        module_name = _PLATFORM_TO_MODULE[platform]
+        module = importlib.import_module(f"custom_components.roomba_plus.{module_name}")
+        config_entry = _make_cloud_only_config_entry()
+        created: list = []
+
+        await module.async_setup_entry(MagicMock(), config_entry, created.extend)
+
+        assert created, (
+            f"Platform.{platform.name} ({module_name}.py) is listed in PRIME_PLATFORMS "
+            f"but created ZERO entities for a realistic CLOUD_ONLY config entry. Either "
+            f"its own CLOUD_ONLY branch is broken, or it doesn't have one at all."
+        )
+
+
+class TestBackwardEveryCloudOnlyModuleIsListed:
+    """Direction 2: does the code -> is it actually reachable at all.
+
+    This is the direction that would have caught the REAL bug:
+    binary_sensor.py/switch.py both had real, working, unit-tested
+    CLOUD_ONLY branches while PRIME_PLATFORMS simply never listed
+    them, so HA never called either module's async_setup_entry() for
+    a real CLOUD_ONLY entry at all."""
+
+    def test_every_module_referencing_cloud_only_is_in_prime_platforms(self) -> None:
+        """CARVED-OUT EXCEPTIONS: calendar.py and todo_prime.py are
+        deliberately NOT in the static PRIME_PLATFORMS list anymore --
+        Platform.CALENDAR is now conditional on
+        CONF_ENABLE_SCHEDULE_CALENDAR (default True), added at runtime
+        by __init__.py's _optional_platforms(), called
+        identically at all four platform-list build sites (Classic
+        setup/unload, Prime setup/unload). This is a deliberate,
+        single, well-tested exception to the invariant this test
+        otherwise enforces -- not a reopening of the original bug this
+        test exists to catch (every OTHER CLOUD_ONLY module must still
+        be unconditionally listed)."""
+        referencing = _platform_files_referencing_cloud_only()
+        listed_modules = {_PLATFORM_TO_MODULE[p] for p in PRIME_PLATFORMS}
+        # `todo` joins calendar for the same reason and a stronger one:
+        # a maintenance list takes a place in Home Assistant's sidebar,
+        # and @chairstacker found one there he had not asked for. It is
+        # gated on CONF_ENABLE_MAINTENANCE_LIST and, unlike the calendar,
+        # defaults to OFF.
+        deliberately_conditional = {"calendar", "todo"}
+        missing = referencing - listed_modules - deliberately_conditional
+        assert not missing, (
+            f"{missing} reference ConnectionType.CLOUD_ONLY but are NOT in "
+            f"PRIME_PLATFORMS -- this is exactly the shape of the original bug "
+            f"(binary_sensor.py/switch.py had real CLOUD_ONLY code that was never "
+            f"actually reachable). Add the corresponding Platform to PRIME_PLATFORMS."
+        )
+
+
+class TestEveryPlatformWorksOnDataTheLibraryActuallyReturns:
+    """The MagicMock run above answers "is this platform wired at all".
+    It cannot answer "does it work", and the difference cost a feature.
+
+    `getattr(m, "anything")` on a MagicMock returns a truthy MagicMock.
+    So code reading `.schedule_id` off what is really a dict passes here
+    and produces nothing in the field. PrimeScheduleSwitch did exactly
+    that for its entire life: green in this file, zero entities for
+    every real user, found by manual review rather than by any test.
+
+    This run uses the library's own parsers (tests/prime_fixtures.py).
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("platform", PRIME_PLATFORMS)
+    async def test_platform_creates_entities_from_real_library_data(
+        self, platform: Platform
+    ) -> None:
+        from tests import prime_fixtures
+
+        module = importlib.import_module(
+            f"custom_components.roomba_plus.{_PLATFORM_TO_MODULE[platform]}"
+        )
+        created: list = []
+
+        await module.async_setup_entry(
+            MagicMock(), prime_fixtures.cloud_only_config_entry(), created.extend
+        )
+
+        assert created, (
+            f"Platform.{platform.name} produces entities for a MagicMock but NONE "
+            f"for data the library actually returns. Something in its setup path "
+            f"is reading attributes off a value that is a plain dict at runtime."
+        )
+
+
+class TestNoPrimeEntityClassIsNeverBuilt:
+    """The third direction, and the one the two above cannot see.
+
+    Both existing checks compare what a run produces. A class that is
+    never instantiated in ANY run is absent from every comparison --
+    which is the exact shape of the schedule-switch bug: nothing was
+    missing from a list, nothing failed, a class simply never got built
+    and no test was looking for it.
+
+    So this asks the code what Prime entity classes exist, and the
+    platforms what they actually build.
+    """
+
+    @pytest.mark.asyncio
+    async def test_every_prime_entity_class_is_reachable(self) -> None:
+        import ast
+
+        from tests import prime_fixtures
+
+        declared: dict[str, str] = {}
+        for path in sorted(INTEGRATION_DIR.glob("*.py")):
+            for node in ast.walk(ast.parse(path.read_text())):
+                if not (isinstance(node, ast.ClassDef)
+                        and node.name.startswith("Prime")):
+                    continue
+                bases = [
+                    base.id if isinstance(base, ast.Name)
+                    else getattr(base, "attr", "")
+                    for base in node.bases
+                ]
+                if any(b.endswith(("Entity", "Sensor", "Switch", "Button",
+                                   "Select", "Image", "Tracker", "Vacuum",
+                                   "Calendar"))
+                       for b in bases):
+                    declared[node.name] = path.name
+
+        built: set[str] = set()
+        # The two conditional platforms are added by hand, exactly as
+        # __init__.py adds them at runtime when their option is on. A
+        # platform being opt-in must not make its entities look dead.
+        for platform in list(PRIME_PLATFORMS) + [
+            Platform.CALENDAR, Platform.TODO
+        ]:
+            module = importlib.import_module(
+                f"custom_components.roomba_plus.{_PLATFORM_TO_MODULE[platform]}"
+            )
+            created: list = []
+            # OPTIONAL ENTITIES NEED THEIR OPTION ON. The fixture's
+            # `options` is a MagicMock, so `.get()` used to return a
+            # truthy mock and every option read as enabled -- which is
+            # why this guard passed while the region sensors were gated
+            # on a coordinator a Prime entry does not have.
+            #
+            # Explicit options make the guard mean what it says: these
+            # classes are reachable on an entry that has asked for them.
+            _entry = prime_fixtures.cloud_only_config_entry()
+            _entry.options = {"region_sensors": True, "room_schedule": True}
+            _entry.runtime_data.prime_room_names = {"10": "Kitchen"}
+            await module.async_setup_entry(
+                MagicMock(), _entry, created.extend
+            )
+            built |= {type(entity).__name__ for entity in created}
+
+        never_built = sorted(set(declared) - built)
+
+        assert not never_built, (
+            "These Prime entity classes exist but no platform builds them for a "
+            "realistic CLOUD_ONLY entry: "
+            + ", ".join(f"{name} ({declared[name]})" for name in never_built)
+            + ". Either the class is dead code, or its setup path drops it "
+            "silently -- which is how PrimeScheduleSwitch shipped without ever "
+            "creating a single entity. If a class is genuinely gated on data "
+            "this fixture does not carry, add that data to tests/prime_fixtures.py "
+            "rather than removing the class from this check."
+        )
+
+
+class TestEveryPrimeEntityBelongsToTheRobotDevice:
+    """A device-metadata fix that was applied to some entities and not
+    others -- and nothing noticed for two releases.
+
+    `IRobotEntity.__init__` takes an optional config_entry, and for a
+    Prime entity it is the ONLY source of model, serial and the device
+    name (there is no roombapy state to read them from). Its own
+    docstring records this being fixed after an architecture review.
+    Six Prime classes across four files never got the argument:
+    PrimeFavoriteButton, PrimeLocateButton, PrimeDockButton,
+    PrimeSettingSelect, PrimeSettingSwitch, PrimeRoomsImage. Their
+    device pages carried model=None, serial=None, and a device name
+    that depended on which entity happened to register first.
+
+    A textual check on the call sites would drift with the next
+    refactor. This asks the entities.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("platform", list(PRIME_PLATFORMS) + [Platform.CALENDAR])
+    async def test_entities_carry_complete_device_info(
+        self, platform: Platform
+    ) -> None:
+        from custom_components.roomba_plus.const import DOMAIN
+        from tests import prime_fixtures
+
+        module = importlib.import_module(
+            f"custom_components.roomba_plus.{_PLATFORM_TO_MODULE[platform]}"
+        )
+        created: list = []
+        await module.async_setup_entry(
+            MagicMock(), prime_fixtures.cloud_only_config_entry(), created.extend
+        )
+
+        incomplete = []
+        for entity in created:
+            info = getattr(entity, "device_info", None)
+            if not info or not info.get("identifiers"):
+                incomplete.append((type(entity).__name__, "no device_info"))
+            elif info["identifiers"] != {(DOMAIN, f"roomba_plus_{entity._blid}")}:
+                incomplete.append((type(entity).__name__, "wrong device"))
+            elif info.get("model") is None:
+                # For a Prime entity this means config_entry was not passed
+                # to IRobotEntity.__init__ -- there is no other source.
+                incomplete.append((type(entity).__name__, "model=None"))
+
+        assert not incomplete, (
+            f"Platform.{platform.name} built entities with incomplete device "
+            f"info: {sorted(set(incomplete))}. For Prime entities model and "
+            "serial come only from config_entry -- pass it to "
+            "IRobotEntity.__init__."
+        )
+
+
+class TestRegionSensorsGrowWithTheMap:
+    """@chairstacker adds and renames zones regularly -- he went from
+    eight to twelve between two reports. A list frozen at setup leaves
+    every new zone without an entity until he reloads the integration,
+    which is the manual step this feature exists to remove.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_zone_added_later_gets_its_sensor(self):
+        from unittest.mock import MagicMock, patch
+
+        from custom_components.roomba_plus.sensor import async_setup_entry
+        from tests import prime_fixtures
+
+        entry = prime_fixtures.cloud_only_config_entry()
+        # `prime_room_names` ON THE ENTRY, not `regions_by_pmap` on a
+        # Classic coordinator. A Prime entry has no `cloud_coordinator`
+        # at all, so this fixture agreed with a gate that could never
+        # open -- @chairstacker ticked the option, ran a zone mission,
+        # reloaded, and got no entities (#84) while this test passed.
+        # THE OPTION HAS TO BE ON. It defaults to False, and the old
+        # gate never opened on Prime anyway -- so this test passed
+        # without ever exercising the code it names.
+        entry.options = {**getattr(entry, "options", {}), "region_sensors": True}
+        entry.runtime_data.prime_room_names = {"10": "Kitchen"}
+        coordinator = entry.runtime_data.prime_status_coordinator
+
+        listeners: list = []
+        coordinator.async_add_listener = lambda cb: listeners.append(cb) or (
+            lambda: None
+        )
+
+        created: list = []
+        with patch(
+            # Patched where sensor.py BINDS it, not where it lives: the
+            # import moved to module level, so patching the source no
+            # longer affects the already-bound name.
+            "custom_components.roomba_plus.sensor.async_dispatcher_connect",
+            lambda _h, _sig, cb: listeners.append(cb) or (lambda: None),
+        ):
+            await async_setup_entry(MagicMock(), entry, created.extend)
+
+        before = sum(
+            1 for e in created if type(e).__name__ == "PrimeRegionLastCleanedSensor"
+        )
+
+        # A new zone appears, and the status coordinator fires.
+        entry.runtime_data.prime_room_names["101"] = "Sofa corner"
+        for callback in listeners:
+            callback()
+
+        after = sum(
+            1 for e in created if type(e).__name__ == "PrimeRegionLastCleanedSensor"
+        )
+
+        assert after == before + 1, "a zone added after setup must get an entity"
+
+    @pytest.mark.asyncio
+    async def test_an_unchanged_map_adds_nothing(self):
+        """The listener fires on every cloud refresh; it must not
+        create duplicates of what already exists."""
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.sensor import async_setup_entry
+        from tests import prime_fixtures
+
+        entry = prime_fixtures.cloud_only_config_entry()
+        coordinator = entry.runtime_data.cloud_coordinator
+        coordinator.regions_by_pmap = {"MAP-A": {"10": "Kitchen"}}
+        listeners: list = []
+        coordinator.async_add_listener = lambda cb: listeners.append(cb) or (
+            lambda: None
+        )
+
+        created: list = []
+        await async_setup_entry(MagicMock(), entry, created.extend)
+        before = len(created)
+
+        for callback in listeners:
+            callback()
+
+        assert len(created) == before

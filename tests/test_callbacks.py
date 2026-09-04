@@ -167,6 +167,8 @@ def _make_callback_env():
     mission_store.async_append = AsyncMock()
     mission_store.async_save = AsyncMock()
     mission_store.consecutive_skips = 0
+    mission_store.update_terminal_fields = MagicMock(return_value=False)
+    mission_store.records = []
 
     runtime_data = MagicMock()
     runtime_data.mission_store = mission_store
@@ -662,6 +664,130 @@ class TestAsyncRecordMissionL3ErrorState:
             {"phase": "charge", "error": 18},
         )
         assert data.last_error_code == 18
+
+
+class TestAsyncRecordMissionReplayMerge:
+    """A same-mission-id replay (same start_ts, later wall-clock, a
+    different computed initiator/duration) must merge into the existing
+    terminal record in place rather than storing a second record."""
+
+    def _run_replay(self, first_mission, second_mission, first_now, second_now, start_ts):
+        from custom_components.roomba_plus.callbacks import async_record_mission
+        store = _make_store()
+        loop  = asyncio.new_event_loop()
+        entry = _make_entry(store)
+        hass  = _make_hass(loop)
+        try:
+            with patch(
+                "custom_components.roomba_plus.callbacks.dt_util.utcnow",
+                side_effect=[first_now, second_now],
+            ):
+                loop.run_until_complete(
+                    async_record_mission(hass, entry, first_mission, {}, [], start_ts, 0)
+                )
+                loop.run_until_complete(
+                    async_record_mission(hass, entry, second_mission, {}, [], start_ts, 0)
+                )
+        finally:
+            loop.close()
+        return store
+
+    def test_replay_freezes_first_write_and_stores_once(self):
+        now_real = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
+        start_ts  = now_real - 3 * 3600
+        first_now  = datetime.datetime.fromtimestamp(now_real - 2 * 3600, tz=datetime.timezone.utc)
+        # Replay pulse re-delivers the SAME terminal event within the
+        # MQTT re-delivery window (seconds, not hours).
+        second_now = first_now + datetime.timedelta(seconds=30)
+        first_mission  = {"phase": "charge", "error": 0, "sqft": 100, "initiator": "schedule"}
+        second_mission = {"phase": "charge", "error": 0, "sqft": 120, "initiator": "manual"}
+
+        store = self._run_replay(first_mission, second_mission, first_now, second_now, start_ts)
+
+        assert len(store.records) == 1
+        rec = store.records[0]
+        assert rec["duration_min"] == 60
+        assert rec["initiator"] == "schedule"
+        expected_started_at = datetime.datetime.fromtimestamp(
+            start_ts, tz=datetime.timezone.utc
+        ).isoformat()
+        assert rec["started_at"] == expected_started_at
+        assert rec["ended_at"] == first_now.isoformat()
+
+    def test_replay_two_hours_later_is_a_genuine_segment_not_a_merge(self):
+        """980/900-series multi-recharge keeps mssnStrtTm across segments: a
+        second write hours after the terminal record is the next segment
+        (async_append's _r<N> path), NOT an in-place replay merge."""
+        now_real = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
+        start_ts  = now_real - 3 * 3600
+        first_now  = datetime.datetime.fromtimestamp(now_real - 2 * 3600, tz=datetime.timezone.utc)
+        second_now = datetime.datetime.fromtimestamp(now_real, tz=datetime.timezone.utc)
+        first_mission  = {"phase": "charge", "error": 0, "sqft": 100, "initiator": "schedule"}
+        second_mission = {"phase": "charge", "error": 0, "sqft": 120, "initiator": "manual"}
+
+        store = self._run_replay(first_mission, second_mission, first_now, second_now, start_ts)
+
+        assert len(store.records) == 2
+        assert store.records[1]["id"].endswith("_r1"), store.records[1]["id"]
+
+    def test_replay_counted_once_by_missions_last_30d_query(self):
+        now_real = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
+        start_ts  = now_real - 3 * 3600
+        first_now  = datetime.datetime.fromtimestamp(now_real - 2 * 3600, tz=datetime.timezone.utc)
+        second_now = first_now + datetime.timedelta(seconds=30)
+        first_mission  = {"phase": "charge", "error": 0, "sqft": 100, "initiator": "schedule"}
+        second_mission = {"phase": "charge", "error": 0, "sqft": 120, "initiator": "manual"}
+
+        store = self._run_replay(first_mission, second_mission, first_now, second_now, start_ts)
+
+        assert len(store.query(30, result="completed")) == 1
+
+    def test_missions_last_30d_dedupes_legacy_recharge_segments(self):
+        from custom_components.roomba_plus.sensor_core import SENSORS
+
+        now_real = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
+        start_ts = now_real - 3 * 3600
+        first_now = datetime.datetime.fromtimestamp(
+            now_real - 2 * 3600, tz=datetime.timezone.utc
+        )
+        second_now = datetime.datetime.fromtimestamp(
+            now_real, tz=datetime.timezone.utc
+        )
+        store = self._run_replay(
+            {"phase": "charge", "error": 0, "sqft": 100, "initiator": "schedule"},
+            {"phase": "charge", "error": 0, "sqft": 120, "initiator": "manual"},
+            first_now,
+            second_now,
+            start_ts,
+        )
+        # Two segments of one physical mission (m_<start> + m_<start>_r1).
+        entity = MagicMock()
+        entity._config_entry.runtime_data.mission_store = store
+        descriptor = next(d for d in SENSORS if d.key == "missions_last_30d")
+
+        assert len(store.query(30, result="completed")) == 2
+        assert descriptor.value_fn(entity) == 1
+
+    def test_missions_last_30d_counts_idless_records_individually(self):
+        """Records without an id must never collapse into a single count via
+        the base-id dedupe (base_mission_id('') == '' for all of them)."""
+        from custom_components.roomba_plus.sensor_core import SENSORS
+
+        store = _make_store()
+        now_real = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
+        store._records = [
+            {"id": None, "started_at": _iso(now_real - 1000), "ended_at": _iso(now_real - 900), "result": "completed"},
+            {"id": "", "started_at": _iso(now_real - 800), "ended_at": _iso(now_real - 700), "result": "completed"},
+            {"id": 42, "started_at": _iso(now_real - 600), "ended_at": _iso(now_real - 500), "result": "completed"},
+            {"id": f"m_{now_real}", "started_at": _iso(now_real - 400), "ended_at": _iso(now_real - 300), "result": "completed"},
+            {"id": f"m_{now_real}_r1", "started_at": _iso(now_real - 200), "ended_at": _iso(now_real - 100), "result": "completed"},
+        ]
+        entity = MagicMock()
+        entity._config_entry.runtime_data.mission_store = store
+        descriptor = next(d for d in SENSORS if d.key == "missions_last_30d")
+
+        # 3 id-less (each counts once) + 1 deduped pair = 4 distinct missions.
+        assert descriptor.value_fn(entity) == 4
 
 
 class TestMakeMapRetrainCallback:
@@ -2387,6 +2513,95 @@ class TestFullLifecycleSequenceToResult:
         assert len(captured) == 0
 
 
+class TestPhaseTrackingReplayGuard:
+    """A phase flipping back to run/hmMidMsn/evac under an mssnStrtTm that
+    MissionStore already holds a terminal record for is a post-terminal
+    replay pulse, not a genuine new mission start."""
+
+    def test_replay_pulse_does_not_restart_timer_or_reopen_mission(self):
+        hass, entry, _recorded, mission_store = _make_callback_env()
+        mts = MagicMock()
+        mts.mission_id = None
+        entry.runtime_data.mission_timer_store = mts
+        cb = make_mission_callback(hass, entry)
+        captured: list[dict] = []
+
+        async def _capture(*args, **kwargs):
+            captured.append(dict(kwargs))
+
+        with patch("custom_components.roomba_plus.callbacks.async_record_mission",
+                   new_callable=AsyncMock) as mock_record, \
+             _patch_callbacks_time():
+            mock_record.side_effect = _capture
+            for phase, nstuck in [
+                ("run", 0), ("run", 0), ("charge", 0), ("charge", 0),
+            ]:
+                cb(_msg(phase, nstuck=nstuck))
+            hass.loop.run_until_complete(asyncio.sleep(0))
+            assert len(captured) == 1
+
+            mission_store.records = [{
+                "id": "m_1700000000",
+                "started_at": _iso(1700000000),
+                "result": "completed",
+            }]
+            mts.reset_mock()
+
+            for phase, nstuck in [("run", 0), ("charge", 0), ("charge", 0)]:
+                cb(_msg(phase, nstuck=nstuck))
+            hass.loop.run_until_complete(asyncio.sleep(0))
+
+        assert len(captured) == 1
+        mts.on_phase_run.assert_not_called()
+        mts.clear.assert_not_called()
+
+    def test_old_terminal_record_does_not_suppress_genuine_segment_resume(self):
+        """980/900-series keeps mssnStrtTm across multi-recharge segments: a
+        terminal record whose ended_at is far older than the re-delivery
+        window is a real segment resume, so the phase guard must not treat
+        it as a replay pulse."""
+        hass, entry, _recorded, mission_store = _make_callback_env()
+        mts = MagicMock()
+        mts.mission_id = None
+        entry.runtime_data.mission_timer_store = mts
+        cb = make_mission_callback(hass, entry)
+        captured: list[dict] = []
+
+        async def _capture(*args, **kwargs):
+            captured.append(dict(kwargs))
+
+        from custom_components.roomba_plus.callbacks import _CLOUD_CATCHUP_MISSION_MATCH_SEC
+
+        with patch("custom_components.roomba_plus.callbacks.async_record_mission",
+                   new_callable=AsyncMock) as mock_record,              _patch_callbacks_time():
+            mock_record.side_effect = _capture
+            for phase, nstuck in [
+                ("run", 0), ("run", 0), ("charge", 0), ("charge", 0),
+            ]:
+                cb(_msg(phase, nstuck=nstuck))
+            hass.loop.run_until_complete(asyncio.sleep(0))
+            assert len(captured) == 1
+
+            # Terminal record from LONG ago (started_at == ended_at, old timestamp).
+            old_ts = 1700000000  # 2.7 years before the live clock — well outside window
+            mission_store.records = [{
+                "id": "m_1700000000",
+                "started_at": _iso(old_ts),
+                "ended_at": _iso(old_ts),
+                "result": "completed",
+            }]
+            mts.reset_mock()
+
+            for phase, nstuck in [("run", 0), ("charge", 0), ("charge", 0)]:
+                cb(_msg(phase, nstuck=nstuck))
+            hass.loop.run_until_complete(asyncio.sleep(0))
+
+        # Genuine resume: a second mission record gets recorded and the timer
+        # tracks the resumed segment.
+        assert len(captured) == 2
+        mts.on_phase_run.assert_called_once()
+
+
 class TestCloudRefreshCallbackDispatchesV320Checks:
     """make_cloud_refresh_callback's _on_cloud_refresh_complete dispatches
     the surviving grid-store-dependent check.
@@ -2986,7 +3201,7 @@ class TestGsSmartCoverageDispatchFunction:
             _async_update_gs_smart_coverage,
         )
         hass, entry, data, gs, aligner, ms = _gs_coverage_env()
-        ms.records.return_value = [
+        ms.records = [
             {"id": "m_1", "nMssn": 5},  # no pmaps_info at all
         ]
         await _async_update_gs_smart_coverage(hass, entry, MagicMock())
@@ -2999,7 +3214,11 @@ class TestGsSmartCoverageDispatchFunction:
             _async_update_gs_smart_coverage,
         )
         hass, entry, data, gs, aligner, ms = _gs_coverage_env(watermark=10)
-        ms.records.return_value = [
+        # `records` is a PROPERTY. These fixtures set
+        # `ms.records.return_value`, which only works against a call --
+        # and the code under test called it, so both sides agreed on a
+        # shape the real MissionStore does not have.
+        ms.records = [
             {"id": "m_1", "nMssn": 10, "pmaps_info": [{"pmap_id": "p", "pmapv_id": "v"}]},
             {"id": "m_2", "nMssn": 9, "pmaps_info": [{"pmap_id": "p", "pmapv_id": "v"}]},
         ]
@@ -3015,7 +3234,7 @@ class TestGsSmartCoverageDispatchFunction:
             MissionMapUnavailable,
         )
         hass, entry, data, gs, aligner, ms = _gs_coverage_env()
-        ms.records.return_value = [
+        ms.records = [
             {"id": f"m_{i}", "nMssn": i,
              "pmaps_info": [{"pmap_id": "p", "pmapv_id": f"v{i}"}]}
             for i in range(1, 9)  # 8 candidates, backlog > cap
@@ -3033,7 +3252,7 @@ class TestGsSmartCoverageDispatchFunction:
             _async_update_gs_smart_coverage,
         )
         hass, entry, data, gs, aligner, ms = _gs_coverage_env()
-        ms.records.return_value = [
+        ms.records = [
             {"id": "m_3", "nMssn": 30, "pmaps_info": [{"pmap_id": "p", "pmapv_id": "v"}],
              "started_at": "2026-07-01T10:00:00+00:00"},
             {"id": "m_1", "nMssn": 10, "pmaps_info": [{"pmap_id": "p", "pmapv_id": "v"}],
@@ -3062,7 +3281,7 @@ class TestGsSmartCoverageDispatchFunction:
             MissionMapUnavailable,
         )
         hass, entry, data, gs, aligner, ms = _gs_coverage_env()
-        ms.records.return_value = [
+        ms.records = [
             {"id": "m_1", "nMssn": 5, "pmaps_info": [{"pmap_id": "p", "pmapv_id": "v"}]},
         ]
         with patch(
@@ -3082,7 +3301,7 @@ class TestGsSmartCoverageDispatchFunction:
             _async_update_gs_smart_coverage,
         )
         hass, entry, data, gs, aligner, ms = _gs_coverage_env()
-        ms.records.return_value = [
+        ms.records = [
             {"id": "m_1", "nMssn": 5, "pmaps_info": [{"pmap_id": "p", "pmapv_id": "v"}]},
         ]
         with patch(
@@ -3102,7 +3321,7 @@ class TestGsSmartCoverageDispatchFunction:
             ROBOT_DIAMETER_MM_ISJ_SERIES,
         )
         hass, entry, data, gs, aligner, ms = _gs_coverage_env()
-        ms.records.return_value = [
+        ms.records = [
             {"id": "m_1", "nMssn": 5,
              "pmaps_info": [{"pmap_id": "p", "pmapv_id": "v"}],
              "started_at": "2026-07-04T10:00:00+00:00"},
@@ -3137,7 +3356,7 @@ class TestGsSmartCoverageDispatchFunction:
             _async_update_gs_smart_coverage,
         )
         hass, entry, data, gs, aligner, ms = _gs_coverage_env(watermark=100)
-        ms.records.return_value = []
+        ms.records = []
         await _async_update_gs_smart_coverage(hass, entry, MagicMock())
         gs.async_save.assert_not_called()
 
@@ -3155,7 +3374,7 @@ class TestGsCoverageLiveCloudMutualExclusion:
         # Simulates image.py having already called
         # grid_store.record_processed_nmssn(77) for this mission.
         hass, entry, data, gs, aligner, ms = _gs_coverage_env(watermark=77)
-        ms.records.return_value = [
+        ms.records = [
             {"id": "m_1", "nMssn": 77,
              "pmaps_info": [{"pmap_id": "p", "pmapv_id": "v"}]},
         ]
@@ -3311,3 +3530,94 @@ class TestGsCoverageNonNumericCoordinateResilience:
         ]
         result = _gs_coverage_classify_stuck_events(events, aligner)
         assert result == [(11.0, 22.0)]  # only the valid event survives
+
+
+class TestRecordsIsAPropertyNotAMethod:
+    """`MissionStore.records` is a property. One call site wrote
+    `ms.records()`, which raises TypeError — a Sequence is not callable
+    — so `_async_update_gs_smart_coverage` died on its first statement
+    every time it ran.
+
+    Four other call sites in the integration read it correctly. Found by
+    mypy as "Sequence[dict[str, Any]] not callable"; no test exercised
+    the function.
+    """
+
+    def test_nothing_calls_records_as_a_method(self):
+        """Parsed rather than grepped: the comment recording this bug
+        contains the very string a text search looks for."""
+        import ast
+        import pathlib
+
+        offenders = []
+        for path in pathlib.Path("custom_components/roomba_plus").glob("*.py"):
+            for node in ast.walk(ast.parse(path.read_text())):
+                if (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "records"
+                ):
+                    offenders.append(f"{path.name}:{node.lineno}")
+
+        assert not offenders, (
+            f"{offenders} call `records()` -- it is a property, and "
+            f"calling it raises TypeError"
+        )
+
+    def test_the_property_is_still_a_property(self):
+        """If it ever becomes a method, the guard above is wrong rather
+        than the call sites."""
+        from custom_components.roomba_plus.mission_store import MissionStore
+
+        assert isinstance(MissionStore.records, property)
+
+
+class TestPropertiesAreNotCalledAsMethods:
+    """Guard against a whole class of bug a MagicMock cannot catch.
+
+    Reported by @liblit against v3.5.2 with a full root cause: one
+    call site wrote `ms.records()` where `records` is a property, so
+    the GS-SMART-COVERAGE backfill raised TypeError on its first line
+    every time the cloud coordinator refreshed. Four other call sites
+    read it correctly.
+
+    It was fixed before the report arrived, but the interesting part
+    is why it survived as long as it did. The tests for that very
+    function assert `ms.records.assert_not_called()` -- treating
+    `records` as callable, because a MagicMock allows both forms
+    silently. The tests could not have caught it, and neither could
+    any test built the same way.
+
+    So this checks the source text instead of behaviour: no MagicMock
+    involved, nothing to be lenient.
+    """
+
+    def test_no_call_site_invokes_records_as_a_method(self):
+        from pathlib import Path
+
+        component = Path("custom_components/roomba_plus")
+        offenders = []
+        for path in sorted(component.glob("*.py")):
+            for number, line in enumerate(path.read_text().splitlines(), 1):
+                stripped = line.strip()
+                if stripped.startswith("#"):
+                    continue
+                if ".records()" in line:
+                    offenders.append(f"{path.name}:{number}: {stripped}")
+
+        assert not offenders, (
+            "`MissionStore.records` is a property, not a method. "
+            "Calling it raises TypeError at runtime:\n  "
+            + "\n  ".join(offenders)
+        )
+
+    def test_records_really_is_a_property(self):
+        """If it ever becomes a method, the guard above must be
+        retired rather than left asserting the opposite."""
+        from custom_components.roomba_plus.mission_store import MissionStore
+
+        assert isinstance(
+            type(MissionStore).__dict__.get("records")
+            or MissionStore.__dict__.get("records"),
+            property,
+        )
