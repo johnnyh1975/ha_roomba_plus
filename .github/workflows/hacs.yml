@@ -1,0 +1,41 @@
+# HACS validation, in its own workflow purely so it can carry a badge.
+#
+# GitHub's badge endpoint addresses WORKFLOWS, not jobs -- there is no way
+# to point a badge at one job inside a larger file. This ran as the `hacs`
+# job in validate.yml, where it gated correctly but was invisible from the
+# README. hassfest.yml and typing.yml exist for the same reason.
+#
+# Deliberately NOT badged as one combined "Validate" status: that workflow
+# has ten jobs, so a badge on it turns any one of ten unrelated failures
+# into a red mark on the front page. Three narrow badges each say something
+# a reader can act on.
+#
+# Same triggers as validate.yml, so nothing is checked less often than
+# before. The duplicate checkout costs one runner.
+name: HACS
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  schedule:
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  hacs:
+    name: HACS Validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: HACS validation
+        uses: hacs/action@main
+        with:
+          category: integration

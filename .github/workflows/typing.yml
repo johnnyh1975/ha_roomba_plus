@@ -1,0 +1,73 @@
+# mypy --strict, in its own workflow so it can carry a badge.
+# See hacs.yml for why this is a separate file rather than a job.
+#
+# WHY THIS ONE IS BADGED AT ALL. Strict typing is a real Platinum
+# requirement in Home Assistant's quality scale, and it is the only one
+# of them that a README badge can actually evidence. The "Quality Scale:
+# Gold" badge next to it is self-awarded -- nothing verifies it for a
+# custom integration, because the scale is defined for core integrations
+# and no reviewer grades this repository. This badge is different: it
+# reports whether a real check passed on real code, and the ratchet
+# baseline is 0.
+name: Typing
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  schedule:
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  typing:
+    name: Typing (mypy --strict)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      # mypy needs the same environment as the test suite: it resolves
+      # Home Assistant's own types, and a bare install would report
+      # hundreds of missing-import errors instead of real ones.
+      #
+      # Pinned to 2025.1.4 via requirements-test-frozen.txt, NOT the
+      # newer-HA combination the test suite also runs against. The
+      # `type: ignore` comments that bridge the two HA APIs are required
+      # by one version and redundant on the other, so mypy cannot be
+      # satisfied by both at once and `warn_unused_ignores` is worth
+      # keeping. This is the same reasoning recorded in validate.yml.
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-test-frozen.txt
+          pip install mypy
+
+      # --no-deps: phahc 0.13.205 hard-pins paho-mqtt==1.6.1 while
+      # roombapy-prime requires >=2.0. Nothing here constructs a real
+      # paho client, so the older one is never exercised.
+      - name: Install roombapy-prime (--no-deps)
+        run: |
+          pip install --no-deps --no-cache-dir "roombapy-prime==0.3.1"
+
+      # mypy.ini runs --strict with no disabled error codes. The two
+      # per-module exemptions are for Home Assistant itself and are
+      # explained where they are declared.
+      #
+      # The ratchet script rather than a bare `mypy` call: it fails on
+      # an increase AND on an undeclared decrease, so a fix that lowers
+      # the count has to lower the recorded baseline in the same commit
+      # rather than drifting silently. The baseline is 0.
+      - name: Run mypy
+        run: python scripts/check_typing_baseline.py

@@ -1,0 +1,32 @@
+# Hassfest validation, in its own workflow so it can carry a badge.
+# See hacs.yml for why this is a separate file rather than a job.
+#
+# hassfest is Home Assistant's own manifest/brand/dependency checker. For a
+# custom integration it is the closest thing to an external verdict on the
+# repository, which is exactly why it is worth badging: everything else in
+# the README header is a claim this project makes about itself.
+name: Hassfest
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  schedule:
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  hassfest:
+    name: Hassfest Validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Hassfest validation
+        uses: home-assistant/actions/hassfest@master

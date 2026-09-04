@@ -16,34 +16,19 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# MOVED OUT of this file, into their own workflows, so each can carry a
+# README badge -- GitHub's badge endpoint addresses workflows, not jobs,
+# so a check buried in a ten-job file is invisible from the front page:
+#
+#   hacs.yml      HACS validation
+#   hassfest.yml  Hassfest validation
+#   typing.yml    mypy --strict  (was the `typing` job below)
+#
+# Same triggers as here, so nothing is checked less often than before,
+# and each has its own concurrency group. Deliberately NOT badged as one
+# combined status for this file: ten jobs means ten unrelated ways to
+# put a red mark on the README.
 jobs:
-  hacs:
-    name: HACS Validation
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-
-      - name: HACS validation
-        uses: hacs/action@main
-        with:
-          category: integration
-
-  hassfest:
-    name: Hassfest Validation
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-
-      - name: Hassfest validation
-        uses: home-assistant/actions/hassfest@master
-
-  # ── Added (session: CI pipeline review) ─────────────────────────────────
-  #
-  # Below this line: four new jobs. None of hacs/hassfest above needed any
-  # changes — same triggers already cover push/PR/nightly/manual for these
-  # too.
 
   # A SECOND COMBINATION, deliberately not a matrix. `requirements-test-frozen.txt`
   # pins Home Assistant 2025.1.4, which is the newest release that installs
@@ -123,7 +108,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: "pip"
@@ -179,7 +164,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: "pip"
@@ -196,43 +181,8 @@ jobs:
       - name: Run ruff check
         run: ruff check .
 
-  typing:
-    name: Typing (mypy --strict)
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-          cache: "pip"
-
-      # mypy needs the same environment as the test suite: it resolves
-      # Home Assistant's own types, and a bare install would report
-      # hundreds of missing-import errors instead of real ones.
-      - name: Install test dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements-test-frozen.txt
-          pip install mypy
-
-      # Same --no-deps reasoning as the test suite job above.
-      - name: Install roombapy-prime (--no-deps)
-        run: |
-          pip install --no-deps --no-cache-dir "roombapy-prime==0.3.1"
-
-      # mypy.ini runs --strict with no disabled error codes. The two
-      # per-module exemptions are for Home Assistant itself and are
-      # explained where they are declared.
-      #
-      # The ratchet script rather than a bare `mypy` call: it fails on
-      # an increase AND on an undeclared decrease, so a fix that lowers
-      # the count has to lower the recorded baseline in the same commit
-      # rather than drifting silently. The baseline is 0.
-      - name: Run mypy
-        run: python scripts/check_typing_baseline.py
+  # The `typing` job lives in typing.yml now, so the strict-typing badge
+  # has a workflow to point at. Same environment, same ratchet script.
 
   translations:
     name: Translation Completeness
@@ -242,7 +192,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -257,7 +207,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: "pip"
@@ -276,7 +226,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -306,7 +256,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
