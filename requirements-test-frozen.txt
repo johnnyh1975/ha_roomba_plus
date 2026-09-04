@@ -41,7 +41,7 @@ envs==1.4
 execnet==2.1.2
 fnv-hash-fast==1.0.2
 fnvhash==0.1.0
-freezegun==1.5.1
+freezegun==1.5.5
 frozenlist==1.8.0
 greenlet==3.5.3
 h11==0.16.0
