@@ -105,7 +105,7 @@ PyYAML==6.0.2
 requests==2.32.3
 requests-mock==1.12.1
 respx==0.21.1
-roombapy==1.9.1
+roombapy==2.0.0
 # NEW (this session): roombapy-prime is DELIBERATELY not listed here.
 # It's a hard, exact-version requirement conflict: this project's own
 # roombapy-prime requires paho-mqtt>=2.0,<3.0 (paho-mqtt 2.x's
