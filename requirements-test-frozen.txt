@@ -90,7 +90,7 @@ pytest-aiohttp==1.0.5
 pytest-asyncio==0.24.0
 pytest-cov==6.0.0
 pytest-github-actions-annotate-failures==0.2.0
-pytest-homeassistant-custom-component==0.13.205
+pytest-homeassistant-custom-component==0.13.361
 pytest-picked==0.5.0
 pytest-socket==0.7.0
 pytest-sugar==1.0.0
@@ -110,7 +110,7 @@ roombapy==1.9.1
 # It's a hard, exact-version requirement conflict: this project's own
 # roombapy-prime requires paho-mqtt>=2.0,<3.0 (paho-mqtt 2.x's
 # CallbackAPIVersion API specifically), but
-# pytest-homeassistant-custom-component==0.13.205 (no newer version
+# pytest-homeassistant-custom-component==0.13.361 (no newer version
 # exists as of this writing) hard-pins paho-mqtt==1.6.1 exactly --
 # not a range, an exact pin, tied to the specific HA core version
 # (2025.1.4) it tests against. There is no single paho-mqtt version
