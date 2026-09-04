@@ -87,7 +87,7 @@ PyRIC==0.1.6.3
 pyroute2==0.9.6
 pytest==8.3.4
 pytest-aiohttp==1.0.5
-pytest-asyncio==0.24.0
+pytest-asyncio==1.4.0
 pytest-cov==6.0.0
 pytest-github-actions-annotate-failures==0.2.0
 pytest-homeassistant-custom-component==0.13.205
