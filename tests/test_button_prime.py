@@ -374,45 +374,47 @@ class TestDockButtons:
 
         assert "stopwashpad" not in {c.command for c in PRIME_DOCK_COMMANDS}
 
-    @pytest.mark.asyncio
-    async def test_buttons_appear_when_the_dock_supports_them(self):
+    def test_buttons_appear_when_the_dock_supports_them(self):
+        # BUILT BY THEIR OWN FUNCTION NOW, not by async_build_prime_buttons.
+        # Dock buttons are the ones whose gate reads a shadow field that
+        # moves, so button.py re-runs this builder on every shadow
+        # instead of once at setup. The gate rule itself is unchanged;
+        # only who calls it, and how often.
         from custom_components.roomba_plus.button_prime import (
             PrimeDockButton,
-            async_build_prime_buttons,
+            build_prime_dock_buttons,
         )
 
-        entities = await async_build_prime_buttons(_entry(dock=True))
+        entities = build_prime_dock_buttons(_entry(dock=True))
 
         assert sum(isinstance(e, PrimeDockButton) for e in entities) == 4
 
-    @pytest.mark.asyncio
-    async def test_a_dock_that_cannot_do_something_gets_no_button(self):
+    def test_a_dock_that_cannot_do_something_gets_no_button(self):
         """A robot without a self-emptying base still reports its own
         capabilities happily -- the DOCK flags are what say whether a
         base is there."""
         from custom_components.roomba_plus.button_prime import (
             PrimeDockButton,
-            async_build_prime_buttons,
+            build_prime_dock_buttons,
         )
 
-        entities = await async_build_prime_buttons(_entry(dock=False))
+        entities = build_prime_dock_buttons(_entry(dock=False))
 
         assert not any(isinstance(e, PrimeDockButton) for e in entities)
 
-    @pytest.mark.asyncio
-    async def test_unknown_capabilities_still_get_buttons(self):
+    def test_unknown_capabilities_still_get_buttons(self):
         """Only an explicit 0 means absent. A robot that has not reported
         its dock yet must not silently lose the controls."""
 
         from custom_components.roomba_plus.button_prime import (
             PrimeDockButton,
-            async_build_prime_buttons,
+            build_prime_dock_buttons,
         )
 
         entry = _entry()
         entry.runtime_data.prime_status_coordinator.data = None
 
-        entities = await async_build_prime_buttons(entry)
+        entities = build_prime_dock_buttons(entry)
 
         assert sum(isinstance(e, PrimeDockButton) for e in entities) == 4
 
@@ -420,11 +422,11 @@ class TestDockButtons:
     async def test_pressing_sends_the_wire_string(self):
         from custom_components.roomba_plus.button_prime import (
             PrimeDockButton,
-            async_build_prime_buttons,
+            build_prime_dock_buttons,
         )
 
         entry = _entry(dock=True)
-        buttons = await async_build_prime_buttons(entry)
+        buttons = build_prime_dock_buttons(entry)
         empty = next(
             b for b in buttons
             if isinstance(b, PrimeDockButton) and b._command.command == "evac"

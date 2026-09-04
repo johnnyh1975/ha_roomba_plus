@@ -10,6 +10,8 @@ from __future__ import annotations
 
 
 import datetime
+
+from homeassistant.util import dt as dt_util
 import pytest
 from custom_components.roomba_plus.mission_store import MissionStore
 from custom_components.roomba_plus.sensor import _completion_rate_30d
@@ -36,7 +38,12 @@ __make_record_seq = 0
 
 
 def _iso(days_ago: float = 0, hour: int = 10) -> str:
-    dt = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days_ago)
+    """Local, not UTC. Anything comparing a record's DATE against
+    `dt_util.now().date()` reads a local date, so a record built in UTC
+    lands on the wrong day whenever the two disagree -- 00:00 to 08:00
+    UTC under HA's pinned US/Pacific test timezone, which includes the
+    00:00 nightly CI run. See test_mission_store._iso()."""
+    dt = dt_util.now() - datetime.timedelta(days=days_ago)
     return dt.replace(hour=hour, minute=0, second=0, microsecond=0).isoformat()
 
 

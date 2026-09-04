@@ -680,3 +680,118 @@ class TestZonesReachTheNameCacheToo:
         cached = {"Kitchen": "MAP-A/10"}
 
         assert not self._should_refetch(cached, flat, seen={"10", "11"})
+
+
+class TestTheDockWorkingIsNotTheRobotCleaning:
+    """@chairstacker (#70, third round): the tracker showed "Docked" at
+    the end of a mission and then flipped back to "Cleaning" minutes
+    later, with the robot in its dock throughout.
+
+    His CSV export dates every step. Mission ends 13:59:45 `hmPostMsn`,
+    tracker "Docked". The dock then empties the bin and washes the pad --
+    phase `padWash` at 14:01:15. The tracker reads "Cleaning" at
+    14:04:34.358, two milliseconds before the `fin` mission event and
+    171 ms before the vacuum entity goes `docked`.
+
+    TWO CAUSES, and each test here covers one:
+
+      * `padWash` was in none of the phase sets, so it fell through to
+        the active branch -- which means "the robot is out somewhere on
+        a mission", the one thing it was not.
+      * `state` reads `prime_status_coordinator` while only
+        `prime_coordinator` was subscribed, so the entity wrote nothing
+        when the phase changed and everything when the map bundle
+        happened to refresh. That is the three-minute gap, and why the
+        flip looked untethered to any event.
+    """
+
+    def _tracker(self, phase: str):
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.device_tracker import (
+            RoombaDeviceTracker,
+        )
+        from custom_components.roomba_plus.models import ConnectionType
+
+        tracker = RoombaDeviceTracker.__new__(RoombaDeviceTracker)
+        tracker.vacuum = None
+        tracker._prime_rooms = {}
+        tracker.hass = MagicMock()
+        tracker.hass.config.language = "en"
+        tracker._config_entry = MagicMock()
+        tracker._config_entry.runtime_data = SimpleNamespace(
+            connection_type=ConnectionType.CLOUD_ONLY,
+            prime_status_coordinator=SimpleNamespace(
+                data={"ro-currentstate": {"cleanMissionStatus": {"phase": phase}}}
+            ),
+            prime_live_rooms=None,
+        )
+        return tracker
+
+    def test_a_pad_wash_is_not_cleaning(self):
+        """The exact phase from the export."""
+        assert self._tracker("padWash").state != "Cleaning"
+
+    def test_pad_dry_and_refill_are_not_either(self):
+        for phase in ("padDry", "refill"):
+            assert self._tracker(phase).state != "Cleaning", phase
+
+    def test_the_dock_task_state_says_the_dock_is_busy(self):
+        """Not folded into "Docked": a pad wash runs for minutes and is
+        audible, so a state saying only "Docked" invites the opposite
+        report."""
+        assert self._tracker("padWash").state == "Dock busy"
+
+    def test_a_real_mission_still_reads_as_active(self):
+        """The negative control that matters. A gate wide enough to
+        catch `padWash` must not also swallow a running mission."""
+        assert self._tracker("run").state == "Cleaning"
+
+
+class TestTheTrackerListensWhereItReads:
+    """`state` derives from `prime_status_coordinator`. Subscribing only
+    to `prime_coordinator` meant a phase change wrote nothing until an
+    unrelated coordinator fired -- a three-minute lag in the export, and
+    a rendered phase that had already ended.
+    """
+
+    @pytest.mark.asyncio
+    async def test_it_subscribes_to_the_status_coordinator(self):
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.device_tracker import (
+            RoombaDeviceTracker,
+        )
+        from custom_components.roomba_plus.models import ConnectionType
+
+        status = MagicMock()
+        status.async_add_listener.return_value = lambda: None
+        rooms = MagicMock()
+        rooms.async_add_listener.return_value = lambda: None
+
+        tracker = RoombaDeviceTracker.__new__(RoombaDeviceTracker)
+        tracker._prime_rooms = {}
+        tracker.hass = MagicMock()
+        tracker.async_on_remove = MagicMock()
+        tracker._config_entry = MagicMock()
+        tracker._config_entry.runtime_data = SimpleNamespace(
+            connection_type=ConnectionType.CLOUD_ONLY,
+            prime_status_coordinator=status,
+            prime_coordinator=rooms,
+        )
+
+        with patch.object(
+            RoombaDeviceTracker, "_async_refresh_prime_rooms"
+        ), patch(
+            "custom_components.roomba_plus.entity.IRobotEntity"
+            ".async_added_to_hass"
+        ):
+            await RoombaDeviceTracker.async_added_to_hass(tracker)
+
+        assert status.async_add_listener.called, (
+            "the coordinator `state` reads from was never subscribed"
+        )
+        assert rooms.async_add_listener.called, (
+            "the room-name listener must survive; it answers a different "
+            "question"
+        )

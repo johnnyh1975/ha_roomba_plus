@@ -86,8 +86,27 @@ TYPICAL_TIMELINE = {
 
 
 def _iso(days_ago: float = 0, hour: int = 10) -> str:
-    """Return an ISO datetime string N days in the past."""
-    dt = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days_ago)
+    """Return an ISO datetime string N days in the past, in HA's LOCAL
+    timezone.
+
+    NOT UTC, and the difference is a real bug this hid for months.
+    `MissionStore.clean_streak()` compares against `dt_util.now().date()`
+    -- local. Building the record in UTC and comparing against a local
+    date means that whenever the two disagree about which day it is, the
+    record lands on the wrong side of the boundary and the streak counts
+    one day off.
+
+    HA's test environment pins US/Pacific, so the two disagree from
+    00:00 to 08:00 UTC -- eight hours a day, and the nightly CI run is
+    scheduled at 00:00 UTC, inside the window. The failure was invisible
+    only because every other run happened at a different hour.
+
+    The irony is that clean_streak()'s own comment is about exactly this
+    class of bug: @chairstacker reported a streak of 0 just after
+    midnight. The production code was fixed; these helpers kept the
+    assumption.
+    """
+    dt = dt_util.now() - datetime.timedelta(days=days_ago)
     return dt.replace(hour=hour, minute=0, second=0, microsecond=0).isoformat()
 
 
@@ -124,7 +143,8 @@ def _ts(unix_ts: int) -> str:
 
 
 def _iso_v180_sensors(days_ago: float = 0, hour: int = 10) -> str:
-    dt = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days_ago)
+    """Local, for the same reason as _iso() above."""
+    dt = dt_util.now() - datetime.timedelta(days=days_ago)
     return dt.replace(hour=hour, minute=0, second=0, microsecond=0).isoformat()
 
 
@@ -157,7 +177,8 @@ async def _store_with(*records) -> MissionStore:
 
 
 def _iso_v191_fixes(days_ago: float = 0, hour: int = 10) -> str:
-    dt = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days_ago)
+    """Local, for the same reason as _iso() above."""
+    dt = dt_util.now() - datetime.timedelta(days=days_ago)
     return dt.replace(hour=hour, minute=0, second=0, microsecond=0).isoformat()
 
 
@@ -1431,37 +1452,30 @@ class TestMergeCloudFieldsB1Ext:
 
     @freeze_time("2026-07-10 12:00:00")
     def test_query_by_day_completed_count_after_b1ext_correction(self):
-        """End-to-end repro of the field bug (980 OG, originally observed
-        26.06.2026): before B1-EXT, summary showed completed:3 for a day
-        that had one error_battery and one cancelled_by_user mission,
-        because both local records had result='completed' and were never
-        corrected.
+        """End-to-end repro of the field bug (980 OG, 26.06.2026):
+        before B1-EXT, summary showed completed:3 for a day that had one
+        error_battery and one cancelled_by_user mission, because both local
+        records had result='completed' and were never corrected.
 
         After B1-EXT fires via backfill_from_cloud(), query_by_day() must
         show completed:0 for that day (the third missing mission is a
         separate RECORDS-UNION issue, not tested here).
 
-        v3.5.1 bug-hunt fix (real CI failure): the original field
-        timestamps were hardcoded as absolute Unix time (26.06.2026,
-        07:01/09:08 UTC) with a fixed `days=28` query window — correct when
-        written, but guaranteed to silently start failing once that fixed
-        date aged past 28 days before "now" on whatever day CI happens to
-        run. Anchored to `dt_util.utcnow()` instead, preserving the
-        original recording's exact internal structure (the 1020s/9360s
-        mission durations and the 7646s gap between the two end-times) —
-        only the calendar anchor is now relative, not the values that
-        actually matter for the assertions.
-        """
-        from homeassistant.util import dt as dt_util
+        REAL FLAKY-TEST BUG FIXED (found via a live CI failure, not just
+        theoretical): query_by_day(days=28) computes its cutoff from
+        dt_util.now() -- genuinely real, correct production behavior for
+        "last N days from now", nothing wrong with the underlying code.
+        But this test's own data is pinned to a REAL historic date from
+        the field archive (2026-06-26) with NO frozen time at all, so it
+        only ever passed while the real wall-clock date happened to be
+        within 28 days of that fixed date -- which stopped being true the
+        moment CI ran on/after ~2026-07-24. Freezing time to a fixed date
+        safely mid-window (14 days after the archive date, comfortably
+        clear of both edges) makes this deterministic forever, independent
+        of whenever this test actually runs."""
         store = MissionStore()
-        # 5 days ago, comfortably inside the 28-day window regardless of
-        # when CI runs — same margin approach as the api_views.py fix this
-        # same bug-hunt round.
-        anchor = (dt_util.utcnow() - datetime.timedelta(days=5)).replace(
-            hour=7, minute=1, second=15, microsecond=0
-        )
-        ts1 = int(anchor.timestamp())        # was 07:01 UTC on a fixed date
-        ts2 = ts1 + 7646                     # was 09:08 UTC — same gap as original
+        ts1 = 1782457275  # 07:01 UTC
+        ts2 = 1782464921  # 09:08 UTC — both from the real field archive
         store._records = [
             {
                 "id": f"m_{ts1 - 1020}",
@@ -1495,9 +1509,10 @@ class TestMergeCloudFieldsB1Ext:
         assert store._records[0]["result"] == "error"
         assert store._records[1]["result"] == "cancelled"
 
-        day = dt_util.as_local(anchor).date()
+        from datetime import date, timezone
+        day = date(2026, 6, 26)
         summaries = store.query_by_day(days=28)
-        assert day in summaries, f"must have a summary for {day}"
+        assert day in summaries, "must have a summary for 2026-06-26"
         s = summaries[day]
         assert s.completed == 0, (
             f"field bug: query_by_day counted {s.completed} completed "
