@@ -212,18 +212,30 @@ async def async_setup_entry(
             # is one log entry and one colour-coded tile instead of two
             # controls that show only that they can be pressed.
             #
-            # Same dock-capability contract as the buttons: None means
-            # unknown and still gets the control; only an explicit 0
-            # means the dock cannot dry.
-            from .prime_coordinator import _dock_reports_itself  # noqa: PLC0415
+            # Same dock-capability contract as the buttons, but the
+            # source changed: `dock.known` decided this and describes
+            # dock identity, not pad hardware -- and flips transiently
+            # after a user dock command (@AlakazipLabs). `dock_supports`
+            # asks for evidence instead, and the switch is added
+            # whenever that evidence turns up rather than only at setup.
+            from .prime_coordinator import (  # noqa: PLC0415
+                _dock_reports_itself,
+                add_prime_entities_when_available,
+                get_prime_capability_flags,
+            )
 
-            if _dock_reports_itself(config_entry) and not (
-                dock_cap is not None
-                and getattr(dock_cap, "pad_dry", None) == 0
-            ):
-                async_add_entities([
-                    PrimePadDrySwitch(data.blid, config_entry),
-                ])
+            def _build_pad_dry_switch() -> list[SwitchEntity]:
+                _, live_dock_cap = get_prime_capability_flags(config_entry)
+                if not _dock_reports_itself(config_entry):
+                    return []
+                if (live_dock_cap is not None
+                        and getattr(live_dock_cap, "pad_dry", None) == 0):
+                    return []
+                return [PrimePadDrySwitch(data.blid, config_entry)]
+
+            add_prime_entities_when_available(
+                config_entry, async_add_entities, _build_pad_dry_switch
+            )
 
         # SETTING SWITCHES. Capability-gated on the same "None means
         # unknown, only explicit 0 means absent" contract the carpet

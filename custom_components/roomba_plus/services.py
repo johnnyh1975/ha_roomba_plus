@@ -246,6 +246,38 @@ async def _async_warn_if_swallowed(
     if (status.get("cycle") or "none") != "none":
         return
 
+    # BLIND SPOT, MEASURED AND NOT FIXED: a robot that was ALREADY in an
+    # open cycle when the command was sent.
+    #
+    # The check above asks "did a mission start". That is the right
+    # question only when none was running. Send a region-targeted start
+    # to a PAUSED robot -- cycle `clean`, phase `pause` -- and the cycle
+    # is open before the command and open after it, so this returns and
+    # says nothing whether the command took or was swallowed. Called
+    # directly with the three states, an idle swallow warns while a
+    # paused swallow is indistinguishable from success.
+    #
+    # The paused refusal is real and is not about localisation.
+    # @AlakazipLabs preregistered the experiment and ran it: mission 488,
+    # paused at 16:06:28, region-5 `start` at 16:06:38 swallowed with no
+    # echo and no motion, `resume` at 16:09:18 taken instantly -- and the
+    # mission closed `lmk 4, h_squal 48`, its best localisation reading
+    # in weeks. A well-localised paused robot still refuses. What is left
+    # is mission state plus dock contact.
+    #
+    # WHY THIS IS NOT FIXED HERE. Detecting it needs a success signature
+    # to compare against, and nobody has one. Cycle, mission number and
+    # phase are all unchanged across a swallowed region start from
+    # pause; presumably an ACCEPTED one moves the phase off `pause`, but
+    # no accepted case has ever been recorded -- every logged region
+    # start from pause was refused. Guessing the signature would produce
+    # a warning that fires on the success path too, which is worse than
+    # the current silence.
+    #
+    # Note also that the field evidence is raw-MQTT, from a tester's own
+    # stack. That this service's own path is equally blind follows from
+    # the code, not from a report.
+
     not_ready = status.get("notReady")
     _LOGGER.warning(
         "%s was accepted by the robot but no mission started within %ds "

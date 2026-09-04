@@ -1929,7 +1929,35 @@ def reports_local_pose(state: dict[str, Any]) -> bool:
     serializer and the robot's response builder. What is NOT resolved:
     the units and coordinate frame of `xyt` (explicitly not assumed to
     match the 900-series millimetres-from-dock), and the exact local MQTT
-    topic. Nothing has been verified against hardware.
+    topic.
+
+    FIRST HARDWARE RESULT, AND IT IS NEGATIVE (@AlakazipLabs, i3 on
+    daredevil 2.6.0). Six candidate topics -- `req`, `rrtp`,
+    `rrtp/request`, `local/rrtp/request`, `mission/rrtp/request`,
+    `$aws/things/<blid>/mission/rrtp/request` -- one fixed body, single
+    local slot, subscribed `#`. All six silent: no `data`, no new topic,
+    no `reqId` echo.
+
+    Controlled and instrumented, which is what makes it worth recording:
+
+      * `cmd` carrying the same body reflected in 240 ms, `reqId` back
+        inside `state.reported`, so publishes from that session reach a
+        handler and the silences are not a dead link.
+      * At the PACKET level the only inbound frame after each send was
+        `PINGRESP`. No `PUBACK`, no `DISCONNECT`, nothing undecoded --
+        which rules out both "the broker drops the connection on a
+        denied publish" and "there is a reply we fail to parse".
+
+    WHAT IT DOES NOT SETTLE: a topic-scoped ACL silently dropping these
+    topics is indistinguishable on the wire from a robot that never had
+    the path. QoS 1 does not separate them either -- brokers differ on
+    whether a denied publish still gets its PUBACK.
+
+    SCOPE, deliberately narrow: one `reqType` (`current`), one `conType`
+    (`local`), robot docked, one firmware, n=1. So this says daredevil
+    does not answer these six names under these conditions. It does not
+    locate the generation boundary -- that needs the same probe on an
+    S9+, j7+, Braava m6 or an i7 on lewis, and nobody has run it.
 
     So a robot returning False here is behaving correctly and may still
     have a position available on request. This function answers "is there

@@ -214,11 +214,42 @@ rules:
 
   # ── Platinum ─────────────────────────────────────────────────────────────
   async-dependency:
-    status: done
-    comment: roombapy is async-capable via paho-MQTT thread. Cloud via aiohttp.
+    status: todo
+    comment: >
+      NOT MET, and this said `done` with the comment "roombapy is
+      async-capable via paho-MQTT thread". A sync library driven from a
+      thread is not an async dependency -- that is what the rule exists
+      to exclude.
+
+      Measured rather than argued: the pinned `roombapy==1.9.1` defines
+      **61 functions and zero `async def`**. The Prime side is genuinely
+      async (aiohttp throughout), so this fails on the Classic half
+      only.
+
+      The same file records the same mistake one rule up: strict-typing
+      said `done` before anyone had run mypy, and the first run reported
+      565 errors and eleven runtime bugs. A self-declared scale is worth
+      what its last check was worth.
+
+      CLEARS IN 4.1, as one step rather than as extra work. roombapy
+      2.0's asynchronous rewrite is released (2.0.1) and this project
+      contributed it; adopting it is the 4.1 milestone, and this rule
+      falls with it. Until then Platinum is one rule short and the
+      manifest correctly says `gold`.
   inject-websession:
     status: done
-    comment: Cloud API uses async_get_clientsession(hass) — no standalone sessions.
+    comment: >
+      Both dependencies take the Home Assistant session; neither creates
+      its own. The Classic cloud path uses
+      `async_get_clientsession(hass)` in `__init__.py`,
+      `cloud_coordinator.py` and both config-flow entry points -- and
+      `roombapy_prime.RestClient.__init__` takes `session` as its first
+      REQUIRED parameter, so a Prime client physically cannot be built
+      with a standalone one.
+
+      The single `aiohttp.ClientSession()` in the tree is in
+      roombapy-prime's own `diagnostics.py`, a standalone tool outside
+      the integration's path.
   migration:
     status: done
     comment: >

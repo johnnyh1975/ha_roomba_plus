@@ -2230,6 +2230,35 @@ class PrimeReadinessSensor(_PrimeCurrentStateSensorBase):
             code_int = int(code)
         except (TypeError, ValueError):
             return None
+        # WIRE OR INDEX? UNDECIDED, AND THIS LOOKS UP THE RAW VALUE.
+        #
+        # The Classic path does NOT do this: sensor_helpers.py calls
+        # decode_not_ready(raw) first, because the iRobot app maps wire
+        # values above 10 down by three (`values()[jsonInt - 3]`). Wire
+        # 15 is index 12, "Insufficient charge"; index 15 is "In cloud
+        # upgrade". Two different states, three apart, and above 10
+        # every value is ambiguous without knowing which is held.
+        #
+        # NOT "FIXED" BY ADDING THE DECODE, because that would be a
+        # guess in the other direction. roombapy_prime's own
+        # RobotReadinessState says outright that whether Prime sends the
+        # index or the offset wire value is not established -- and Prime
+        # has a third range again, its own readiness values running in
+        # the 200s (`readiness_state` 231/251/284 in the app's error
+        # specs, a field capture with `condNotReady: [234]`), which
+        # matches neither reading.
+        #
+        # WHAT WOULD SETTLE IT: one Prime capture with a `notReady`
+        # between 11 and 79 whose real cause is known from the robot's
+        # behaviour at the time. @AlakazipLabs did exactly that on
+        # CLASSIC -- wire 15 across seven `dock` sends at 6-15% battery,
+        # the seventh aborting on error 46, which is "Insufficient
+        # charge" (index 12) and cannot be "In cloud upgrade" (index
+        # 15). The same observation on a Prime robot decides this line.
+        #
+        # Until then an unrecognised code renders as "unrecognized",
+        # which is honest, while a wrong decode would render a confident
+        # wrong label.
         label = READINESS_STATE_LABELS.get(code_int)
         return state_slug(label) if label else "unrecognized"
 

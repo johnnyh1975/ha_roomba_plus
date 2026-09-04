@@ -182,6 +182,23 @@ async def async_setup_entry(
         if entities:
             async_add_entities(entities)
 
+        # DOCK BUTTONS SEPARATELY, because they are the ones whose gate
+        # depends on a shadow field that moves. Same rule as before --
+        # `dock.known`, then an explicit `dock.cap` 0 -- but re-read on
+        # every shadow instead of only here, and add-only, so a `known`
+        # that dips false takes no button away and one that returns
+        # needs no reload.
+        from .button_prime import build_prime_dock_buttons  # noqa: PLC0415
+        from .prime_coordinator import (  # noqa: PLC0415
+            add_prime_entities_when_available,
+        )
+
+        add_prime_entities_when_available(
+            config_entry,
+            async_add_entities,
+            lambda: build_prime_dock_buttons(config_entry),
+        )
+
         # FAVOURITE BUTTONS FOLLOW THE LIST, and until now they did not.
         #
         # Buttons were built exactly once, here. A favourite created in

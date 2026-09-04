@@ -48,7 +48,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import roomba_reported_state
-from .const import MISSION_END_PHASES, POSE_POINT_CM_TO_MM
+from .const import DOCK_TASK_PHASES, MISSION_END_PHASES, POSE_POINT_CM_TO_MM
 from .entity import IRobotEntity
 from .structural_failures import record_failure, record_success
 from .models import ConnectionType, RoombaConfigEntry
@@ -95,6 +95,22 @@ _ERROR_LABEL: dict[str, str] = {
     "nl": "Fout",
     "pl": "Błąd",
     "pt": "Erro",
+}
+
+#: Shown while the DOCK is working and the robot is sitting in it --
+#: `padWash`, `padDry`, `refill`. The robot is docked; it is simply not
+#: idle. "Docked" alone would be true but would hide a two-to-five
+#: minute activity the owner can hear happening, and "Cleaning" was
+#: actively wrong, which is what this fixes (@chairstacker).
+_DOCK_TASK_LABEL: dict[str, str] = {
+    "de": "Dock arbeitet",
+    "en": "Dock busy",
+    "es": "Base en marcha",
+    "fr": "Base en action",
+    "it": "Base al lavoro",
+    "nl": "Dock bezig",
+    "pl": "Stacja pracuje",
+    "pt": "Base a trabalhar",
 }
 
 _ACTIVE_FALLBACK_LABEL: dict[str, str] = {
@@ -251,6 +267,34 @@ class RoombaDeviceTracker(IRobotEntity, TrackerEntity):
         if phase in MISSION_END_PHASES or phase == "":
             return self._label(_DOCKED_LABEL)
 
+        # THE DOCK WORKING IS NOT THE ROBOT CLEANING.
+        #
+        # @chairstacker (#70, third round): the tracker showed "Docked"
+        # at the end of a mission and then flipped back to "Cleaning" a
+        # few minutes later, with the robot sitting in its dock the
+        # whole time. His CSV export dates it exactly -- mission ends
+        # 13:59:45 `hmPostMsn`, tracker "Docked"; the dock then empties
+        # the bin and washes the pad, phase `padWash` at 14:01:15; the
+        # tracker reads "Cleaning" at 14:04:34.358, two milliseconds
+        # before the `fin` event and 171 ms before the vacuum entity
+        # goes `docked`.
+        #
+        # `padWash` is in none of the sets above, so it fell through to
+        # the active branch -- and the active branch means "the robot is
+        # somewhere, doing a mission", which is the one thing it is not.
+        #
+        # DOCK_TASK_PHASES already existed for exactly this, in const.py,
+        # carrying the note "Not consumed anywhere yet". It is consumed
+        # now.
+        #
+        # Its own label rather than folding into _DOCKED_LABEL: the
+        # robot IS docked, but a pad wash runs for minutes and is
+        # audible, so a state that says only "Docked" invites the
+        # opposite report -- "it is clearly doing something and the
+        # tracker says nothing".
+        if phase in DOCK_TASK_PHASES:
+            return self._label(_DOCK_TASK_LABEL)
+
         # A STUCK ROBOT IS NOT CLEANING, and saying so for days is worse
         # than saying nothing.
         #
@@ -300,6 +344,32 @@ class RoombaDeviceTracker(IRobotEntity, TrackerEntity):
             if coordinator is not None:
                 self.async_on_remove(
                     coordinator.async_add_listener(self._handle_prime_update)
+                )
+
+            # LISTEN TO WHAT `state` READS. It reads
+            # `prime_status_coordinator`; only `prime_coordinator` was
+            # subscribed above, which refreshes the map bundle and the
+            # room names on a slow cycle. So the phase could change and
+            # this entity would not write anything until the OTHER
+            # coordinator happened to fire.
+            #
+            # That is the delay in @chairstacker's export, and it is why
+            # he described the flip as happening "within 1-5 minutes"
+            # rather than at a moment tied to anything: phase went
+            # `padWash` at 14:01:15 and this entity did not move until
+            # 14:04:34 -- by which point it rendered a phase that was
+            # already over.
+            #
+            # Both listeners are kept. They answer different questions:
+            # one supplies the room NAMES, the other the phase the state
+            # is derived from, and an entity that has names but a stale
+            # phase is exactly what produced the report.
+            status_coordinator = getattr(data, "prime_status_coordinator", None)
+            if status_coordinator is not None:
+                self.async_on_remove(
+                    status_coordinator.async_add_listener(
+                        self.async_write_ha_state
+                    )
                 )
 
     @callback

@@ -484,15 +484,31 @@ async def async_build_prime_buttons(
     # carrying a `cap` object where this one carries nothing. That would
     # mean `known: false` is about identity rather than capability, and
     # this dock is merely mute rather than passive.
-    if _dock_reports_itself(config_entry):
-        for command in PRIME_DOCK_COMMANDS:
-            # None means unknown, only an explicit 0 means absent -- so a
-            # robot that has not reported its dock yet still gets the
-            # buttons rather than silently losing them.
-            if (dock_cap is not None
-                    and getattr(dock_cap, command.dock_cap_attr, None) == 0):
-                continue
-            entities.append(PrimeDockButton(data.blid, config_entry, command))
+    #
+    # THAT HAS NOW HAPPENED. @chairstacker's dock carries a full `cap`
+    # object -- it is where DockCapabilities came from -- and the
+    # platform shadow fixtures show `known` travelling with `id`, `pn`,
+    # `fwVer`, `hwRev`, `varID`: dock identity, nothing about pads.
+    # @AlakazipLabs then showed `known` is not even stable, flipping
+    # false within seconds of a user `dock` command and returning on its
+    # own minutes later.
+    #
+    # SO THE TEST MOVED, FOR THE PAD BUTTONS ONLY. `dock_supports` reads
+    # `dock.cap` first and falls back to whether the dock has ever
+    # reported `pwState` / `pdState` -- a dock that reports a pad-wash
+    # state washes pads, and nothing else needs to declare it.
+    #
+    # EVAC KEEPS THE OLD TEST, deliberately. The dock object carries no
+    # evac state key to fall back on, so there is no evidence to read
+    # when `dock.cap` is absent -- which is the common case, absent in
+    # all seven platform shadows. Switching it would have removed the
+    # empty-bin button from every robot whose dock stays quiet. What it
+    # does gain is the add-only wrapper below: a `known` that dips false
+    # can no longer take the button away, and one that comes back adds
+    # it without a reload. The evidence @utkjmitch assembled for HIS
+    # dock (no evac keys in rw-settings, `evac: null` across 1,293
+    # timeline events) is mission-history-shaped, not dock-shaped, and
+    # belongs in a separate change.
 
     # Locate is always offered; favourite buttons are optional.
     #
@@ -519,6 +535,24 @@ async def async_build_prime_buttons(
     entities.extend(build_prime_favorite_buttons(config_entry))
 
     return entities
+
+
+def build_prime_dock_buttons(config_entry: RoombaConfigEntry) -> list[ButtonEntity]:
+    """Dock buttons this dock has evidence for; re-read on every shadow."""
+    data = config_entry.runtime_data
+    built: list[ButtonEntity] = []
+    for command in PRIME_DOCK_COMMANDS:
+        # None means unknown, only an explicit 0 means absent -- so a
+        # robot that has not reported its dock yet still gets the
+        # buttons rather than silently losing them.
+        if not _dock_reports_itself(config_entry):
+            continue
+        _, live_dock_cap = get_prime_capability_flags(config_entry)
+        if (live_dock_cap is not None
+                and getattr(live_dock_cap, command.dock_cap_attr, None) == 0):
+            continue
+        built.append(PrimeDockButton(data.blid, config_entry, command))
+    return built
 
 
 def _raw_favorite_is_for(favorite: dict[str, Any], blid: str) -> bool:

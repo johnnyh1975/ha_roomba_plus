@@ -227,7 +227,11 @@ async def async_setup_entry(
     # edge-coverage/learning/zone sensors -- all cloud_coordinator-based,
     # a different coordinator entirely) applies to a CLOUD_ONLY entry.
     if data.connection_type is ConnectionType.CLOUD_ONLY:
-        from .prime_coordinator import _dock_reports_itself, get_prime_capability_flags
+        from .prime_coordinator import (  # noqa: PLC0415
+            _dock_reports_itself,
+            add_prime_entities_when_available,
+            get_prime_capability_flags,
+        )
 
         cap, dock_cap = get_prime_capability_flags(config_entry)
 
@@ -304,33 +308,11 @@ async def async_setup_entry(
         # buttons, on a robot that can do neither. Same family as the
         # a17 Max 705 fix and a different trigger -- there the cap object
         # was present and the key absent, here the object never comes.
-        dock_known = _dock_reports_itself(config_entry)
-        # NOT CONVERTED TO created-but-disabled, and PR #76 proposes it.
-        #
-        # Seventeen tests encode this contract, and the strongest is
-        # field-derived: @utkjmitch's Y351020 reports
-        # `dock: {"known": false}` and got pad wash and pad dry sensors
-        # for a dock that has neither. `known: false` is the robot
-        # stating there is no such dock -- not an incomplete shadow.
-        #
-        # A disabled entity is still an entity in the registry. For a
-        # dock that does not exist, that is a row the owner has to
-        # understand and dismiss, which is what the original fix
-        # removed. The disabled pattern fits a capability a robot HAS
-        # and reports off; it does not fit hardware that is absent.
         # NOT GATED. Every robot reports `cleanMissionStatus.initiator`,
         # and a household that only ever starts from the app still gets
         # a useful answer -- the sensor exists to distinguish `schedule`
         # from `alexa` from `dockBtn`, not to detect a capability.
         entities.append(PrimeJobInitiatorSensor(data.blid, config_entry))
-        # `dock_cap is None` INSTEAD OF THE SEPARATE FLAG. `dock_cap_known`
-        # holds exactly that answer, but under its own name -- so the
-        # short-circuit is correct and narrows nothing. Asking the value
-        # directly says the same thing and carries the type.
-        if dock_known and (dock_cap is None or dock_cap.pad_wash not in (0, None)):
-            entities.append(PrimePadWashStatusSensor(data.blid, config_entry))
-        if dock_known and (dock_cap is None or dock_cap.pad_dry not in (0, None)):
-            entities.append(PrimePadDryStatusSensor(data.blid, config_entry))
         # PRESENCE, not capability. See PrimeDockTankLevelSensor's
         # docstring: which docks report tankLvl is not decidable from
         # dock.cap, and a sensor reading "unknown" forever is worse than
@@ -439,6 +421,45 @@ async def async_setup_entry(
             )
 
         async_add_entities(entities)
+
+        # DOCK-DERIVED SENSORS, added as evidence arrives rather than
+        # once at setup. These were gated on `dock.known`, which
+        # describes dock identity and is not stable -- @AlakazipLabs
+        # logged 15 true-to-false flips, 11 of them within seconds of a
+        # user `dock` command, returning on their own minutes later. A
+        # restart inside one of those windows cost a real AutoWash dock
+        # its pad sensors until the next reload fell elsewhere.
+        def _build_dock_sensors() -> list[SensorEntity]:
+            # THE GATE RULE IS UNCHANGED, on purpose. `dock.known` still
+            # decides, and a present `dock.cap` still suppresses only on
+            # an explicit 0. An evidence-based rule was tried here --
+            # fall back to whether the dock reports `pwState`/`pdState`
+            # when `dock.cap` is absent -- and withdrawn: no capture in
+            # this repo shows either key arriving at rest, so it would
+            # have silently removed the pad sensors from every dock that
+            # simply has not washed yet. @jouwdan's evac-only dock is
+            # also the reminder that `dock.cap` is NOT usually absent in
+            # the field, whatever the vendor platform samples suggest.
+            #
+            # WHAT CHANGED IS WHEN THIS RUNS. Read once at setup, a
+            # `known` that dips false -- which @AlakazipLabs logged 15
+            # times, 11 within seconds of a user dock command -- cost a
+            # real dock its sensors until the next reload. Re-read on
+            # every shadow, with add-only semantics, the dip costs
+            # nothing and the recovery needs no reload.
+            _, live_dock_cap = get_prime_capability_flags(config_entry)
+            if not _dock_reports_itself(config_entry):
+                return []
+            built: list[SensorEntity] = []
+            if live_dock_cap is None or live_dock_cap.pad_wash not in (0, None):
+                built.append(PrimePadWashStatusSensor(data.blid, config_entry))
+            if live_dock_cap is None or live_dock_cap.pad_dry not in (0, None):
+                built.append(PrimePadDryStatusSensor(data.blid, config_entry))
+            return built
+
+        add_prime_entities_when_available(
+            config_entry, async_add_entities, _build_dock_sensors
+        )
 
         # Consumable parts: one sensor per part the ROBOT reports,
         # discovered rather than hard-coded.

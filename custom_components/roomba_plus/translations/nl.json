@@ -1428,7 +1428,31 @@
         "name": "Uitschakelen (experimenteel)"
       },
       "map_training": {
-        "name": "Actie – Start kaartronde"
+        "name": "Actie – Kaart trainen starten"
+      },
+      "prime_favorite": {
+        "name": "Favoriet – {favorite}"
+      },
+      "prime_locate": {
+        "name": "Lokaliseren"
+      },
+      "prime_empty_bin": {
+        "name": "Bak legen"
+      },
+      "prime_wash_pad": {
+        "name": "Doek wassen"
+      },
+      "prime_stop_pad_dry": {
+        "name": "Drogen stoppen"
+      },
+      "prime_start_pad_dry": {
+        "name": "Drogen starten"
+      },
+      "reset_side_brush": {
+        "name": "Onderhoud – Vervanging zijborstel bevestigen"
+      },
+      "reset_clean_base_bag": {
+        "name": "Onderhoud – Vervanging Clean Base-zak bevestigen"
       }
     },
     "switch": {

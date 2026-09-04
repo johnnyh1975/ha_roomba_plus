@@ -46,10 +46,11 @@ import time as _time
 
 import asyncio
 import logging
+from collections.abc import Callable
 from typing import Any, Final
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
@@ -207,6 +208,33 @@ class PrimeCoordinator(DataUpdateCoordinator[MissionTimelineReport]):
                 # No irbt topic prefix on this account -- the topic
                 # cannot be built. Not an error and not worth retrying:
                 # the prefix arrives with the login or not at all.
+                #
+                # AND IT SILENCES MORE THAN THIS WATCHER. The same
+                # `deployment["irbtTopics"]` value builds the live map
+                # and the mission timeline, which back off to five
+                # minutes rather than failing visibly -- @chairstacker
+                # saw every live-map counter at zero mid-mission with no
+                # error anywhere. So a `debug` line here is the third
+                # quiet symptom of one missing field, not a local
+                # detail.
+                #
+                # NOT ESCALATED TO A REPAIR ISSUE, yet, because the
+                # value is legitimately optional: it is
+                # deployment-dependent (v028/v029/v030 all seen) and the
+                # vendor's own app carries `kEmptyIRBTTopicPrefix` as an
+                # expected cause. Telling an owner their setup is broken
+                # when iRobot's own client treats absence as normal
+                # would be worse than the current silence.
+                #
+                # WHAT WOULD SETTLE IT: the app reads this from a
+                # second, robot-scoped source that this integration does
+                # not call -- `GET /v1/robot/discover/{blid}`, which
+                # returns both prefixes directly. roombapy-prime only
+                # calls `/v1/discover/endpoints?country_code=`. If an
+                # account missing the login-side value has it there,
+                # this stops being optional and becomes a fallback worth
+                # building. Nobody has checked, because it needs an
+                # account where the prefix is actually absent.
                 _LOGGER.debug(
                     "roomba_plus: no irbt topic prefix, not watching rejections"
                 )
@@ -1024,6 +1052,56 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         else:
             record_success("mission phase update")
 
+
+
+@callback
+def add_prime_entities_when_available(
+    config_entry: Any,
+    async_add_entities: Any,
+    build: Callable[[], list[Any]],
+) -> None:
+    """Add the entities `build()` asks for, now and on every later shadow.
+
+    THE BUG THIS FIXES IS THE TIMING, NOT THE TEST. Dock-derived entities
+    were created once, in `async_setup_entry`, from whatever the shadow
+    happened to say at that instant. `get_prime_capability_flags` says as
+    much in its own docstring -- the vendor app rebuilds `cap`, `digiCap`
+    and `dockCap` on EVERY shadow change, while this integration read
+    them at connect and never again.
+
+    So a restart landing in the wrong moment cost a robot its pad-wash
+    and pad-dry entities until the next reload happened to fall
+    elsewhere. Swapping a plain charge dock for an AutoWash dock did the
+    same, in the other direction.
+
+    ADD-ONLY, DELIBERATELY. Nothing here removes an entity, and that is
+    what makes a flickering source harmless: a `dock.cap` that arrives
+    late adds late, a `known` that dips to false removes nothing,
+    a `pwState` that only appears after the first wash heals itself.
+    Removal needs an authoritative list saying a thing is GONE, which
+    the dock object does not provide -- an empty dock block and a failed
+    fetch look identical. button.py's favourite sync does remove, and
+    can, because the cloud returns the full favourites list.
+
+    The `known` set holds unique_ids rather than entities so a rebuilt
+    entity object for the same id is not added twice.
+    """
+    known: set[str] = set()
+
+    @callback
+    def _sync() -> None:
+        new = [e for e in build() if str(e.unique_id) not in known]
+        if new:
+            known.update(str(e.unique_id) for e in new)
+            async_add_entities(new)
+
+    _sync()
+
+    coordinator = getattr(
+        config_entry.runtime_data, "prime_status_coordinator", None
+    )
+    if coordinator is not None:
+        config_entry.async_on_unload(coordinator.async_add_listener(_sync))
 
 
 def _dock_reports_itself(config_entry: Any) -> bool:
