@@ -69,6 +69,31 @@ If automatic pairing fails entirely: → [Retrieve iRobot credentials manually](
 
 ---
 
+**Setup fails and a rest980 server is still running**
+
+The robot accepts **one local connection at a time**, and the rest980
+server holds it on port 8883 for as long as its container runs. Roomba+
+then cannot connect at all, and the setup error says nothing about why.
+
+**Stop the rest980 container before setting Roomba+ up.** The
+roomba_rest980 *integration* can stay installed — that is what the room
+import reads from, and it is a different thing from the server.
+
+**But do the HACS restart first, while the container is still running.**
+roomba_rest980 builds its room entities during setup from data it fetches
+off the server; with the container stopped its config entry fails to load
+and those entities never appear, so there is nothing left to import from.
+Existing entities are safe — the room data sits on the entity and survives
+the server going away. It is only the next start that cannot recreate them.
+See [Migration](../README.md#from-roomba_rest980).
+
+This is the same constraint behind the entry below and behind "mqtt
+slot" errors: **one slot, and whoever holds it wins.** A robot that
+refuses a connection is usually not broken; something else is already
+connected to it.
+
+---
+
 **The iRobot app loses connection when Roomba+ is running**
 
 Expected — the robot only allows one local MQTT connection. Either disable continuous mode in Settings → Roomba+ → Configure → Connection settings, or accept that the iRobot app will use the cloud path while Roomba+ is connected locally.

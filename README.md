@@ -438,11 +438,41 @@ Two things also appear automatically, no setup needed: your cleaning schedule as
 
 ### From roomba_rest980
 
-1. **Keep roomba_rest980 installed for now** — don't remove it yet
-2. Add Roomba+ — it connects directly to the robot without middleware
-3. Enter your iRobot credentials in the setup flow to restore cloud zone names and favorites
-4. Settings → Devices → Roomba+ → Configure → **Import rooms from roomba_rest980** (only shown when an existing roomba_rest980 installation is detected on a Smart Map robot) — reads room names straight from its `select.*` entities and fills in any of your Roomba+ room labels that aren't set yet. Never overwrites a name you've already assigned through Roomba+'s own naming workflow.
-5. Once you're happy with the result, remove roomba_rest980 and stop the rest980 Docker container
+> ⚠️ **"rest980" means two things here, and they need opposite treatment.**
+> The **integration** stays installed — that is where your room names come
+> from. The **server container** (often `rest980_j7`) has to be **stopped
+> before you set Roomba+ up**, because a robot accepts exactly one local
+> connection at a time and the server holds it on port 8883. Roomba+ then
+> cannot connect at all, and nothing in the error says why.
+
+**Assumed at the start:** roomba_rest980 is working, with its room entities
+present in Home Assistant. That is the normal state if you are migrating —
+it is what you are migrating *from* — and it matters for one reason: those
+entities exist because the container was running the last time Home Assistant
+started. Keeping them alive through the steps below is what the second note
+is about.
+
+1. Install Roomba+ through HACS and **restart Home Assistant** — but don't set it up yet
+2. **Stop the rest980 server container.** Leave the integration installed
+3. Set Roomba+ up — it connects directly to the robot without middleware
+4. Enter your iRobot credentials in the setup flow to restore cloud zone names and favorites
+5. Settings → Devices → Roomba+ → Configure → **Import rooms from roomba_rest980** (only shown when an existing roomba_rest980 installation is detected on a Smart Map robot) — reads room names straight from its `select.*` entities and fills in any of your Roomba+ room labels that aren't set yet. Never overwrites a name you've already assigned through Roomba+'s own naming workflow.
+6. Once you're happy with the result, remove the roomba_rest980 integration and delete the container
+
+> ⚠️ **Do not restart Home Assistant between steps 2 and 5.**
+>
+> roomba_rest980 builds its room entities during setup, from data it fetches
+> off the server. With the container stopped, its config entry fails to load
+> and those entities never appear — so the import in step 5 would find
+> nothing to import.
+>
+> Once they exist they are safe: the room data sits on the entity itself and
+> does not go away when the server stops. It is only the **next start** that
+> cannot recreate them. That is why the HACS restart comes first, while the
+> container is still running.
+>
+> If you restart by accident, start the container again, restart Home
+> Assistant, and pick up from step 2.
 
 ### Multiple robots
 
