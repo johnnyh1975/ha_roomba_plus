@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import ast
 import json
+import pathlib
 from pathlib import Path
 
 import pytest
@@ -99,7 +100,28 @@ def test_platform_translation_keys_have_icons(module: str, domain: str) -> None:
     icons = _load_icons()
     registry = icons.get(domain, {})
     used = _translation_keys_in_source(module)
-    missing = sorted(k for k in used if k not in registry and k not in _EXPLICIT_ICON_KEYS)
+    # EXCEPTION KEYS ARE NOT ENTITY KEYS. A platform module may raise
+    # ServiceValidationError with a translation_key, and those live under
+    # "exceptions" in strings.json -- they name an error message, not an
+    # entity, and an icon for one would mean nothing.
+    #
+    # Read from strings.json rather than listed here, so a new exception
+    # needs no edit to this test and a key that is NOT an exception still
+    # has to have its icon.
+    exception_keys = set(
+        json.loads(
+            (
+                pathlib.Path(__file__).parent.parent
+                / "custom_components" / "roomba_plus" / "strings.json"
+            ).read_text(encoding="utf-8")
+        ).get("exceptions", {})
+    )
+    missing = sorted(
+        k for k in used
+        if k not in registry
+        and k not in _EXPLICIT_ICON_KEYS
+        and k not in exception_keys
+    )
     assert not missing, (
         f"{domain} icons.json missing entries for {missing} "
         f"(translation keys used in {module})"
