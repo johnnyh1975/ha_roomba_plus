@@ -1453,6 +1453,9 @@
       },
       "reset_clean_base_bag": {
         "name": "Manutenção – Confirmar substituição de saco da Clean Base"
+      },
+      "prime_clean_zone": {
+        "name": "Limpar a divisão escolhida"
       }
     },
     "switch": {
@@ -1651,6 +1654,9 @@
           "19": "19",
           "20": "20"
         }
+      },
+      "prime_zone_select": {
+        "name": "Escolher divisão ou zona"
       }
     },
     "image": {
@@ -1939,9 +1945,6 @@
     "unknown_rooms": {
       "message": "Divisão(ões) desconhecida(s) para {entity_id}: {rooms}. Divisões conhecidas: {known}."
     },
-    "favorite_prime_only": {
-      "message": "run_favorite só está disponível para robôs V4/Prime"
-    },
     "favorite_not_found": {
       "message": "Nenhum favorito executável com o ID {favorite_id}"
     },
@@ -1974,6 +1977,15 @@
     },
     "zone_name_not_found": {
       "message": "Um ou mais nomes de zona não foram encontrados no mapa."
+    },
+    "favorite_needs_cloud": {
+      "message": "Os favoritos ficam guardados na sua conta iRobot, por isso são precisas credenciais da nuvem. Adicione-as nas opções da integração e eles aparecerão."
+    },
+    "no_zone_selected": {
+      "message": "Não há nenhuma divisão selecionada. Escolha uma no seletor."
+    },
+    "no_room_cleaning": {
+      "message": "Este robô não suporta limpeza por divisões."
     }
   },
   "selector": {

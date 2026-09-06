@@ -1453,6 +1453,9 @@
       },
       "reset_clean_base_bag": {
         "name": "Onderhoud – Vervanging Clean Base-zak bevestigen"
+      },
+      "prime_clean_zone": {
+        "name": "Gekozen kamer schoonmaken"
       }
     },
     "switch": {
@@ -1651,6 +1654,9 @@
           "19": "19",
           "20": "20"
         }
+      },
+      "prime_zone_select": {
+        "name": "Kamer of zone kiezen"
       }
     },
     "image": {
@@ -1939,9 +1945,6 @@
     "unknown_rooms": {
       "message": "Onbekende kamer(s) voor {entity_id}: {rooms}. Bekende kamers: {known}."
     },
-    "favorite_prime_only": {
-      "message": "run_favorite is alleen beschikbaar voor V4/Prime-robots"
-    },
     "favorite_not_found": {
       "message": "Geen uitvoerbare favoriet met id {favorite_id}"
     },
@@ -1974,6 +1977,15 @@
     },
     "zone_name_not_found": {
       "message": "Een of meer zonenamen zijn niet op de kaart gevonden."
+    },
+    "favorite_needs_cloud": {
+      "message": "Favorieten staan in je iRobot-account, dus hiervoor zijn cloudgegevens nodig. Voeg ze toe in de integratie-opties en ze verschijnen."
+    },
+    "no_zone_selected": {
+      "message": "Er is geen kamer gekozen. Kies er eerst een in de keuzelijst."
+    },
+    "no_room_cleaning": {
+      "message": "Deze robot ondersteunt geen kamerreiniging."
     }
   },
   "selector": {

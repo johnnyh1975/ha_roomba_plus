@@ -53,10 +53,13 @@ from .calendar_modes import match_mode
 from .const import DOMAIN
 from .structural_failures import record_failure, record_success
 from .classic_schedule_write import (
+    MODERN_KEY,
     ScheduleFormatError,
     legacy_with_entry,
     legacy_without_day,
     reject_unsupported,
+    schedule2_with_entry,
+    schedule2_without_day,
     schedule_key,
 )
 from .entity import IRobotEntity
@@ -294,11 +297,31 @@ class RoombaScheduleCalendar(IRobotEntity, CalendarEntity):
         super().__init__(roomba, blid, config_entry)
         self._attr_unique_id = f"{self.robot_unique_id}_schedule"
 
-    def _schedule_state(self) -> tuple[str | None, dict[str, Any]]:
-        """The robot's schedule and the key it lives under."""
+    def _schedule_state(self) -> tuple[str | None, dict[str, Any] | list[Any]]:
+        """The robot's schedule and the key it lives under.
+
+        THE TYPE FOLLOWS THE KEY, and getting that wrong made this
+        calendar silently unwritable on every i/s/j robot. `cleanSchedule`
+        is an object; `cleanSchedule2` is an ARRAY. This used to coerce
+        anything that was not a dict to `{}`, so a modern robot's entries
+        were discarded on read and a legacy-shaped object was written back
+        under the modern key.
+
+        Nothing reported it because both outcomes look the same to a
+        user: the robot rejects the type outright (`'cleanSchedule2' is
+        NOT of type: ARRAY`), or it accepts it and our own reader then
+        finds no entries. Either way the schedule does not change and
+        there is no error.
+
+        Provable without a robot, which is how it was found: feed a real
+        `cleanSchedule2` through the writer and back through the parser
+        and the entry count goes from one to zero.
+        """
         reported = self.vacuum_state or {}
         key = schedule_key(reported)
         current = reported.get(key) if key else None
+        if key == MODERN_KEY:
+            return key, current if isinstance(current, list) else []
         return key, current if isinstance(current, dict) else {}
 
     def _weekday_of(self, event: dict[str, Any]) -> tuple[int, int, int]:
@@ -331,6 +354,37 @@ class RoombaScheduleCalendar(IRobotEntity, CalendarEntity):
             roomba.set_preference, key, schedule
         )
 
+    def _with_entry(
+        self, key: str, current: Any, *, weekday: int, hour: int, minute: int
+    ) -> Any:
+        """The schedule with one weekday set, in this robot's own format.
+
+        ONE BRANCH, USED BY ALL THREE WRITE PATHS. Creating, moving and
+        re-enabling a cleaning are the same operation on the stored
+        schedule, and letting each pick a format independently is how
+        one of them came to pick the wrong one for years.
+        """
+        if key == MODERN_KEY:
+            return schedule2_with_entry(
+                current if isinstance(current, list) else [],
+                weekday=weekday, hour=hour, minute=minute,
+            )
+        return legacy_with_entry(
+            current if isinstance(current, dict) else {},
+            weekday=weekday, hour=hour, minute=minute,
+        )
+
+    def _without_day(self, key: str, current: Any, weekday: int) -> Any:
+        """The schedule with one weekday removed, in this robot's format."""
+        if key == MODERN_KEY:
+            return schedule2_without_day(
+                current if isinstance(current, list) else [], weekday
+            )
+        return legacy_without_day(
+            current if isinstance(current, dict) else {}, weekday
+        )
+
+
     async def async_create_event(self, **kwargs: Any) -> None:
         """Adds a weekly cleaning on one weekday.
 
@@ -353,8 +407,8 @@ class RoombaScheduleCalendar(IRobotEntity, CalendarEntity):
                 name=kwargs.get("summary"),
             )
             weekday, hour, minute = self._weekday_of(kwargs)
-            schedule = legacy_with_entry(
-                current, weekday=weekday, hour=hour, minute=minute
+            schedule = self._with_entry(
+                key, current, weekday=weekday, hour=hour, minute=minute
             )
         except ScheduleFormatError as err:
             raise ServiceValidationError(str(err)) from err
@@ -418,9 +472,9 @@ class RoombaScheduleCalendar(IRobotEntity, CalendarEntity):
 
             previous = _weekday_from_uid(uid)
             if previous is not None and previous != weekday:
-                current = legacy_without_day(current, previous)
-            schedule = legacy_with_entry(
-                current, weekday=weekday, hour=hour, minute=minute
+                current = self._without_day(key, current, previous)
+            schedule = self._with_entry(
+                key, current, weekday=weekday, hour=hour, minute=minute
             )
         except ScheduleFormatError as err:
             raise ServiceValidationError(str(err)) from err
@@ -441,7 +495,7 @@ class RoombaScheduleCalendar(IRobotEntity, CalendarEntity):
                 "That schedule entry cannot be identified on the robot."
             )
         try:
-            schedule = legacy_without_day(current, weekday)
+            schedule = self._without_day(key, current, weekday)
         except ScheduleFormatError as err:
             raise ServiceValidationError(str(err)) from err
         await self._async_write(schedule, key)

@@ -1453,6 +1453,9 @@
       },
       "reset_clean_base_bag": {
         "name": "Mantenimiento – Confirmar sustitución de bolsa de la Clean Base"
+      },
+      "prime_clean_zone": {
+        "name": "Limpiar la habitación seleccionada"
       }
     },
     "switch": {
@@ -1651,6 +1654,9 @@
           "19": "19",
           "20": "20"
         }
+      },
+      "prime_zone_select": {
+        "name": "Seleccionar habitación o zona"
       }
     },
     "image": {
@@ -1939,9 +1945,6 @@
     "unknown_rooms": {
       "message": "Habitación(es) desconocida(s) para {entity_id}: {rooms}. Habitaciones conocidas: {known}."
     },
-    "favorite_prime_only": {
-      "message": "run_favorite solo está disponible para robots V4/Prime"
-    },
     "favorite_not_found": {
       "message": "No hay ningún favorito ejecutable con el ID {favorite_id}"
     },
@@ -1974,6 +1977,15 @@
     },
     "zone_name_not_found": {
       "message": "No se encontraron uno o varios nombres de zona en el mapa."
+    },
+    "favorite_needs_cloud": {
+      "message": "Los favoritos se guardan en tu cuenta de iRobot, así que hacen falta las credenciales de la nube. Añádelas en las opciones de la integración y aparecerán."
+    },
+    "no_zone_selected": {
+      "message": "No hay ninguna habitación seleccionada. Elige una en el selector."
+    },
+    "no_room_cleaning": {
+      "message": "Este robot no admite limpieza por habitaciones."
     }
   },
   "selector": {

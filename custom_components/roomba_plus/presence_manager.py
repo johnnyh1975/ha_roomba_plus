@@ -358,6 +358,29 @@ class PresenceManager:
             )
             return
 
+        # THIS ONE WORKS, AND THAT IS NOT OBVIOUS FROM THE PRIME SIDE.
+        #
+        # On Prime, `schedHold` is written, echoed back, and ignored --
+        # the key appears exactly once in that firmware, as a table
+        # entry nothing reads. Which is why the Prime branch above goes
+        # through the schedule containers instead.
+        #
+        # Classic is the opposite. The `scheduler` binary carries a full
+        # handler: a type check, a value check, its own acceptance log
+        # line ("schedHold set to %d"), persistence to the schedule
+        # keystore and a reload at boot. The consumer sits in the
+        # trigger path itself, between the throttle checks and the point
+        # a mission would start -- "Scheduler is on hold". Identical in
+        # lewis and ruby, with no platform gating of the kind that
+        # exists for the wet/dry setting.
+        #
+        # WHAT A TEST OF THIS MUST NOT LOOK AT: the iRobot app. The app
+        # shows the schedule CONFIGURATION, and holding does not change
+        # it -- the entries stay and stay enabled. The hold state
+        # surfaces only in the robot's own schedule dump. Checking the
+        # app is what made this look broken on the Prime side, where it
+        # then turned out to be broken for an entirely different reason.
+        # The real test is whether a due entry fires.
         state = roomba.master_state.get("state", {}).get("reported", {})
         if "schedHold" not in state:
             _LOGGER.warning(

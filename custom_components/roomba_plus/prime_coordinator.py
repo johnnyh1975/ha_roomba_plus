@@ -1105,13 +1105,42 @@ def add_prime_entities_when_available(
 
 
 def _dock_reports_itself(config_entry: Any) -> bool:
-    """Whether the robot claims to have a dock at all.
+    """Whether the robot has IDENTIFIED a dock.
 
-    `dock.known` is a statement, not a gap: a robot on a plain charge
-    dock reports `{"known": false, "error": 0, "fwVer": ""}` with no
-    `cap` object. Read as "capability unknown", that produced pad wash
-    and pad dry entities on a robot that can do neither (@utkjmitch,
-    a19).
+    Not "whether a dock exists", and not "where it is" -- both of which
+    this docstring used to imply by calling `known` "a statement, not a
+    gap".
+
+    WHAT THE FIELD TRAVELS WITH. @Thonno's i7+ reports `known: true`
+    alongside `pn`, `id`, `fwVer`, `hwRev` and `varID`: part number,
+    firmware, hardware revision. Identity, with no position anywhere
+    near it. The seven platform shadows agree -- where `known` is true
+    the object carries some of that set, and where it is false the
+    object is bare.
+
+    @utkjmitch's robot reports `{"known": false, "error": 0,
+    "fwVer": ""}`: an identity slot that exists and is empty. His dock
+    is real -- an auto-empty dock with a bag -- and the robot simply has
+    not identified it. Reading that as "capability unknown" produced pad
+    wash and pad dry entities on a dock that can do neither (a19), which
+    is why this gate exists at all.
+
+    AND IT MOVES. @AlakazipLabs logged 15 true-to-false flips across
+    24,900 messages: 11 within seconds of a user `dock` command, median
+    4 s, returning on their own after 95 s, 18 min and 34 min with no
+    dock contact, and 0 of 35 self-docks flipping it. So this answers a
+    question about the present moment, not a property of the hardware.
+
+    USED AS A GATE ANYWAY, because nothing better exists. `dock.cap` is
+    the right source and is usually absent. The dock part number looked
+    like a third option and is not: of the seven platform shadows
+    exactly one carries a real `pn`, three report the literal string
+    "unknown", and three omit the field.
+
+    What makes an unstable gate survivable is that callers only ever ADD
+    entities and never remove them -- see
+    `add_prime_entities_when_available`. A dip to false costs nothing; a
+    return needs no reload.
 
     Absent entirely -- no dock key, or the shadow has not arrived --
     stays True: that IS a gap, and failing open is right for it. Only an

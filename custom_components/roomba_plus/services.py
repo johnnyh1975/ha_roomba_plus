@@ -1809,16 +1809,39 @@ async def async_handle_run_favorite(call: ServiceCall) -> None:
         config_entry = hass.config_entries.async_get_entry(entry.config_entry_id or "")
         if config_entry is None:
             continue
-        if config_entry.runtime_data.connection_type is not ConnectionType.CLOUD_ONLY:
-            raise ServiceValidationError(
-                "run_favorite is only available for V4/Prime robots",
-                translation_domain=DOMAIN,
-                translation_key="favorite_prime_only",
+        # CLASSIC ROBOTS CAN DO THIS TOO, and always could -- the
+        # favourite BUTTONS have worked there since v3.x, sending the
+        # stored command definition verbatim. Only the service was
+        # scoped to Prime, so a Classic household could press a
+        # favourite by hand and not from an automation. There was no
+        # structural reason; it had simply not been extended.
+        #
+        # It matters more than convenience: a favourite carries its own
+        # `pmap_id`, so it reaches a room on a map the robot is not
+        # currently using -- the one thing neither the zone button nor
+        # `clean_room` managed. @ScenicSystemsLLC captured the iRobot
+        # app doing exactly that on a Classic robot, with the inactive
+        # map's id, and the robot went straight there.
+        if config_entry.runtime_data.connection_type is ConnectionType.CLOUD_ONLY:
+            from .button_prime import async_run_favorite  # noqa: PLC0415
+
+            sent = await async_run_favorite(config_entry, favorite_id)
+        else:
+            if not config_entry.runtime_data.has_cloud:
+                raise ServiceValidationError(
+                    "Favourites are stored in your iRobot account, so this "
+                    "needs cloud credentials. Add them in the integration "
+                    "options and the favourites will appear.",
+                    translation_domain=DOMAIN,
+                    translation_key="favorite_needs_cloud",
+                )
+            from .button import async_run_classic_favorite  # noqa: PLC0415
+
+            sent = await async_run_classic_favorite(
+                hass, config_entry, favorite_id
             )
 
-        from .button_prime import async_run_favorite  # noqa: PLC0415
-
-        if not await async_run_favorite(config_entry, favorite_id):
+        if not sent:
             # Deleted since the attribute was read, or carrying no
             # commands. Raised rather than logged: a favourite that
             # silently does nothing is the failure this whole feature

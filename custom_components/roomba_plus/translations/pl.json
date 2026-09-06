@@ -1453,6 +1453,9 @@
       },
       "reset_clean_base_bag": {
         "name": "Konserwacja – Potwierdź wymianę worka stacji Clean Base"
+      },
+      "prime_clean_zone": {
+        "name": "Posprzątaj wybrany pokój"
       }
     },
     "switch": {
@@ -1651,6 +1654,9 @@
           "19": "19",
           "20": "20"
         }
+      },
+      "prime_zone_select": {
+        "name": "Wybierz pokój lub strefę"
       }
     },
     "image": {
@@ -1939,9 +1945,6 @@
     "unknown_rooms": {
       "message": "Nieznane pomieszczenia dla {entity_id}: {rooms}. Znane pomieszczenia: {known}."
     },
-    "favorite_prime_only": {
-      "message": "run_favorite jest dostępne tylko dla robotów V4/Prime"
-    },
     "favorite_not_found": {
       "message": "Brak wykonywalnego ulubionego o identyfikatorze {favorite_id}"
     },
@@ -1974,6 +1977,15 @@
     },
     "zone_name_not_found": {
       "message": "Nie znaleziono jednej lub więcej nazw stref na mapie."
+    },
+    "favorite_needs_cloud": {
+      "message": "Ulubione są zapisane na Twoim koncie iRobot, więc potrzebne są dane logowania do chmury. Dodaj je w opcjach integracji, a ulubione się pojawią."
+    },
+    "no_zone_selected": {
+      "message": "Nie wybrano pokoju. Najpierw wybierz go z listy."
+    },
+    "no_room_cleaning": {
+      "message": "Ten robot nie obsługuje sprzątania pokoi."
     }
   },
   "selector": {

@@ -114,6 +114,7 @@ async def async_setup_entry(
             PRIME_SELECTS,
             PrimeMapSelect,
             PrimeSettingSelect,
+            PrimeZoneSelect,
         )
 
         from .select_prime import (  # noqa: PLC0415
@@ -193,6 +194,9 @@ async def async_setup_entry(
         # fails for a reason unrelated to automations.
         async_add_entities([
             PrimeMapSelect(data.blid, config_entry),
+            # Rooms and zones in one list, with the companion clean
+            # button -- the pair Classic has and Prime did not.
+            PrimeZoneSelect(data.blid, config_entry),
             # Asked for by a user: the app offers vacuum / mop / both
             # when starting a clean, and this had a suction control and
             # nothing for the mode.

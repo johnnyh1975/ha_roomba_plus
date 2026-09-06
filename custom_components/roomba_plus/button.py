@@ -724,6 +724,25 @@ class RepeatLastMissionButton(IRobotEntity, ButtonEntity):
         return "lastCommand" in new_state
 
 
+def pick_zone_selection(candidates: list[Any]) -> Any | None:
+    """Which zone-select entity's selection to act on.
+
+    MODULE LEVEL SO IT CAN BE TESTED. It lived inside `async_press`,
+    where reaching it needs a Home Assistant instance -- so the first
+    test written for this fix reimplemented the rule instead of calling
+    it, passed against the reverted bug, and proved nothing.
+
+    Prefer the active map, do not require it: with a selection on
+    several maps the active one wins, and with one only on an inactive
+    map it is used rather than discarded. `_is_active_map` is set from
+    v1.5.1 onwards, so its absence means "assume active".
+    """
+    return next(
+        (e for e in candidates if getattr(e, "_is_active_map", True)),
+        candidates[0] if candidates else None,
+    )
+
+
 class SmartZoneButton(IRobotEntity, ButtonEntity):
     """Button: clean the zone selected in SmartZoneSelect.
 
@@ -762,6 +781,34 @@ class SmartZoneButton(IRobotEntity, ButtonEntity):
         # Rather than hardcoding uids, we match on robot_unique_id prefix and
         # presence of selected_region_id — works for both entity types.
         prefix = self.robot_unique_id
+
+        # PREFER THE ACTIVE MAP, DO NOT REQUIRE IT.
+        #
+        # This used to read `if is_active and entity.selected_region_id`,
+        # which is the comment's "prefer" written as "require". With one
+        # select entity per map, a household whose chosen room sits on a
+        # map the robot is not currently using had its selection thrown
+        # away here -- the loop fell through to the `lastCommand`
+        # fallback below and cleaned whatever ran last.
+        #
+        # @ScenicSystemsLLC hit exactly that: Hallway selected on the
+        # Second Floor entity, state confirmed updated, button pressed,
+        # and the robot cleaned Bedroom. It did what it was told; it was
+        # told the wrong thing.
+        #
+        # Two passes keep the intent. When several entities hold a
+        # selection the active map still wins, which is what "prefer"
+        # was for; when only an inactive one does, it is used instead of
+        # discarded. Nothing changes for a single-map household.
+        #
+        # NOT SETTLED: whether a robot accepts a region command for a
+        # map it does not have loaded. The gate carried no note of a
+        # hardware reason and the command names its own `pmap_id`, so
+        # this is very likely fine -- but nobody has watched a robot
+        # answer one. If it refuses, the failure is now a robot-side
+        # refusal with a real error rather than a silent clean of the
+        # wrong room, which is the better of the two.
+        candidates: list[Any] = []
         for platform in ep.async_get_platforms(self.hass, "roomba_plus"):
             for entity in platform.entities.values():
                 uid = getattr(entity, "unique_id", "") or ""
@@ -769,18 +816,16 @@ class SmartZoneButton(IRobotEntity, ButtonEntity):
                     continue
                 if not hasattr(entity, "selected_region_id"):
                     continue
-                # For CloudSmartZoneSelect, prefer the active map's entity.
-                # active_map attr is set in v1.5.1+ — fall back gracefully.
-                is_active = getattr(entity, "_is_active_map", True)
-                if is_active and entity.selected_region_id:
-                    region_id = entity.selected_region_id
-                    # Also read pmap_id directly from cloud entity if available
-                    pmap_info = getattr(entity, "selected_pmap_info", {})
-                    if pmap_info.get("pmap_id"):
-                        pmap_id = pmap_info["pmap_id"]
-                    break
-            if region_id:
-                break
+                if entity.selected_region_id:
+                    candidates.append(entity)
+
+        chosen = pick_zone_selection(candidates)
+        if chosen is not None:
+            region_id = chosen.selected_region_id
+            # Also read pmap_id directly from cloud entity if available
+            pmap_info = getattr(chosen, "selected_pmap_info", {})
+            if pmap_info.get("pmap_id"):
+                pmap_id = pmap_info["pmap_id"]
 
         # pmap_id resolution priority:
         #   1. Read directly from CloudSmartZoneSelect.selected_pmap_info (above)
@@ -859,6 +904,80 @@ class SmartZoneButton(IRobotEntity, ButtonEntity):
         await self.hass.async_add_executor_job(
             self.vacuum.send_command, "start", params
         )
+
+
+async def async_run_classic_favorite(
+    hass: HomeAssistant, config_entry: RoombaConfigEntry, favorite_id: str
+) -> bool:
+    """Run a saved favourite on a Classic robot. Sent, or not.
+
+    THE SAME PAYLOAD THE FAVOURITE BUTTON SENDS, reachable from an
+    automation. The button has always worked here; only the
+    `run_favorite` service was scoped to Prime, so a Classic household
+    could press a favourite by hand and not from a script.
+
+    WHY THIS MATTERS BEYOND CONVENIENCE. A favourite carries its own
+    `pmap_id` and `region_id`, fixed when it was created. It therefore
+    reaches a room on a map the robot is NOT currently using -- which is
+    the one thing neither the zone button nor `clean_room` could do.
+
+    Field-captured off the wire (@ScenicSystemsLLC): the iRobot app
+    sent `command: start` with `favorite_id`, the inactive map's
+    `pmap_id` and one region, and the Classic robot drove straight to
+    that room. So cross-map region commands are not a hardware limit at
+    all -- something this project had assumed without checking.
+    """
+    data = config_entry.runtime_data
+    roomba = getattr(data, "roomba", None)
+    coordinator = getattr(data, "cloud_coordinator", None)
+    if roomba is None or coordinator is None or coordinator.data is None:
+        return False
+
+    from .button_prime import _raw_favorite_is_for  # noqa: PLC0415
+
+    for favorite in coordinator.data.get("favorites", []) or []:
+        if str(favorite.get("favorite_id", "")) != str(favorite_id):
+            continue
+        # PER ROBOT, NOT PER ACCOUNT. `/user/favorites` returns the whole
+        # household, and running another robot's favourite on this one
+        # would send it somewhere its map does not describe.
+        if not _raw_favorite_is_for(favorite, data.blid):
+            continue
+        command_defs = favorite.get("commanddefs") or []
+        if not command_defs:
+            return False
+        if len(command_defs) > 1:
+            # Same limitation as the button, and the same reasoning:
+            # real app sample data expresses multi-region cleaning as one
+            # entry with a nested `regions` array, so a second entry is
+            # unconfirmed territory rather than a normal case.
+            _LOGGER.warning(
+                "run_favorite: favourite %s has %d command definitions -- "
+                "only the first is sent", favorite_id, len(command_defs),
+            )
+        await _send_favorite(hass, roomba, command_defs[0])
+        return True
+    return False
+
+
+async def _send_favorite(
+    hass: HomeAssistant, roomba: Any, cmd: dict[str, Any]
+) -> None:
+    """Publish one favourite command definition verbatim.
+
+    HASS IS PASSED IN, not read off the config entry. `ConfigEntry` has
+    no `hass` attribute; reading one raises AttributeError on a real
+    entry, and a version of the room-cleaning factory did exactly that
+    -- the vacuum entity vanished for a tester because the exception
+    landed in a property Home Assistant evaluates while registering it.
+    A guard test in this repository caught the same mistake here before
+    it shipped.
+    """
+    await hass.async_add_executor_job(
+        roomba.send_command,
+        cmd.get("command", "start"),
+        {k: v for k, v in cmd.items() if k != "command"},
+    )
 
 
 class FavoriteButton(IRobotEntity, ButtonEntity):

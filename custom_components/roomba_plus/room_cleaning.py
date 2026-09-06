@@ -968,6 +968,20 @@ class ClassicRoomCleaning(RoomCleaningBackend):
         self._config_entry = config_entry
         self._hass = hass
         self._pmap_by_region: dict[str, str] = {}
+        #: region id -> wire region type ("rid" or "zid").
+        #:
+        #: A ZONE IS NOT A ROOM ON THE WIRE, and this sent every region
+        #: as "rid". The robot's own command schema enumerates
+        #: `["rid", "zid", "wid", "tag"]` (ruby firmware), so a zone sent
+        #: as a room is wrong against the vendor contract -- and room and
+        #: zone ids are numbered per map, so the id very likely names a
+        #: real but different region.
+        #:
+        #: The Prime backend already picks the type from an id prefix;
+        #: Classic ids arrive bare, so the source has to be remembered
+        #: while the list is built. Fourth repair in this project to have
+        #: reached one of two sibling classes and not the other.
+        self._type_by_region: dict[str, str] = {}
 
         #: The local robot, narrowed once for this whole class.
         #:
@@ -1062,6 +1076,7 @@ class ClassicRoomCleaning(RoomCleaningBackend):
         # Classic needs beyond a region id is its map, and it already
         # sits right here.
         self._pmap_by_region = {}
+        self._type_by_region = {}
         rooms: dict[str, str] = {}
 
         zone_data: dict[str, Any] = self._config_entry.options.get(CONF_SMART_ZONE_DATA, {})
@@ -1073,14 +1088,53 @@ class ClassicRoomCleaning(RoomCleaningBackend):
 
         coordinator = self._data.cloud_coordinator
         if coordinator is not None and coordinator.data is not None:
-            for source in (coordinator.regions or [], coordinator.zones or []):
+            for source, region_type in (
+                (coordinator.regions or [], "rid"),
+                (coordinator.zones or [], "zid"),
+            ):
+                for item in source:
+                    if not (item.get("id") and item.get("name")):
+                        continue
+                    entries.append(
+                        (str(item["id"]), item["name"], str(item.get("pmap_id") or ""))
+                    )
+                    self._type_by_region[str(item["id"])] = region_type
+
+            # ROOMS ON THE OTHER MAPS TOO, added last on purpose.
+            #
+            # `coordinator.regions` returns the ACTIVE map only, and
+            # deliberately: two maps sharing a room name would otherwise
+            # produce a silent clean on the wrong floor. That protection
+            # is right and stays -- but it also meant a room existing
+            # only on another map could not be named at all, and
+            # `clean_room` answered "unknown room" for a room the robot
+            # knows perfectly well.
+            #
+            # @ScenicSystemsLLC hit it with a bathroom-only map trained
+            # for spot cleaning: after using it, every room on his real
+            # Second Floor map became unreachable by name.
+            #
+            # LAST, so the collision rule is unchanged. The loop below
+            # keeps the FIRST entry for a name, and the active map's
+            # rooms are already in `entries` by now -- so a duplicate
+            # name still resolves to the active map, exactly as before.
+            # What changes is only the case that used to have no answer.
+            for pmap_id, names in (coordinator.regions_by_pmap or {}).items():
+                if pmap_id == coordinator.active_pmap_id:
+                    continue
                 entries += [
-                    (str(item["id"]), item["name"], str(item.get("pmap_id") or ""))
-                    for item in source
-                    if item.get("id") and item.get("name")
+                    (str(rid), name, str(pmap_id))
+                    for rid, name in names.items()
+                    if rid and name
                 ]
 
         for rid, name, pmap_id in entries:
+            # FIRST ONE WINS. `rooms[name] = rid` overwrote, so the last
+            # entry decided -- which put the non-active maps in charge
+            # the moment they were added above. Order carries the
+            # priority here, and it has to be read that way.
+            if name in rooms:
+                continue
             rooms[name] = rid
             self._pmap_by_region[rid] = pmap_id
         return rooms
@@ -1220,7 +1274,23 @@ class ClassicRoomCleaning(RoomCleaningBackend):
             "regions": [
                 {
                     "region_id": rid,
-                    "type": "rid",
+                    # ZONES GO OUT AS "zid". Everything used to go out
+                    # as "rid" -- see `_type_by_region` for why that is
+                    # wrong against the robot's own schema rather than
+                    # merely inconsistent with the Prime path.
+                    #
+                    # Defaults to "rid" for an id whose source is not
+                    # known: that is the previous behaviour, and it is
+                    # the right fallback because rooms are the common
+                    # case and an id reaching here without having gone
+                    # through the room list is most likely one a caller
+                    # supplied directly.
+                    # `getattr` because tests -- and any caller that
+                    # builds this backend without __init__ -- reach
+                    # `clean_rooms` without the mapping existing. An
+                    # AttributeError here would turn a missing lookup
+                    # into a failed clean.
+                    "type": getattr(self, "_type_by_region", {}).get(rid, "rid"),
                     "params": {
                         "noAutoPasses": no_auto,
                         # THE CLEANING MODE, when the user has expressed

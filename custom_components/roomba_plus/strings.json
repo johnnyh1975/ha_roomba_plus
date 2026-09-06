@@ -1460,6 +1460,9 @@
       },
       "reset_clean_base_bag": {
         "name": "Maintenance – Confirm Clean Base bag replacement"
+      },
+      "prime_clean_zone": {
+        "name": "Clean selected room"
       }
     },
     "switch": {
@@ -1658,6 +1661,9 @@
           "19": "19",
           "20": "20"
         }
+      },
+      "prime_zone_select": {
+        "name": "Select room or zone"
       }
     },
     "image": {
@@ -1941,9 +1947,6 @@
     "unknown_rooms": {
       "message": "Unknown room(s) for {entity_id}: {rooms}. Known rooms: {known}."
     },
-    "favorite_prime_only": {
-      "message": "run_favorite is only available for V4/Prime robots"
-    },
     "favorite_not_found": {
       "message": "No runnable favorite with id {favorite_id}"
     },
@@ -1976,6 +1979,15 @@
     },
     "zone_name_not_found": {
       "message": "One or more zone names were not found on the map."
+    },
+    "favorite_needs_cloud": {
+      "message": "Favourites are stored in your iRobot account, so this needs cloud credentials. Add them in the integration options and the favourites will appear."
+    },
+    "no_zone_selected": {
+      "message": "No room is selected. Pick one in the zone selector first."
+    },
+    "no_room_cleaning": {
+      "message": "This robot has no room cleaning support."
     }
   },
   "selector": {

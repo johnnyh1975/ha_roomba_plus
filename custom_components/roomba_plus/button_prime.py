@@ -28,7 +28,13 @@ from typing import TYPE_CHECKING, Any
 from homeassistant.components.button import ButtonEntity
 from homeassistant.const import EntityCategory
 
-from .const import CONF_PRIME_FAVORITE_BUTTONS, DEFAULT_PRIME_FAVORITE_BUTTONS
+from homeassistant.exceptions import ServiceValidationError
+
+from .const import (
+    CONF_PRIME_FAVORITE_BUTTONS,
+    DEFAULT_PRIME_FAVORITE_BUTTONS,
+    DOMAIN,
+)
 from .entity import IRobotEntity
 from .structural_failures import record_failure, record_success
 from .prime_commands import _send_confirmed
@@ -427,7 +433,12 @@ async def async_build_prime_buttons(
     if robot is None:
         return []
 
-    entities: list[ButtonEntity] = [PrimeLocateButton(data.blid, config_entry)]
+    entities: list[ButtonEntity] = [
+        PrimeLocateButton(data.blid, config_entry),
+        # The other half of the room/zone selector -- Classic has had
+        # this pair for years and Prime had only the services.
+        PrimeZoneCleanButton(data.blid, config_entry),
+    ]
 
     # DOCK CONTROLS, matching what the iRobot app offers.
     #
@@ -493,22 +504,24 @@ async def async_build_prime_buttons(
     # false within seconds of a user `dock` command and returning on its
     # own minutes later.
     #
-    # SO THE TEST MOVED, FOR THE PAD BUTTONS ONLY. `dock_supports` reads
-    # `dock.cap` first and falls back to whether the dock has ever
-    # reported `pwState` / `pdState` -- a dock that reports a pad-wash
-    # state washes pads, and nothing else needs to declare it.
+    # AND THE TEST STAYED WHERE IT WAS. Replacing `known` with evidence
+    # -- fall back to whether the dock has ever reported `pwState` /
+    # `pdState` when `dock.cap` is absent -- was written, tried and
+    # withdrawn: neither key appears at rest in any capture in this
+    # repository, so the rule would have removed the pad buttons from
+    # every dock that had not washed yet. The test suite caught it.
     #
-    # EVAC KEEPS THE OLD TEST, deliberately. The dock object carries no
-    # evac state key to fall back on, so there is no evidence to read
-    # when `dock.cap` is absent -- which is the common case, absent in
-    # all seven platform shadows. Switching it would have removed the
-    # empty-bin button from every robot whose dock stays quiet. What it
-    # does gain is the add-only wrapper below: a `known` that dips false
-    # can no longer take the button away, and one that comes back adds
-    # it without a reload. The evidence @utkjmitch assembled for HIS
-    # dock (no evac keys in rw-settings, `evac: null` across 1,293
-    # timeline events) is mission-history-shaped, not dock-shaped, and
-    # belongs in a separate change.
+    # WHAT CHANGED INSTEAD IS WHEN THIS RUNS. The builder below is
+    # re-run on every shadow rather than once at setup, and it can only
+    # ever ADD (see add_prime_entities_when_available). That is what
+    # makes an unstable source survivable without deciding what it
+    # means: a `known` that dips false takes no button away, and one
+    # that returns adds it without a reload.
+    #
+    # The evidence @utkjmitch assembled for HIS dock (no evac keys in
+    # rw-settings, `evac: null` across 1,293 timeline events) is
+    # mission-history-shaped, not dock-shaped, and belongs in a separate
+    # change.
 
     # Locate is always offered; favourite buttons are optional.
     #
@@ -802,3 +815,72 @@ async def async_run_favorite(
             await robot.send_routine_command_via_cmd_topic(command)
         return True
     return False
+
+
+class PrimeZoneCleanButton(IRobotEntity, ButtonEntity):
+    """Clean whatever `PrimeZoneSelect` is set to.
+
+    The other half of a pair Classic has had for years. Prime could send
+    a robot to a room only through a service call, so a dashboard needed
+    an automation behind it to do what a Classic dashboard did with two
+    entities.
+
+    NO ACTIVE-MAP CHECK HERE, and that is deliberate rather than
+    forgotten. Classic's equivalent had one -- written as "prefer the
+    active map", implemented as "require" -- and it silently discarded a
+    selection whenever the chosen room sat on a map the robot was not
+    using, falling through to whatever ran last. A live capture settled
+    that a robot accepts a region command for any of its maps
+    (@ScenicSystemsLLC), so there is nothing here to check for.
+
+    ONE SELECT, so there is nothing to choose between either: the id
+    carries its own map.
+    """
+
+    _attr_translation_key = "prime_clean_zone"
+
+    def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:
+        """Set up the button."""
+        IRobotEntity.__init__(
+            self, roomba=None, blid=blid, config_entry=config_entry
+        )
+        self._config_entry = config_entry
+        self._attr_unique_id = f"{self.robot_unique_id}_prime_clean_zone"
+
+    async def async_press(self) -> None:
+        """Send the robot to the selected room or zone."""
+        from homeassistant.helpers import entity_platform as ep  # noqa: PLC0415
+
+        wanted = f"{self.robot_unique_id}_prime_zone_select"
+        segment_id: str | None = None
+        for platform in ep.async_get_platforms(self.hass, "roomba_plus"):
+            for entity in platform.entities.values():
+                if getattr(entity, "unique_id", "") != wanted:
+                    continue
+                segment_id = getattr(entity, "selected_segment_id", None)
+                break
+            if segment_id:
+                break
+
+        if not segment_id:
+            raise ServiceValidationError(
+                "No room is selected. Pick one in the zone selector first.",
+                translation_domain=DOMAIN,
+                translation_key="no_zone_selected",
+            )
+
+        from .room_cleaning import async_get_room_cleaning_backend  # noqa: PLC0415
+
+        backend = async_get_room_cleaning_backend(self._config_entry, self.hass)
+        if backend is None:
+            raise ServiceValidationError(
+                "This robot has no room cleaning support.",
+                translation_domain=DOMAIN,
+                translation_key="no_room_cleaning",
+            )
+
+        _LOGGER.info(
+            "PrimeZoneCleanButton: cleaning segment %s on %s",
+            segment_id, self._blid,
+        )
+        await backend.clean_segments([segment_id])

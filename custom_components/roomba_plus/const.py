@@ -1152,6 +1152,37 @@ MAINTENANCE_DUE_GRACE_DAYS: Final[int] = 3
 # ── v1.8.0 — Error catalogue with descriptions and suggested actions ──────────
 # Replaces the flat ERROR_CODE_LABELS dict. All existing sensor code that reads
 # ERROR_CODE_LABELS continues to work unchanged — it is now a derived view.
+# ── ARE THESE NUMBERS THE SAME ON EVERY ROBOT? ───────────────────────────────
+#
+# Raised, investigated, and NOT acted on. Recorded so the next person does
+# not spend the same evening on it.
+#
+# Firmware analysis of ruby-0.7.12 (j9) found that `CONSTANT_CLIFF` is absent
+# from its RECOVERABLE error literals, while lewis (i7/i8) has it. If those
+# literals are the enum, every RECOVERABLE index from 2 upward shifts between
+# the two platforms, and `error: 5` would mean different things on an i7 and a
+# j9 -- which would make this whole table lewis-only.
+#
+# TWO THINGS ARGUE AGAINST ACTING ON IT.
+#
+# The analysis says so itself: the lewis ordering was PROVEN from a `tbb` jump
+# table; for ruby (ARM, not Thumb) that proof is missing and only the file
+# order of literals was read. A missing literal does not prove a missing enum
+# slot -- absence where one looked is not absence.
+#
+# And the field contradicts it. Two codes, two different firmware families,
+# both matching this table:
+#
+#     42  "Localisation problem"   @ScenicSystemsLLC's Braava jet m6 (san_marino)
+#     46  "Low battery"            @AlakazipLabs' i3 at 6% (daredevil)
+#
+# iRobot's own app also ships ONE code-to-text catalogue with no platform
+# dimension (see vendor_errors.py). If the wire code were the internal enum
+# index, the vendor's own client would be showing wrong text too.
+#
+# WHAT WOULD CHANGE THIS: a j-series robot reporting a code whose text here
+# does not match what the iRobot app shows for the same event. That is one
+# screenshot, and it would be worth more than any amount of further reading.
 ERROR_CATALOGUE: Final[dict[int, dict[str, str]]] = {
     0:   {"label": "None",                     "description": "No error.",                                                  "action": ""},
     1:   {"label": "Left wheel off floor",      "description": "The left wheel has lifted off the floor.",                  "action": "Check for objects under the robot and place it on a flat surface."},

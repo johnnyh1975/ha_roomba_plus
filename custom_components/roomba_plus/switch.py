@@ -212,12 +212,16 @@ async def async_setup_entry(
             # is one log entry and one colour-coded tile instead of two
             # controls that show only that they can be pressed.
             #
-            # Same dock-capability contract as the buttons, but the
-            # source changed: `dock.known` decided this and describes
-            # dock identity, not pad hardware -- and flips transiently
-            # after a user dock command (@AlakazipLabs). `dock_supports`
-            # asks for evidence instead, and the switch is added
-            # whenever that evidence turns up rather than only at setup.
+            # Same dock-capability contract as the buttons, and the same
+            # caveat: `dock.known` decides this, and it describes dock
+            # IDENTITY rather than pad hardware -- it travels with `pn`,
+            # `fwVer` and `hwRev` (@Thonno) and flips transiently after
+            # a user dock command (@AlakazipLabs).
+            #
+            # Nothing better is available, so the gate is unchanged and
+            # the timing is not: this builder is re-run on every shadow
+            # and only ever adds, which is what makes an unstable source
+            # harmless here.
             from .prime_coordinator import (  # noqa: PLC0415
                 _dock_reports_itself,
                 add_prime_entities_when_available,

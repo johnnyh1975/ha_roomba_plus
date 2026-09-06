@@ -301,8 +301,38 @@ async def async_setup_entry(
         # See button_prime.py's gate for what that does and does not
         # justify. The rule below reads a missing cap as "shadow
         # has not arrived, fail open", which is right when the shadow
-        # really is incomplete and wrong here: `known: false` is the
-        # robot stating there is no such dock.
+        # really is incomplete and wrong here.
+        #
+        # WHAT `known` ACTUALLY MEANS: a dock has been IDENTIFIED, not
+        # that one exists or where it is. This line used to say "the
+        # robot stating there is no such dock", which the evidence does
+        # not support.
+        #
+        # @Thonno's i7+ is the clearest case. `known: true` arrives
+        # carrying `pn`, `id`, `fwVer`, `hwRev` and `varID` -- part
+        # number, firmware, hardware revision. Identity fields, and no
+        # position anywhere near them. The platform shadows agree:
+        # wherever `known` is true the object carries some of that set,
+        # and where it is false (atlantis) the object is bare.
+        #
+        # @utkjmitch's is the other half. `fwVer: ""` is an identity
+        # slot that EXISTS and is empty -- a robot with nothing to write
+        # into it, not a robot reporting an absence of hardware. His
+        # dock is real; the robot simply has not identified it.
+        #
+        # AND IT IS NOT STABLE. @AlakazipLabs logged 15 true-to-false
+        # flips across 24,900 messages, 11 within seconds of a user
+        # `dock` command and returning on their own minutes later with
+        # no dock contact. A field describing identity, which comes and
+        # goes, is a poor gate for whether an entity exists -- which is
+        # why the entities are added as evidence arrives and never
+        # removed (see add_prime_entities_when_available).
+        #
+        # THE GATE STILL USES IT ANYWAY, because nothing better exists.
+        # `dock.cap` is the right source and is usually absent. The dock
+        # part number looked like a third option and is not: across the
+        # seven platform shadows exactly one carries a real `pn`, three
+        # report the literal string "unknown", and three omit the field.
         #
         # It produced pad wash and pad dry sensors, plus the wash and dry
         # buttons, on a robot that can do neither. Same family as the

@@ -373,9 +373,14 @@ restore_backup:
 run_favorite:
   name: Run favorite
   description: >-
-    Runs a saved favorite by its ID. V4/Prime robots only. The IDs are in
-    the vacuum entity's `favorites` attribute -- keyed on ID rather than
-    name so an automation survives a rename in the iRobot app.
+    Runs a saved favorite by its ID. Needs cloud credentials, because
+    favourites live in your iRobot account -- but works on every robot,
+    Classic and V4/Prime alike. The IDs are in the vacuum entity's
+    `favorites` attribute, keyed on ID rather than name so an automation
+    survives a rename in the iRobot app.
+
+    A favourite carries the map and rooms it was created with, so it
+    reaches a room on a map the robot is not currently using.
   target:
     entity:
       integration: roomba_plus
@@ -610,9 +615,11 @@ set_quiet_hours:
 clean_zone:
   name: Clean zone
   description: >
-    Start a targeted clean of one or more clean zones on a Prime robot.
-    The app no longer lets you save a zone as a favourite, so this is
-    how you send the robot to a zone on demand. Identify a zone by its
+    Start a targeted clean of one or more clean zones. Works on Classic
+    and V4/Prime robots alike -- the description said Prime only, which
+    was true of where the feature was first wired rather than of what
+    the robots can do. The app no longer lets you save a zone as a
+    favourite, so this is how you send the robot to a zone on demand. Identify a zone by its
     name (as shown in the Roomba+ map) or by its numeric id. Provide
     either zone_name or zone_id, not both.
   target:

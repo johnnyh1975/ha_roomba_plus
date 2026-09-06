@@ -527,6 +527,9 @@
       },
       "prime_locate": {
         "default": "mdi:map-marker-radius-outline"
+      },
+      "prime_clean_zone": {
+        "default": "mdi:broom"
       }
     },
     "select": {
@@ -577,6 +580,9 @@
       },
       "smart_zones_need_naming": {
         "default": "mdi:map-marker-question-outline"
+      },
+      "prime_zone_select": {
+        "default": "mdi:floor-plan"
       }
     },
     "switch": {

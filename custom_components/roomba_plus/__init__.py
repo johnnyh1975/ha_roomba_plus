@@ -1261,6 +1261,59 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
     # did before this existed.
     cached_login_result = pop_pending_login(blid)
 
+    # ONE LOGIN PER CONFIG ENTRY, AND NOTHING IS SHARED BETWEEN THEM.
+    # The bridge above is keyed on blid and single-use, so it only ever
+    # helps the robot that was just added in the config flow.
+    #
+    # An account with two Prime robots therefore runs the full Gigya +
+    # iRobot chain twice, and a Home Assistant restart fires both within
+    # a second of each other. @jpatchMC hit exactly that when he added a
+    # second Combo 105: both entries failed with Gigya's "Account
+    # Temporarily Locked Out", while the iRobot app on his phone kept
+    # working. Disabling both for about ten minutes and re-enabling them
+    # one at a time cleared it.
+    #
+    # AND A LOCKOUT DELIBERATELY STAYS IN THE AuthCredentialsError
+    # BRANCH BELOW, which looks backwards and is not.
+    #
+    # ConfigEntryNotReady retries on `2 ** min(tries, 4) * 5` seconds:
+    # 11 attempts per entry in ten minutes, 22 across his two, against
+    # an account locked *because of* too many attempts. The
+    # AuthCredentialsError branch produces zero automatic attempts --
+    # Home Assistant stops and asks. Against a lockout, stopping is the
+    # correct behaviour and the retry loop is the harmful one.
+    #
+    # What roombapy-prime fixes is the WORDING, since that is what sent
+    # him resetting passwords. See _login_gigya() there for the
+    # measurement.
+    #
+    # AND IT APPLIES TO CLASSIC TOO, not just Prime: `CloudApi
+    # .authenticate()` calls the same `roombapy_prime.auth.login()`
+    # (consolidated in v3.6.0). Any household with cloud credentials and
+    # several robots runs several full Gigya chains.
+    #
+    # THE MULTIPLIER HAS NEVER CAUSED A PROBLEM, and that is the part
+    # worth writing down, because the arithmetic invites the opposite
+    # conclusion. Several testers run multi-robot accounts, Classic and
+    # mixed, for months without one.
+    #
+    # The one incident blamed on it was not it. @jpatchMC's account
+    # locked out, and the cause was the live-map keep-alive retrying a
+    # rate-limited endpoint every ten seconds with no backoff -- a
+    # PRIME-ONLY loop, absent from the Classic cloud path, which polls
+    # daily. He then reloaded repeatedly to clear the symptom, and the
+    # reloads locked the account. Fixed in roombapy-prime 0.3.3 by
+    # backing off, not by reducing logins.
+    #
+    # So one login per account remains a reasonable tidy-up -- fewer
+    # requests against shared limits, and the login response already
+    # carries every robot -- but it is NOT a fix for anything observed,
+    # and it is not small: the session outlives any single entry, so it
+    # needs an owner, a refresh policy and a teardown that does not
+    # strand the others. The natural moment is 4.2, when the cloud calls
+    # move into the library and one cache would serve both generations
+    # instead of two.
+
     try:
         prime_robot = await PrimeFactory.create_prime_robot(
             session, username, password, country_code,

@@ -1453,6 +1453,9 @@
       },
       "reset_clean_base_bag": {
         "name": "Manutenzione – Conferma sostituzione sacchetto Clean Base"
+      },
+      "prime_clean_zone": {
+        "name": "Pulisci la stanza selezionata"
       }
     },
     "switch": {
@@ -1651,6 +1654,9 @@
           "19": "19",
           "20": "20"
         }
+      },
+      "prime_zone_select": {
+        "name": "Seleziona stanza o zona"
       }
     },
     "image": {
@@ -1939,9 +1945,6 @@
     "unknown_rooms": {
       "message": "Stanza/e sconosciuta/e per {entity_id}: {rooms}. Stanze note: {known}."
     },
-    "favorite_prime_only": {
-      "message": "run_favorite è disponibile solo per i robot V4/Prime"
-    },
     "favorite_not_found": {
       "message": "Nessun preferito eseguibile con ID {favorite_id}"
     },
@@ -1974,6 +1977,15 @@
     },
     "zone_name_not_found": {
       "message": "Uno o più nomi di zona non sono stati trovati sulla mappa."
+    },
+    "favorite_needs_cloud": {
+      "message": "I preferiti sono salvati nel tuo account iRobot, quindi servono le credenziali cloud. Aggiungile nelle opzioni dell'integrazione e compariranno."
+    },
+    "no_zone_selected": {
+      "message": "Nessuna stanza selezionata. Scegline una nel selettore."
+    },
+    "no_room_cleaning": {
+      "message": "Questo robot non supporta la pulizia per stanze."
     }
   },
   "selector": {

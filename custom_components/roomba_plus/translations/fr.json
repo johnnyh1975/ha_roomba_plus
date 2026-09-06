@@ -1453,6 +1453,9 @@
       },
       "reset_clean_base_bag": {
         "name": "Maintenance – Confirmer le remplacement du sac de la Clean Base"
+      },
+      "prime_clean_zone": {
+        "name": "Nettoyer la pièce choisie"
       }
     },
     "switch": {
@@ -1651,6 +1654,9 @@
           "19": "19",
           "20": "20"
         }
+      },
+      "prime_zone_select": {
+        "name": "Choisir une pièce ou une zone"
       }
     },
     "image": {
@@ -1939,9 +1945,6 @@
     "unknown_rooms": {
       "message": "Pièce(s) inconnue(s) pour {entity_id} : {rooms}. Pièces connues : {known}."
     },
-    "favorite_prime_only": {
-      "message": "run_favorite n'est disponible que pour les robots V4/Prime"
-    },
     "favorite_not_found": {
       "message": "Aucun favori exécutable avec l'ID {favorite_id}"
     },
@@ -1974,6 +1977,15 @@
     },
     "zone_name_not_found": {
       "message": "Un ou plusieurs noms de zone sont introuvables sur la carte."
+    },
+    "favorite_needs_cloud": {
+      "message": "Les favoris sont enregistrés dans votre compte iRobot : des identifiants cloud sont donc nécessaires. Ajoutez-les dans les options de l'intégration et ils apparaîtront."
+    },
+    "no_zone_selected": {
+      "message": "Aucune pièce n'est sélectionnée. Choisissez-en une dans le sélecteur."
+    },
+    "no_room_cleaning": {
+      "message": "Ce robot ne gère pas le nettoyage par pièce."
     }
   },
   "selector": {

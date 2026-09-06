@@ -274,6 +274,38 @@ def _discover_rest980_rooms(hass: HomeAssistant) -> dict[str, str]:
 
     Pure read access to the state machine and entity registry — never writes
     to or calls services on the foreign integration.
+
+    AN EMPTY RESULT USUALLY MEANS THE ENTITIES WERE NEVER CREATED, not
+    that the user has no rooms. It is worth knowing which, because the
+    two look identical from here and only one is fixable.
+
+    `CleanRoomPasses` is a plain `SelectEntity` in roomba_rest980, not a
+    coordinator-backed one, and it sets `room_data` once in `__init__`
+    from data its own setup fetched off the rest980 server. So:
+
+      * once the entities exist, stopping the rest980 container does NOT
+        take them away. Nothing re-reads the server, nothing marks them
+        unavailable, and this function keeps working. That is what makes
+        the documented migration order possible at all -- the container
+        has to be stopped before Roomba+ can take the robot's single
+        local connection.
+
+      * but a Home Assistant restart with the container stopped is
+        fatal to them. roomba_rest980's `async_setup_entry` awaits
+        `async_config_entry_first_refresh()` against
+        `{base_url}/api/local/info/state`; with nothing listening, the
+        config entry fails to load, `select.async_setup_entry` never
+        runs, and no `CleanRoomPasses` is ever constructed.
+
+    Hence the ordering in README's migration section: install through
+    HACS and restart FIRST, while the container is still running, then
+    stop it. A user who restarts between stopping the container and
+    running the import will land here with an empty dict and no
+    indication why.
+
+    Not defended against in code, because there is nothing to defend:
+    the entities are absent, and this function cannot tell an account
+    with no rooms from one whose rooms it can no longer see.
     """
     rooms: dict[str, str] = {}
     rest980_entries = hass.config_entries.async_entries(REST980_DOMAIN)

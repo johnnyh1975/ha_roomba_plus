@@ -1170,3 +1170,95 @@ def _settings_keys(config_entry: RoombaConfigEntry) -> set[str] | None:
     if not isinstance(reported, dict):
         return None
     return set(reported)
+
+
+class PrimeZoneSelect(IRobotEntity, SelectEntity):
+    """Which room or zone the Prime clean-zone button will send the robot to.
+
+    THE PRIME HALF OF A PAIR CLASSIC HAS HAD FOR YEARS. Classic offers
+    `select.{name}_select_zone` with a companion button; Prime had the
+    `clean_room` and `clean_zone` SERVICES and no control, so a
+    dashboard could not send the robot to a room without an automation
+    behind it.
+
+    ONE ENTITY, NOT ONE PER MAP. Classic creates one select per map
+    because its ids are bare and a map has to disambiguate them. Prime
+    ids already carry their map -- `<p2map_id>/<room_id>` -- so a single
+    list works, and its size does not grow with the number of maps.
+
+    ROOMS AND ZONES TOGETHER, as Classic does. `get_segments()` is the
+    source because it is the only one that holds both: `available_rooms()`
+    reads `rooms_metadata`, which carries rooms only, and a zone could
+    not appear in a list built from it.
+    """
+
+    _attr_translation_key = "prime_zone_select"
+    _attr_entity_category = None   # primary control — visible by default
+
+    def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:
+        """Set up the selector."""
+        # roomba=None, as every Prime entity here: a Prime robot has no
+        # roombapy object behind it.
+        IRobotEntity.__init__(
+            self, roomba=None, blid=blid, config_entry=config_entry
+        )
+        self._config_entry = config_entry
+        self._attr_unique_id = f"{self.robot_unique_id}_prime_zone_select"
+        self._selected: str | None = None
+        #: name -> segment id, refreshed on every read.
+        self._segments: dict[str, str] = {}
+
+    async def async_update(self) -> None:
+        """Refresh the room and zone list.
+
+        POLLED RATHER THAN PUSHED, because the underlying list changes
+        when maps are retrained or rooms renamed in the app -- neither
+        of which arrives as a state delta.
+        """
+        from .room_cleaning import async_get_room_cleaning_backend  # noqa: PLC0415
+
+        backend = async_get_room_cleaning_backend(self._config_entry, self.hass)
+        if backend is None:
+            return
+        try:
+            segments = await backend.get_segments()
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug(
+                "roomba_plus: could not read segments for the zone selector",
+                exc_info=True,
+            )
+            return
+        self._segments = {segment.name: segment.id for segment in segments}
+
+    @property
+    def options(self) -> list[str]:
+        """Every room and zone this robot knows, across all its maps."""
+        return sorted(self._segments)
+
+    @property
+    def current_option(self) -> str | None:
+        """The chosen room, or the first one when nothing is chosen yet."""
+        if self._selected in self._segments:
+            return self._selected
+        return next(iter(sorted(self._segments)), None)
+
+    async def async_select_option(self, option: str) -> None:
+        """Remember the choice. Nothing is sent until the button."""
+        self._selected = option
+        self.async_write_ha_state()
+
+    @property
+    def available(self) -> bool:
+        """Unavailable while the robot reports no rooms at all."""
+        return bool(self._segments)
+
+    @property
+    def selected_segment_id(self) -> str | None:
+        """The segment id the button should clean.
+
+        Qualified -- `<p2map_id>/<room_id>` for a room, `zid_<id>` for a
+        zone -- which is what lets `clean_segments()` pick the right
+        region type and the right map without being told.
+        """
+        chosen = self.current_option
+        return self._segments.get(chosen) if chosen else None
