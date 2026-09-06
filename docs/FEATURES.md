@@ -69,6 +69,9 @@ marked in their own headings.
 | Schedule hold | Switch | Freeze schedule without deleting it (i/s/j/Braava) |
 | Locate robot | Button | Play find-me tone |
 | Evacuate bin | Button | Clean Base models only |
+| Select room or zone | Select | Rooms and zones in one list. Classic: one per map, because its region ids are bare. Prime: one for the whole home, because its ids already carry their map (v4.1.0) |
+| Clean selected room | Button | Sends the robot to whatever the selector holds. Works whichever map the robot last ran on — a robot accepts a region command for any of its maps (v4.1.0) |
+| *(one per favourite)* | Button | Runs a saved iRobot favourite. A favourite carries its own map, so this is the shortest route to a room on another floor |
 
 **Actions** (Settings → Automations → Actions → Roomba+):
 
@@ -76,7 +79,8 @@ marked in their own headings.
 |---|---|---|
 | `roomba_plus.smart_start` | All | Start with blocking-sensor gate; optionally targets rooms on SMART robots |
 | `roomba_plus.clean_room` | SMART | Clean one or more named rooms — no HA 2026.3+ required |
-| `roomba_plus.clean_zone` | PRIME | Clean one or more zones on demand, by name or numeric id |
+| `roomba_plus.clean_zone` | SMART | Clean one or more zones on demand, by name or numeric id. Said PRIME until v4.1.0 — which described where it was first wired, not what the robots can do |
+| `roomba_plus.run_favorite` | Cloud | Run a saved iRobot favourite by its id. A favourite carries its own map, so it reaches a room on a map the robot is not currently using |
 | `vacuum.clean_area` | SMART + cloud + HA 2026.3+ | Clean by HA area — see [Room cleaning setup](#room-cleaning-setup--ha-areas-vacuumclean_area-ha-20263) |
 | `roomba_plus.reset_filter` | All | Record filter replacement |
 | `roomba_plus.reset_brush` | All | Record brush / pad replacement |
@@ -172,7 +176,7 @@ already worked before this table existed:
 | `region_areas_m2` | `dict[str, float]` | Room name → floor area in m² *(v2.9.1)*. Computed once from the same UMF geometry used for map rendering — doesn't update on its own; a map retrain reloads the config entry and recomputes it. Present only for whichever floor/map this integration's UMF aligner was built for (the active map at setup) — absent, not zero, on other floors. |
 | `learning_percentage` | `int` | Map-learning progress for this floor |
 | `region_count` / `zone_count` | `int` | Counts for this map |
-| `is_active_map` | `bool` | Whether this is the robot's currently active map |
+| `is_active_map` | `bool` | Whether this is the robot's currently active map. **Informational only since v4.1.0** — it used to decide whether a selection on this map would be acted on at all, which silently discarded a room picked on any other map. A robot accepts a region command for any of its maps |
 
 #### Smart Start with blocking sensor gate
 
@@ -742,14 +746,20 @@ The `.../mission/{n_mssn}/path` endpoint (v3.2.0) reconstructs a mission's room-
 
 #### Cleaning schedule calendar (v3.4.0)
 
-`calendar.{name}_schedule` — your robot's cleaning schedule (`cleanSchedule2` on i/s/j-series, legacy `cleanSchedule` on 900/600-series) as recurring Home Assistant calendar events. Read-only, always created on every tier — an empty calendar just means no schedule is currently set. Each event uses a fixed 60-minute placeholder duration, since iRobot's schedule data carries a start time only, never a planned duration.
+`calendar.{name}_schedule` — your robot's cleaning schedule (`cleanSchedule2` on i/s/j-series, legacy `cleanSchedule` on 900/600-series) as recurring Home Assistant calendar events. Always created on every tier — an empty calendar just means no schedule is currently set. Each event uses a fixed 60-minute placeholder duration, since iRobot's schedule data carries a start time only, never a planned duration.
+
+**Writable on every generation**, from the calendar itself: create, move or delete a cleaning and it reaches the robot.
+
+> ⚠️ **Writing to `cleanSchedule2` was broken until v4.1.0**, and silently. The calendar built the legacy schedule OBJECT and wrote it under the modern key, where the robot expects an ARRAY — so on i/s/j robots a schedule created from Home Assistant did nothing at all, while reading kept working and the calendar looked fine. If you tried this before v4.1.0 and it appeared to be ignored, it was.
+>
+> A write replaces the entire list, so entries this integration does not understand are carried through untouched rather than dropped, and there is a 21-entry ceiling that raises an error rather than losing the surplus.
 
 Room names in schedule summaries are resolved from **every map on the account**, not just the one
 currently drawn — a schedule that spans maps used to get half its rooms named and half numbered as
 `Zone N`.
 
-**Prime robots can write it, and three services do that directly** — the calendar entity is the
-usual way in, but a script may prefer the service:
+**Three Prime-only services write it directly** — the calendar entity is the
+usual way in on either generation, but a script may prefer the service:
 
 | Service | What it does |
 |---|---|

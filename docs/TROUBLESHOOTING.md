@@ -631,6 +631,38 @@ than as the boundary.
 
 Observed by @AlakazipLabs across two weeks of lossless shadow logs.
 
+## Something I asked for just did not happen (before v4.1.0)
+
+Four separate faults shared one symptom: nothing happened, and no error
+appeared anywhere. A rejected command and a robot that was already where
+you wanted it look identical from Home Assistant.
+
+All four are fixed in v4.1.0. If you saw any of these on an earlier
+version, that is what it was:
+
+**A schedule created from the calendar never appeared in the iRobot
+app** — on i7, i8, s9, j7 or any other i/s/j robot. The calendar wrote
+the wrong shape under the right key and the robot discarded it. Reading
+always worked, so the calendar itself looked correct.
+
+**A zone clean went to the wrong place, or nowhere.** `clean_zone` sent
+zones as if they were rooms. Region ids are numbered per map, so the
+wrong type usually names a real but different region — the robot did
+something, just not what you asked.
+
+**The clean-zone button cleaned the wrong room.** If your selection was
+on a map the robot had not run on most recently, the button discarded it
+and repeated whatever ran last.
+
+**`clean_room` answered "unknown room" for a room that exists.** Only
+rooms on the most recently used map could be named. Households that keep
+a small secondary map — a bathroom-only map for spot cleaning, say —
+lost access to every room on their main map after using it.
+
+None of these needs any action beyond updating. If you built an
+automation around one of them, though, it is worth re-checking: an
+automation written to work around a bug can break when the bug does not.
+
 ## Sending a diagnostics download
 
 Settings → Devices & Services → Roomba+ → the three dots → Download

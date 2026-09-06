@@ -47,6 +47,13 @@ NON_CYCLE_REASONS: dict[str, str] = {
         "Prime-only path inside a module shared by both generations"
     ),
     "button -> button_prime": "Prime-only entities, built only on the Prime branch",
+    "button_prime -> room_cleaning": (
+        "the room/zone backend, needed only when the clean-zone button is\n        actually pressed. Importing it at module level would pull the\n        whole cleaning chain into every Prime button platform setup"
+    ),
+    "select_prime -> room_cleaning": "as button_prime -> room_cleaning",
+    "services -> button": (
+        "generation-specific favourite paths, one branch each. The Prime\n        side already defers its own import for the same reason, and\n        pulling the whole button platform up into services would make\n        every service call carry the entity module"
+    ),
     "sensor -> prime_coordinator": (
         "Prime-only path inside a module shared by both generations -- the "
         "Classic branch must not pay for the Prime coordinator's imports"

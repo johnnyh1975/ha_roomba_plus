@@ -1,7 +1,7 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Default-blue.svg)](https://github.com/hacs/default)
-[![Version](https://img.shields.io/badge/Version-4.0.0-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-4.1.0-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2025.5%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Gold-gold.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
@@ -227,6 +227,13 @@ Everything else listed below works.
 - **Zone cleaning on demand** — `roomba_plus.clean_zone`, by zone name or numeric id. The iRobot
   app stopped allowing zone favourites; this is how you send the robot to a zone from Home
   Assistant instead
+- **A room and zone selector with a clean button** (v4.1.0) — pick from a dropdown, press a
+  button, no service call. Rooms and zones in one list, across every map. Classic robots have
+  had this pair for years; Prime had only the services until now
+- **Favourites as buttons**, one per saved routine, and `roomba_plus.run_favorite` for
+  automations. Worth knowing: a favourite carries the map it was created with, so it reaches a
+  room on a map the robot is not currently using — the shortest route to a one-press control
+  for another floor
 - **Consumable parts** — filter, brushes, mop pads and dirt disposal bag, with the app's own
   units: hours, routines, evacuations
 - Setup via a third onboarding option (sign in with your iRobot cloud account) — Classic
@@ -341,9 +348,10 @@ add. If an older guide told you to add one, that step is obsolete — it does no
 harm, but it is not needed.
 
 > ℹ️ **No beta channel needed since v4.0.0.** Earlier v4 releases were
-> pre-releases and required *Show beta versions*; 4.0.0 is a normal release and
-> HACS offers it by default. If you enabled beta versions for the v4 betas, you
-> can leave the setting on or turn it off — either way you get 4.0.0.
+> pre-releases and required *Show beta versions*; every release from 4.0.0 on is
+> a normal one and HACS offers it by default. If you enabled beta versions for
+> the v4 betas, you can leave the setting on or turn it off — either way you get
+> the current release.
 >
 > If HACS offers you only **`main`** and downloading it hangs, you are on a
 > checkout from before v3.5.2 was tagged. Selecting `main` fails with a 404:
