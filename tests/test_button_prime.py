@@ -92,7 +92,7 @@ class TestFavouriteButtons:
             _entry([_favorite("f1"), _favorite("f2")])
         )
 
-        assert len(entities) == 3  # two favourites + locate
+        assert len(entities) == 4  # two favourites + locate + clean-zone
 
     @pytest.mark.asyncio
     async def test_pressing_sends_every_command_in_order(self):
@@ -128,7 +128,7 @@ class TestFavouriteButtons:
             _favorite("f2", hidden=True),
         ]))
 
-        assert len(entities) == 1  # locate only
+        assert len(entities) == 2  # locate + clean-zone
 
     @pytest.mark.asyncio
     async def test_a_favourite_with_no_commands_warns_rather_than_silently_failing(self):
@@ -172,7 +172,9 @@ class TestFavouriteButtons:
 
         entities = await async_build_prime_buttons(_entry([]))
 
-        assert len(entities) == 1
+        # Locate and the clean-zone button, neither of which depends on
+        # favourites existing.
+        assert len(entities) == 2
 
     @pytest.mark.asyncio
     async def test_buttons_do_not_re_read_the_favourites(self):
@@ -295,7 +297,8 @@ class TestFavoriteButtonsAreOptional:
             async_build_prime_buttons,
         )
 
-        assert len(await async_build_prime_buttons(_entry([_favorite("f1")]))) == 2
+        # One favourite, plus locate and the clean-zone button.
+        assert len(await async_build_prime_buttons(_entry([_favorite("f1")]))) == 3
 
     @pytest.mark.asyncio
     async def test_the_option_suppresses_only_the_favourites(self):
@@ -310,7 +313,9 @@ class TestFavoriteButtonsAreOptional:
 
         entities = await async_build_prime_buttons(entry)
 
-        assert len(entities) == 1
+        # The option suppresses the favourite buttons and nothing else:
+        # locate and the clean-zone button stay.
+        assert len(entities) == 2
         assert not any(hasattr(e, "_favorite_id") for e in entities)
 
     def test_the_default_is_on(self):
