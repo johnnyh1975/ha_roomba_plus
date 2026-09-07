@@ -19,13 +19,15 @@ from custom_components.roomba_plus.sensor_diagnostics import (
     RoombaResetDiagnosticsSensor,
 )
 
+from tests.conftest import robot_mock
+
 def _make_sensor(
     has_cloud: bool = True,
     last_update_success: bool = True,
     coordinator_data: dict | None = None,
 ) -> CloudRawSensor:
     """Build a minimal CloudRawSensor with mocked internals."""
-    roomba = MagicMock()
+    roomba = robot_mock()
     blid = "test_blid"
 
     coordinator = MagicMock()
@@ -54,7 +56,7 @@ def _make_sensor(
 def _make_reset_diagnostics_sensor(vacuum_state: dict):
     """Return a RoombaResetDiagnosticsSensor with the given vacuum_state."""
     from custom_components.roomba_plus.sensor import RoombaResetDiagnosticsSensor
-    roomba = MagicMock()
+    roomba = robot_mock()
     roomba.master_state = {"state": {"reported": vacuum_state}}
     sensor = RoombaResetDiagnosticsSensor.__new__(RoombaResetDiagnosticsSensor)
     sensor._roomba = roomba
@@ -77,7 +79,7 @@ class TestRoombaFirmwareVersionSensor:
         # Set vacuum_state directly — the cached dict set by IRobotEntity.__init__
         s.vacuum_state = reported
         # vacuum attribute needed for new_state_filter (via roomba_reported_state)
-        roomba = MagicMock()
+        roomba = robot_mock()
         roomba.master_state = {"state": {"reported": reported}}
         s.vacuum = roomba
         return s
@@ -162,7 +164,7 @@ class TestResetDiagnosticsSensor:
         """The prior key ("reset_diagnostics") resolved to an imperative-
         looking display name for a passive counter sensor.
         """
-        roomba = MagicMock()
+        roomba = robot_mock()
         roomba.master_state = {"state": {"reported": {}}}
         sensor = RoombaResetDiagnosticsSensor(roomba, "test_blid")
         assert sensor.translation_key == "reset_diagnostics_summary"
@@ -172,7 +174,7 @@ class TestResetDiagnosticsSensor:
         (and thus the initial entity_id) must stay byte-for-byte identical
         so existing entity registrations are not broken.
         """
-        roomba = MagicMock()
+        roomba = robot_mock()
         roomba.master_state = {"state": {"reported": {}}}
         sensor = RoombaResetDiagnosticsSensor(roomba, "test_blid")
         assert sensor.unique_id == "roomba_plus_test_blid_reset_diagnostics"
@@ -183,7 +185,7 @@ def _make_health_trend_sensor(rps):
     """Return a RoombaHealthScoreTrendSensor with the given robot_profile_store
     (or None) wired into runtime_data."""
     from custom_components.roomba_plus.sensor import RoombaHealthScoreTrendSensor
-    roomba = MagicMock()
+    roomba = robot_mock()
     roomba.master_state = {"state": {"reported": {}}}
     entry = MagicMock()
     entry.runtime_data.robot_profile_store = rps

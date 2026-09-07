@@ -13,6 +13,8 @@ import sys
 import os
 import types
 import pytest
+
+from tests.conftest import robot_mock
 from custom_components.roomba_plus.cloud_coordinator import IrobotCloudCoordinator
 from custom_components.roomba_plus.models import RoombaData
 from custom_components.roomba_plus.models import MapCapability
@@ -121,6 +123,8 @@ def _make_manager(options: dict | None = None) -> DirtThresholdManager:
     entry.options = options if options is not None else {CONF_DEMAND_CLEANING_ENABLED: True}
     entry.entry_id = "test_entry"
     entry.runtime_data = MagicMock()
+    # The client is awaited since roombapy 2.x.
+    entry.runtime_data.roomba = robot_mock()
     entry.runtime_data.roomba_reported_state.return_value = {
         "cleanMissionStatus": {"cycle": "none"}
     }
@@ -782,9 +786,12 @@ class TestAsyncEvaluate:
         }
 
         with patch.object(mgr, 'async_save', new_callable=AsyncMock):
-            with patch.object(mgr._hass, 'async_add_executor_job', new_callable=AsyncMock) as mock_job:
-                await mgr.async_evaluate(coord, "test_entry")
-            mock_job.assert_called_once()
+            await mgr.async_evaluate(coord, "test_entry")
+
+        # ASKS THE ROBOT, not the executor: the command goes straight to
+        # `send_command` since roombapy 2.x, so an executor that is never
+        # used would report "called 0 times" for a working trigger.
+        mgr._entry.runtime_data.roomba.send_command.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_last_trigger_time_set_after_trigger(self):
@@ -1253,11 +1260,18 @@ class TestCleanRoomPmapSelection:
         hass.config_entries.async_get_entry.return_value = config_entry
         hass.async_add_executor_job = AsyncMock()
 
-        # Capture the pmap_id sent to the robot
+        # Capture the pmap_id sent to the robot.
+        #
+        # CAPTURED AT THE CLIENT since roombapy 2.x: the command no
+        # longer travels through the executor, so a side_effect there
+        # would never fire and the assertion below would compare against
+        # an empty dict.
         sent_params = {}
-        async def capture_send(fn, cmd, params):
+
+        async def capture_send(cmd, params):
             sent_params.update(params)
-        hass.async_add_executor_job.side_effect = capture_send
+
+        config_entry.runtime_data.roomba.send_command = capture_send
 
         import homeassistant.helpers.entity_registry as er_mod
         with patch.object(er_mod, "async_get", return_value=ent_reg):
@@ -1316,10 +1330,13 @@ class TestCleanRoomPmapSelection:
         hass.config_entries.async_get_entry.return_value = config_entry
         hass.async_add_executor_job = AsyncMock()
 
+        # At the client, not the executor -- see the note above.
         sent_params = {}
-        async def capture_send(fn, cmd, params):
+
+        async def capture_send(cmd, params):
             sent_params.update(params)
-        hass.async_add_executor_job.side_effect = capture_send
+
+        config_entry.runtime_data.roomba.send_command = capture_send
 
         import homeassistant.helpers.entity_registry as er_mod
         with patch.object(er_mod, "async_get", return_value=ent_reg):
@@ -1433,6 +1450,7 @@ class TestCleanRoomCloudPmapvFirst:
         }
 
         data = MagicMock()
+        data.roomba = robot_mock()   # awaited since roombapy 2.x
         data.map_capability = MapCapability.SMART
         data.has_cloud = True
         data.cloud_coordinator.active_pmap_id = pmap_id
@@ -1465,10 +1483,15 @@ class TestCleanRoomCloudPmapvFirst:
         hass.config_entries.async_get_entry.return_value = config_entry
         hass.async_add_executor_job = AsyncMock()
 
+        # At the client, not the executor -- see the note above. Assigned
+        # AFTER `data.roomba = robot_mock()`, or the factory's own
+        # AsyncMock would replace this and `sent` would stay empty.
         sent = {}
-        async def capture(fn, cmd, params):
+
+        async def capture(cmd, params):
             sent.update(params)
-        hass.async_add_executor_job.side_effect = capture
+
+        data.roomba.send_command = capture
 
         import homeassistant.helpers.entity_registry as er_mod
         with patch.object(er_mod, "async_get", return_value=ent_reg):

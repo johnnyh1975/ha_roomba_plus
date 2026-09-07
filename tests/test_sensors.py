@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import datetime
 import pytest
+
+from tests.conftest import robot_mock
 import types
 import sys
 import os
@@ -195,7 +197,7 @@ def _entity(state: dict) -> MagicMock:
 def _mission_sensor(cycle="none", phase=""):
     """Build a minimal RoombaMissionActive with stubbed vacuum state."""
     from custom_components.roomba_plus.binary_sensor import RoombaMissionActive
-    roomba = MagicMock()
+    roomba = robot_mock()
     roomba.master_state = {"state": {"reported": {
         "cleanMissionStatus": {"cycle": cycle, "phase": phase}
     }}}
@@ -212,7 +214,7 @@ def _boost_entity(carpet_boost=None, vac_high=None):
         state["carpetBoost"] = carpet_boost
     if vac_high is not None:
         state["vacHigh"] = vac_high
-    roomba = MagicMock()
+    roomba = robot_mock()
     roomba.master_state = {"state": {"reported": state}}
     s = CarpetBoostSelect.__new__(CarpetBoostSelect)
     s.vacuum = roomba
@@ -228,7 +230,7 @@ def _make_sensor(
     coordinator_data: dict | None = None,
 ) -> CloudRawSensor:
     """Build a minimal CloudRawSensor with mocked internals."""
-    roomba = MagicMock()
+    roomba = robot_mock()
     blid = "test_blid"
 
     coordinator = MagicMock()
@@ -274,7 +276,7 @@ def _make_entry(mission_store=None, cloud_coordinator=None, umf_aligner=None):
 
 
 def _make_sensor_v270_consolidated_sensors(cls, records=None, data=None, mission_store=None):
-    roomba = MagicMock()
+    roomba = robot_mock()
     roomba.master_state = {"state": {"reported": {}}}
     cc = _make_coordinator(records=records, data=data)
     entry = _make_entry(mission_store=mission_store)
@@ -1698,7 +1700,7 @@ class TestSensorSetupEntryCloud:
     def _make_entry(self, has_cloud: bool):
         entry = MagicMock()
         entry.options = {}
-        roomba = MagicMock()
+        roomba = robot_mock()
         roomba.master_state = {"state": {"reported": {}}}
         cc = _make_history_coordinator(_make_history(sqft=500, hr=10, mn=0, n_mssn=50))
         runtime = MagicMock()
@@ -1792,7 +1794,7 @@ class TestPrimarySlim:
 def _make_reloc_sensor(rps=None):
     """Return a RoombaRelocalisationRateSensor backed by the given RobotProfileStore."""
     from custom_components.roomba_plus.sensor import RoombaRelocalisationRateSensor
-    roomba = MagicMock()
+    roomba = robot_mock()
     roomba.master_state = {"state": {"reported": {}}}
     entry = MagicMock()
     rd = MagicMock()
@@ -2285,3 +2287,244 @@ class TestTheOnboardAreaCounterIsScaled:
 
         assert 1947 * SQFT_TO_M2 / 450.5 < 1.0
         assert 251 * SQFT_TO_M2 / 103.0 < 1.0
+
+
+# ── Merged from test_sensor.py ───────────────────────────────────────
+# A stray singular-named file the v2.8 consolidation missed. This file
+# is the one its own header names as the consolidated home.
+class TestDayScopedSensorsRollOver:
+    """@chairstacker (#78): "Area cleaned today" kept yesterday's figure
+    past midnight, and a reload cleared it.
+
+    That pairing is the diagnosis. The calculation was always right — it
+    reads today's date on every call. Nothing called it: the value comes
+    from `mission_store`, written at mission end, so between the last run
+    of one day and the first of the next there is no event to recompute
+    on. A reload recomputes everything, which is why that worked.
+    """
+
+    def test_area_cleaned_today_is_registered_for_midnight(self):
+        from custom_components.roomba_plus.sensor_core import RoombaSensor
+
+        assert "area_cleaned_today" in RoombaSensor._MIDNIGHT_SENSORS
+
+    def test_the_value_function_itself_was_never_wrong(self):
+        """Guards against 'fixing' the calculation, which is correct —
+        the fault was that nobody called it."""
+        import datetime
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.sensor_helpers import (
+            _area_cleaned_today,
+        )
+        from homeassistant.util import dt as dt_util
+
+        today = dt_util.now()
+        store = MagicMock()
+        store.query.return_value = [
+            {"area_sqft": 100.0, "started_at": today.isoformat()},
+            {
+                "area_sqft": 999.0,
+                "started_at": (today - datetime.timedelta(days=1)).isoformat(),
+            },
+        ]
+
+        # Yesterday's 999 must not appear in today's figure.
+        assert _area_cleaned_today(store) == round(100.0 * 0.092903, 1)
+
+    def test_every_date_reading_sensor_is_covered(self):
+        """A GUARD THAT FINDS THEM, not one that restates a list.
+
+        The first version of this matched function names containing
+        "today". It passed while `clean_streak` and `battery_age_days`
+        had exactly the same fault -- neither has "today" in its name,
+        and one of them had to be found by a tester running a 13-day
+        experiment.
+
+        So this looks for the actual cause: a value function whose
+        source reads the CURRENT DATE. Such a value changes because time
+        passed, and nothing about the robot passing time generates an
+        event, so it needs a rollover or it goes quietly stale.
+        """
+        import inspect
+        import re
+
+        from custom_components.roomba_plus import mission_store, sensor_helpers
+        from custom_components.roomba_plus.sensor_core import SENSORS, RoombaSensor
+
+        date_reading: set[str] = set()
+        for module in (sensor_helpers, mission_store):
+            for name, obj in vars(module).items():
+                if not callable(obj) or isinstance(obj, type):
+                    continue
+                try:
+                    src = inspect.getsource(obj)
+                except (OSError, TypeError):
+                    continue
+                if re.search(r"now\(\)\s*\.date\(\)", src):
+                    date_reading.add(name.lstrip("_"))
+
+        # Methods on MissionStore need the class walked too.
+        for name, obj in vars(mission_store.MissionStore).items():
+            try:
+                src = inspect.getsource(obj)
+            except (OSError, TypeError):
+                continue
+            if re.search(r"now\(\)\s*\.date\(\)", src):
+                date_reading.add(name.lstrip("_"))
+
+        assert date_reading, "the detector itself stopped working"
+
+        keys = {d.key for d in SENSORS}
+        for name in date_reading:
+            if name in keys:
+                assert name in RoombaSensor._MIDNIGHT_SENSORS, (
+                    f"{name} reads today's date but has no midnight rollover "
+                    f"-- it will be stale from every midnight until something "
+                    f"unrelated writes its state"
+                )
+
+    def test_the_three_known_ones_are_registered(self):
+        """Named explicitly, because the detector above could break
+        silently and the point is that these three are covered."""
+        from custom_components.roomba_plus.sensor_core import RoombaSensor
+
+        assert {"area_cleaned_today", "clean_streak", "battery_age_days"} <= (
+            RoombaSensor._MIDNIGHT_SENSORS
+        )
+
+
+# ── Merged from test_sensor_resilience.py ────────────────────────────
+# Sensor platform behaviour, and this file is the sensor platform's
+# consolidated home.
+#
+# THE NAMES ARE SUFFIXED because both files had classes called
+# TestSensorFilterFnResilience and TestSensorValueFnResilience, plus
+# four identically named shape helpers. Appending one to the other
+# let the second definition shadow the first -- eight tests vanished
+# from the suite total with everything still green. Merging by
+# concatenation is safe only after checking for collisions; there is
+# now a guard for it.
+REAL_980_STATE = {
+    "batPct": 100,
+    "batteryType": "F12432712",
+    "bbchg": {"nChgOk": 325, "nLithF": 0, "aborts": [1, 1, 1]},
+    "bbchg3": {"avgMin": 415, "hOnDock": 30557, "nAvail": 1160, "estCap": 9720,
+               "nLithChrg": 290, "nNimhChrg": 36, "nDocks": 229},
+    "bbmssn": {"nMssn": 425, "nMssnOk": 135, "nMssnC": 182, "nMssnF": 108,
+               "aMssnM": 94, "aCycleM": 42},
+    "bbrun": {"hr": 438, "min": 5, "sqft": 1903, "nStuck": 168, "nScrubs": 958,
+              "nPicks": 1099, "nPanics": 1544, "nCliffsF": 6968,
+              "nCliffsR": 3555, "nMBStll": 24, "nWStll": 23, "nCBump": 0},
+    "bin": {"present": True, "full": False},
+    "binPause": True,
+    "cap": {"pose": 1, "ota": 2, "multiPass": 2, "carpetBoost": 1, "pp": 1,
+            "binFullDetect": 1, "maps": 1, "edge": 1, "eco": 1},
+    "carpetBoost": True,
+    "cleanMissionStatus": {"cycle": "none", "phase": "charge", "error": 0,
+                           "sqft": 0, "mssnM": 0, "nMssn": 425, "notReady": 0,
+                           "initiator": ""},
+    "dock": {"known": True},
+    "hardwareRev": 3,
+    "mapUploadAllowed": True,
+    "name": "Roomba",
+    "noAutoPasses": False,
+    "openOnly": False,
+    "pose": {"point": {"x": 0, "y": 0}, "theta": 0},
+    "schedHold": False,
+    "signal": {"rssi": -47, "snr": 42},
+    "sku": "R980040",
+    "softwareVer": "v2.4.17-138",
+    "twoPass": False,
+    "vacHigh": False,
+    "wifistat": {"rssi": -47},
+}
+
+
+def _all_none_real980(state):
+    return {k: None for k in state}
+
+
+def _empty_subdicts_real980(state):
+    return {k: ({} if isinstance(v, dict) else v) for k, v in state.items()}
+
+
+def _null_subdicts_real980(state):
+    out = copy.deepcopy(state)
+    for k in ("bbrun", "bbchg3", "bbmssn", "cleanMissionStatus", "bin", "cap",
+              "pose", "signal", "wifistat", "dock", "bbchg"):
+        if k in out:
+            out[k] = None
+    return out
+
+
+def _missing_subdicts_real980(state):
+    return {k: v for k, v in state.items() if not isinstance(v, dict)}
+
+
+SHAPES = {
+    "REAL": REAL_980_STATE,
+    "all-none": _all_none_real980(REAL_980_STATE),
+    "empty-subdicts": _empty_subdicts_real980(REAL_980_STATE),
+    "null-subdicts": _null_subdicts_real980(REAL_980_STATE),
+    "missing-subdicts": _missing_subdicts_real980(REAL_980_STATE),
+    "empty-dict": {},
+}
+
+
+class TestSensorFilterFnResilienceFromResilienceFile:
+    """No filter_fn may raise on any reported-state shape — a single crash in
+    the async_setup_entry list comprehension takes down the whole platform."""
+
+    @pytest.mark.parametrize("shape_name", list(SHAPES))
+    def test_all_filter_fns_survive_shape(self, shape_name):
+        state = SHAPES[shape_name]
+        failures = []
+        for desc in SENSORS:
+            fn = getattr(desc, "filter_fn", None)
+            if fn is None:
+                continue
+            try:
+                fn(state)
+            except Exception as e:  # noqa: BLE001
+                failures.append(f"{desc.key}: {type(e).__name__}: {e}")
+        assert not failures, (
+            f"{len(failures)} filter_fn crash(es) on '{shape_name}' state:\n"
+            + "\n".join(failures)
+        )
+
+    def test_real_state_surfaces_sensors(self):
+        """Sanity: the real 980 state should surface a healthy number of
+        sensors (filter_fn → True), proving the test state is realistic."""
+        surfaced = sum(
+            1 for d in SENSORS
+            if getattr(d, "filter_fn", None) and d.filter_fn(REAL_980_STATE)
+        )
+        # A 980 with full bbrun/bbchg/bbmssn should surface many sensors
+        assert surfaced >= 10
+
+
+class TestSensorValueFnResilienceFromResilienceFile:
+    """value_fn(entity) resilience is covered comprehensively by the per-sensor
+    test files (test_sensors.py etc.), which build properly-wired entities.
+
+    A platform-wide value_fn stress test was evaluated here but a minimal mock
+    entity cannot distinguish a real crash from MagicMock-arithmetic noise (a
+    value_fn reading entity._config_entry.runtime_data.* gets a MagicMock, and
+    `MagicMock / int` raises TypeError that would not occur with a real
+    entity). The meaningful platform-failure guard is the filter_fn test above:
+    filter_fn takes the raw state dict directly and runs in the single list
+    comprehension that can take down the whole platform.
+
+    This placeholder documents that the value_fn path is intentionally covered
+    elsewhere rather than with an unreliable platform-wide mock.
+    """
+
+    def test_real_state_is_well_formed(self):
+        """Guard the test fixture itself: the reconstructed 980 state has the
+        sub-dicts the value_fns expect, so the per-sensor tests that reuse
+        similar shapes stay representative of real field data."""
+        for key in ("bbrun", "bbchg3", "bbmssn", "cleanMissionStatus"):
+            assert isinstance(REAL_980_STATE[key], dict)
+        assert REAL_980_STATE["bbrun"]["hr"] == 438
+        assert REAL_980_STATE["bbmssn"]["nMssn"] == 425

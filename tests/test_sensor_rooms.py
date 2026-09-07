@@ -77,6 +77,8 @@ class TestAFinishedMissionReadsOneHundred:
 
 
 from unittest.mock import MagicMock, patch  # noqa: E402
+
+from tests.conftest import robot_mock  # noqa: E402
 from custom_components.roomba_plus.mission_store import MissionStore  # noqa: E402
 
 from custom_components.roomba_plus.sensor_rooms import (  # noqa: E402
@@ -98,7 +100,7 @@ def _store_with(*records) -> MissionStore:
 def _make_last_mission_summary_sensor(mission_store=None, cloud_coordinator=None, umf_aligner=None):
     """Return a RoombaLastMissionSummarySensor backed by the given store."""
     from custom_components.roomba_plus.sensor import RoombaLastMissionSummarySensor
-    roomba = MagicMock()
+    roomba = robot_mock()
     roomba.master_state = {"state": {"reported": {}}}
     entry = _make_entry(
         mission_store=mission_store,
@@ -264,7 +266,7 @@ class TestLastMissionSummarySensor:
 def _make_room_cleaning_history_sensor(mission_store=None):
     """Return a RoombaRoomCleaningHistorySensor backed by the given store."""
     from custom_components.roomba_plus.sensor import RoombaRoomCleaningHistorySensor
-    roomba = MagicMock()
+    roomba = robot_mock()
     roomba.master_state = {"state": {"reported": {}}}
     entry = _make_entry(mission_store=mission_store)
     sensor = RoombaRoomCleaningHistorySensor.__new__(RoombaRoomCleaningHistorySensor)
@@ -353,7 +355,7 @@ class TestRoomCleaningHistorySensor:
 def _make_room_areas_sensor(umf_aligner=None, regions=None):
     """Return a RoombaRoomAreasSensor with the given aligner and cc.regions."""
     from custom_components.roomba_plus.sensor import RoombaRoomAreasSensor
-    roomba = MagicMock()
+    roomba = robot_mock()
     roomba.master_state = {"state": {"reported": {}}}
     entry = MagicMock()
     rd = MagicMock()
@@ -499,7 +501,7 @@ def _make_room_accessibility_sensor(
     """Return a RoombaRoomAccessibilityScoresSensor with the given
     collaborators wired in — mirrors _make_room_areas_sensor's pattern."""
     from custom_components.roomba_plus.sensor import RoombaRoomAccessibilityScoresSensor
-    roomba = MagicMock()
+    roomba = robot_mock()
     roomba.master_state = {"state": {"reported": {}}}
     entry = MagicMock()
     rd = MagicMock()

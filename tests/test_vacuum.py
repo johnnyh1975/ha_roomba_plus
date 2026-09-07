@@ -14,6 +14,8 @@ from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 from unittest.mock import patch
 import pytest
+
+from tests.conftest import robot_mock
 from custom_components.roomba_plus.umf_aligner import UmfAligner
 import json
 from pathlib import Path
@@ -72,7 +74,7 @@ def _make_runtime_data(
 
 
 def _make_roomba(state: dict | None = None):
-    r = MagicMock()
+    r = robot_mock()
     r.master_state = {"state": {"reported": state or {}}}
     r.current_state = "Charging"
     r.error_code = 0
@@ -89,6 +91,9 @@ def _make_smart_data(regions=None, has_data=True):
         {"id": "21", "name": "Kitchen"},
     ]
     data = MagicMock()
+    # The room-cleaning backend reaches the client through here, and it
+    # is awaited since roombapy 2.x.
+    data.roomba = robot_mock()
     data.map_capability = MapCapability.SMART
     data.cloud_coordinator = coord
     data.has_cloud = has_data
@@ -141,11 +146,13 @@ def _make_vacuum_entity_v270_ia74_zone(coordinator=None, vacuum_state=None):
     """Create a minimal RoombaVacuum-like object for testing."""
     from custom_components.roomba_plus.vacuum import RoombaVacuum
 
-    roomba = MagicMock()
+    roomba = robot_mock()
     roomba.master_state = {"state": {"reported": vacuum_state or {}}}
 
     entry = MagicMock()
     data = MagicMock()
+    # The room-cleaning backend awaits this since roombapy 2.x.
+    data.roomba = roomba
     data.has_cloud = True
     # SMART is now required for segment cleaning, where the old code
     # checked only has_cloud. Not a new restriction in practice: HA only
@@ -346,11 +353,15 @@ class TestAsyncCleanSegments:
             mock_hass.async_add_executor_job = AsyncMock()
             await v.async_clean_segments(["MAP001_19", "MAP001_21"])
 
-        mock_hass.async_add_executor_job.assert_called_once()
-        call_args = mock_hass.async_add_executor_job.call_args
+        # ASKS THE CLIENT, not the executor: since roombapy 2.x the
+        # command is awaited directly, so the executor is never used and
+        # `call_args` would be None.
+        send = v._config_entry.runtime_data.roomba.send_command
+        send.assert_awaited_once()
+        call_args = send.await_args
         # Uses send_command("start", params) — not set_preference (Bug 5 fix)
-        assert call_args[0][1] == "start"
-        params = call_args[0][2]
+        assert call_args[0][0] == "start"
+        params = call_args[0][1]
         assert params["pmap_id"] == "MAP001"
         assert len(params["regions"]) == 2
         assert params["regions"][0]["region_id"] == "19"
@@ -380,8 +391,8 @@ class TestAsyncCleanSegments:
             mock_hass.async_add_executor_job = AsyncMock()
             await v.async_clean_segments(["MAP001_19", "OTHERMAP_21"])
 
-        call_args = mock_hass.async_add_executor_job.call_args
-        params = call_args[0][2]
+        call_args = v._config_entry.runtime_data.roomba.send_command.await_args
+        params = call_args[0][1]
         assert len(params["regions"]) == 1
         assert params["regions"][0]["region_id"] == "19"
 
@@ -394,7 +405,7 @@ class TestAsyncCleanSegments:
             mock_hass.async_add_executor_job = AsyncMock()
             await v.async_clean_segments(["MAP001_19"])
 
-        payload = mock_hass.async_add_executor_job.call_args[0][2]
+        payload = v._config_entry.runtime_data.roomba.send_command.await_args[0][1]
         assert payload["regions"][0]["params"]["twoPass"] is False
 
     @pytest.mark.asyncio
@@ -413,7 +424,7 @@ class TestAsyncCleanSegments:
             mock_hass.async_add_executor_job = AsyncMock()
             await v.async_clean_segments(["MAP001_19"])
 
-        payload = mock_hass.async_add_executor_job.call_args[0][2]
+        payload = v._config_entry.runtime_data.roomba.send_command.await_args[0][1]
         assert payload["regions"][0]["params"]["noAutoPasses"] is False
         assert payload["regions"][0]["params"]["twoPass"] is False
 
@@ -660,8 +671,7 @@ class TestPmapUnderscoreRegression:
             mock_hass.async_add_executor_job = AsyncMock()
             await v.async_clean_segments([seg_id])
 
-        mock_hass.async_add_executor_job.assert_called_once()
-        payload = mock_hass.async_add_executor_job.call_args[0][2]
+        payload = v._config_entry.runtime_data.roomba.send_command.await_args[0][1]
         assert payload["pmap_id"] == pmap_id, (
             f"pmap_id must be '{pmap_id}', not a truncated value"
         )
@@ -949,10 +959,12 @@ class TestCleanSegmentsZones:
 
         captured_params = {}
 
-        async def _capture(fn, cmd, params):
+        # At the client: the command is awaited directly since roombapy
+        # 2.x, so a capture on the executor would never fire.
+        async def _capture(cmd, params):
             captured_params.update(params)
 
-        entity.hass.async_add_executor_job = _capture
+        entity._config_entry.runtime_data.roomba.send_command = _capture
 
         # Provide a zone segment ID
         await entity.async_clean_segments(["PMAP1_zid_z1"])
@@ -973,10 +985,12 @@ class TestCleanSegmentsZones:
 
         captured_params = {}
 
-        async def _capture(fn, cmd, params):
+        # At the client: the command is awaited directly since roombapy
+        # 2.x, so a capture on the executor would never fire.
+        async def _capture(cmd, params):
             captured_params.update(params)
 
-        entity.hass.async_add_executor_job = _capture
+        entity._config_entry.runtime_data.roomba.send_command = _capture
 
         await entity.async_clean_segments(["PMAP1_19"])
 
@@ -997,10 +1011,12 @@ class TestCleanSegmentsZones:
 
         captured_params = {}
 
-        async def _capture(fn, cmd, params):
+        # At the client: the command is awaited directly since roombapy
+        # 2.x, so a capture on the executor would never fire.
+        async def _capture(cmd, params):
             captured_params.update(params)
 
-        entity.hass.async_add_executor_job = _capture
+        entity._config_entry.runtime_data.roomba.send_command = _capture
 
         await entity.async_clean_segments(["PMAP1_19", "PMAP1_zid_z1"])
 
@@ -1318,28 +1334,24 @@ class TestLocalPushVacuumActionsUnaffected:
         v = _make_vacuum_entity()
         v.hass = MagicMock()
         v.hass.async_add_executor_job = AsyncMock()
-        v.vacuum.send_command = MagicMock()
+        v.vacuum.send_command = AsyncMock()
         return v
 
     @pytest.mark.asyncio
-    async def test_start_uses_executor_job_with_roomba_send_command(self):
+    async def test_start_awaits_roomba_send_command(self):
         v = self._make_local_entity()
 
         await v.async_start()
 
-        v.hass.async_add_executor_job.assert_awaited_once_with(
-            v.vacuum.send_command, "start"
-        )
+        v.vacuum.send_command.assert_awaited_once_with("start")
 
     @pytest.mark.asyncio
-    async def test_locate_uses_executor_job_with_find_command(self):
+    async def test_locate_awaits_the_find_command(self):
         v = self._make_local_entity()
 
         await v.async_locate()
 
-        v.hass.async_add_executor_job.assert_awaited_once_with(
-            v.vacuum.send_command, "find"
-        )
+        v.vacuum.send_command.assert_awaited_once_with("find")
 
 
 # =========================================================================
@@ -1655,7 +1667,11 @@ class TestSendVerbIsSharedByTheUniformActions:
         v = object.__new__(IRobotVacuum)
         v._connection_type = connection_type
         v._prime_robot = AsyncMock()
-        v.vacuum = MagicMock()
+        # Both clients are async now -- the Prime one always was, the
+        # local one since roombapy 2.x. A MagicMock here made the two
+        # branches of this very test behave differently for a reason
+        # that has nothing to do with what it checks.
+        v.vacuum = robot_mock()
         v.hass = MagicMock()
         v.hass.async_add_executor_job = AsyncMock()
         return v
@@ -1669,7 +1685,7 @@ class TestSendVerbIsSharedByTheUniformActions:
         await v._async_send_verb("stop")
 
         v._prime_robot.send_simple_command.assert_awaited_once_with("stop")
-        v.hass.async_add_executor_job.assert_not_awaited()
+        v.vacuum.send_command.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_classic_goes_through_the_local_connection(self):
@@ -1679,7 +1695,9 @@ class TestSendVerbIsSharedByTheUniformActions:
 
         await v._async_send_verb("stop")
 
-        v.hass.async_add_executor_job.assert_awaited_once()
+        # The local client, not the executor: each generation now reaches
+        # its own library directly, and this test is about which one.
+        v.vacuum.send_command.assert_awaited_once_with("stop")
         v._prime_robot.send_simple_command.assert_not_awaited()
 
     @pytest.mark.asyncio

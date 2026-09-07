@@ -117,6 +117,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from tests.conftest import robot_mock
+
 # IMPORTED FROM sensor_cloud DIRECTLY, not through the sensor.py facade
 # as they were in test_sensors.py. All six are defined in this module;
 # the facade only re-exported them, which is exactly why a search for
@@ -707,7 +709,7 @@ def _make_coordinator(records=None, data=None):
 
 
 def _make_sensor_v270_consolidated_sensors(cls, records=None, data=None, mission_store=None):
-    roomba = MagicMock()
+    roomba = robot_mock()
     roomba.master_state = {"state": {"reported": {}}}
     cc = _make_coordinator(records=records, data=data)
     entry = _make_entry(mission_store=mission_store)
@@ -728,7 +730,7 @@ def _make_sensor(
     coordinator_data: dict | None = None,
 ) -> CloudRawSensor:
     """Build a minimal CloudRawSensor with mocked internals."""
-    roomba = MagicMock()
+    roomba = robot_mock()
     blid = "test_blid"
 
     coordinator = MagicMock()
@@ -1327,7 +1329,7 @@ def _make_health_trend_sensor(rps):
     """Return a RoombaHealthScoreTrendSensor with the given robot_profile_store
     (or None) wired into runtime_data."""
     from custom_components.roomba_plus.sensor import RoombaHealthScoreTrendSensor
-    roomba = MagicMock()
+    roomba = robot_mock()
     roomba.master_state = {"state": {"reported": {}}}
     entry = MagicMock()
     entry.runtime_data.robot_profile_store = rps

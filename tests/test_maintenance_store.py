@@ -10,6 +10,8 @@ from __future__ import annotations
 
 
 import pytest
+
+from tests.conftest import robot_mock
 from custom_components.roomba_plus.maintenance_store import MaintenanceStore
 import datetime
 from custom_components.roomba_plus.sensor import RoombaSensorDescription
@@ -1320,7 +1322,7 @@ class TestMaintenanceDueOnMessageRepairCheck:
         from custom_components.roomba_plus.binary_sensor import RoombaMaintenanceDue
         from unittest.mock import MagicMock
 
-        roomba = MagicMock()
+        roomba = robot_mock()
         roomba.master_state = {"state": {"reported": {"bbrun": {"hr": current_hr}}}}
         entry = MagicMock()
         store = MaintenanceStore()

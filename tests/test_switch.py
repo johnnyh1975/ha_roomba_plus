@@ -12,6 +12,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from tests.conftest import robot_mock
+
 from custom_components.roomba_plus.switch import (
     EdgeCleanSwitch,
     AlwaysFinishSwitch,
@@ -26,7 +28,13 @@ from custom_components.roomba_plus.switch import (
 
 def _make(cls, state):
     """Build a switch instance bypassing __init__, with vacuum_state set."""
-    roomba = MagicMock()
+    roomba = robot_mock()
+    # THE ROBOT CLIENT IS ASYNC SINCE roombapy 2.x. A MagicMock answers a
+    # coroutine call with a MagicMock, which cannot be awaited -- so these
+    # have to be AsyncMock or every test that sends a command fails on the
+    # await rather than on what it is testing.
+    for _coro in ("send_command", "set_preference", "connect", "disconnect"):
+        setattr(roomba, _coro, AsyncMock())
     roomba.master_state = {"state": {"reported": state}}
     s = cls.__new__(cls)
     s.vacuum = roomba
@@ -57,16 +65,14 @@ class TestEdgeCleanSwitch:
     async def test_turn_on_sends_openonly_false(self):
         s = _make(EdgeCleanSwitch, {"openOnly": True})
         await s.async_turn_on()
-        s.hass.async_add_executor_job.assert_awaited_once_with(
-            s.vacuum.set_preference, "openOnly", False
+        s.vacuum.set_preference.assert_awaited_once_with("openOnly", False
         )
 
     @pytest.mark.asyncio
     async def test_turn_off_sends_openonly_true(self):
         s = _make(EdgeCleanSwitch, {"openOnly": False})
         await s.async_turn_off()
-        s.hass.async_add_executor_job.assert_awaited_once_with(
-            s.vacuum.set_preference, "openOnly", True
+        s.vacuum.set_preference.assert_awaited_once_with("openOnly", True
         )
 
     def test_new_state_filter(self):
@@ -95,16 +101,14 @@ class TestAlwaysFinishSwitch:
     async def test_turn_on_sends_binpause_false(self):
         s = _make(AlwaysFinishSwitch, {"binPause": True})
         await s.async_turn_on()
-        s.hass.async_add_executor_job.assert_awaited_once_with(
-            s.vacuum.set_preference, "binPause", False
+        s.vacuum.set_preference.assert_awaited_once_with("binPause", False
         )
 
     @pytest.mark.asyncio
     async def test_turn_off_sends_binpause_true(self):
         s = _make(AlwaysFinishSwitch, {"binPause": False})
         await s.async_turn_off()
-        s.hass.async_add_executor_job.assert_awaited_once_with(
-            s.vacuum.set_preference, "binPause", True
+        s.vacuum.set_preference.assert_awaited_once_with("binPause", True
         )
 
 
@@ -127,16 +131,14 @@ class TestScheduleHoldSwitch:
     async def test_turn_on_sends_schedhold_true(self):
         s = _make(ScheduleHoldSwitch, {"schedHold": False})
         await s.async_turn_on()
-        s.hass.async_add_executor_job.assert_awaited_once_with(
-            s.vacuum.set_preference, "schedHold", True
+        s.vacuum.set_preference.assert_awaited_once_with("schedHold", True
         )
 
     @pytest.mark.asyncio
     async def test_turn_off_sends_schedhold_false(self):
         s = _make(ScheduleHoldSwitch, {"schedHold": True})
         await s.async_turn_off()
-        s.hass.async_add_executor_job.assert_awaited_once_with(
-            s.vacuum.set_preference, "schedHold", False
+        s.vacuum.set_preference.assert_awaited_once_with("schedHold", False
         )
 
 
@@ -159,16 +161,14 @@ class TestChildLockSwitch:
     async def test_turn_on_sends_childlock_true(self):
         s = _make(ChildLockSwitch, {"childLock": False})
         await s.async_turn_on()
-        s.hass.async_add_executor_job.assert_awaited_once_with(
-            s.vacuum.set_preference, "childLock", True
+        s.vacuum.set_preference.assert_awaited_once_with("childLock", True
         )
 
     @pytest.mark.asyncio
     async def test_turn_off_sends_childlock_false(self):
         s = _make(ChildLockSwitch, {"childLock": True})
         await s.async_turn_off()
-        s.hass.async_add_executor_job.assert_awaited_once_with(
-            s.vacuum.set_preference, "childLock", False
+        s.vacuum.set_preference.assert_awaited_once_with("childLock", False
         )
 
 
@@ -191,16 +191,14 @@ class TestEcoChargeSwitch:
     async def test_turn_on_sends_ecocharge_true(self):
         s = _make(EcoChargeSwitch, {"ecoCharge": False})
         await s.async_turn_on()
-        s.hass.async_add_executor_job.assert_awaited_once_with(
-            s.vacuum.set_preference, "ecoCharge", True
+        s.vacuum.set_preference.assert_awaited_once_with("ecoCharge", True
         )
 
     @pytest.mark.asyncio
     async def test_turn_off_sends_ecocharge_false(self):
         s = _make(EcoChargeSwitch, {"ecoCharge": True})
         await s.async_turn_off()
-        s.hass.async_add_executor_job.assert_awaited_once_with(
-            s.vacuum.set_preference, "ecoCharge", False
+        s.vacuum.set_preference.assert_awaited_once_with("ecoCharge", False
         )
 
 
@@ -224,16 +222,14 @@ class TestGentleModeSwitch:
     async def test_turn_on_sends_gentle_true(self):
         s = _make(GentleModeSwitch, {"gentle": False})
         await s.async_turn_on()
-        s.hass.async_add_executor_job.assert_awaited_once_with(
-            s.vacuum.set_preference, "gentle", True
+        s.vacuum.set_preference.assert_awaited_once_with("gentle", True
         )
 
     @pytest.mark.asyncio
     async def test_turn_off_sends_gentle_false(self):
         s = _make(GentleModeSwitch, {"gentle": True})
         await s.async_turn_off()
-        s.hass.async_add_executor_job.assert_awaited_once_with(
-            s.vacuum.set_preference, "gentle", False
+        s.vacuum.set_preference.assert_awaited_once_with("gentle", False
         )
 
     def test_new_state_filter_true_when_gentle_present(self):
@@ -249,7 +245,7 @@ class TestGentleModeSwitch:
 
 class TestSwitchSetupGating:
     def _setup(self, reported_state):
-        roomba = MagicMock()
+        roomba = robot_mock()
         roomba.master_state = {"state": {"reported": reported_state}}
         entry = MagicMock()
         entry.runtime_data.roomba = roomba

@@ -13,6 +13,8 @@ import sys
 import datetime
 import collections
 import pytest
+
+from tests.conftest import robot_mock
 from unittest.mock import MagicMock
 from custom_components.roomba_plus.entity import IRobotEntity
 from unittest.mock import AsyncMock
@@ -41,7 +43,7 @@ def _make_entity(cell_count: int = 5, stuck_count: int = 2):
     gs._cells = {(i, 0): 0.5 for i in range(cell_count)}
     gs._stuck = {(0, 0): {"count": stuck_count, "times": []}}
 
-    roomba = MagicMock()
+    roomba = robot_mock()
     roomba.master_state = {"state": {"reported": {}}}
     config_entry = MagicMock()
     config_entry.runtime_data = MagicMock()
@@ -897,7 +899,7 @@ def _make_map_entity():
     """
     from custom_components.roomba_plus.image import RoombaMapImage
 
-    roomba = MagicMock()
+    roomba = robot_mock()
     roomba.master_state = {"state": {"reported": {}}}
 
     entity = RoombaMapImage.__new__(RoombaMapImage)

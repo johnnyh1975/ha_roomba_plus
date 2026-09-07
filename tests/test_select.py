@@ -10,6 +10,8 @@ from __future__ import annotations
 
 
 import pytest
+
+from tests.conftest import robot_mock
 import tests.conftest
 from custom_components.roomba_plus.select import CloudSmartZoneSelect, resolve_zone_name
 import sys
@@ -25,7 +27,7 @@ import asyncio
 def _mission_sensor(cycle="none", phase=""):
     """Build a minimal RoombaMissionActive with stubbed vacuum state."""
     from custom_components.roomba_plus.binary_sensor import RoombaMissionActive
-    roomba = MagicMock()
+    roomba = robot_mock()
     roomba.master_state = {"state": {"reported": {
         "cleanMissionStatus": {"cycle": cycle, "phase": phase}
     }}}
@@ -42,7 +44,7 @@ def _boost_entity(carpet_boost=None, vac_high=None):
         state["carpetBoost"] = carpet_boost
     if vac_high is not None:
         state["vacHigh"] = vac_high
-    roomba = MagicMock()
+    roomba = robot_mock()
     roomba.master_state = {"state": {"reported": state}}
     s = CarpetBoostSelect.__new__(CarpetBoostSelect)
     s.entity_description = _CARPET_BOOST_DESC   # F-RB-6: set descriptor (bypassed __init__)
@@ -421,10 +423,14 @@ class TestCarpetBoostSlugMigration:
         v = RoombaVacuumCarpetBoost.__new__(RoombaVacuumCarpetBoost)
         v.hass = MagicMock()
         v.hass.async_add_executor_job = AsyncMock()
-        v.vacuum = MagicMock()
+        v.vacuum = robot_mock()
         await v.async_set_fan_speed("Automatic")
-        # Should not log an error and should call set_preference twice
-        assert v.hass.async_add_executor_job.call_count == 2
+        # Should not log an error, and should write both keys of the pair.
+        #
+        # ASSERTS ON THE ROBOT, not on the executor: the call goes
+        # straight to the client since roombapy 2.x, so counting
+        # executor jobs measures a transport that is no longer used.
+        assert v.vacuum.set_preference.await_count == 2
 
     def test_all_seven_languages_have_lowercase_state_keys(self):
         """strings.json + all 7 translations must use lowercase slug keys
@@ -1298,7 +1304,9 @@ class TestSelectSetupEntryRouting:
 # ── CloudHistorySensor test helpers ──────────────────────────────────────────
 
 
-def _make_history(sqft: int = 0, hr: int = 0, mn: int = 0, n_mssn: int = 0) -> dict:
+# The four helpers below shadowed identically named ones further up,
+# which differ in body. Suffixed so both sets are reachable.
+def _make_history_v2(sqft: int = 0, hr: int = 0, mn: int = 0, n_mssn: int = 0) -> dict:
     """Build a fake coordinator.data["mission_history"] dict for CloudHistorySensor tests."""
     return {
         "runtimeStats": {"sqft": sqft, "hr": hr, "min": mn},
@@ -1306,12 +1314,12 @@ def _make_history(sqft: int = 0, hr: int = 0, mn: int = 0, n_mssn: int = 0) -> d
     }
 
 
-def _make_history_list(**kwargs) -> list:
-    """Wrap _make_history in a list — simulates the raw API response before normalisation."""
-    return [_make_history(**kwargs)]
+def _make_history_list_v2(**kwargs) -> list:
+    """Wrap _make_history_v2 in a list — simulates the raw API response before normalisation."""
+    return [_make_history_v2(**kwargs)]
 
 
-def _make_history_sensor(key: str, history: dict | None = None, *, success: bool = True):
+def _make_history_sensor_v2(key: str, history: dict | None = None, *, success: bool = True):
     """Return a CloudHistorySensor instance wired to a fake coordinator."""
     from custom_components.roomba_plus.sensor import CLOUD_HISTORY_SENSORS, CloudHistorySensor
     desc = next(d for d in CLOUD_HISTORY_SENSORS if d.key == key)
@@ -1326,7 +1334,7 @@ def _make_history_sensor(key: str, history: dict | None = None, *, success: bool
     return sensor
 
 
-def _make_history_coordinator(history: dict):
+def _make_history_coordinator_v2(history: dict):
     """Return a fake coordinator whose data contains mission_history."""
     coordinator = MagicMock()
     coordinator.last_update_success = True

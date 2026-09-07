@@ -6,6 +6,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from tests.conftest import robot_mock
+
 
 class TestBackendSelection:
     """Which backend a robot gets — and None as a real answer.
@@ -911,7 +913,14 @@ class TestClassicBackendRequiresTheRoomListFirst:
 
         from custom_components.roomba_plus.room_cleaning import ClassicRoomCleaning
 
-        return ClassicRoomCleaning(MagicMock(), MagicMock(), MagicMock())
+        # The client comes off `data`, not from a positional argument --
+        # the constructor takes (data, config_entry, hass). Its
+        # `send_command` is awaited since roombapy 2.x, so a plain
+        # MagicMock fails on the await before the test reaches what it
+        # is checking.
+        data = MagicMock()
+        data.roomba = robot_mock()
+        return ClassicRoomCleaning(data, MagicMock(), MagicMock())
 
     @pytest.mark.asyncio
     async def test_cleaning_without_reading_rooms_first_raises(self):
@@ -946,7 +955,9 @@ class TestClassicBackendRequiresTheRoomListFirst:
         with patch.object(backend, "_raise_if_map_updating"):
             await backend.clean_rooms(["12"])
 
-        assert backend._hass.async_add_executor_job.await_count == 1
+        # The command reaches the robot -- which is the point of the
+        # test, and no longer travels through the executor.
+        assert backend._data.roomba.send_command.await_count == 1
 
 
 class TestPrimeMapConsistency:
@@ -1692,11 +1703,15 @@ class TestClassicMopParamsMatchTheCapture:
 
         captured = {}
 
-        def _executor(fn, name, params):
+        # CAPTURED AT THE ROBOT, not at the executor. Since roombapy 2.x
+        # the command goes straight to `send_command`, so intercepting
+        # `async_add_executor_job` would catch nothing and the test would
+        # assert against an empty dict.
+        async def _send(name, params):
             captured["name"] = name
             captured["params"] = params
 
-        backend._hass.async_add_executor_job = AsyncMock(side_effect=_executor)
+        backend._roomba.send_command = _send
 
         with patch.object(
             ClassicRoomCleaning, "available_rooms", AsyncMock(return_value={"K": "2"})

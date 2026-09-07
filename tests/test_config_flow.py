@@ -22,6 +22,7 @@ import asyncio
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 from unittest.mock import patch
+import inspect
 import pytest
 
 # MODULE SCOPE, not inside the test: the `hass` fixture rebuilds the
@@ -30,6 +31,11 @@ import pytest
 from custom_components.roomba_plus.const import (
     CONF_BLID, CONF_IROBOT_PASSWORD, CONF_IROBOT_USERNAME,
         )
+from unittest.mock import MagicMock, patch
+from custom_components.roomba_plus.const import (
+    CONF_CORRELATION_ENTITIES,
+    CONF_ROOM_SCHEDULE,
+)
 
 
 class TestCF2PmapResolution:
@@ -797,10 +803,17 @@ class TestLinkStep:
     async def _run(self, flow, *, password="pw", raises=None, validate=None):
         from custom_components.roomba_plus import config_flow
 
-        flow.hass.async_add_executor_job = AsyncMock(
+        # THE PASSWORD COMES FROM THE CLIENT NOW, not from the executor.
+        # `RoombaPassword.get_password()` is a coroutine since roombapy
+        # 2.x, so the stub has to live on the patched class -- the
+        # executor is no longer in the path and stubbing it would leave
+        # the real MagicMock to be awaited.
+        pw_class = MagicMock()
+        pw_class.return_value.get_password = AsyncMock(
             side_effect=raises, return_value=password
         )
-        with patch.object(config_flow, "RoombaPassword", MagicMock()), \
+        flow.hass.async_add_executor_job = AsyncMock()
+        with patch.object(config_flow, "RoombaPassword", pw_class), \
              patch.object(config_flow, "validate_input",
                           AsyncMock(**(validate or {"return_value": {"name": "Rosie"}}))):
             return await flow.async_step_link({})
@@ -866,9 +879,10 @@ class TestLinkStep:
         from custom_components.roomba_plus import config_flow
 
         flow = self._flow(name="Already Known")
-        flow.hass.async_add_executor_job = AsyncMock(return_value="pw")
+        pw_class = MagicMock()
+        pw_class.return_value.get_password = AsyncMock(return_value="pw")
 
-        with patch.object(config_flow, "RoombaPassword", MagicMock()), \
+        with patch.object(config_flow, "RoombaPassword", pw_class), \
              patch.object(config_flow, "validate_input", AsyncMock()) as validate:
             await flow.async_step_link({})
 
@@ -945,3 +959,170 @@ class TestRegionSensorsOptionIsOfferedOnBothTiers:
         from custom_components.roomba_plus.const import DEFAULT_REGION_SENSORS
 
         assert DEFAULT_REGION_SENSORS is False
+
+
+class TestTheRemovedConnectionOptions:
+    """`continuous` and `delay` are gone from the settings form (4.2).
+
+    roombapy 2.x keeps one supervised connection and reconnects on its
+    own -- the behaviour `continuous: true` selected, and what the
+    option's own description recommended. There is no polling mode left,
+    so the library has neither parameter and offering the choice would
+    offer something nothing reads.
+
+    Pinned because a form is easy to extend and these two are easy to
+    put back from muscle memory. A returning field would be a control
+    that does nothing.
+    """
+
+    def test_neither_option_is_offered(self) -> None:
+        from custom_components.roomba_plus import config_flow
+
+        source = inspect.getsource(config_flow.RoombaPlusOptionsFlow)
+        form = source[source.index('step_id="settings"'):]
+
+        assert "CONF_CONTINUOUS" not in form
+        assert "CONF_DELAY" not in form
+
+    def test_neither_is_still_labelled(self) -> None:
+        """A label for a field that does not exist reads, to anyone
+        looking at strings.json, like a field that does."""
+        import json
+        import pathlib
+
+        base = pathlib.Path(__file__).parent.parent / "custom_components" / "roomba_plus"
+        for name in ["strings.json", *(f"translations/{c}.json" for c in
+                     ("en", "de", "es", "fr", "it", "nl", "pl", "pt"))]:
+            step = json.loads((base / name).read_text(encoding="utf-8"))
+            settings = step.get("options", {}).get("step", {}).get("settings", {})
+            for section in ("data", "data_description"):
+                keys = settings.get(section, {})
+                assert "continuous" not in keys, f"{name}: {section}.continuous"
+                assert "delay" not in keys, f"{name}: {section}.delay"
+
+    def test_a_stored_false_is_reported_once(self) -> None:
+        """Someone who deliberately turned the persistent connection off
+        gets it back without asking. The new behaviour is the one that
+        was recommended, but it is still a silent change to a setting
+        they chose -- so it goes in their log."""
+        import custom_components.roomba_plus as integration
+
+        # In `_phase_connect`, where the client is built -- not in
+        # `async_setup_entry`, which delegates the phases.
+        source = inspect.getsource(integration._phase_connect)
+
+        assert "config_entry.options.get(CONF_CONTINUOUS) is False" in source
+
+
+# ── Merged from test_config_flow_v330.py ─────────────────────────────
+# Version-named test files are the pattern the v2.8 consolidation set
+# out to remove; this one survived it.
+#
+# The import is module-level here, as it was in the source file. The
+# rest of this file imports the class inside each helper instead; both
+# work, and unifying them would be churn for its own sake.
+from custom_components.roomba_plus.config_flow import (  # noqa: E402
+    RoombaPlusOptionsFlow,
+)
+
+
+def _flow(options=None, regions=None, capability="smart", has_cloud=True):
+    flow = object.__new__(RoombaPlusOptionsFlow)
+    entry = MagicMock()
+    entry.options = options or {}
+    data = entry.runtime_data
+    data.map_capability.value = capability
+    data.has_cloud = has_cloud
+    if not has_cloud:
+        data.cloud_coordinator = None
+    else:
+        data.cloud_coordinator.regions = regions if regions is not None else [
+            {"id": "7", "name": "Kitchen"}, {"id": "9", "name": "Hall"},
+        ]
+    # OptionsFlow.config_entry is a property in recent HA — each test
+    # patches it at class level via patch.object(..., new=entry).
+    return flow, entry
+
+
+class TestRoomScheduleStep:
+    def _make(self, **kw):
+        flow, entry = _flow(**kw)
+        # Patch the property at class level per-test via context manager
+        return flow, entry
+
+    @pytest.mark.asyncio
+    async def test_form_shows_selector_per_room_with_current_defaults(self):
+        flow, entry = self._make(
+            options={CONF_ROOM_SCHEDULE: {"Kitchen": "daily"}}
+        )
+        with patch.object(
+            RoombaPlusOptionsFlow, "config_entry", new=entry, create=True
+        ):
+            result = await flow.async_step_room_schedule(None)
+        assert result["type"].value == "form"
+        schema_keys = {k.schema: k.default() for k in result["data_schema"].schema}
+        assert schema_keys == {"Hall": "learned", "Kitchen": "daily"}
+
+    @pytest.mark.asyncio
+    async def test_save_filters_orphans_and_learned(self):
+        """Orphan filter: a configured room that vanished from the cloud
+        map is dropped on save; 'learned' entries are not stored."""
+        flow, entry = self._make(
+            options={CONF_ROOM_SCHEDULE: {"Ghost": "weekly"}}
+        )
+        with patch.object(
+            RoombaPlusOptionsFlow, "config_entry", new=entry, create=True
+        ):
+            result = await flow.async_step_room_schedule(
+                {"Kitchen": "every_2_days", "Hall": "learned",
+                 "Ghost": "weekly"}
+            )
+        assert result["type"].value == "create_entry"
+        assert result["data"][CONF_ROOM_SCHEDULE] == {
+            "Kitchen": "every_2_days"
+        }
+
+    @pytest.mark.asyncio
+    async def test_gate_aborts_without_smart_cloud(self):
+        flow, entry = self._make(capability="ephemeral", has_cloud=False)
+        with patch.object(
+            RoombaPlusOptionsFlow, "config_entry", new=entry, create=True
+        ):
+            result = await flow.async_step_room_schedule(None)
+        assert result["type"].value == "abort"
+        assert result["reason"] == "room_schedule_not_supported"
+
+    @pytest.mark.asyncio
+    async def test_abort_without_named_rooms(self):
+        flow, entry = self._make(regions=[])
+        with patch.object(
+            RoombaPlusOptionsFlow, "config_entry", new=entry, create=True
+        ):
+            result = await flow.async_step_room_schedule(None)
+        assert result["type"].value == "abort"
+        assert result["reason"] == "room_schedule_no_rooms"
+
+
+class TestSettingsCorrelationField:
+    @pytest.mark.asyncio
+    async def test_settings_schema_contains_correlation_entities(self):
+        flow, entry = _flow(options={CONF_CORRELATION_ENTITIES: ["sensor.h"]})
+        with patch.object(
+            RoombaPlusOptionsFlow, "config_entry", new=entry, create=True
+        ):
+            result = await flow.async_step_settings(None)
+        assert result["type"].value == "form"
+        keys = {k.schema: k.default() for k in result["data_schema"].schema}
+        assert keys[CONF_CORRELATION_ENTITIES] == ["sensor.h"]
+
+    @pytest.mark.asyncio
+    async def test_settings_save_persists_correlation_entities(self):
+        flow, entry = _flow()
+        with patch.object(
+            RoombaPlusOptionsFlow, "config_entry", new=entry, create=True
+        ):
+            result = await flow.async_step_settings(
+                {CONF_CORRELATION_ENTITIES: ["sensor.humidity"]}
+            )
+        assert result["type"].value == "create_entry"
+        assert result["data"][CONF_CORRELATION_ENTITIES] == ["sensor.humidity"]

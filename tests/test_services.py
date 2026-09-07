@@ -13,6 +13,8 @@ import json
 from pathlib import Path
 
 import pytest
+
+from tests.conftest import robot_mock
 from unittest.mock import AsyncMock, MagicMock, patch
 
 
@@ -320,9 +322,11 @@ class TestHandleSmartStartConnectionTypeBranching:
         # This fixture used to set `.start` on the mock -- an attribute
         # `roombapy.Roomba` does not define -- so the test supplied the
         # very thing the production path was missing.
-        entry.runtime_data.roomba.send_command = (
-            lambda cmd: started.append(cmd)
-        )
+        # And async, because roombapy 2.x made it a coroutine.
+        async def _send(cmd):
+            started.append(cmd)
+
+        entry.runtime_data.roomba.send_command = _send
         hass.config_entries.async_get_entry.return_value = entry
         hass.async_add_executor_job = AsyncMock(
             side_effect=lambda fn, *a: fn(*a)
@@ -550,7 +554,7 @@ def _make_smart_config_entry(*, zone_data, two_pass_state=False, global_two_pass
         "noAutoPasses": False,
         "twoPass": two_pass_state,
     }
-    data.roomba.send_command = MagicMock()
+    data.roomba.send_command = AsyncMock()
     return config_entry
 
 
@@ -647,7 +651,7 @@ class TestCleanRoomPerRoomPasses:
             mock_er.return_value.async_get.return_value = ent_reg_entry
             await async_handle_clean_room(call)
 
-        sent_params = config_entry.runtime_data.roomba.send_command.call_args[0][1]
+        sent_params = config_entry.runtime_data.roomba.send_command.await_args[0][1]
         regions_by_id = {r["region_id"]: r for r in sent_params["regions"]}
         assert regions_by_id["3"]["params"]["twoPass"] is True   # Kitchen — explicit override
         assert regions_by_id["5"]["params"]["twoPass"] is False  # Hallway — falls back to robot state
@@ -670,7 +674,7 @@ class TestCleanRoomPerRoomPasses:
             mock_er.return_value.async_get.return_value = ent_reg_entry
             await async_handle_clean_room(call)
 
-        sent_params = config_entry.runtime_data.roomba.send_command.call_args[0][1]
+        sent_params = config_entry.runtime_data.roomba.send_command.await_args[0][1]
         for region in sent_params["regions"]:
             assert region["params"]["twoPass"] is True
 
@@ -692,7 +696,7 @@ class TestCleanRoomPerRoomPasses:
             mock_er.return_value.async_get.return_value = ent_reg_entry
             await async_handle_clean_room(call)
 
-        sent_params = config_entry.runtime_data.roomba.send_command.call_args[0][1]
+        sent_params = config_entry.runtime_data.roomba.send_command.await_args[0][1]
         assert sent_params["regions"][0]["params"]["twoPass"] is False
 
 
@@ -1526,6 +1530,9 @@ class TestAutoCleanDirtyRooms:
         # branch and awaited a Mock. The fixture was describing a robot
         # that is both generations at once.
         data.prime_robot = None
+        # And the local client is awaited since roombapy 2.x -- the same
+        # kind of mismatch as the one above, one layer down.
+        data.roomba = robot_mock()
         data.map_capability = MapCapability.SMART
         ms = MissionStore(); ms._records = records
         data.mission_store = ms

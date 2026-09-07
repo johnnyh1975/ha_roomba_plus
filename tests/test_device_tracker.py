@@ -12,12 +12,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from tests.conftest import robot_mock
+
 
 def _make_tracker(map_capability_value: str = "smart"):
     """Build a minimal RoombaDeviceTracker with stubbed vacuum/entry state."""
     from custom_components.roomba_plus.device_tracker import RoombaDeviceTracker
 
-    roomba = MagicMock()
+    roomba = robot_mock()
     roomba.master_state = {"state": {"reported": {}}}
 
     entry = MagicMock()

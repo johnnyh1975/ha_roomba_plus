@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import sys
 import pytest
+
+from tests.conftest import robot_mock
 from unittest.mock import AsyncMock, MagicMock, patch
 import homeassistant.helpers.entity_platform as _ep
 
@@ -18,7 +20,7 @@ import homeassistant.helpers.entity_platform as _ep
 def _mission_sensor(cycle="none", phase=""):
     """Build a minimal RoombaMissionActive with stubbed vacuum state."""
     from custom_components.roomba_plus.binary_sensor import RoombaMissionActive
-    roomba = MagicMock()
+    roomba = robot_mock()
     roomba.master_state = {"state": {"reported": {
         "cleanMissionStatus": {"cycle": cycle, "phase": phase}
     }}}
@@ -35,7 +37,7 @@ def _boost_entity(carpet_boost=None, vac_high=None):
         state["carpetBoost"] = carpet_boost
     if vac_high is not None:
         state["vacHigh"] = vac_high
-    roomba = MagicMock()
+    roomba = robot_mock()
     roomba.master_state = {"state": {"reported": state}}
     s = CarpetBoostSelect.__new__(CarpetBoostSelect)
     s.vacuum = roomba
@@ -106,7 +108,7 @@ class TestMissionActiveSensor:
         from custom_components.roomba_plus.binary_sensor import RoombaMidMissionRecharge
 
         # During run phase: MissionActive=ON, MidMissionRecharge=OFF
-        roomba = MagicMock()
+        roomba = robot_mock()
         roomba.master_state = {"state": {"reported": {
             "cleanMissionStatus": {"cycle": "clean", "phase": "run"}
         }}}
@@ -143,7 +145,7 @@ def _mqtt_stale_sensor(
     if wifistat is not None:
         reported["wifistat"] = wifistat
 
-    roomba = MagicMock()
+    roomba = robot_mock()
     roomba.master_state = {"state": {"reported": reported}}
 
     entry = MagicMock()
@@ -510,7 +512,7 @@ from custom_components.roomba_plus.binary_sensor import (
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _make_sensor(not_ready: int = 0) -> RoombaMapSavingStatus:
-    roomba = MagicMock()
+    roomba = robot_mock()
     roomba.master_state = {
         "state": {
             "reported": {
@@ -675,7 +677,7 @@ class TestMapSavingIsOn:
         assert sensor.is_on is False
 
     def test_off_when_cleanmissionstatus_absent(self):
-        roomba = MagicMock()
+        roomba = robot_mock()
         roomba.master_state = {"state": {"reported": {}}}
         sensor = RoombaMapSavingStatus(roomba, "blid")
         assert sensor.is_on is False
@@ -693,7 +695,7 @@ class TestMapSavingIsOn:
         assert sensor.is_on is False
 
     def test_off_when_not_ready_is_none(self):
-        roomba = MagicMock()
+        roomba = robot_mock()
         roomba.master_state = {
             "state": {"reported": {"cleanMissionStatus": {"notReady": None}}}
         }
@@ -710,7 +712,7 @@ class TestMapSavingIsOn:
         robot's own app.
         """
         for value in range(256):
-            roomba = MagicMock()
+            roomba = robot_mock()
             roomba.master_state = {
                 "state": {"reported": {"cleanMissionStatus": {"notReady": value}}}
             }
@@ -783,9 +785,9 @@ class TestMapSavingSetupEntry:
 
         state = {"pmaps": [{"abc": "v1"}], "cleanMissionStatus": {"notReady": 0}}
         entry = MagicMock()
-        roomba = MagicMock()
+        roomba = robot_mock()
         roomba.master_state = {"state": {"reported": state}}
-        roomba.roomba_connected = True
+        roomba.connected = True
         entry.runtime_data.roomba = roomba
         entry.runtime_data.blid = "test_blid"
 
@@ -805,9 +807,9 @@ class TestMapSavingSetupEntry:
 
         state = {}
         entry = MagicMock()
-        roomba = MagicMock()
+        roomba = robot_mock()
         roomba.master_state = {"state": {"reported": state}}
-        roomba.roomba_connected = True
+        roomba.connected = True
         entry.runtime_data.roomba = roomba
         entry.runtime_data.blid = "test_blid"
 
@@ -893,7 +895,7 @@ def _get_button(key: str) -> RoombaButtonDescription:
 
 def _make_button_entity(key: str) -> RoombaCommandButton:
     desc = _get_button(key)
-    roomba = MagicMock()
+    roomba = robot_mock()
     roomba.master_state = {"state": {"reported": {}}}
     return RoombaCommandButton(roomba, "test_blid", desc)
 
@@ -1025,8 +1027,7 @@ class TestExperimentalButtonPress:
         entity.hass = MagicMock()
         entity.hass.async_add_executor_job = AsyncMock()
         await entity.async_press()
-        args = entity.hass.async_add_executor_job.call_args[0]
-        assert args[1] == "spot"
+        entity.vacuum.send_command.assert_awaited_once_with("spot")
 
     @pytest.mark.asyncio
     async def test_quick_press_sends_quick(self):
@@ -1034,8 +1035,7 @@ class TestExperimentalButtonPress:
         entity.hass = MagicMock()
         entity.hass.async_add_executor_job = AsyncMock()
         await entity.async_press()
-        args = entity.hass.async_add_executor_job.call_args[0]
-        assert args[1] == "quick"
+        entity.vacuum.send_command.assert_awaited_once_with("quick")
 
     @pytest.mark.asyncio
     async def test_sleep_press_sends_sleep(self):
@@ -1043,8 +1043,7 @@ class TestExperimentalButtonPress:
         entity.hass = MagicMock()
         entity.hass.async_add_executor_job = AsyncMock()
         await entity.async_press()
-        args = entity.hass.async_add_executor_job.call_args[0]
-        assert args[1] == "sleep"
+        entity.vacuum.send_command.assert_awaited_once_with("sleep")
 
     @pytest.mark.asyncio
     async def test_power_off_press_sends_off(self):
@@ -1053,8 +1052,7 @@ class TestExperimentalButtonPress:
         entity.hass = MagicMock()
         entity.hass.async_add_executor_job = AsyncMock()
         await entity.async_press()
-        args = entity.hass.async_add_executor_job.call_args[0]
-        assert args[1] == "off"
+        entity.vacuum.send_command.assert_awaited_once_with("off")
 
 
 # ── Translation keys ──────────────────────────────────────────────────────────
@@ -1078,7 +1076,7 @@ class TestExperimentalButtonTranslationKeys:
 def _make_reset_button(cls):
     """Build a FilterResetButton/BrushResetButton/BatteryResetButton with a
     real (mocked) MaintenanceStore and config_entry, hass mocked out."""
-    roomba = MagicMock()
+    roomba = robot_mock()
     roomba.master_state = {"state": {"reported": {"bbrun": {"hr": 123}}}}
     config_entry = MagicMock()
     config_entry.entry_id = "entry1"
@@ -1141,7 +1139,7 @@ class TestMaintenanceResetButtonsFireLogbookEvent:
 def _make_maintenance_due(store, *, options=None, hr=0, mop=False, language="en"):
     """Build a real RoombaMaintenanceDue wired to the given MaintenanceStore."""
     from custom_components.roomba_plus.binary_sensor import RoombaMaintenanceDue
-    roomba = MagicMock()
+    roomba = robot_mock()
     state: dict = {"bbrun": {"hr": hr}}
     if mop:
         state["detectedPad"] = "wet"
@@ -1228,7 +1226,7 @@ def _make_layout_change_sensor(grid_store=None):
     """Return a RoombaLayoutChangeDetected with the given GridStore
     wired into runtime_data (or None to test the no-grid_store path)."""
     from custom_components.roomba_plus.binary_sensor import RoombaLayoutChangeDetected
-    roomba = MagicMock()
+    roomba = robot_mock()
     roomba.master_state = {"state": {"reported": {}}}
     entry = MagicMock()
     entry.runtime_data.grid_store = grid_store
@@ -1319,7 +1317,7 @@ class TestBinStatusNullRegression:
     this codebase (see test_edge_cases.py)."""
 
     def _entity(self, cls, reported: dict):
-        roomba = MagicMock()
+        roomba = robot_mock()
         roomba.master_state = {"state": {"reported": reported}}
         entity = cls.__new__(cls)
         entity.vacuum = roomba

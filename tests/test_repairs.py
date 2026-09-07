@@ -10,6 +10,8 @@ from __future__ import annotations
 
 
 import pytest
+
+from tests.conftest import robot_mock
 import re
 import uuid
 from unittest.mock import MagicMock
@@ -1856,7 +1858,7 @@ class TestRoombaCloudConnected:
 
     def _make_sensor(self, wifistat=None):
         from custom_components.roomba_plus.binary_sensor import RoombaCloudConnected
-        roomba = MagicMock()
+        roomba = robot_mock()
         reported = {}
         if wifistat is not None:
             reported["wifistat"] = wifistat
@@ -1892,7 +1894,7 @@ class TestRoombaFirmwareUpdated:
 
     def _make_sensor(self, last_fw=None, updated_at=None):
         from custom_components.roomba_plus.binary_sensor import RoombaFirmwareUpdated
-        roomba = MagicMock()
+        roomba = robot_mock()
         roomba.master_state = {"state": {"reported": {}}}
         entry = MagicMock()
         entry.runtime_data.last_firmware_version = last_fw
@@ -2611,7 +2613,7 @@ class TestIntegrationHealthPlainStatus:
         status_text/recommendation alongside the existing breakdown fields.
         """
         from custom_components.roomba_plus.sensor import RoombaIntegrationHealthSensor
-        roomba = MagicMock()
+        roomba = robot_mock()
         roomba.master_state = {"state": {"reported": {}}}
         entry = self._make_entry()
         sensor = RoombaIntegrationHealthSensor.__new__(RoombaIntegrationHealthSensor)
