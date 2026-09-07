@@ -59,7 +59,7 @@ jobs:
       # paho client, so the older one is never exercised.
       - name: Install roombapy-prime (--no-deps)
         run: |
-          pip install --no-deps --no-cache-dir "roombapy-prime==0.3.1"
+          pip install --no-deps --no-cache-dir "roombapy-prime==0.3.4"
 
       # mypy.ini runs --strict with no disabled error codes. The two
       # per-module exemptions are for Home Assistant itself and are

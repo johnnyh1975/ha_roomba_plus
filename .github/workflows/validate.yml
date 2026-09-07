@@ -95,7 +95,7 @@ jobs:
       # Kept anyway, so both test jobs install it identically and the
       # roombapy-prime pin guard sees the same string in both.
       - name: Install roombapy-prime (--no-deps, for parity with the pinned job)
-        run: pip install --no-deps --no-cache-dir "roombapy-prime==0.3.1"
+        run: pip install --no-deps --no-cache-dir "roombapy-prime==0.3.4"
 
       - name: Run full test suite
         run: python -m pytest tests/ -q -p no:randomly
@@ -134,7 +134,7 @@ jobs:
       # requirements-test-frozen.txt itself.
       - name: Install roombapy-prime (--no-deps, see comment above)
         run: |
-          pip install --no-deps --no-cache-dir "roombapy-prime==0.3.1"
+          pip install --no-deps --no-cache-dir "roombapy-prime==0.3.4"
 
       - name: Run full test suite with coverage
         run: |
@@ -282,6 +282,13 @@ jobs:
       # shape, and each found another on its first run.
       - name: Check generation parity
         run: python3 scripts/check_generation_parity.py
+
+      # The manifest is the only pin users get. A workflow installing a
+      # different version tests a build nobody runs -- and passes while
+      # doing it. This tree shipped with roombapy-prime pinned to 0.3.1
+      # in the manifest while the library had moved on twice.
+      - name: Check CI pins match the manifest
+        run: python3 scripts/check_ci_pins_match_manifest.py
 
       - name: Check cloud request budget
         run: python3 scripts/check_request_budget.py
