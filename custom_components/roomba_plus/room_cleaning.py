@@ -470,7 +470,7 @@ class PrimeRoomCleaning(RoomCleaningBackend):
         ambiguous: set[str] = set()
         for p2map_id in await self._all_map_ids():
             try:
-                map_data = await self._robot.get_map_metadata(p2map_id)
+                map_data = await self._map_metadata(p2map_id)
             except Exception:  # noqa: BLE001
                 _LOGGER.warning(
                     "roomba_plus: could not read rooms from map %s for %s",
@@ -528,7 +528,7 @@ class PrimeRoomCleaning(RoomCleaningBackend):
 
         for p2map_id in await self._all_map_ids():
             try:
-                map_data = await self._robot.get_map_metadata(p2map_id)
+                map_data = await self._map_metadata(p2map_id)
             except Exception:  # noqa: BLE001
                 _LOGGER.warning(
                     "roomba_plus: could not read rooms from map %s for %s",
@@ -591,6 +591,88 @@ class PrimeRoomCleaning(RoomCleaningBackend):
 
     _SEGMENT_PREFIX = "rid_"
 
+    #: Map documents fetched during one `get_segments()` listing.
+    _map_meta_cache: dict[str, Any]
+
+    async def _named_regions_across_maps(self) -> dict[str, str]:
+        """{region_id: name} for every named room AND zone, on every map.
+
+        THE SOURCE THAT WAS FOUND AND NEVER CONNECTED. Region names live
+        in the map VERSION document, `GET /v1/p2maps/{id}/versions/{vid}`
+        -- roombapy-prime's own docstring records that it took four
+        rounds with @chairstacker to establish that, after
+        `rooms_metadata` (rooms only, zones always None) and the
+        bundle's `cleanZones` layer (empty on his robot) both came up
+        short.
+
+        The integration never called it. Zone names came from two
+        narrower places instead: the bundle of the map being DRAWN, and
+        `lastCommand.regions[].region_name` -- whichever regions the
+        last command happened to label. So a zone on another map was
+        missing from the area-mapping dialog entirely, and a room could
+        appear in the rooms half of that dialog and not the zones half.
+        That is what @chairstacker reported the day 4.1.0 shipped.
+
+        ADDITIVE AND FAILING SAFE. Everything is merged rather than
+        replaced, and the library returns {} instead of raising when the
+        key is absent -- it has not seen this response on a robot
+        either. If the endpoint gives nothing back, the list is what it
+        was before.
+        """
+        # NO ROBOT, NO CALL. Tests build this backend past __init__ and
+        # never set `_robot`; so does any caller that only wants the
+        # stored zone data. An AttributeError here would turn a missing
+        # optional source into a failed segment listing.
+        robot = getattr(self, "_robot", None)
+        if robot is None:
+            return {}
+
+        names: dict[str, str] = {}
+        for p2map_id in await self._all_map_ids():
+            try:
+                map_data = await self._map_metadata(p2map_id)
+            except Exception:  # noqa: BLE001
+                continue
+            if map_data is None:
+                continue
+            version = (
+                getattr(map_data, "active_p2mapv_id", None)
+                or getattr(map_data, "user_p2mapv_id", None)
+                or getattr(map_data, "p2mapv_id", None)
+            )
+            if not version:
+                continue
+            try:
+                found = await robot.get_map_region_names(p2map_id, version)
+            except Exception:  # noqa: BLE001
+                _LOGGER.debug(
+                    "roomba_plus: could not read region names from map %s "
+                    "version %s for %s",
+                    p2map_id, version, self._data.blid, exc_info=True,
+                )
+                continue
+            for region_id, region_name in (found or {}).items():
+                if region_id and region_name:
+                    names.setdefault(str(region_id), str(region_name))
+        return names
+
+    async def _map_metadata(self, p2map_id: str) -> Any:
+        """`get_map_metadata`, fetched at most once per segment listing.
+
+        `available_rooms()` and `_named_regions_across_maps()` both walk
+        every map, and without this each would fetch the same document.
+        `get_segments()` clears the cache before it starts, so it lives
+        for one listing and cannot go stale between them -- a map
+        retrained in the app is picked up the next time the dialog opens.
+        """
+        cache: dict[str, Any] | None = getattr(self, "_map_meta_cache", None)
+        if cache is None:
+            cache = {}
+            self._map_meta_cache = cache
+        if p2map_id not in cache:
+            cache[p2map_id] = await self._robot.get_map_metadata(p2map_id)
+        return cache[p2map_id]
+
     async def get_segments(self) -> list[Any]:
         """Prime rooms as HA Clean Area segments.
 
@@ -610,6 +692,13 @@ class PrimeRoomCleaning(RoomCleaningBackend):
         # ONE CALL. A test caught a second await here -- it hits the
         # cloud, and asking twice for a list that has not changed is a
         # request nobody asked for.
+        #
+        # `_map_metadata()` now backs both this and the zone lookup
+        # below, so the two walks over the maps share one fetch each
+        # rather than doubling them. Cleared here: the cache is meant to
+        # last for one listing, so that a map retrained in the app shows
+        # up the next time this dialog opens.
+        self._map_meta_cache = {}
         rooms = await self.available_rooms()
         segments = [
             Segment(id=f"{self._SEGMENT_PREFIX}{room_id}", name=name, group="Room")
@@ -635,11 +724,30 @@ class PrimeRoomCleaning(RoomCleaningBackend):
         # the same id.
         known = {seg.id for seg in segments}
         entry = getattr(self, "_config_entry", None)
-        names = getattr(
-            getattr(entry, "runtime_data", None), "prime_room_names", None
-        ) or {}
+
+        # THREE LAYERS, WIDEST LAST-RESORT FIRST.
+        #
+        # `prime_room_names` holds what the drawn map's bundle and the
+        # last command named -- narrow, but user-set and current. The
+        # version document covers every map, which is the half that was
+        # missing, so it fills gaps rather than overriding: a name
+        # someone typed for the map in front of them wins over one read
+        # from another map's document.
+        names = dict(await self._named_regions_across_maps())
+        names.update(
+            getattr(
+                getattr(entry, "runtime_data", None), "prime_room_names", None
+            )
+            or {}
+        )
         rooms_by_id = {v: k for k, v in rooms.items()}
-        for region_id, region_name in sorted(names.items()):
+        # SORTED BY NAME, as the rooms above are. This sorted by region
+        # id, so the zone half of the area-mapping dialog came out in an
+        # order that looks random next to an alphabetical room list
+        # (@chairstacker).
+        for region_id, region_name in sorted(
+            names.items(), key=lambda item: str(item[1]).casefold()
+        ):
             if str(region_id) in rooms_by_id or not region_name:
                 continue
             seg_id = f"{ZID_PREFIX}{region_id}"
@@ -652,16 +760,26 @@ class PrimeRoomCleaning(RoomCleaningBackend):
 
     async def clean_segments(self, segment_ids: list[str]) -> None:
         """Decode HA segment ids back to room ids and clean them."""
-        # BOTH PREFIXES. get_segments() now offers zones as well, and a
-        # `zid_` id decoded by the room rule would drop its first four
-        # characters and clean whatever room happened to share the
-        # remainder.
+        # THE `zid_` PREFIX SURVIVES; only `rid_` is stripped.
+        #
+        # `_send_region_command()` decides between RegionType.ZID and
+        # RegionType.RID by looking for exactly that prefix. Removing it
+        # here left the zone indistinguishable from a room, so it went
+        # out as RID with an id no room has -- @chairstacker's robot
+        # left the dock, localised, found nothing to clean and declared
+        # the mission complete.
+        #
+        # The comment that stood here worried about the opposite: that
+        # keeping the prefix would clean "whatever room happened to
+        # share the remainder". That is the danger for `rid_`, whose
+        # remainder IS a room id. For `zid_` the remainder is a zone id,
+        # and stripping it is what makes the two collide.
         room_ids: list[str] = []
         for seg_id in segment_ids:
-            for prefix in (self._SEGMENT_PREFIX, ZID_PREFIX):
-                if seg_id.startswith(prefix):
-                    room_ids.append(seg_id[len(prefix):])
-                    break
+            if seg_id.startswith(self._SEGMENT_PREFIX):
+                room_ids.append(seg_id[len(self._SEGMENT_PREFIX):])
+            elif seg_id.startswith(ZID_PREFIX):
+                room_ids.append(seg_id)
         if not room_ids:
             # A stale area mapping, or segments belonging to another
             # vacuum. Cleaning nothing quietly would look like success.
@@ -1717,6 +1835,45 @@ def _resolve_pmapv_id(state: dict[str, Any], pmap_id: str) -> str | None:
             return str(pmap[pmap_id])
     return None
 
+
+def region_names_across_maps(cloud_coordinator: Any) -> dict[str, str]:
+    """{region_id: name} from every map the account holds.
+
+    ONE PLACE, because there were four. `cloud_coordinator.regions`
+    returns the ACTIVE map's regions only -- deliberately, so that two
+    maps sharing a room name cannot collide. Four separate consumers
+    built the same `id_to_name` dict from it, and when 4.1.0 lifted the
+    restriction for `clean_room` the other three kept it.
+
+    @ScenicSystemsLLC found the first of them the evening 4.1.0 shipped:
+    a favourite cleaning a room on a non-active map worked, and
+    `current_room` displayed "Room ID 18" instead of "Hallway". Nobody
+    could have hit it earlier, because until that release a cross-map
+    mission could not be started at all.
+
+    ACTIVE MAP WINS a duplicate name, exactly as before: its entries go
+    in first and `setdefault` leaves them alone.
+    """
+    if cloud_coordinator is None:
+        return {}
+    # ROOMS AND ZONES, both halves of the active map first.
+    #
+    # A first version read `regions` only and a test caught it: the
+    # active map's ZONES would have vanished from every consumer at
+    # once. `regions` and `zones` are separate lists on the coordinator
+    # and always have been -- reading one of them is the mistake this
+    # helper exists to stop repeating.
+    names: dict[str, str] = {}
+    for source in (cloud_coordinator.regions, cloud_coordinator.zones):
+        for r in source or []:
+            if r.get("id") and r.get("name"):
+                names.setdefault(str(r["id"]), str(r["name"]))
+    by_map = getattr(cloud_coordinator, "regions_by_pmap", None) or {}
+    for regions in by_map.values():
+        for region_id, region_name in regions.items():
+            if region_id and region_name:
+                names.setdefault(str(region_id), region_name)
+    return names
 
 def _resolve_rooms(
     zone_data: dict[str, dict[str, Any]],

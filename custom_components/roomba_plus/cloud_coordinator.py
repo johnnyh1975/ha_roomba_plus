@@ -1014,14 +1014,24 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if not pmap_id:
                 continue
             names: dict[str, str] = {}
-            for region in details.get("regions") or []:
-                if not isinstance(region, dict):
-                    continue
-                # Same two-key divergence the active-map read handles.
-                rid = str(region.get("region_id") or region.get("id") or "")
-                name = region.get("name") or ""
-                if rid and name:
-                    names[rid] = str(name)
+            # ZONES TOO. They sit right beside `regions` in the same
+            # details object, and reading only one of the two is why a
+            # zone on another map had no name anywhere -- the
+            # area-mapping dialog showed rooms from every map and zones
+            # from the drawn one (@chairstacker, 4.1.0).
+            #
+            # Regions first: on the rare id shared between a room and a
+            # zone, the room wins, which matches what `regions` alone
+            # used to return.
+            for source in ("regions", "zones"):
+                for region in details.get(source) or []:
+                    if not isinstance(region, dict):
+                        continue
+                    # Same two-key divergence the active-map read handles.
+                    rid = str(region.get("region_id") or region.get("id") or "")
+                    name = region.get("name") or ""
+                    if rid and name:
+                        names.setdefault(rid, str(name))
             if names:
                 result[str(pmap_id)] = names
         return result

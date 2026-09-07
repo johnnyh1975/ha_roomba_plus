@@ -36,6 +36,7 @@ if TYPE_CHECKING:
     from .models import RoombaConfigEntry, RoombaData
 
 from .structural_failures import record_failure, record_success
+from .room_cleaning import region_names_across_maps
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -292,11 +293,7 @@ def _capture_zone_names(
             if r.get("region_id")
         ]
         if region_ids and data.cloud_coordinator:
-            id_to_name = {
-                r["id"]: r["name"]
-                for r in data.cloud_coordinator.regions
-                if r.get("id")
-            }
+            id_to_name = region_names_across_maps(data.cloud_coordinator)
             return [id_to_name[rid] for rid in region_ids if rid in id_to_name]
     return []  # NONE (600-series) or SMART without cloud
 
@@ -1394,13 +1391,9 @@ def make_mission_callback(
                     # can't resolve a name).
                     from .mission_store import MissionStore as _MS
                     _cc = getattr(entry.runtime_data, "cloud_coordinator", None)
-                    _cloud_id_to_name: dict[str, str] = {}
-                    if _cc is not None:
-                        _cloud_id_to_name = {
-                            r["id"]: r["name"]
-                            for r in (getattr(_cc, "regions", None) or [])
-                            if r.get("id") and r.get("name")
-                        }
+                    _cloud_id_to_name: dict[str, str] = (
+                        region_names_across_maps(_cc)
+                    )
                     _names = [
                         _cloud_id_to_name.get(_MS.extract_rid(r) or "")
                         or r.get("region_name")

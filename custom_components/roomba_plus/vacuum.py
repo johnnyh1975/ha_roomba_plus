@@ -66,6 +66,7 @@ from .const import (
 )
 from .entity import IRobotEntity
 from .models import ConnectionType, RoombaConfigEntry
+from .room_cleaning import region_names_across_maps
 
 _LOGGER = logging.getLogger(__name__)
 PARALLEL_UPDATES = 0
@@ -676,15 +677,7 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
             and self._config_entry.runtime_data.cloud_coordinator is not None
         ):
             _live = self._config_entry.runtime_data
-            _live_region_map = {
-                r["id"]: r["name"]
-                for r in (
-                    _live.cloud_coordinator.regions
-                    if _live.cloud_coordinator is not None
-                    else []
-                )
-                if r.get("id")
-            }
+            _live_region_map = region_names_across_maps(_live.cloud_coordinator)
             # Try cleanMissionStatus.cmd.regions first, fall back to lastCommand.regions
             _cmd_regions = (
                 (
@@ -726,11 +719,7 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
                 _data.has_cloud
                 and _data.cloud_coordinator is not None
             ):
-                region_map = {
-                    r["id"]: r["name"]
-                    for r in _data.cloud_coordinator.regions
-                    if r.get("id")
-                }
+                region_map = region_names_across_maps(_data.cloud_coordinator)
 
             # EPHEMERAL fallback (v2.3.0 Step 10 — Q7 gate)
             # When region_map is empty and UmfAligner is aligned, use its rid→name map.

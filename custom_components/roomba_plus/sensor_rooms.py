@@ -29,6 +29,7 @@ from .const import CONF_ROOM_SCHEDULE
 from .entity import IRobotEntity
 from .models import RoombaConfigEntry
 from .prime_coordinator import prime_current_state, prime_last_command
+from .room_cleaning import region_names_across_maps
 
 _LOGGER = logging.getLogger("custom_components.roomba_plus.sensor")
 
@@ -134,7 +135,7 @@ def _get_planned_room_order(data: Any) -> list[str]:
             return list(mts.planned_rooms)
         return []
 
-    id_to_name = {r["id"]: r["name"] for r in cc.regions if r.get("id")}
+    id_to_name = region_names_across_maps(cc)
     result = [id_to_name[rid] for rid in region_ids if rid in id_to_name]
 
     # v2.9.0 — region_ids had entries, but not all of them resolved via
@@ -1153,11 +1154,7 @@ class RoombaLastMissionSummarySensor(IRobotEntity, SensorEntity):
         data = self._entry.runtime_data
         region_map: dict[str, str] = {}
         if data.has_cloud and data.cloud_coordinator is not None:
-            region_map = {
-                r["id"]: r["name"]
-                for r in data.cloud_coordinator.regions
-                if r.get("id")
-            }
+            region_map = region_names_across_maps(data.cloud_coordinator)
         umf_regions: dict[str, str] | None = None
         if not region_map and data.umf_aligner and data.umf_aligner.aligned:
             umf_regions = data.umf_aligner.rid_to_name()
@@ -1323,15 +1320,7 @@ def _region_maps_for(runtime_data: Any) -> tuple[dict[str, str], dict[str, str] 
         # Sixth instance of this shape: a better-populated source
         # appeared later and the places reading the older one were never
         # revisited. See `scripts/check_prime_sources.py`.
-        region_map = {
-            r["id"]: r["name"]
-            for source in (
-                runtime_data.cloud_coordinator.regions or [],
-                runtime_data.cloud_coordinator.zones or [],
-            )
-            for r in source
-            if r.get("id") and r.get("name")
-        }
+        region_map = region_names_across_maps(runtime_data.cloud_coordinator)
     # PRIME HAS NO CLOUD COORDINATOR AT ALL. `prime_room_names` is flat
     # and holds rooms and zones together, so a Prime robot's template
     # gets the same list a Classic one does.
@@ -1370,11 +1359,7 @@ def _id_to_display_name(cc: Any) -> dict[str, str]:
     """
     if cc is None:
         return {}
-    id_to_name: dict[str, str] = {
-        r["id"]: r["name"]
-        for r in (cc.regions or [])
-        if r.get("id") and r.get("name")
-    }
+    id_to_name: dict[str, str] = region_names_across_maps(cc)
     for suggestion in (cc.region_suggestions or []):
         rid = suggestion.get("region_id")
         if not rid or rid in id_to_name:

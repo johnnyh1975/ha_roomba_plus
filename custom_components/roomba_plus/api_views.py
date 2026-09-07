@@ -36,6 +36,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN, SQFT_TO_M2
+from .room_cleaning import region_names_across_maps
 
 if TYPE_CHECKING:
     from .models import RoombaData
@@ -456,11 +457,7 @@ class MissionHistoryView(HomeAssistantView):
         if fmt == "zone_coverage_health":
             if data.mission_store is None:
                 return self.json({}, status_code=200)
-            _region_map = {
-                r["id"]: r["name"]
-                for r in (getattr(data.cloud_coordinator, "regions", None) or [])
-                if r.get("id")
-            } if data.cloud_coordinator is not None else {}
+            _region_map = region_names_across_maps(data.cloud_coordinator)
             _umf = (
                 data.umf_aligner.rid_to_name()
                 if not _region_map and data.umf_aligner and data.umf_aligner.aligned
@@ -754,9 +751,7 @@ class MissionPathView(HomeAssistantView):
         id_to_name: dict[str, str] = {}
         cc = data.cloud_coordinator
         if cc is not None and cc.regions:
-            id_to_name = {
-                r["id"]: r["name"] for r in cc.regions if r.get("id") and r.get("name")
-            }
+            id_to_name = region_names_across_maps(cc)
         elif data.room_seg_store is not None:
             # Asking the attribute directly rather than through
             # `getattr(..., None)`: the store is a declared field, and

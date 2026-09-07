@@ -1689,11 +1689,24 @@ class RoombaSensor(IRobotEntity, SensorEntity):
 
 
     # ── Countdown tick for recharge/expire minute sensors ────────────────────
-    # iRobot firmware sends rechrgTm / expireTm once at recharge start and does
+    # iRobot firmware sends rechrgTm / expireTm at recharge start and does
     # not push further cleanMissionStatus updates during charging.  Without a
     # periodic tick the sensor value stays frozen at the initial reading.
     # We schedule a 60-second interval whenever the sensor is enabled so the
     # value decrements correctly, matching what the iRobot app displays.
+    #
+    # "ONCE" WAS TOO STRONG, and a millisecond-resolution capture shows why
+    # (@AlakazipLabs, i3, daredevil 2.6.0). The field is reported PER PHASE,
+    # not once: it carries the deadline in every `charge` message and 0 in
+    # every `hmMidMsn` or `run` message, alternating within a 383 ms phase
+    # bounce at the recharge and again an hour later at the resume. The
+    # VALUE stays constant across both -- recharge arrival plus 5,399 s, so
+    # 90 minutes -- which is what makes the tick the right mechanism: the
+    # deadline does not move, only the reporting comes and goes.
+    #
+    # The robot resumed 31 minutes inside its own deadline, at 79% battery.
+    # Whether the timer is genuinely re-armed on each flap or merely
+    # reported differently by phase is not visible from the shadow.
 
     _TICK_SENSORS = frozenset({"mission_recharge_minutes", "mission_expire_minutes"})
 

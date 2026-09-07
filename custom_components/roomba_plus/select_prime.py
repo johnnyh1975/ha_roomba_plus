@@ -1208,13 +1208,25 @@ class PrimeZoneSelect(IRobotEntity, SelectEntity):
         #: name -> segment id, refreshed on every read.
         self._segments: dict[str, str] = {}
 
-    async def async_update(self) -> None:
-        """Refresh the room and zone list.
+    async def async_added_to_hass(self) -> None:
+        """Load the room and zone list once the entity is registered.
 
-        POLLED RATHER THAN PUSHED, because the underlying list changes
-        when maps are retrained or rooms renamed in the app -- neither
-        of which arrives as a state delta.
+        NOT `async_update()`, which is what this had at first and why the
+        selector shipped in 4.1.0 permanently unavailable (@chairstacker).
+        `IRobotEntity` sets `_attr_should_poll = False`, so Home
+        Assistant never calls `async_update()` — `_segments` stayed
+        empty, `available` returned False, and the companion button had
+        nothing to act on.
+
+        Loading here is the pattern `PrimeMapSelect` next door already
+        uses, for the same reason: the list comes from the cloud rather
+        than from a state delta, so nothing pushes it.
         """
+        await super().async_added_to_hass()
+        await self._async_load_segments()
+
+    async def _async_load_segments(self) -> None:
+        """Read the rooms and zones this robot knows."""
         from .room_cleaning import async_get_room_cleaning_backend  # noqa: PLC0415
 
         backend = async_get_room_cleaning_backend(self._config_entry, self.hass)
