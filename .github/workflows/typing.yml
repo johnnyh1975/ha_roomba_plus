@@ -38,10 +38,28 @@ jobs:
           python-version: "3.13"
           cache: "pip"
 
+      # pycares IS PINNED, and only on this combination.
+      #
+      # Home Assistant 2025.5.2 requires aiodns==3.4.0, which declares
+      # `pycares>=4.0.0` with no upper bound. pycares 5.0.0 removed
+      # `ares_query_a_result`, which aiodns 3.4.0 names in its own type
+      # annotations at class-definition time -- so a fresh install picks
+      # the newest pycares and `import aiohttp` raises AttributeError
+      # before a single test is collected.
+      #
+      # The 2026.8 job is unaffected: its newer HA pins an aiodns that
+      # allows pycares 5. So this is not a general pin, it belongs to
+      # the minimum-version job.
+      #
+      # This is also the thing requirements-test-frozen.txt was doing
+      # that its own comments never claimed: it froze TRANSITIVE
+      # dependencies. Removing it in 4.2 was right about the HA version
+      # it pinned and wrong about what else it held still.
       - name: Install Home Assistant 2025.5 and test tooling
         run: |
           python -m pip install --upgrade pip
           pip install "pytest-homeassistant-custom-component==0.13.245" \
+                      "pycares==4.11.0" \
                       aiohttp pillow
 
       - name: Install roombapy and roombapy-prime
