@@ -30,9 +30,10 @@ concurrency:
 # put a red mark on the README.
 jobs:
 
-  # A SECOND COMBINATION, deliberately not a matrix. `requirements-test-frozen.txt`
-  # pins Home Assistant 2025.1.4, which is the newest release that installs
-  # on Python 3.12 -- so the version pair is fixed, not free to vary.
+  # TWO COMBINATIONS, deliberately not a matrix. Each HA release fixes
+  # its own Python floor, so the pairs are not free to vary: the minimum
+  # this integration supports (2025.5 on 3.13) and a much newer one
+  # (2026.8 on 3.14, about fifteen months ahead of it).
   #
   # This job proves the integration still works against a much newer HA
   # (2026.8 on Python 3.14, about eighteen months ahead of the pin).
@@ -41,13 +42,13 @@ jobs:
   # A REAL GATE, not advisory. It carried `continue-on-error: true` while
   # the combination was new and unproven. It no longer is: the full suite
   # passes here (6145 passed / 4 skipped) on 2026.8.3 and, checked
-  # separately, on 2026.9.0 as well -- the same counts as the pinned
-  # 2025.1.4 job. This is also the ONLY job that runs against the HA
+  # separately, on 2026.9.0 as well -- the same counts as the
+  # minimum-version job. This is also the ONLY job that runs against the HA
   # version the field actually runs; the a38 breakage that hit every
   # installation on HA 2026.7+ is exactly the class of failure it exists
   # to catch, and an advisory job would have gone unread.
   #
-  # Tests only. Type checking stays on the pinned version, because the
+  # Tests only. Type checking stays on the minimum version, because the
   # `type: ignore` comments that bridge the two HA APIs are required by
   # one and redundant on the other -- mypy cannot be satisfied by both
   # at once, and `warn_unused_ignores` is worth keeping.
@@ -59,7 +60,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Set up Python 3.14
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@v6
         with:
           python-version: "3.14"
           # This job installs a full Home Assistant and its dependency
@@ -77,19 +78,24 @@ jobs:
       # with no change to this repo or to HA. Pinning phahc fixes both
       # halves at once and makes an upgrade a deliberate edit.
       #
-      # This mirrors what requirements-test-frozen.txt already does for
-      # the 3.12 side (phahc 0.13.205 / HA 2025.1.4).
+      # This mirrors what the minimum-version job does for HA 2025.5.
       #
-      # aiomqtt is deliberately NOT installed: roombapy 1.9.1 does not
-      # use it (that arrives with roombapy 2.0), and nothing else here
-      # imports it.
+      # roombapy 2.0.1 since 4.2, and it brings `aiomqtt` with it -- the
+      # 1.x line used paho-mqtt. Installed as a dependency rather than
+      # named here; the note that used to sit at this spot said aiomqtt
+      # "arrives with roombapy 2.0", and it has.
+      #
+      # THE VERSION HERE MUST MATCH manifest.json. A CI that installs
+      # the old library tests the old library: the whole 4.2 async
+      # migration would have passed against 1.9.1 without touching a
+      # single line of what it changed.
       - name: Install a recent Home Assistant and test tooling
         run: |
           python -m pip install --upgrade pip
           pip install "pytest-homeassistant-custom-component==0.13.357" \
-                      "roombapy==1.9.1" aiohttp pillow
+                      "roombapy==2.0.1" aiohttp pillow
 
-      # Unlike the pinned-2025.1.4 jobs, --no-deps is NOT required here:
+      # --no-deps is NOT required here:
       # phahc 0.13.357 allows paho-mqtt 2.x, so roombapy-prime's own
       # constraint (>=2.0,<3.0) is satisfiable and `pip check` is clean.
       # Kept anyway, so both test jobs install it identically and the
@@ -101,40 +107,44 @@ jobs:
         run: python -m pytest tests/ -q -p no:randomly
 
   test:
-    name: Test Suite
+    name: Test Suite (HA 2025.5 / Python 3.13 — the supported minimum)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v7
+      # THE MINIMUM WE ACTUALLY CLAIM, which this job did not test until
+      # 4.2. It ran HA 2025.1.4 on Python 3.12 from a pinned set, while
+      # manifest and hacs.json both say 2025.5.0 -- a combination no user
+      # can have, since HA 2025.5 requires Python >= 3.13.2.
+      #
+      # roombapy 2.x forced the issue rather than creating it: it needs
+      # aiomqtt, aiomqtt imports `paho.mqtt.enums.CallbackAPIVersion` at
+      # module level, and the newest phahc that runs on 3.12 (0.13.205)
+      # pins paho-mqtt==1.6.1, which has no such module. No version of
+      # anything satisfies both.
+      #
+      # phahc 0.13.245 brings HA 2025.5.2 and pins paho-mqtt==2.1.0, so
+      # the paho conflict that needed a --no-deps workaround for
+      # roombapy-prime simply does not exist here. The pinned dependency
+      # set that documented it (requirements-test-frozen.txt) is gone
+      # with it: it existed to freeze HA 2025.1.4, a version this
+      # integration has not supported since its minimum became 2025.5.
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: "3.13"
           cache: "pip"
-          cache-dependency-path: requirements-test-frozen.txt
 
-      - name: Install test dependencies
+      - name: Install Home Assistant 2025.5 and test tooling
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-test-frozen.txt
+          pip install "pytest-homeassistant-custom-component==0.13.245" \
+                      aiohttp pillow
 
-      # NEW (this session): installed separately from requirements-test-frozen.txt,
-      # deliberately with --no-deps. roombapy-prime's own declared dependency
-      # (paho-mqtt>=2.0,<3.0) is unsatisfiable alongside
-      # pytest-homeassistant-custom-component's hard paho-mqtt==1.6.1 pin (no
-      # newer phahc release exists) -- see the comment next to roombapy in
-      # requirements-test-frozen.txt for the full reasoning and the verification
-      # that this is genuinely safe (not a workaround masking a real
-      # incompatibility): with paho-mqtt forced to 1.6.1, the full test suite
-      # still passes, since PrimeMqttClient is mocked throughout and never
-      # actually constructed against a real paho-mqtt installation in tests.
-      # --no-deps is safe specifically because roombapy-prime's OTHER
-      # dependencies (aiohttp, certifi) are already satisfied by
-      # requirements-test-frozen.txt itself.
-      - name: Install roombapy-prime (--no-deps, see comment above)
+      - name: Install roombapy and roombapy-prime
         run: |
-          pip install --no-deps --no-cache-dir "roombapy-prime==0.3.4"
+          pip install "roombapy==2.0.1" "roombapy-prime[map]==0.3.4"
 
       - name: Run full test suite with coverage
         run: |
@@ -164,7 +174,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: "pip"
@@ -192,7 +202,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -207,7 +217,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: "pip"
@@ -226,7 +236,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -256,7 +266,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -283,10 +293,24 @@ jobs:
       - name: Check generation parity
         run: python3 scripts/check_generation_parity.py
 
+      # Added with the 4.2 async migration, and the only thing that can
+      # catch this mistake: neither mypy nor the tests see a roombapy
+      # coroutine handed to async_add_executor_job. The suite passed
+      # 6197 tests against a build where 46 commands never reached the
+      # robot.
+      - name: Check no roombapy coroutine runs in an executor
+        run: python3 scripts/check_no_executor_coroutines.py
+
+      # The other half of the same blind spot: the client is typed `Any`
+      # on the entity base, so mypy checks no attribute read off it.
+      # Two renamed attributes survived the 4.2 migration that way.
+      - name: Check attributes read off the robot client exist
+        run: python3 scripts/check_client_attributes.py
+
       # The manifest is the only pin users get. A workflow installing a
-      # different version tests a build nobody runs -- and passes while
-      # doing it. This tree shipped with roombapy-prime pinned to 0.3.1
-      # in the manifest while the library had moved on twice.
+      # different version tests a build nobody runs -- and passes.
+      # During the 4.2 migration the manifest said roombapy 2.0.1 while
+      # this file still installed 1.9.1.
       - name: Check CI pins match the manifest
         run: python3 scripts/check_ci_pins_match_manifest.py
 

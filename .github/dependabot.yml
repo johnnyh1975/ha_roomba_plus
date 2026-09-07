@@ -1,9 +1,16 @@
 version: 2
 updates:
-  # requirements-test-frozen.txt — 133 pinned test/dev dependencies, no
-  # automated way currently to notice a security patch landing upstream.
-  # Weekly (not daily) — this is test tooling, not runtime dependencies
-  # shipped to users; no urgency that justifies daily PR noise.
+  # Test and dev dependencies, so that a security patch landing upstream
+  # is noticed. Weekly (not daily) — this is test tooling, not runtime
+  # dependencies shipped to users; no urgency that justifies daily PR
+  # noise.
+  #
+  # This once watched requirements-test-frozen.txt, 133 pinned versions
+  # for HA 2025.1.4. That file went with the 4.2 migration: it froze a
+  # Home Assistant older than this integration's own minimum, and
+  # roombapy 2.x could not be installed alongside it at all. The
+  # workflows now name their few packages directly, which Dependabot
+  # reads from the workflow files rather than from here.
   #
   # No `labels:` here, deliberately: Dependabot requires labels to already
   # exist in the repo before it can apply them to a PR, and neither
@@ -11,6 +18,10 @@ updates:
   # written in response to). Create both under Settings → Labels first if
   # you want the categorization back, then re-add `labels: ["dependencies"]`
   # / `labels: ["dependencies", "ci"]` to the two entries below.
+  # KEPT even though no requirements file remains at the root: a
+  # pyproject or a requirements file may come back, and an allow-list
+  # that has already been thought through is worth more than the few
+  # seconds Dependabot spends finding nothing.
   - package-ecosystem: "pip"
     directory: "/"
     schedule:
