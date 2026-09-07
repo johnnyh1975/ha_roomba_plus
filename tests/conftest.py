@@ -129,3 +129,32 @@ from unittest.mock import patch as _patch
 def enable_event_loop_debug():  # noqa: PT004
     """Neutralise the plugin's async autouse fixture. See note above."""
     return None
+
+
+def robot_mock(**attrs: object) -> "MagicMock":
+    """A stand-in for the local robot client, with async methods async.
+
+    WHY A HELPER RATHER THAN `MagicMock()` AT EACH SITE. roombapy 2.x
+    made `send_command`, `set_preference`, `connect` and `disconnect`
+    coroutines. A MagicMock answers a coroutine call with another
+    MagicMock, and awaiting that raises `TypeError: object MagicMock
+    can't be used in 'await' expression` -- so a test fails on the await
+    rather than on whatever it was checking.
+
+    Worth knowing what this does NOT protect against, because the 4.2
+    migration turned on it: mocking hid the opposite mistake completely.
+    The suite passed 6197 tests against code that handed 46 coroutines
+    to `hass.async_add_executor_job()`, where each one ran in a thread,
+    returned a coroutine object nobody awaited, and never reached the
+    robot. A MagicMock accepts that as happily as it accepts the correct
+    call. `scripts/check_no_executor_coroutines.py` is what catches it;
+    this helper only keeps the tests honest about the await.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    mock = MagicMock()
+    for coroutine in ("send_command", "set_preference", "connect", "disconnect"):
+        setattr(mock, coroutine, AsyncMock())
+    for name, value in attrs.items():
+        setattr(mock, name, value)
+    return mock
