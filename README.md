@@ -1,7 +1,7 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Default-blue.svg)](https://github.com/hacs/default)
-[![Version](https://img.shields.io/badge/Version-4.1.1-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-4.2.0b1-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2025.5%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Gold-gold.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
@@ -21,8 +21,9 @@ Roomba+ is a Gold-quality Home Assistant custom integration for iRobot Roomba an
 
 | Your robot | Install | Why |
 |---|---|---|
-| **Any supported robot** | **v4.0.0** (stable) — the default in HACS | One line for both generations. No beta channel needed any more. |
-| **Roomba Max · Combo/Plus 400-series** and other newer cloud robots | **v4.0.0** | Earlier stable lines **cannot connect to your robot at all** |
+| **Any supported robot** | **v4.1.0** (stable) — the default in HACS | One line for both generations. No beta channel needed any more. |
+| **Roomba Max · Combo/Plus 400-series** and other newer cloud robots | **v4.1.0** | Earlier stable lines **cannot connect to your robot at all** |
+| Willing to test a beta | **v4.2.0b1** — needs *Show beta versions* in HACS | The async rewrite: the Classic library became async, and every command path moved with it. Behaviour should be identical; that is what the beta is for |
 | Not sure | Check your model number against the [supported hardware](#supported-hardware--capability-matrix) table below | |
 
 > ⚠️ If HACS shows you only `main` and downloading it hangs, see
@@ -40,7 +41,7 @@ Roomba+ is a Gold-quality Home Assistant custom integration for iRobot Roomba an
 - **Full automation support** — replace `vacuum.start` with `smart_start`: it waits if a blocking sensor fires (a door contact, a baby monitor), skips rooms that aren't actually dirty, and can pause and resume around your presence — all from automations you already have, no new workarounds needed.
 - **Comprehensive monitoring** — 100+ entities covering maintenance life, wear rates, 365-entry mission history, performance trends, and error detail with recommended actions.
 - **Self-calibrating** — maintenance thresholds, navigation health, battery degradation, and per-room cleaning rhythms all adapt to your robot's own usage history rather than fixed thresholds or manual configuration.
-- **Gold quality scale** — 5,590+ tests, 8 languages, full config entry migration chain, CI/CD.
+- **Gold quality scale**, and every Platinum rule met as of v4.2 — the last one, `async-dependency`, closed when the Classic library became async. 6,200+ tests, 8 languages, full config entry migration chain, CI/CD.
 
 > 📊 **[Full feature comparison with HA Core and roomba_rest980 →](docs/COMPARISON.md)**
 
@@ -336,7 +337,9 @@ protocol: [Release notes →](release-notes/)
 
 ## Installation
 
-**Requirements:** Home Assistant 2025.5 or newer · HACS installed (for recommended install)
+**Requirements:** Home Assistant 2025.5 or newer (which itself needs Python 3.13.2+) · HACS installed (for recommended install)
+
+> Both CI test jobs run against versions you can actually have: the supported minimum (HA 2025.5 on Python 3.13) and a much newer one (HA 2026.8 on Python 3.14). Until v4.2 the first of those pinned HA 2025.1.4 on Python 3.12 — a combination no installation can be in, since 2025.5 requires 3.13.2.
 
 ### HACS (recommended)
 
@@ -347,11 +350,15 @@ Roomba+ is in the **HACS default store**, so there is no custom repository to
 add. If an older guide told you to add one, that step is obsolete — it does no
 harm, but it is not needed.
 
-> ℹ️ **No beta channel needed since v4.0.0.** Earlier v4 releases were
-> pre-releases and required *Show beta versions*; every release from 4.0.0 on is
-> a normal one and HACS offers it by default. If you enabled beta versions for
-> the v4 betas, you can leave the setting on or turn it off — either way you get
-> the current release.
+> ℹ️ **No beta channel needed for the stable line.** Earlier v4 releases were
+> pre-releases and required *Show beta versions*; every stable release from
+> 4.0.0 on is a normal one and HACS offers it by default. Leaving the setting
+> on is harmless — it simply also offers pre-releases when one exists.
+>
+> **There is one right now: `4.2.0b1`**, the async rewrite. It changes how
+> every command reaches a Classic robot, and no part of it has met real
+> hardware yet — which is exactly what a beta is for. If something that
+> worked in 4.1.0 does not work there, that is worth an issue.
 >
 > If HACS offers you only **`main`** and downloading it hangs, you are on a
 > checkout from before v3.5.2 was tagged. Selecting `main` fails with a 404:
@@ -582,7 +589,7 @@ Some findings were only possible because two people reported the same thing diff
 
 **Translation** — **mdarocha** contributed the Polish (`pl`) translation, **boutXIII** contributed the French (`fr`) translation.
 
-**[roombapy](https://github.com/pschmitt/roombapy)** — Python library for local MQTT/TLS communication with Roomba robots.
+**[roombapy](https://github.com/pschmitt/roombapy)** — Python library for local MQTT/TLS communication with Roomba robots. Roomba+ has used it since the beginning and pins `2.0.1`, the async rewrite; this project contributed the RRTP position protocol and its reply-shape fix back to it.
 
 **[dorita980](https://github.com/koalazak/dorita980)** by Facu Decena — Pioneering work documenting the local MQTT protocol, cloud auth flows, and Smart Map commands.
 

@@ -96,7 +96,9 @@ connected to it.
 
 **The iRobot app loses connection when Roomba+ is running**
 
-Expected — the robot only allows one local MQTT connection. Either disable continuous mode in Settings → Roomba+ → Configure → Connection settings, or accept that the iRobot app will use the cloud path while Roomba+ is connected locally.
+Expected — the robot only allows one local MQTT connection, and Roomba+ holds it. The iRobot app uses the cloud path meanwhile, which works normally.
+
+This used to suggest turning off continuous mode to free the slot. **That option is gone as of v4.2**: roombapy 2.x keeps one supervised connection and has no polling mode to fall back to. To hand the slot to something else — a rest980 container during a migration, say — disable or reload the Roomba+ entry instead.
 
 ---
 

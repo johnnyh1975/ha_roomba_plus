@@ -52,7 +52,15 @@ move on a scale of cleaning hours, and hammering someone else's cloud API for a 
 a few times a day would be rude.
 
 Classic's own live state does not go through a coordinator at all — it arrives via callbacks
-registered on the `roombapy` object (`callbacks.py`).
+registered on the `roombapy` client (`callbacks.py`).
+
+**Both halves are async as of v4.2.** The Classic side ran on roombapy 1.x, a synchronous library
+driven from a paho-mqtt thread, so every command went through `hass.async_add_executor_job()` — 46
+call sites of it. roombapy 2.x is async throughout (aiomqtt), so those are plain `await` now, and
+`RoombaFactory` gave way to constructing a `RoombaClient` directly.
+
+What did **not** move into the event loop: map rendering, UMF alignment and the backup ZIPs. Those
+are CPU- and I/O-bound, and 20 executor calls remain for them deliberately.
 
 ### One thing worth knowing about push streams
 
@@ -203,6 +211,9 @@ class of mistake that leaves every test passing.
 | `check_request_budget.py` | A polling entity making cloud calls, or the same call twice in one method. Found on its first run: the Prime calendar polling every 30 seconds with two calls, roughly 5,760 requests a day. |
 | `check_late_imports.py` | A late import with no stated reason. Established that **none** of this package's 45 late imports guards a real circular import. |
 | `list_assumed_tests.py` | Tests asserting on wire formats nobody has confirmed. `assetId` sat green for months on a key that turned out to be `robot_id`. |
+| `check_no_executor_coroutines.py` | A roombapy coroutine handed to `async_add_executor_job()`. It runs in a worker thread, returns a coroutine object nobody awaits, and the robot never sees the command. Neither mypy nor the tests can see this: the executor's signature accepts any callable, and a mocked robot accepts the call either way. The 4.2 migration passed 6,197 tests against a build with 46 of them. |
+| `check_ci_pins_match_manifest.py` | A workflow installing a different library version than `manifest.json` pins. The manifest is the only pin a user gets; a workflow that differs tests a build nobody runs, and passes while doing it. Through the 4.2 migration the manifest said roombapy 2.0.1 while one job still installed 1.9.1. |
+| `check_client_attributes.py` | An attribute read off the robot client that roombapy does not have. The client is typed `Any` on the entity base, so mypy checks nothing there — across all 25 entity modules. Two renamed attributes survived the 4.2 migration that way, one of which would have made the connectivity sensor raise on every state read. |
 
 Each has an allowlist requiring a written reason, and a test asserting
 that the reasons are not placeholders -- ten entries reading "as above"

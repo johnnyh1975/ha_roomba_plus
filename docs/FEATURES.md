@@ -1058,11 +1058,11 @@ Settings → Devices → Roomba+ → Configure
 
 | Parameter | Default | Description |
 |---|---|---|
-| Continuous connection | `true` | Keep MQTT connection open permanently |
-| Connection delay (s) | `30` | Seconds between reconnect attempts |
 | Map enabled | `true` | Enable live map rendering (900-series) |
 | Map size (px) | `600` | Rendered map image size (400–1200) |
 | Map scale (mm/px) | `10.0` | Millimetres per pixel |
+
+> **Continuous connection** and **connection delay** were removed in v4.2. roombapy 2.x keeps one supervised connection and reconnects on its own — the behaviour the first of those selected, and the only one the library still has. An entry that had continuous turned off says so in the log once, then keeps a connection like every other.
 
 **Options menu structure (v2.6):**
 

@@ -9,6 +9,50 @@ note are listed — most releases need zero action beyond updating.
 
 ---
 
+## v4.2.0b1 — from v4.1.0
+
+**Two settings disappear from the options form, and one of them may change
+how your robot behaves.**
+
+Roomba+ now uses roombapy 2.x, which keeps one supervised connection and
+reconnects on its own. It has no polling mode, so **Continuous connection**
+and **Connection delay** no longer exist — offering them would offer a
+choice nothing reads.
+
+**If you had continuous connection turned OFF**, your robot now keeps a
+persistent connection anyway. That is the behaviour the option's own
+description recommended, and for almost everyone it is an improvement — but
+it is a change to a setting you chose, so it is written to your log once on
+startup. Nothing to do about it; there is no polling mode to go back to.
+
+The stored values stay in your config entry, unread. No migration runs, and
+downgrading to 4.1.0 restores the form with your old values intact.
+
+**Everything else should be identical.** Every command to a Classic robot
+now travels a different route internally — 46 call sites moved from a worker
+thread to the event loop — and no part of that has met real hardware yet. If
+something that worked in 4.1.0 does not work here, that is the bug this beta
+exists to find.
+
+**Also:** the tested Home Assistant minimum is now genuinely 2025.5 (Python
+3.13.2+), which is what the manifest has claimed since 4.0. CI had been
+testing 2025.1.4 on Python 3.12 — a combination no installation can be in.
+
+---
+
+## v4.1.0 — from v4.0.x
+
+Nothing to do. Four silent bugs fixed and two new entities added; see the
+release notes.
+
+**One thing worth checking if you built around a bug**: schedules created
+from the calendar did nothing on i/s/j robots, `clean_zone` sent zones as
+rooms, the zone button ignored selections from non-active maps, and
+`clean_room` could not name rooms on other maps. An automation written to
+work around any of those may behave differently now that they work.
+
+---
+
 ## v4.0.0 (alpha) — from any v3.x
 
 **No migration step, and no entity ids change.** The v4 line adds support for
