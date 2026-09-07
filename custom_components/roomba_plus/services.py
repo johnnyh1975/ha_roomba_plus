@@ -748,7 +748,7 @@ async def async_handle_smart_start(call: ServiceCall) -> None:
             assert data.prime_robot is not None  # noqa: S101
             await data.prime_robot.send_simple_command("start")
         elif data.roomba is not None:
-            await hass.async_add_executor_job(data.roomba.send_command, "start")
+            await data.roomba.send_command("start")
 
 
 async def async_handle_clean_overdue_rooms(call: ServiceCall) -> None:
@@ -1024,7 +1024,7 @@ async def async_handle_auto_clean_dirty_rooms(call: ServiceCall) -> None:
             if data.prime_robot is not None:
                 await data.prime_robot.send_simple_command("start")
             elif data.roomba is not None:
-                await hass.async_add_executor_job(data.roomba.send_command, "start")
+                await data.roomba.send_command("start")
             continue
 
         candidates = _route_optimize_order(data, candidates, region_map)

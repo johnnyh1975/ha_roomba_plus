@@ -161,8 +161,6 @@
       "settings": {
         "title": "Impostazioni di connessione",
         "data": {
-          "continuous": "Connessione continua",
-          "delay": "Ritardo riconnessione (secondi)",
           "map_enabled": "Abilita mappa in tempo reale",
           "map_size_px": "Dimensione mappa (pixel)",
           "map_scale_mm_per_px": "Scala (mm/pixel)",
@@ -178,8 +176,6 @@
           "region_sensors": "Sensore separato per stanza e zona"
         },
         "data_description": {
-          "continuous": "Mantieni una connessione MQTT persistente con il robot. Consigliato.",
-          "delay": "Secondi di attesa tra i tentativi di riconnessione.",
           "map_enabled": "Abilita la mappa di pulizia in tempo reale per i robot con rilevamento della posizione (Roomba 900, i, s, j, Braava m).",
           "map_size_px": "Dimensione del canvas della mappa in pixel (400–1200). Predefinito: 600.",
           "map_scale_mm_per_px": "Millimetri per pixel (5–30). Predefinito 10 = 6 m × 6 m a 600 px."

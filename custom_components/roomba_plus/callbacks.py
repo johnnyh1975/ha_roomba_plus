@@ -293,6 +293,9 @@ def _capture_zone_names(
             if r.get("region_id")
         ]
         if region_ids and data.cloud_coordinator:
+            # Across every map: a mission can target a room on a map
+            # the robot is not currently using, and this is the lookup
+            # that names the rooms it visits.
             id_to_name = region_names_across_maps(data.cloud_coordinator)
             return [id_to_name[rid] for rid in region_ids if rid in id_to_name]
     return []  # NONE (600-series) or SMART without cloud

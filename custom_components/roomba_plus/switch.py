@@ -348,16 +348,12 @@ class EdgeCleanSwitch(IRobotEntity, SwitchEntity):
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Enable edge cleaning."""
         _LOGGER.debug("EdgeClean: turning ON (openOnly=False)")
-        await self.hass.async_add_executor_job(
-            self.vacuum.set_preference, "openOnly", False
-        )
+        await self.vacuum.set_preference("openOnly", False)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Disable edge cleaning."""
         _LOGGER.debug("EdgeClean: turning OFF (openOnly=True)")
-        await self.hass.async_add_executor_job(
-            self.vacuum.set_preference, "openOnly", True
-        )
+        await self.vacuum.set_preference("openOnly", True)
 
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:
         return "openOnly" in new_state
@@ -392,16 +388,12 @@ class AlwaysFinishSwitch(IRobotEntity, SwitchEntity):
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Enable always-finish mode (binPause=False)."""
         _LOGGER.debug("AlwaysFinish: turning ON (binPause=False)")
-        await self.hass.async_add_executor_job(
-            self.vacuum.set_preference, "binPause", False
-        )
+        await self.vacuum.set_preference("binPause", False)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Disable always-finish mode (binPause=True — pause when bin is full)."""
         _LOGGER.debug("AlwaysFinish: turning OFF (binPause=True)")
-        await self.hass.async_add_executor_job(
-            self.vacuum.set_preference, "binPause", True
-        )
+        await self.vacuum.set_preference("binPause", True)
 
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:
         return "binPause" in new_state
@@ -435,16 +427,12 @@ class ScheduleHoldSwitch(IRobotEntity, SwitchEntity):
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Freeze the schedule."""
         _LOGGER.debug("ScheduleHold: turning ON (schedHold=True)")
-        await self.hass.async_add_executor_job(
-            self.vacuum.set_preference, "schedHold", True
-        )
+        await self.vacuum.set_preference("schedHold", True)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Unfreeze the schedule."""
         _LOGGER.debug("ScheduleHold: turning OFF (schedHold=False)")
-        await self.hass.async_add_executor_job(
-            self.vacuum.set_preference, "schedHold", False
-        )
+        await self.vacuum.set_preference("schedHold", False)
 
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:
         return "schedHold" in new_state
@@ -478,16 +466,12 @@ class ChildLockSwitch(IRobotEntity, SwitchEntity):
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Lock the physical buttons."""
         _LOGGER.debug("ChildLock: turning ON (childLock=True)")
-        await self.hass.async_add_executor_job(
-            self.vacuum.set_preference, "childLock", True
-        )
+        await self.vacuum.set_preference("childLock", True)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Unlock the physical buttons."""
         _LOGGER.debug("ChildLock: turning OFF (childLock=False)")
-        await self.hass.async_add_executor_job(
-            self.vacuum.set_preference, "childLock", False
-        )
+        await self.vacuum.set_preference("childLock", False)
 
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:
         return "childLock" in new_state
@@ -518,16 +502,12 @@ class EcoChargeSwitch(IRobotEntity, SwitchEntity):
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Enable eco charging."""
         _LOGGER.debug("EcoCharge: turning ON (ecoCharge=True)")
-        await self.hass.async_add_executor_job(
-            self.vacuum.set_preference, "ecoCharge", True
-        )
+        await self.vacuum.set_preference("ecoCharge", True)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Disable eco charging."""
         _LOGGER.debug("EcoCharge: turning OFF (ecoCharge=False)")
-        await self.hass.async_add_executor_job(
-            self.vacuum.set_preference, "ecoCharge", False
-        )
+        await self.vacuum.set_preference("ecoCharge", False)
 
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:
         return "ecoCharge" in new_state
@@ -563,16 +543,12 @@ class GentleModeSwitch(IRobotEntity, SwitchEntity):
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Enable gentle mode."""
         _LOGGER.debug("GentleMode: turning ON (gentle=True)")
-        await self.hass.async_add_executor_job(
-            self.vacuum.set_preference, "gentle", True
-        )
+        await self.vacuum.set_preference("gentle", True)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Disable gentle mode."""
         _LOGGER.debug("GentleMode: turning OFF (gentle=False)")
-        await self.hass.async_add_executor_job(
-            self.vacuum.set_preference, "gentle", False
-        )
+        await self.vacuum.set_preference("gentle", False)
 
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:
         return "gentle" in new_state

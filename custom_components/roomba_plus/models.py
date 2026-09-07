@@ -13,7 +13,7 @@ from homeassistant.config_entries import ConfigEntry
 
 if TYPE_CHECKING:
     from .mission_archive import MissionArchive
-    from roombapy import Roomba
+    from roombapy import RoombaClient
     from roombapy_prime import PrimeRobot
     from roombapy_prime.models import RobotSerialInfo
     from .blocking_manager import BlockingManager
@@ -66,7 +66,7 @@ class ConnectionType(Enum):
     context.
 
     UPDATE: now referenced by RoombaData (below) -- roomba is Optional
-    for exactly this reason (a CLOUD_ONLY entry has no local Roomba
+    for exactly this reason (a CLOUD_ONLY entry has no local RoombaClient
     object at all). CLOUD_ONLY entries take an entirely separate setup/
     unload path (_async_setup_entry_prime() in __init__.py) rather than
     threading through the existing 4-phase LOCAL_PUSH pipeline, which
@@ -105,12 +105,12 @@ class RoombaData:
 
     blid: str
     # NEW (V4/Prime): Optional, not required -- a CLOUD_ONLY entry has no
-    # local Roomba object at all. Moved ahead of `blid` in declaration
+    # local RoombaClient object at all. Moved ahead of `blid` in declaration
     # order for exactly this reason (dataclass fields without a default
     # can't follow one that has a default; blid has none and applies to
     # both connection types, roomba now has a default and doesn't apply
     # to both).
-    roomba: Roomba | None = None
+    roomba: RoombaClient | None = None
     # NEW (V4/Prime): defaults to LOCAL_PUSH so every existing entry
     # (which predates this field entirely) is treated exactly as before.
     connection_type: ConnectionType = ConnectionType.LOCAL_PUSH

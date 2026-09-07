@@ -161,8 +161,6 @@
       "settings": {
         "title": "Verbindungseinstellungen",
         "data": {
-          "continuous": "Dauerverbindung",
-          "delay": "Wiederverbindungsverzögerung (Sekunden)",
           "map_enabled": "Live-Karte aktivieren",
           "map_size_px": "Kartengröße (Pixel)",
           "map_scale_mm_per_px": "Maßstab (mm/Pixel)",
@@ -178,8 +176,6 @@
           "region_sensors": "Eigener Sensor je Raum und Zone"
         },
         "data_description": {
-          "continuous": "Persistente MQTT-Verbindung zum Roboter halten. Empfohlen.",
-          "delay": "Wartezeit in Sekunden zwischen Wiederverbindungsversuchen.",
           "map_enabled": "Aktiviert die Live-Reinigungskarte für Roboter mit Positionserkennung (Roomba 900, i, s, j, Braava m).",
           "map_size_px": "Bildgröße der Karte in Pixel (400–1200). Standard: 600 px.",
           "map_scale_mm_per_px": "Millimeter pro Pixel (5–30). Standard 10 entspricht 6 m × 6 m bei 600 Pixel."

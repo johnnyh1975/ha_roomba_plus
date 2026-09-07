@@ -4,11 +4,10 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 import asyncio
-from functools import partial
 import logging
 from typing import Any
 
-from roombapy import RoombaFactory, RoombaInfo
+from roombapy import RoombaClient, RoombaInfo
 from roombapy.discovery import RoombaDiscovery
 from roombapy.getpassword import RoombaPassword
 from roombapy_prime import LoginResult
@@ -209,15 +208,13 @@ async def validate_input(
     Returns dict containing the robot name and session on success.
     Raises CannotConnect when the device is unreachable or credentials fail.
     """
-    roomba = await hass.async_add_executor_job(
-        partial(
-            RoombaFactory.create_roomba,
-            address=data[CONF_HOST],
-            blid=data[CONF_BLID],
-            password=data[CONF_PASSWORD],
-            continuous=True,
-            delay=data[CONF_DELAY],
-        )
+    # See the note in __init__.py: roombapy 2.x dropped the factory, and
+    # `continuous`/`delay` with it. This call passed `continuous=True`
+    # explicitly, which is now the only behaviour there is.
+    roomba = RoombaClient(
+        data[CONF_HOST],
+        data[CONF_BLID],
+        data[CONF_PASSWORD],
     )
 
     info = await async_connect_or_timeout(hass, roomba)
@@ -854,7 +851,7 @@ class RoombaPlusConfigFlow(ConfigFlow, domain=DOMAIN):
         roomba_pw = RoombaPassword(self.host)
 
         try:
-            password = await self.hass.async_add_executor_job(roomba_pw.get_password)
+            password = await roomba_pw.get_password()
         except OSError:
             return await self.async_step_link_manual()
 
@@ -1329,14 +1326,19 @@ class RoombaPlusOptionsFlow(OptionsFlow):
             step_id="settings",
             data_schema=vol.Schema(
                 {
-                    vol.Optional(
-                        CONF_CONTINUOUS,
-                        default=options.get(CONF_CONTINUOUS, DEFAULT_CONTINUOUS),
-                    ): bool,
-                    vol.Optional(
-                        CONF_DELAY,
-                        default=options.get(CONF_DELAY, DEFAULT_DELAY),
-                    ): int,
+                    # CONTINUOUS AND DELAY ARE GONE FROM THIS FORM (4.2).
+                    #
+                    # roombapy 2.x keeps one supervised connection and
+                    # reconnects on its own -- the behaviour `continuous:
+                    # true` used to select, and what this form's own
+                    # description already recommended. There is no
+                    # polling mode left to ask for, so offering the
+                    # choice would be offering something nothing reads.
+                    #
+                    # The stored keys are left in the config entry
+                    # rather than migrated away: a value nothing reads is
+                    # harmless, and a migration whose only effect is to
+                    # delete two numbers is a risk with no upside.
                     vol.Optional(
                         CONF_MAP_ENABLED,
                         default=options.get(CONF_MAP_ENABLED, DEFAULT_MAP_ENABLED),
@@ -2310,10 +2312,21 @@ class RoombaPlusOptionsFlow(OptionsFlow):
 
 @callback
 def _async_get_roomba_discovery() -> RoombaDiscovery:
-    """Create a RoombaDiscovery instance capped at MAX_NUM_DEVICES_TO_DISCOVER."""
-    discovery = RoombaDiscovery()
-    discovery.amount_of_broadcasted_messages = MAX_NUM_DEVICES_TO_DISCOVER
-    return discovery
+    """Create a RoombaDiscovery instance.
+
+    NO LONGER CAPPED, because there is nothing to cap. roombapy 1.x
+    exposed `amount_of_broadcasted_messages`, the number of UDP
+    broadcasts it sent before giving up, and this set it to
+    MAX_NUM_DEVICES_TO_DISCOVER -- which conflated "how many probes" with
+    "how many robots", and had been that way long enough that nobody
+    noticed the two are unrelated.
+
+    2.x replaces it with a plain `timeout` on `get_all()`, which is the
+    honest control: discovery listens for that long and returns whatever
+    answered. A household with more robots than the old cap now finds
+    all of them.
+    """
+    return RoombaDiscovery()
 
 
 @callback
@@ -2343,11 +2356,11 @@ async def _async_discover_roombas(
             discovered: set[RoombaInfo] = set()
             try:
                 if host:
-                    device = await hass.async_add_executor_job(discovery.get, host)
+                    device = await discovery.get(host)
                     if device:
                         discovered.add(device)
                 else:
-                    discovered = await hass.async_add_executor_job(discovery.get_all)
+                    discovered = await discovery.get_all()
             except OSError:
                 await asyncio.sleep(ROOMBA_WAKE_TIME * attempt)
                 continue
@@ -2357,7 +2370,12 @@ async def _async_discover_roombas(
                         discovered_hosts.add(device.ip)
                         devices.append(device)
             finally:
-                discovery.server_socket.close()
+                # `server_socket` was the 1.x internal; 2.x owns its
+                # transport and closes it here. Still in `finally`, for
+                # the same reason as before -- a discovery that raises
+                # must not leave the socket bound, or the next attempt
+                # in this loop fails on the port.
+                await discovery.aclose()
 
         if host and host in discovered_hosts:
             return devices

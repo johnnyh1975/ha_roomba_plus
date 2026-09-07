@@ -982,7 +982,7 @@ async def _build_diagnostics(
 
     # REAL CRASH FOUND AND FIXED (architecture review, not a field
     # report): this whole function unconditionally accessed
-    # data.roomba's own attributes (roomba_connected, current_state,
+    # data.roomba's own attributes (connected, current_state,
     # etc.) further below -- data.roomba is None for every CLOUD_ONLY
     # (V4/Prime) entry, so calling HA's own "Download diagnostics"
     # button (Settings -> Devices -> a Prime robot) would have raised
@@ -1356,12 +1356,20 @@ async def _build_diagnostics(
         "options": async_redact_data(dict(config_entry.options), _CLOUD_REDACT),
 
         # Connection state
+        # `continuous` and `delay` are gone from roombapy 2.x, which
+        # keeps one supervised connection and reconnects on its own.
+        # Reporting them as null would suggest they exist and are unset;
+        # dropping them says what is true, and an old diagnostic still
+        # reads fine because nothing consumes this by position.
         "connection": {
-            "connected": roomba.roomba_connected,
+            "connected": roomba.connected,
             "current_state": roomba.current_state,
-            "client_error": roomba.client_error,
-            "continuous": roomba.continuous,
-            "delay": roomba.delay,
+            # `client_error` is gone in roombapy 2.x; `error_code` and
+            # `error_message` are what it exposes now. Found by checking
+            # every attribute read off the client against the real class
+            # -- `self.vacuum` is typed `Any`, so mypy saw none of this.
+            "error_code": roomba.error_code,
+            "error_message": roomba.error_message,
         },
 
         # Error state

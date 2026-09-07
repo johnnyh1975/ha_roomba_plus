@@ -512,6 +512,6 @@ class DirtThresholdManager:
                 "cleaning is a Classic path", entry_id,
             )
             return
-        await self._hass.async_add_executor_job(roomba.send_command, "start")
+        await roomba.send_command("start")
 
         _LOGGER.info("DirtThresholdManager: demand clean sent for %s", entry_id)

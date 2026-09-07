@@ -357,28 +357,20 @@ async def _select_cleaning_passes(entity: SimpleRoombaSelect, option: str) -> No
     _LOGGER.debug(
         "CleaningPasses: option=%r → noAutoPasses=%s twoPass=%s", option, no_auto, two_pass
     )
-    await entity.hass.async_add_executor_job(entity.vacuum.set_preference, "noAutoPasses", no_auto)
-    await entity.hass.async_add_executor_job(entity.vacuum.set_preference, "twoPass", two_pass)
+    await entity.vacuum.set_preference("noAutoPasses", no_auto)
+    await entity.vacuum.set_preference("twoPass", two_pass)
 
 
 async def _select_disposable_wetness(entity: SimpleRoombaSelect, option: str) -> None:
     level = int(option)
     current = entity.vacuum_state.get("padWetness", {})
-    await entity.hass.async_add_executor_job(
-        entity.vacuum.set_preference,
-        "padWetness",
-        {"disposable": level, "reusable": current.get("reusable", level)},
-    )
+    await entity.vacuum.set_preference("padWetness", {"disposable": level, "reusable": current.get("reusable", level)})
 
 
 async def _select_reusable_wetness(entity: SimpleRoombaSelect, option: str) -> None:
     level = int(option)
     current = entity.vacuum_state.get("padWetness", {})
-    await entity.hass.async_add_executor_job(
-        entity.vacuum.set_preference,
-        "padWetness",
-        {"disposable": current.get("disposable", level), "reusable": level},
-    )
+    await entity.vacuum.set_preference("padWetness", {"disposable": current.get("disposable", level), "reusable": level})
 
 
 async def _select_carpet_boost(entity: SimpleRoombaSelect, option: str) -> None:

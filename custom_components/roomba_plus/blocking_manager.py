@@ -334,9 +334,7 @@ class BlockingManager:
             # two agree, and only one of them narrows.
             await data.prime_robot.send_simple_command("start")
         elif data.roomba is not None:
-            await self._hass.async_add_executor_job(
-                data.roomba.send_command, "start"
-            )
+            await data.roomba.send_command("start")
         _LOGGER.info("BlockingManager: start issued")
 
     # ── Cleanup ───────────────────────────────────────────────────────────────

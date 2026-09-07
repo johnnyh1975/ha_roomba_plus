@@ -411,9 +411,7 @@ class RoombaCommandButton(IRobotEntity, ButtonEntity):
         _LOGGER.debug("CommandButton: %s → %s",
                       self.entity_description.key,
                       self.entity_description.command)
-        await self.hass.async_add_executor_job(
-            self.vacuum.send_command, self.entity_description.command
-        )
+        await self.vacuum.send_command(self.entity_description.command)
 
 
 # ── Maintenance reset button base ─────────────────────────────────────────────
@@ -663,9 +661,7 @@ class ZoneCleanButton(_MaintenanceResetButton):
         )
         # 900-series: send plain start — robot navigates using its own logic.
         # The room parameter is noted in the log but cannot be passed to the robot.
-        await self.hass.async_add_executor_job(
-            self.vacuum.send_command, "start"
-        )
+        await self.vacuum.send_command("start")
 
 
 class RepeatLastMissionButton(IRobotEntity, ButtonEntity):
@@ -716,9 +712,7 @@ class RepeatLastMissionButton(IRobotEntity, ButtonEntity):
         _LOGGER.info(
             "RepeatLastMission: sending %s params=%s", command, params or "(none)"
         )
-        await self.hass.async_add_executor_job(
-            self.vacuum.send_command, command, params or {}
-        )
+        await self.vacuum.send_command(command, params or {})
 
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:
         return "lastCommand" in new_state
@@ -901,9 +895,7 @@ class SmartZoneButton(IRobotEntity, ButtonEntity):
             "SmartZoneButton: cleaning region %s on map %s",
             region_id, pmap_id[:12],
         )
-        await self.hass.async_add_executor_job(
-            self.vacuum.send_command, "start", params
-        )
+        await self.vacuum.send_command("start", params)
 
 
 async def async_run_classic_favorite(
@@ -973,11 +965,7 @@ async def _send_favorite(
     A guard test in this repository caught the same mistake here before
     it shipped.
     """
-    await hass.async_add_executor_job(
-        roomba.send_command,
-        cmd.get("command", "start"),
-        {k: v for k, v in cmd.items() if k != "command"},
-    )
+    await roomba.send_command(cmd.get("command", "start"), {k: v for k, v in cmd.items() if k != "command"})
 
 
 class FavoriteButton(IRobotEntity, ButtonEntity):
@@ -1052,8 +1040,4 @@ class FavoriteButton(IRobotEntity, ButtonEntity):
             "FavoriteButton: firing favorite '%s' → %s params=%s",
             self._attr_name, command, params or "(none)",
         )
-        await self.hass.async_add_executor_job(
-            self.vacuum.send_command,
-            command,
-            params,
-        )
+        await self.vacuum.send_command(command, params)

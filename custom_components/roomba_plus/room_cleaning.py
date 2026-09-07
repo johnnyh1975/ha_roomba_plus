@@ -592,6 +592,8 @@ class PrimeRoomCleaning(RoomCleaningBackend):
     _SEGMENT_PREFIX = "rid_"
 
     #: Map documents fetched during one `get_segments()` listing.
+    #: Declared here so both readers share one type; `get_segments()`
+    #: clears it, and `_map_metadata()` fills it lazily.
     _map_meta_cache: dict[str, Any]
 
     async def _named_regions_across_maps(self) -> dict[str, str]:
@@ -1475,9 +1477,7 @@ class ClassicRoomCleaning(RoomCleaningBackend):
             self._data.blid, room_ids, pmap_id[:12],
             user_pmapv_id[:12] if user_pmapv_id else "none",
         )
-        await self._hass.async_add_executor_job(
-            self._roomba.send_command, "start", params
-        )
+        await self._roomba.send_command("start", params)
 
 
 
@@ -1702,11 +1702,7 @@ class ClassicRoomCleaning(RoomCleaningBackend):
         }
         if include_pmapv and user_pmapv_id is not None:
             params["user_pmapv_id"] = user_pmapv_id
-        await self._hass.async_add_executor_job(
-            self._roomba.send_command,
-            "start",
-            params,
-        )
+        await self._roomba.send_command("start", params)
         # F-RB-1: best-effort state update after segment clean command.
         # Cloud may not yet have the new state; failure is non-fatal.
         try:
@@ -1834,6 +1830,7 @@ def _resolve_pmapv_id(state: dict[str, Any], pmap_id: str) -> str | None:
         if pmap_id in pmap:
             return str(pmap[pmap_id])
     return None
+
 
 
 def region_names_across_maps(cloud_coordinator: Any) -> dict[str, str]:

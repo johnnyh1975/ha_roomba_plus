@@ -317,7 +317,7 @@ class RoombaBinPresentStatus(IRobotEntity, BinarySensorEntity):
 class RoombaConnectionStatus(IRobotEntity, BinarySensorEntity):
     """Binary sensor that is ON when the Roomba is connected via MQTT.
 
-    Uses roombapy's roomba_connected flag and the on_disconnect callback
+    Uses roombapy's `connected` flag and the on_disconnect callback
     to reflect real-time connectivity without polling.
     """
 
@@ -336,8 +336,15 @@ class RoombaConnectionStatus(IRobotEntity, BinarySensorEntity):
 
     @property
     def is_on(self) -> bool:
-        """Return True when the Roomba MQTT connection is active."""
-        return bool(self.vacuum.roomba_connected)
+        """Return True when the Roomba MQTT connection is active.
+
+        `connected`, not `roomba_connected`: roombapy 2.x renamed it.
+        The old name survived the 4.2 migration because `self.vacuum` is
+        typed `Any` on the entity base, so mypy checked nothing here --
+        and a missing attribute on a live robot would have made this
+        sensor raise on every state read.
+        """
+        return bool(self.vacuum.connected)
 
     async def async_added_to_hass(self) -> None:
         """Register both message and disconnect callbacks."""

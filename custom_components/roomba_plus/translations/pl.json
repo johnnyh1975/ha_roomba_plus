@@ -161,8 +161,6 @@
       "settings": {
         "title": "Ustawienia połączenia",
         "data": {
-          "continuous": "Ciągłe połączenie",
-          "delay": "Opóźnienie reconnect (sekundy)",
           "map_enabled": "Włącz mapę na żywo",
           "map_size_px": "Rozmiar mapy (piksele)",
           "map_scale_mm_per_px": "Skala (mm/piksel)",
@@ -178,8 +176,6 @@
           "region_sensors": "Osobny czujnik dla każdego pomieszczenia i strefy"
         },
         "data_description": {
-          "continuous": "Utrzymuj stałe połączenie MQTT z robotem. Zalecane.",
-          "delay": "Czas oczekiwania między próbami reconnect (w sekundach).",
           "map_enabled": "Włącz mapę sprzątania na żywo dla robotów z wykrywaniem pozycji (Roomba 900, i, s, j, Braava m).",
           "map_size_px": "Rozmiar płótna mapy w pikselach (400–1200). Domyślnie: 600.",
           "map_scale_mm_per_px": "Milimetry na piksel (5–30). Domyślnie 10 = 6 m × 6 m przy 600 px."
