@@ -1804,10 +1804,21 @@ class TestPrimeOffersZonesForAreaMapping:
         assert len(segments) == 1
 
     @pytest.mark.asyncio
-    async def test_a_zone_segment_decodes_back(self):
-        """The other half: a `zid_` id sent to clean_segments must not
-        be decoded by the room rule, which would drop four characters
-        and clean whatever room shared the remainder."""
+    async def test_a_zone_segment_keeps_its_prefix(self):
+        """A `zid_` id must reach `clean_rooms` WITH its prefix.
+
+        This asserted the opposite -- that the prefix is stripped, like
+        `rid_` -- and shipped in 4.1.0. `_send_region_command()` decides
+        between RegionType.ZID and RegionType.RID by looking for exactly
+        that prefix, so a stripped zone went out as a room with an id no
+        room has: @chairstacker's robot left the dock, localised, found
+        nothing and declared the mission complete.
+
+        The old docstring worried that keeping the prefix would "clean
+        whatever room shared the remainder". That is the hazard for
+        `rid_`, whose remainder is a room id. For `zid_`, stripping is
+        what creates the collision.
+        """
         from unittest.mock import AsyncMock
 
         backend = self._backend(rooms={}, names={})
@@ -1815,7 +1826,19 @@ class TestPrimeOffersZonesForAreaMapping:
 
         await backend.clean_segments(["zid_107"])
 
-        assert backend.clean_rooms.await_args[0][0] == ["107"]
+        assert backend.clean_rooms.await_args[0][0] == ["zid_107"]
+
+    async def test_a_room_segment_still_loses_its_prefix(self):
+        """The negative control: `rid_` must still be stripped, or the
+        room id would carry four characters no room id has."""
+        from unittest.mock import AsyncMock
+
+        backend = self._backend(rooms={}, names={})
+        backend.clean_rooms = AsyncMock()
+
+        await backend.clean_segments(["rid_12"])
+
+        assert backend.clean_rooms.await_args[0][0] == ["12"]
 
 
 class TestStoredZonesSurviveWithoutCloud:

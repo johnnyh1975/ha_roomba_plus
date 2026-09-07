@@ -242,3 +242,166 @@ class TestZonesGoOutAsZones:
         await backend.available_rooms()
 
         assert backend._type_by_region.get("99", "rid") == "rid"
+
+
+
+class TestRoomNamesResolveAcrossMaps:
+    """`current_room` showed "Room ID 18" instead of "Hallway".
+
+    @ScenicSystemsLLC ran a favourite that cleaned a room on a map the
+    robot was not currently using -- possible for the first time in
+    4.1.0 -- and the robot went to the right room while the sensor
+    displayed a raw id.
+
+    `cloud_coordinator.regions` returns the ACTIVE map only. 4.1.0
+    lifted that for `clean_room`'s lookup and left three other consumers
+    reading the same property: the mission-progress sensors, the
+    callbacks that name visited rooms, and the API view. All four built
+    the same dict by hand.
+    """
+
+    @staticmethod
+    def _coordinator():
+        cc = MagicMock()
+        cc.regions = [{"id": "1", "name": "Master Bathroom"}]
+        cc.regions_by_pmap = {
+            "second-floor": {"18": "Hallway", "1": "Bathroom"},
+            "bathroom-map": {"1": "Master Bathroom"},
+        }
+        return cc
+
+    def test_a_room_on_another_map_gets_its_name(self) -> None:
+        from custom_components.roomba_plus.room_cleaning import (
+            region_names_across_maps,
+        )
+
+        names = region_names_across_maps(self._coordinator())
+
+        assert names["18"] == "Hallway", "this is the one that read 'Room ID 18'"
+
+    def test_the_active_map_still_wins_a_duplicate(self) -> None:
+        """Both maps have a region 1 with different names. The active
+        map's must win, exactly as it did when only that map was read."""
+        from custom_components.roomba_plus.room_cleaning import (
+            region_names_across_maps,
+        )
+
+        assert region_names_across_maps(self._coordinator())["1"] == "Master Bathroom"
+
+    def test_no_coordinator_is_not_an_error(self) -> None:
+        from custom_components.roomba_plus.room_cleaning import (
+            region_names_across_maps,
+        )
+
+        assert region_names_across_maps(None) == {}
+
+    def test_no_consumer_builds_the_lookup_by_hand(self) -> None:
+        """The guard. Four copies of one dict comprehension is how three
+        of them kept the restriction after the fourth lost it."""
+        import pathlib
+        import re
+
+        pattern = re.compile(r'r\["id"\]:\s*r\["name"\]')
+        offenders = [
+            path.name
+            for path in sorted(
+                (
+                    pathlib.Path(__file__).parent.parent
+                    / "custom_components"
+                    / "roomba_plus"
+                ).glob("*.py")
+            )
+            if pattern.search(path.read_text(encoding="utf-8"))
+            and path.name != "room_cleaning.py"
+        ]
+
+        assert not offenders, (
+            "these build the region-name lookup themselves instead of calling "
+            f"region_names_across_maps(), and will read the active map only: "
+            f"{offenders}"
+        )
+
+
+
+class TestZonesAcrossEveryMap:
+    """@chairstacker on 4.1.0: rooms from every map appeared in the
+    area-mapping dialog, zones only from the one being drawn.
+
+    "Master Bathroom" showed up under Rooms and not under Zones;
+    "Testing Zone 13d" showed up because a command had named it;
+    "Testin Zone 13b" appeared nowhere at all.
+
+    Two causes, fixed separately below.
+    """
+
+    def test_the_all_maps_source_carries_zones(self) -> None:
+        """`regions_by_pmap` read `details["regions"]` and ignored
+        `details["zones"]` -- the two sit side by side in the same
+        object, and reading one of them is why a zone on another map had
+        no name anywhere."""
+        from custom_components.roomba_plus.cloud_coordinator import (
+            IrobotCloudCoordinator,
+        )
+
+        coordinator = IrobotCloudCoordinator.__new__(IrobotCloudCoordinator)
+        coordinator.data = {
+            "pmaps": [
+                {
+                    # The id lives inside `active_pmapv`, not at the top
+                    # of the pmap -- taken from a real /pmaps response.
+                    "active_pmapv_details": {
+                        "active_pmapv": {"pmap_id": "second-floor"},
+                        "regions": [{"region_id": "10", "name": "Hallway"}],
+                        "zones": [{"region_id": "13", "name": "Testin Zone 13b"}],
+                    },
+                }
+            ]
+        }
+
+        by_map = coordinator.regions_by_pmap
+
+        assert by_map["second-floor"] == {
+            "10": "Hallway",
+            "13": "Testin Zone 13b",
+        }
+
+    def test_a_room_wins_an_id_it_shares_with_a_zone(self) -> None:
+        """Regions are read first, so the result matches what `regions`
+        alone used to return for any id they both carry."""
+        from custom_components.roomba_plus.cloud_coordinator import (
+            IrobotCloudCoordinator,
+        )
+
+        coordinator = IrobotCloudCoordinator.__new__(IrobotCloudCoordinator)
+        coordinator.data = {
+            "pmaps": [
+                {
+                    "active_pmapv_details": {
+                        "active_pmapv": {"pmap_id": "m1"},
+                        "regions": [{"region_id": "1", "name": "Kitchen"}],
+                        "zones": [{"region_id": "1", "name": "Under the table"}],
+                    },
+                }
+            ]
+        }
+
+        assert coordinator.regions_by_pmap["m1"]["1"] == "Kitchen"
+
+    def test_the_active_maps_zones_are_not_lost(self) -> None:
+        """The regression this nearly shipped with. A first version of
+        `region_names_across_maps()` read `regions` and not `zones`, so
+        every consumer would have lost the active map's zones at once --
+        a wider break than the gap being closed."""
+        from custom_components.roomba_plus.room_cleaning import (
+            region_names_across_maps,
+        )
+
+        cc = MagicMock()
+        cc.regions = [{"id": "10", "name": "Kitchen"}]
+        cc.zones = [{"id": "101", "name": "Under the table"}]
+        cc.regions_by_pmap = {}
+
+        assert region_names_across_maps(cc) == {
+            "10": "Kitchen",
+            "101": "Under the table",
+        }

@@ -116,3 +116,74 @@ class TestTheCycleCheckIsStillThere:
             "without this it ends the mission 58 minutes early"
         )
         assert "not _is_inter_room_transition" in source
+
+
+#: The two sub-second phase bounces from the same run, as the robot sent
+#: them. Millisecond receive times, one clock, missionId constant across
+#: all eight -- the fields this integration reads, verbatim.
+#:
+#: These are what the debounce and hold-time machinery exists for, and
+#: this project had never had a real one. A synthetic bounce proves only
+#: that whoever wrote it understood the code they were testing.
+_BOUNCE_AT_THE_RECHARGE = [
+    # 13:16:38.841Z, four messages in 383 ms
+    ("hmMidMsn", "clean", 15, 0),
+    ("charge", "clean", 15, 1788619598),
+    ("hmMidMsn", "clean", 15, 0),
+    ("charge", "clean", 15, 1788619598),
+]
+
+_BOUNCE_AT_THE_RESUME = [
+    # 14:15:15.807Z, four messages in 195 ms -- the first flap is 5 ms
+    ("charge", "clean", 0, 1788619598),
+    ("run", "clean", 0, 0),
+    ("charge", "clean", 0, 1788619598),
+    ("run", "clean", 0, 0),
+]
+
+
+class TestTheSubSecondBounces:
+    """Real captured flapping, from @AlakazipLabs' archive.
+
+    A phase-only end test has bounce 2 as its hard case: `charge` to
+    `run` in FIVE milliseconds. Debounce counts and hold times are how
+    such a thing is normally survived -- but they are timing
+    heuristics, and timing heuristics fail on a machine under load.
+
+    The cycle check does not need them. `cycle` is `clean` in all eight
+    messages, so none of them can end a mission whatever the timing
+    does. That is worth pinning: it means the guard is structural, not
+    a race that happens to be won.
+    """
+
+    @pytest.mark.parametrize(
+        ("phase", "cycle", "not_ready", "expire_tm"),
+        _BOUNCE_AT_THE_RECHARGE + _BOUNCE_AT_THE_RESUME,
+    )
+    def test_no_message_in_either_bounce_ends_the_mission(
+        self, phase: str, cycle: str, not_ready: int, expire_tm: int
+    ) -> None:
+        assert not _looks_like_end(phase, cycle)
+
+    def test_the_expiry_timer_is_reported_per_phase(self) -> None:
+        """Not once at the recharge, as this project's own comment said.
+
+        Every `charge` message carries the deadline and every moving
+        message carries 0, alternating inside a 383 ms bounce and again
+        an hour later. The VALUE never changes -- recharge arrival plus
+        5,399 seconds -- so a countdown must tick locally rather than
+        wait to be told.
+        """
+        armed = {
+            expire_tm
+            for phase, _c, _n, expire_tm in _BOUNCE_AT_THE_RECHARGE + _BOUNCE_AT_THE_RESUME
+            if phase == "charge"
+        }
+        moving = {
+            expire_tm
+            for phase, _c, _n, expire_tm in _BOUNCE_AT_THE_RECHARGE + _BOUNCE_AT_THE_RESUME
+            if phase in ("run", "hmMidMsn")
+        }
+
+        assert armed == {1788619598}, "the deadline must be constant while charging"
+        assert moving == {0}, "and absent while moving"
