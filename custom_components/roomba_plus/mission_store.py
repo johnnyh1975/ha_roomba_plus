@@ -1943,7 +1943,16 @@ class MissionStore:
             _models = importlib.import_module(
                 "homeassistant.components.recorder.models"
             )
-            _mean_type_none = getattr(_models, "StatisticMeanType", None)
+            # ANNOTATED `Any`, because the two branches have different
+            # types and only one of them exists on any given HA. Where
+            # `StatisticMeanType` is present the TypedDict declares that
+            # enum, and the `else 0` fallback makes the inferred type
+            # `Any | int` -- which mypy rejects against HA 2025.5 while
+            # accepting it against 2025.1.4, where the field was looser.
+            #
+            # Found only after CI moved to the HA version this
+            # integration actually supports.
+            _mean_type_none: Any = getattr(_models, "StatisticMeanType", None)
             _mean_type_none = (
                 _mean_type_none.NONE if _mean_type_none is not None else 0
             )
