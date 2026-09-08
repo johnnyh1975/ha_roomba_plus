@@ -73,6 +73,22 @@ marked in their own headings.
 | Clean selected room | Button | Sends the robot to whatever the selector holds. Works whichever map the robot last ran on — a robot accepts a region command for any of its maps (v4.1.0) |
 | *(one per favourite)* | Button | Runs a saved iRobot favourite. A favourite carries its own map, so this is the shortest route to a room on another floor |
 
+> **Where Prime zone names come from, and why one may be missing.** Rooms
+> are read from each map's own metadata, which always carries them. Zones
+> are not: their names live in the map *version* document, plus whatever
+> the last cleaning command happened to label. That version document has
+> been confirmed to carry zones on some robots and not others, so a zone
+> of yours may be absent from these lists while the map shows it
+> correctly. It is not a setting, and there is nothing to try — but it is
+> worth reporting, because which robots carry it is still being worked
+> out.
+>
+> A zone can also be missing simply because no map has been drawn yet.
+> Since v4.1.2 the list refills itself when the map arrives; before that
+> it needed a restart.
+
+
+
 **Actions** (Settings → Automations → Actions → Roomba+):
 
 | Action | Robots | Description |

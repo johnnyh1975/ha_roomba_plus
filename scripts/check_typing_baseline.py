@@ -50,7 +50,15 @@ def main() -> int:
 
     found = int(match.group(1))
     if found > BASELINE:
-        print(f"mypy: {found} errors, baseline is {BASELINE} — up by {found - BASELINE}.")
+        # PRINT THE ERRORS, NOT JUST THE COUNT. This reported only
+        # "2 errors, baseline is 0" for a long time, which tells a CI
+        # reader nothing they can act on -- the run has to be
+        # reproduced locally, against the same Python and the same
+        # library pins, before anyone can see what broke.
+        print(f"mypy: {found} errors, baseline is {BASELINE} — up by {found - BASELINE}.\n")
+        for line in result.stdout.splitlines():
+            if ": error:" in line or ": note:" in line:
+                print(f"  {line}")
         return 1
     if found < BASELINE:
         print(

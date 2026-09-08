@@ -9,6 +9,33 @@ note are listed — most releases need zero action beyond updating.
 
 ---
 
+## v4.1.2 — from v4.1.x or v4.0.x
+
+Nothing to do. Four field fixes; see the release notes.
+
+**One thing worth re-checking if you built around a bug.** Several of
+these were silent failures — a zone clean that reported success and did
+nothing, a maintenance reminder for a part that does not exist, a
+room/zone list that was short without saying so. An automation written
+to work around any of them may behave differently now.
+
+**If you came from 4.0.x**, read the v4.1.0 section below as well: it
+added entities, and four other silent bugs were fixed there.
+
+---
+
+## v4.1.0 — from any v4.0.x
+
+Nothing to do. Four silent bugs fixed and two new entities added.
+
+Schedules created from the Home Assistant calendar did nothing on
+i/s/j robots, `clean_zone` sent zones as rooms, the zone button ignored
+selections made on a non-active map, and `clean_room` could not name
+rooms on other maps. If an automation of yours worked around one of
+those, it is worth a look.
+
+---
+
 ## v4.0.0 (alpha) — from any v3.x
 
 **No migration step, and no entity ids change.** The v4 line adds support for
