@@ -64,7 +64,7 @@ jobs:
 
       - name: Install roombapy and roombapy-prime
         run: |
-          pip install "roombapy==2.0.1" "roombapy-prime[map]==0.3.4"
+          pip install "roombapy==2.0.2" "roombapy-prime[map]==0.3.4"
 
       # mypy.ini runs --strict with no disabled error codes. The two
       # per-module exemptions are for Home Assistant itself and are

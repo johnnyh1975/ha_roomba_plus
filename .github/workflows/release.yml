@@ -136,7 +136,7 @@ jobs:
 
       - name: Install roombapy and roombapy-prime
         run: |
-          pip install "roombapy==2.0.1" "roombapy-prime[map]==0.3.4"
+          pip install "roombapy==2.0.2" "roombapy-prime[map]==0.3.4"
 
       - name: Run full test suite (release gate — must pass before packaging)
         run: |
