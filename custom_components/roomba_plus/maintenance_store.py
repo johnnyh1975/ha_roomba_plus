@@ -552,6 +552,22 @@ class MaintenanceStore:
         is_mop_device = is_mop(dict(vacuum_state))
         items: list[str] = []
         for role, spec in CONSUMABLE_ROLES.items():
+            # SKIP PARTS THE ROBOT DOES NOT HAVE.
+            #
+            # A 900-series charges on a plain dock, so it has no Clean
+            # Base bag. Every per-part entity was already suppressed for
+            # it, but this path iterated all four roles regardless -- so
+            # a Roomba 980 reported the bag due once runtime passed the
+            # 30-hour default, for a bag that does not exist
+            # (@liblit, R980020: `dock: {"known": false}`, bbrun.hr 105,
+            # reported 75 hours overdue).
+            #
+            # The cloud never contradicted it because there is no cloud
+            # record for a part the robot does not have, and
+            # `_is_due()` then falls through to the local hour count --
+            # which counts runtime, not bag use.
+            if spec.absent_when is not None and spec.absent_when(dict(vacuum_state)):
+                continue
             threshold = self.threshold_hours(role, options)
             if self._is_due(role, current_hr, threshold):
                 items.append(

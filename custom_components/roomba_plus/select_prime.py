@@ -42,11 +42,13 @@ from typing import TYPE_CHECKING, Any, Final
 from homeassistant.components.select import SelectEntity, SelectEntityDescription
 from homeassistant.const import EntityCategory
 from homeassistant.exceptions import ServiceValidationError
+from homeassistant.core import callback
 from homeassistant.helpers.restore_state import RestoreEntity
 
 from .const import CLEANING_MODES_PRIME, cleaning_modes_for
 from .models import ConnectionType
 from .entity import IRobotEntity
+from .prime_room_map import SIGNAL_PRIME_ROOM_NAMES
 from .structural_failures import record_failure, record_success
 
 if TYPE_CHECKING:
@@ -1224,6 +1226,76 @@ class PrimeZoneSelect(IRobotEntity, SelectEntity):
         """
         await super().async_added_to_hass()
         await self._async_load_segments()
+
+        # AND AGAIN WHEN THE MAP CHANGES. Loading once at startup froze
+        # the list until the next reload: a map retrained in the app, a
+        # zone renamed, or simply a call that had one map fail would
+        # leave the selector showing yesterday's rooms with nothing to
+        # say so.
+        #
+        # @chairstacker saw 18 entries here and 17 in the area-mapping
+        # dialog, which reads live on every open. Two readings of the
+        # same list taken at different times, and only one of them able
+        # to notice a change.
+        # THE MAP BUILD IS WHAT MATTERS, not the status poll.
+        #
+        # Zone names arrive in `prime_room_names` when the map image
+        # builds a floor plan -- not from the status coordinator. At
+        # `async_added_to_hass` no map has been drawn yet, so the first
+        # read misses every zone whose name only lives there.
+        #
+        # @theChef163 saw exactly this: his zone "Litter" was absent
+        # from this selector while Home Assistant's own area-mapping
+        # dialog found it, because that dialog reads live and this
+        # loaded once at startup.
+        #
+        # `SIGNAL_PRIME_ROOM_NAMES` already exists for this -- it was
+        # added when the per-region sensors had the same problem
+        # (@chairstacker, #84). Listening to it rather than inventing a
+        # second mechanism.
+        from homeassistant.helpers.dispatcher import (  # noqa: PLC0415
+            async_dispatcher_connect,
+        )
+
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass,
+                SIGNAL_PRIME_ROOM_NAMES.format(self._config_entry.entry_id),
+                self._schedule_segment_reload,
+            )
+        )
+
+        # And on map changes too: a retrained map changes the rooms
+        # themselves, which the name signal does not cover.
+        coordinator = getattr(
+            self._config_entry.runtime_data, "prime_status_coordinator", None
+        )
+        if coordinator is not None:
+            self.async_on_remove(
+                coordinator.async_add_listener(self._schedule_segment_reload)
+            )
+
+    @callback
+    def _schedule_segment_reload(self) -> None:
+        """Re-read the list, off the coordinator's own callback.
+
+        The coordinator calls its listeners synchronously, so the reload
+        goes onto the loop as a task rather than blocking the update
+        that triggered it. Reading the cloud from inside a coordinator
+        callback would hold up every other listener behind it.
+        """
+        self._config_entry.async_create_background_task(
+            self.hass,
+            self._async_reload_segments(),
+            name=f"roomba_plus_zone_select_reload_{self._blid}",
+        )
+
+    async def _async_reload_segments(self) -> None:
+        """Reload, then tell Home Assistant only if something changed."""
+        before = dict(self._segments)
+        await self._async_load_segments()
+        if self._segments != before:
+            self.async_write_ha_state()
 
     async def _async_load_segments(self) -> None:
         """Read the rooms and zones this robot knows."""

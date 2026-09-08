@@ -1513,9 +1513,14 @@ class RoombaVacuumCarpetBoost(RoombaVacuum):
         else:  # Eco
             carpet_boost, high_perf = False, False
 
-        # set_preference sends a delta command; these cannot be batched
-        await self.vacuum.set_preference("carpetBoost", str(carpet_boost))
-        await self.vacuum.set_preference("vacHigh", str(high_perf))
+        # ONE MESSAGE, BOTH KEYS -- see the note in select.py. The
+        # comment that stood here said these "cannot be batched", which
+        # had it exactly backwards: sent separately the firmware drops
+        # both, because one handler reads the pair and needs each of
+        # them present.
+        await self.vacuum.set_preferences(
+            {"carpetBoost": str(carpet_boost), "vacHigh": str(high_perf)}
+        )
 
 
 class BraavaJet(IRobotVacuum):

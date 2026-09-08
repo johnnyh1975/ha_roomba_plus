@@ -357,8 +357,20 @@ async def _select_cleaning_passes(entity: SimpleRoombaSelect, option: str) -> No
     _LOGGER.debug(
         "CleaningPasses: option=%r → noAutoPasses=%s twoPass=%s", option, no_auto, two_pass
     )
-    await entity.vacuum.set_preference("noAutoPasses", no_auto)
-    await entity.vacuum.set_preference("twoPass", two_pass)
+    # ONE MESSAGE, BOTH KEYS. The firmware reads this pair in a single
+    # handler that looks up both members and takes an early exit if
+    # either is missing -- so two separate writes were accepted with a
+    # 200 and did nothing at all. Confirmed in two firmware families
+    # (lewis `ctv_common_get_num_passes_flags`, ruby
+    # `ctv_common_get_pass_preference`), measured on the wire on an i3,
+    # and matched by dorita980, which has never sent these any other
+    # way.
+    #
+    # `set_preferences()` is roombapy 2.0.2 and later; this project
+    # contributed it for exactly this reason.
+    await entity.vacuum.set_preferences(
+        {"noAutoPasses": no_auto, "twoPass": two_pass}
+    )
 
 
 async def _select_disposable_wetness(entity: SimpleRoombaSelect, option: str) -> None:
