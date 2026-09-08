@@ -14,7 +14,7 @@ import os
 import types
 import pytest
 
-from tests.conftest import robot_mock
+from tests.conftest import robot_mock, hass_mock, entry_mock
 from custom_components.roomba_plus.cloud_coordinator import IrobotCloudCoordinator
 from custom_components.roomba_plus.models import RoombaData
 from custom_components.roomba_plus.models import MapCapability
@@ -118,8 +118,8 @@ def _records(pairs: list[tuple[float, float]]) -> list[dict]:
 
 def _make_manager(options: dict | None = None) -> DirtThresholdManager:
     """Build a DirtThresholdManager with minimal mocking."""
-    hass = MagicMock()
-    entry = MagicMock()
+    hass = hass_mock()
+    entry = entry_mock()
     entry.options = options if options is not None else {CONF_DEMAND_CLEANING_ENABLED: True}
     entry.entry_id = "test_entry"
     entry.runtime_data = MagicMock()
@@ -136,9 +136,9 @@ def _make_manager(options: dict | None = None) -> DirtThresholdManager:
 
 def _make_coordinator_v250_coordinator() -> IrobotCloudCoordinator:
     """Build a coordinator with minimal mocks, patching the aiohttp session."""
-    hass = MagicMock()
+    hass = hass_mock()
     hass.config.country = "US"
-    entry = MagicMock()
+    entry = entry_mock()
     with patch(
         "custom_components.roomba_plus.cloud_coordinator.async_get_clientsession",
         return_value=MagicMock(),
@@ -831,10 +831,10 @@ class TestF11WiringInInit:
         """async_evaluate is scheduled via async_create_task after merge."""
         from unittest.mock import AsyncMock, MagicMock, call, patch
 
-        hass = MagicMock()
-        hass.async_create_task = MagicMock()
-
-        config_entry = MagicMock()
+        hass = hass_mock()
+        # `hass.async_create_task` is left to hass_mock(): it records
+        # calls AND closes the coroutine; a bare MagicMock drops it.
+        config_entry = entry_mock()
         config_entry.entry_id = "test_entry"
 
         ms = MagicMock()
@@ -1161,7 +1161,7 @@ class TestCleanRoomPmapSelection:
             ATTR_ROOM_NAME, ATTR_ORDERED, CONF_SMART_ZONE_DATA,
         )
         call = MagicMock()
-        call.hass = MagicMock()
+        call.hass = hass_mock()
         call.data = {
             "entity_id": [entity_id],
             ATTR_ROOM_NAME: room_name,
@@ -1193,7 +1193,7 @@ class TestCleanRoomPmapSelection:
         }
         data.roomba.master_state = {}
 
-        config_entry = MagicMock()
+        config_entry = entry_mock()
         config_entry.runtime_data = data
         config_entry.options = {
             CONF_SMART_ZONE_DATA: {
@@ -1218,7 +1218,7 @@ class TestCleanRoomPmapSelection:
         pmap_active = "pmap_ACTIVE_current"
         pmap_stale  = "pmap_STALE_old_floor"
 
-        hass = MagicMock()
+        hass = hass_mock()
         call = MagicMock()
         call.hass = hass
         call.data = {
@@ -1245,7 +1245,7 @@ class TestCleanRoomPmapSelection:
             "twoPass": False,
         }
 
-        config_entry = MagicMock()
+        config_entry = entry_mock()
         config_entry.runtime_data = data
         config_entry.options = {
             CONF_SMART_ZONE_DATA: {
@@ -1291,7 +1291,7 @@ class TestCleanRoomPmapSelection:
 
         pmap_cloud = "pmap_from_cloud"
 
-        hass = MagicMock()
+        hass = hass_mock()
         call = MagicMock()
         call.hass = hass
         call.data = {
@@ -1315,7 +1315,7 @@ class TestCleanRoomPmapSelection:
             "twoPass": False,
         }
 
-        config_entry = MagicMock()
+        config_entry = entry_mock()
         config_entry.runtime_data = data
         config_entry.options = {
             CONF_SMART_ZONE_DATA: {
@@ -1440,7 +1440,7 @@ class TestCleanRoomCloudPmapvFirst:
         cloud_pmapv = "260614T103750"   # stable cloud version (app used this)
         live_pmapv  = "260614T175302"   # live state.pmaps (in-flux, causes 224)
 
-        hass = MagicMock()
+        hass = hass_mock()
         call = MagicMock()
         call.hass = hass
         call.data = {
@@ -1468,7 +1468,7 @@ class TestCleanRoomCloudPmapvFirst:
             "twoPass": False,
         }
 
-        config_entry = MagicMock()
+        config_entry = entry_mock()
         config_entry.runtime_data = data
         config_entry.options = {
             CONF_SMART_ZONE_DATA: {

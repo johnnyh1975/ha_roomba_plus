@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from tests.conftest import hass_mock
 
 
 def _geometry(ring):
@@ -270,7 +271,7 @@ class TestTheRoomMapIsRefreshedOnlyWhenItChanges:
         from custom_components.roomba_plus.image import PrimeRoomsImage
 
         entity = object.__new__(PrimeRoomsImage)
-        entity.hass = MagicMock()
+        entity.hass = hass_mock()
         entity._png = b"CACHED"
         entity._rendered_for_map_version = rendered_for
         entity._rendered_map_id = rendered_map
@@ -351,7 +352,7 @@ class TestTheRoomMapIsRefreshedOnlyWhenItChanges:
 
         from custom_components.roomba_plus.image import PrimeRoomsImage
         entity = object.__new__(PrimeRoomsImage)
-        entity.hass = MagicMock()
+        entity.hass = hass_mock()
         entity._polygons = {"room": [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0)]}
         entity._names = {"room": "Kitchen"}
         entity._preferences = {"room": {"profile": "normal"}}
@@ -944,7 +945,7 @@ class TestTheTrailIsClearedPerMission:
         )
 
         coordinator = object.__new__(PrimeStatusCoordinator)
-        coordinator.hass = MagicMock()
+        coordinator.hass = hass_mock()
         coordinator._trail_mission_id = previous
         entry = MagicMock()
         entry.entry_id = "e1"
@@ -1913,7 +1914,7 @@ class TestTheTrailClearsOnANewMissionNumber:
 
         coordinator = object.__new__(PrimeStatusCoordinator)
         coordinator._trail_mission_id = None
-        coordinator.hass = MagicMock()
+        coordinator.hass = hass_mock()
         entry = MagicMock()
         entry.entry_id = "E"
         entry.runtime_data = SimpleNamespace(
@@ -2036,7 +2037,7 @@ class TestTheDockIsLearnedWhileCharging:
 
         coordinator = object.__new__(PrimeStatusCoordinator)
         coordinator._trail_mission_id = "m1"
-        coordinator.hass = MagicMock()
+        coordinator.hass = hass_mock()
         entry = MagicMock()
         entry.entry_id = "E"
         entry.runtime_data = SimpleNamespace(

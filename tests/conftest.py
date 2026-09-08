@@ -84,7 +84,7 @@ def pytest_configure(config):
 
 
 import pytest
-from unittest.mock import patch as _patch
+from unittest.mock import MagicMock  # noqa: F401  (used in annotations)
 
 
 # v2.9.0 — REMOVED the autouse _close_mts_threadsafe_coroutines fixture that
@@ -153,8 +153,139 @@ def robot_mock(**attrs: object) -> "MagicMock":
     from unittest.mock import AsyncMock, MagicMock
 
     mock = MagicMock()
-    for coroutine in ("send_command", "set_preference", "connect", "disconnect"):
+    for coroutine in (
+        "send_command",
+        "set_preference",
+        "set_preferences",
+        "connect",
+        "disconnect",
+    ):
         setattr(mock, coroutine, AsyncMock())
     for name, value in attrs.items():
         setattr(mock, name, value)
     return mock
+
+
+def hass_mock(**attrs: object) -> "MagicMock":
+    """A stand-in for `hass` that does not leak unawaited coroutines.
+
+    `hass.async_create_task(coro)` is the correct way for production code
+    to launch work from a synchronous callback. Against a bare MagicMock
+    the coroutine is created, never scheduled and then garbage-collected,
+    which Python reports as::
+
+        RuntimeWarning: coroutine 'async_check_cloud_stale' was never awaited
+
+    41 of those came out of one CI run. All of them were this, and none
+    was a bug in the integration -- but a warning that is always there is
+    a warning nobody reads, and a real unawaited coroutine would arrive
+    looking exactly the same.
+
+    `test_callbacks.py` has closed its coroutines this way for a while;
+    this is that helper where every test can reach it.
+    """
+    import asyncio
+    from unittest.mock import MagicMock
+
+    mock = MagicMock()
+
+    def _close_coroutines(*args: object, **kwargs: object) -> MagicMock:
+        for arg in args:
+            if asyncio.iscoroutine(arg):
+                arg.close()
+        return MagicMock()
+
+    # A MagicMock WITH a side effect, not a plain function: ten tests
+    # assert on `hass.async_create_task.call_args`, and replacing the
+    # attribute outright takes that away. The side effect closes the
+    # coroutine; the mock still records the call.
+    mock.async_create_task = MagicMock(side_effect=_close_coroutines)
+    mock.async_create_background_task = MagicMock(side_effect=_close_coroutines)
+
+    # FOUR WAYS IN, not one. Home Assistant's own
+    # `Entity.schedule_update_ha_state()` reaches the loop through
+    # `hass.create_task` or `hass.loop.call_soon_threadsafe`, and any
+    # entity calling it against a bare mock leaks
+    # `Entity.async_update_ha_state`. That was six of the sixteen
+    # warnings left after the first pass, and none of them was visible
+    # from the test that reported it -- the warning surfaces whenever
+    # the garbage collector gets round to it, which is usually some
+    # later test in an unrelated file.
+    #
+    # `python -X tracemalloc=8` is what turned the reported name into
+    # the actual line.
+    mock.create_task = MagicMock(side_effect=_close_coroutines)
+    mock.add_job = MagicMock(side_effect=_close_coroutines)
+    mock.loop.call_soon_threadsafe = MagicMock(side_effect=_close_coroutines)
+
+    for name, value in attrs.items():
+        setattr(mock, name, value)
+    return mock
+
+
+def entry_mock(**attrs: object) -> "MagicMock":
+    """A config-entry stand-in that does not leak unawaited coroutines.
+
+    The sibling of `hass_mock()`, for the other half of the same
+    problem: production also launches background work through the config
+    entry (`entry.async_create_background_task(hass, coro, name=...)`),
+    not only through `hass`. A bare MagicMock there leaves the coroutine
+    unscheduled and Python reports it as never awaited.
+
+    Same construction: a MagicMock with a side effect, so tests asserting
+    on `entry.async_create_background_task.call_args` keep working.
+    """
+    import asyncio
+    from unittest.mock import MagicMock
+
+    mock = MagicMock()
+
+    def _close_coroutines(*args: object, **kwargs: object) -> MagicMock:
+        for arg in args:
+            if asyncio.iscoroutine(arg):
+                arg.close()
+        return MagicMock()
+
+    mock.async_create_background_task = MagicMock(side_effect=_close_coroutines)
+    mock.async_create_task = MagicMock(side_effect=_close_coroutines)
+    for name, value in attrs.items():
+        setattr(mock, name, value)
+    return mock
+
+
+@pytest.fixture(autouse=True)
+def _close_coroutines_handed_to_a_mock_loop():
+    """Stop `run_coroutine_threadsafe` leaking against a mocked loop.
+
+    THE ONE ROUTE THE MOCK HELPERS CANNOT COVER. Production hands some
+    work to the loop directly::
+
+        asyncio.run_coroutine_threadsafe(self._async_save(), self.hass.loop)
+
+    The coroutine is captured in a closure, not passed to any method of
+    the loop, so setting `hass.loop.call_soon_threadsafe` to close its
+    arguments -- which is what `hass_mock()` does, and which handles
+    `Entity.schedule_update_ha_state` -- never sees it. Against a
+    MagicMock loop the scheduling callback simply never runs, and the
+    coroutine is collected unawaited.
+
+    A real loop in every affected test would be the other answer, and a
+    much larger change: these tests are deliberately synchronous.
+
+    AUTOUSE, because the leak is not the test's fault and the fix has
+    nothing to teach a reader of that test. A real loop is left alone,
+    so nothing that works today changes.
+    """
+    import asyncio
+    from unittest.mock import MagicMock, patch
+
+    real = asyncio.run_coroutine_threadsafe
+
+    def _guarded(coro, loop):
+        if isinstance(loop, MagicMock):
+            coro.close()
+            return MagicMock()
+        return real(coro, loop)
+
+    with patch("asyncio.run_coroutine_threadsafe", _guarded):
+        yield

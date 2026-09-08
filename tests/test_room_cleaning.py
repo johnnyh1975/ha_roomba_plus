@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from tests.conftest import robot_mock
+from tests.conftest import robot_mock, hass_mock, entry_mock
 
 
 class TestBackendSelection:
@@ -24,7 +24,7 @@ class TestBackendSelection:
 
     def _entry(self, *, connection_type, prime_robot=None,
                map_capability=None, has_cloud=False):
-        entry = MagicMock()
+        entry = entry_mock()
         entry.runtime_data.connection_type = connection_type
         entry.runtime_data.prime_robot = prime_robot
         entry.runtime_data.map_capability = map_capability
@@ -496,6 +496,9 @@ class TestCleanRoomUsesTheBackend:
 
     def _call(self, rooms, *, two_pass=None, ordered=True):
         call = MagicMock()
+        # `call.hass` launches the swallow-watch background task, so it
+        # needs the helper rather than a bare mock.
+        call.hass = hass_mock()
         call.data = {"room_name": rooms}
         if two_pass is not None:
             call.data["two_pass"] = two_pass
@@ -508,6 +511,11 @@ class TestCleanRoomUsesTheBackend:
         )
 
         backend = MagicMock()
+
+        # The swallow-watch task is launched through
+        # `backend._config_entry.async_create_background_task`, so that
+        # entry needs the helper too.
+        backend._config_entry = entry_mock()
         backend.available_rooms = AsyncMock(return_value={"Küche": "12", "Salon": "13"})
         backend.clean_rooms = AsyncMock()
 
@@ -528,6 +536,8 @@ class TestCleanRoomUsesTheBackend:
         )
 
         backend = MagicMock()
+
+        backend._config_entry = entry_mock()
         backend.available_rooms = AsyncMock(return_value={"Küche": "12"})
         backend.clean_rooms = AsyncMock()
 
@@ -549,6 +559,8 @@ class TestCleanRoomUsesTheBackend:
         )
 
         backend = MagicMock()
+
+        backend._config_entry = entry_mock()
         backend.available_rooms = AsyncMock(return_value={"Küche": "12", "Salon": "13"})
 
         with pytest.raises(ServiceValidationError, match="Küche"):
@@ -567,6 +579,8 @@ class TestCleanRoomUsesTheBackend:
         )
 
         backend = MagicMock()
+
+        backend._config_entry = entry_mock()
         backend.available_rooms = AsyncMock(return_value={"A": "1", "B": "2"})
         backend.clean_rooms = AsyncMock()
 
@@ -587,6 +601,8 @@ class TestCleanRoomUsesTheBackend:
         )
 
         backend = MagicMock()
+
+        backend._config_entry = entry_mock()
         backend.available_rooms = AsyncMock(return_value={})
 
         with pytest.raises(ServiceValidationError, match="No rooms with names"):
@@ -1403,7 +1419,7 @@ class TestBothZoneKeysCount:
             _classic_has_room_data,
         )
 
-        entry = MagicMock()
+        entry = entry_mock()
         entry.options = options
         data = SimpleNamespace(cloud_coordinator=None)
         return _classic_has_room_data(data, entry)
@@ -1697,7 +1713,7 @@ class TestClassicMopParamsMatchTheCapture:
         backend._data.blid = "BLID1"
         backend._config_entry = MagicMock()
         backend._config_entry.options = {}
-        backend._hass = MagicMock()
+        backend._hass = hass_mock()
         backend._roomba = MagicMock()
         backend._pmap_by_region = {"2": "MAP-A"}
 
@@ -1774,7 +1790,7 @@ class TestPrimeOffersZonesForAreaMapping:
 
         backend = PrimeRoomCleaning.__new__(PrimeRoomCleaning)
         backend.available_rooms = AsyncMock(return_value=rooms)
-        entry = MagicMock()
+        entry = entry_mock()
         entry.runtime_data.prime_room_names = names
         backend._config_entry = entry
         return backend
@@ -1880,7 +1896,7 @@ class TestStoredZonesSurviveWithoutCloud:
         )
 
         b = ClassicRoomCleaning.__new__(ClassicRoomCleaning)
-        entry = MagicMock()
+        entry = entry_mock()
         entry.options = {"smart_zone_data": zone_data}
         b._config_entry = entry
         data = MagicMock()
@@ -1920,3 +1936,67 @@ class TestStoredZonesSurviveWithoutCloud:
         b = self._backend({}, with_cloud=False)
 
         assert await b.available_rooms() == {}
+
+
+class TestAZoneCarriesItsMap:
+    """@chairstacker: rooms cleaned, zones failed with "this robot has 2
+    maps and is not currently reporting which one it is on".
+
+    `available_rooms()` returns `{p2map_id}/{room_id}`, and
+    `clean_rooms()` splits on that slash to learn which map the command
+    is for. Zone segment ids had no map in them, so there was nothing to
+    split and the two-map branch refused rather than guess. On a
+    one-map robot it would have worked by luck.
+
+    The two readers want the parts in opposite orders, which is the
+    whole difficulty: `clean_rooms()` wants the map first, and
+    `_send_region_command()` looks for `zid_` on what is left after the
+    split. So the id is `zid_<map>/<region>` in the UI and
+    `<map>/zid_<region>` on the way to the robot.
+    """
+
+    @staticmethod
+    def _backend():
+        from custom_components.roomba_plus.room_cleaning import (
+            PrimeRoomCleaning,
+        )
+
+        backend = PrimeRoomCleaning.__new__(PrimeRoomCleaning)
+        backend._data = MagicMock()
+        backend._data.blid = "BLID1"
+        return backend
+
+    async def test_the_map_moves_in_front_of_the_prefix(self) -> None:
+        from unittest.mock import AsyncMock
+
+        backend = self._backend()
+        backend.clean_rooms = AsyncMock()
+
+        await backend.clean_segments(["zid_MAP-A/107"])
+
+        assert backend.clean_rooms.await_args[0][0] == ["MAP-A/zid_107"]
+
+    async def test_a_room_still_loses_only_its_prefix(self) -> None:
+        """The negative control: rooms were never broken and must stay
+        exactly as they were."""
+        from unittest.mock import AsyncMock
+
+        backend = self._backend()
+        backend.clean_rooms = AsyncMock()
+
+        await backend.clean_segments(["rid_MAP-A/12"])
+
+        assert backend.clean_rooms.await_args[0][0] == ["MAP-A/12"]
+
+    async def test_an_unqualified_zone_is_left_alone(self) -> None:
+        """Stored zone data predating this has no map in it. Passing it
+        through unchanged keeps a one-map robot working rather than
+        turning a silent success into a crash."""
+        from unittest.mock import AsyncMock
+
+        backend = self._backend()
+        backend.clean_rooms = AsyncMock()
+
+        await backend.clean_segments(["zid_107"])
+
+        assert backend.clean_rooms.await_args[0][0] == ["zid_107"]

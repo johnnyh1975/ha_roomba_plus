@@ -38,7 +38,8 @@ def _utcnow() -> datetime:
 
 def _make_hass() -> MagicMock:
     hass = MagicMock()
-    hass.async_create_task = MagicMock()
+    # `hass.async_create_task` is left to hass_mock(): it records
+    # calls AND closes the coroutine; a bare MagicMock drops it.
     return hass
 
 

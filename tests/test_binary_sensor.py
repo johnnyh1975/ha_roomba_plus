@@ -12,7 +12,7 @@ from __future__ import annotations
 import sys
 import pytest
 
-from tests.conftest import robot_mock
+from tests.conftest import robot_mock, hass_mock, entry_mock
 from unittest.mock import AsyncMock, MagicMock, patch
 import homeassistant.helpers.entity_platform as _ep
 
@@ -148,7 +148,7 @@ def _mqtt_stale_sensor(
     roomba = robot_mock()
     roomba.master_state = {"state": {"reported": reported}}
 
-    entry = MagicMock()
+    entry = entry_mock()
     entry.entry_id = "test_entry"
     entry.runtime_data.last_mqtt_message_ts = last_mqtt_message_ts
     entry.runtime_data.last_run_transition_ts = last_run_transition_ts
@@ -156,7 +156,7 @@ def _mqtt_stale_sensor(
     s = RoombaMqttStale.__new__(RoombaMqttStale)
     s.vacuum = roomba
     s._entry = entry
-    s.hass = MagicMock()
+    s.hass = hass_mock()
     s._was_stale = False
     s._attr_unique_id = "test_robot_mqtt_stale"
     return s
@@ -592,7 +592,7 @@ class TestMqttStampCallback:
     platforms so entities never evaluate a message before its stamp."""
 
     def _entry(self):
-        entry = MagicMock()
+        entry = entry_mock()
         entry.runtime_data.last_mqtt_message_ts = 0.0
         entry.runtime_data.last_run_transition_ts = 0.0
         return entry
@@ -784,7 +784,7 @@ class TestMapSavingSetupEntry:
         from custom_components.roomba_plus import binary_sensor as bs_mod
 
         state = {"pmaps": [{"abc": "v1"}], "cleanMissionStatus": {"notReady": 0}}
-        entry = MagicMock()
+        entry = entry_mock()
         roomba = robot_mock()
         roomba.master_state = {"state": {"reported": state}}
         roomba.connected = True
@@ -806,7 +806,7 @@ class TestMapSavingSetupEntry:
         from custom_components.roomba_plus import binary_sensor as bs_mod
 
         state = {}
-        entry = MagicMock()
+        entry = entry_mock()
         roomba = robot_mock()
         roomba.master_state = {"state": {"reported": state}}
         roomba.connected = True
@@ -1024,7 +1024,7 @@ class TestExperimentalButtonPress:
     @pytest.mark.asyncio
     async def test_spot_press_sends_spot(self):
         entity = _make_button_entity("spot")
-        entity.hass = MagicMock()
+        entity.hass = hass_mock()
         entity.hass.async_add_executor_job = AsyncMock()
         await entity.async_press()
         entity.vacuum.send_command.assert_awaited_once_with("spot")
@@ -1032,7 +1032,7 @@ class TestExperimentalButtonPress:
     @pytest.mark.asyncio
     async def test_quick_press_sends_quick(self):
         entity = _make_button_entity("quick")
-        entity.hass = MagicMock()
+        entity.hass = hass_mock()
         entity.hass.async_add_executor_job = AsyncMock()
         await entity.async_press()
         entity.vacuum.send_command.assert_awaited_once_with("quick")
@@ -1040,7 +1040,7 @@ class TestExperimentalButtonPress:
     @pytest.mark.asyncio
     async def test_sleep_press_sends_sleep(self):
         entity = _make_button_entity("sleep")
-        entity.hass = MagicMock()
+        entity.hass = hass_mock()
         entity.hass.async_add_executor_job = AsyncMock()
         await entity.async_press()
         entity.vacuum.send_command.assert_awaited_once_with("sleep")
@@ -1049,7 +1049,7 @@ class TestExperimentalButtonPress:
     async def test_power_off_press_sends_off(self):
         """power_off button must send 'off' to the robot, not 'power_off'."""
         entity = _make_button_entity("power_off")
-        entity.hass = MagicMock()
+        entity.hass = hass_mock()
         entity.hass.async_add_executor_job = AsyncMock()
         await entity.async_press()
         entity.vacuum.send_command.assert_awaited_once_with("off")
@@ -1078,14 +1078,14 @@ def _make_reset_button(cls):
     real (mocked) MaintenanceStore and config_entry, hass mocked out."""
     roomba = robot_mock()
     roomba.master_state = {"state": {"reported": {"bbrun": {"hr": 123}}}}
-    config_entry = MagicMock()
+    config_entry = entry_mock()
     config_entry.entry_id = "entry1"
     config_entry.title = "Test Robot"
     store = MagicMock()
     store.async_save = AsyncMock()
     config_entry.runtime_data.maintenance_store = store
     entity = cls(roomba, "test_blid", config_entry)
-    entity.hass = MagicMock()
+    entity.hass = hass_mock()
     entity.schedule_update_ha_state = MagicMock()
     return entity, store, config_entry
 
@@ -1136,19 +1136,28 @@ class TestMaintenanceResetButtonsFireLogbookEvent:
         assert payload["component"] == "battery"
 
 
-def _make_maintenance_due(store, *, options=None, hr=0, mop=False, language="en"):
+def _make_maintenance_due(
+    store, *, options=None, hr=0, mop=False, language="en", clean_base=True
+):
     """Build a real RoombaMaintenanceDue wired to the given MaintenanceStore."""
     from custom_components.roomba_plus.binary_sensor import RoombaMaintenanceDue
     roomba = robot_mock()
+    # A CLEAN BASE BY DEFAULT, because most of these tests are about the
+    # four-role list and a robot without one has only three parts. The
+    # dock shape is what `has_clean_base()` looks for; pass
+    # `clean_base=False` for a 900-series (@liblit's R980020 reported a
+    # bag due on a plain dock, which is the bug that made this explicit).
     state: dict = {"bbrun": {"hr": hr}}
+    if clean_base:
+        state["dock"] = {"fwVer": "1.2.3"}
     if mop:
         state["detectedPad"] = "wet"
     roomba.master_state = {"state": {"reported": state}}
-    config_entry = MagicMock()
+    config_entry = entry_mock()
     config_entry.runtime_data.maintenance_store = store
     config_entry.options = options or {}
     entity = RoombaMaintenanceDue(roomba, "test_blid", config_entry)
-    entity.hass = MagicMock()
+    entity.hass = hass_mock()
     entity.hass.config.language = language
     return entity
 
@@ -1228,7 +1237,7 @@ def _make_layout_change_sensor(grid_store=None):
     from custom_components.roomba_plus.binary_sensor import RoombaLayoutChangeDetected
     roomba = robot_mock()
     roomba.master_state = {"state": {"reported": {}}}
-    entry = MagicMock()
+    entry = entry_mock()
     entry.runtime_data.grid_store = grid_store
     sensor = RoombaLayoutChangeDetected.__new__(RoombaLayoutChangeDetected)
     sensor._roomba = roomba
@@ -1337,7 +1346,7 @@ class TestBinStatusNullRegression:
 # ── V4/Prime bin/tank presence ──────────────────────────────────────────────
 
 def _make_prime_status_entry(ro_currentstate: dict | None = None) -> MagicMock:
-    config_entry = MagicMock()
+    config_entry = entry_mock()
     config_entry.runtime_data.prime_status_coordinator.data = (
         {"ro-currentstate": ro_currentstate} if ro_currentstate is not None else None
     )
@@ -1439,7 +1448,7 @@ class TestAsyncSetupEntryCloudOnlyBranchBinarySensor:
         )
         from custom_components.roomba_plus.models import ConnectionType
 
-        entry = MagicMock()
+        entry = entry_mock()
         entry.runtime_data.connection_type = ConnectionType.CLOUD_ONLY
         entry.runtime_data.blid = "BLID123"
         # tankPresent has to be reported for the tank sensor to appear
@@ -1484,7 +1493,7 @@ class TestAsyncSetupEntryTankSensorGating:
     def _entry(self, current_state: dict | None):
         from custom_components.roomba_plus.models import ConnectionType
 
-        entry = MagicMock()
+        entry = entry_mock()
         entry.runtime_data.connection_type = ConnectionType.CLOUD_ONLY
         entry.runtime_data.blid = "BLID123"
         entry.runtime_data.prime_status_coordinator.data = (
@@ -1636,7 +1645,7 @@ class TestTankSensorGatedOnTheField:
 
         data = self._entities_for({"tankPresent": True})
         data.connection_type = ConnectionType.CLOUD_ONLY
-        entry = MagicMock()
+        entry = entry_mock()
         entry.runtime_data = data
         created: list = []
 
@@ -2106,3 +2115,39 @@ class TestTheTankFieldIsKnownUnreliable:
         features = pathlib.Path("docs/FEATURES.md").read_text()
 
         assert "mop tank sensor is unreliable" in features.lower()
+
+
+class TestAPlainDockHasNoBag:
+    """The sensor half of @liblit's report (Roomba 980, R980020).
+
+    `binary_sensor.<robot>_maintenance_due` was `on` with
+    `due: ["clean_base_bag"]` and an action telling him to replace a bag
+    his robot does not have. His diagnostics carry `dock: {"known":
+    false}` and `bbrun.hr: 105`.
+    """
+
+    @staticmethod
+    def _store():
+        from custom_components.roomba_plus.maintenance_store import (  # noqa: PLC0415
+            MaintenanceStore,
+        )
+
+        return MaintenanceStore()
+
+    def test_the_sensor_does_not_ask_for_a_bag_replacement(self) -> None:
+        entity = _make_maintenance_due(
+            self._store(), hr=105, clean_base=False
+        )
+
+        attrs = entity.extra_state_attributes
+
+        assert "clean_base_bag" not in attrs["due"]
+        assert "clean_base_bag" not in attrs["required_actions"]
+        assert "clean_base_bag" not in attrs["overdue_by_hours"]
+
+    def test_a_clean_base_robot_is_still_told(self) -> None:
+        entity = _make_maintenance_due(
+            self._store(), hr=105, clean_base=True
+        )
+
+        assert "clean_base_bag" in entity.extra_state_attributes["due"]

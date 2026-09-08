@@ -16,6 +16,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+from tests.conftest import entry_mock
 
 _RESPONSE = {
     "robot_id": "BLID",
@@ -43,7 +44,7 @@ _RESPONSE = {
 def _entry(*, response=_RESPONSE, rooms=None):
     from roombapy_prime.models import TimeEstimates
 
-    entry = MagicMock()
+    entry = entry_mock()
     # `rooms if rooms is not None`, not `rooms or` -- an empty mapping
     # is a case worth testing and `or` would quietly swap in the
     # default, which is how this helper first hid the very assertion it
@@ -163,7 +164,7 @@ class TestTheRobotOverridesTheEstimate:
         from custom_components.roomba_plus.calendar import PrimeScheduleCalendar
 
         cal = object.__new__(PrimeScheduleCalendar)
-        entry = MagicMock()
+        entry = entry_mock()
         entry.runtime_data.prime_status_coordinator.data = {
             "ro-currentstate": {"cleanMissionStatus": {"phase": phase}}
         }
@@ -212,7 +213,7 @@ class TestTheScheduleSModeSelectsTheEstimate:
             }],
         }
         cal = object.__new__(PrimeScheduleCalendar)
-        entry = MagicMock()
+        entry = entry_mock()
         entry.runtime_data = SimpleNamespace(
             prime_time_estimates=TimeEstimates.from_json(response)
         )

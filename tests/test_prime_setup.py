@@ -28,6 +28,7 @@ from custom_components.roomba_plus.const import (
     CONF_IROBOT_USERNAME,
 )
 from custom_components.roomba_plus.models import ConnectionType, RoombaData
+from tests.conftest import entry_mock, hass_mock
 from roombapy_prime import (
     AuthConnectionError,
     AuthCredentialsError,
@@ -36,10 +37,10 @@ from roombapy_prime import (
 
 
 def _make_hass_and_entry() -> tuple[MagicMock, MagicMock]:
-    hass = MagicMock()
+    hass = hass_mock()
     hass.config.country = "US"
     hass.config_entries.async_forward_entry_setups = AsyncMock()
-    config_entry = MagicMock()
+    config_entry = entry_mock()
     config_entry.data = {
         CONF_CONNECTION_TYPE: ConnectionType.CLOUD_ONLY.value,
         CONF_BLID: "BLID123",
@@ -73,17 +74,17 @@ def _mock_clientsession():
 
 class TestConnectionType:
     def test_defaults_to_local_push_when_absent(self) -> None:
-        config_entry = MagicMock()
+        config_entry = entry_mock()
         config_entry.data = {}
         assert _connection_type(config_entry) is ConnectionType.LOCAL_PUSH
 
     def test_reads_cloud_only_from_data(self) -> None:
-        config_entry = MagicMock()
+        config_entry = entry_mock()
         config_entry.data = {CONF_CONNECTION_TYPE: "cloud_only"}
         assert _connection_type(config_entry) is ConnectionType.CLOUD_ONLY
 
     def test_reads_local_push_explicitly(self) -> None:
-        config_entry = MagicMock()
+        config_entry = entry_mock()
         config_entry.data = {CONF_CONNECTION_TYPE: "local_push"}
         assert _connection_type(config_entry) is ConnectionType.LOCAL_PUSH
 
@@ -273,9 +274,9 @@ class TestAsyncSetupEntryPrime:
 class TestAsyncUnloadEntryCloudOnly:
     @pytest.mark.asyncio
     async def test_disconnects_prime_robot_and_forwards_no_platforms(self) -> None:
-        hass = MagicMock()
+        hass = hass_mock()
         hass.config_entries.async_unload_platforms = AsyncMock(return_value=True)
-        config_entry = MagicMock()
+        config_entry = entry_mock()
         fake_prime_robot = MagicMock()
         fake_prime_robot.disconnect = AsyncMock()
         config_entry.runtime_data = RoombaData(
@@ -297,9 +298,9 @@ class TestAsyncUnloadEntryCloudOnly:
         (shouldn't happen given _async_setup_entry_prime()'s ordering,
         but this guards against a future refactor introducing that
         gap), unload must not crash."""
-        hass = MagicMock()
+        hass = hass_mock()
         hass.config_entries.async_unload_platforms = AsyncMock(return_value=True)
-        config_entry = MagicMock()
+        config_entry = entry_mock()
         config_entry.runtime_data = RoombaData(
             blid="BLID123", roomba=None,
             connection_type=ConnectionType.CLOUD_ONLY, prime_robot=None,
@@ -314,9 +315,9 @@ class TestAsyncUnloadEntryCloudOnly:
         """Mirrors the classic path's own convention (see the LOCAL_PUSH
         branch just below this one): only disconnect/cleanup if platform
         unloading actually succeeded."""
-        hass = MagicMock()
+        hass = hass_mock()
         hass.config_entries.async_unload_platforms = AsyncMock(return_value=False)
-        config_entry = MagicMock()
+        config_entry = entry_mock()
         fake_prime_robot = MagicMock()
         fake_prime_robot.disconnect = AsyncMock()
         config_entry.runtime_data = RoombaData(

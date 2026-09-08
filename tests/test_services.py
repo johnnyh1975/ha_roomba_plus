@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.conftest import robot_mock
+from tests.conftest import entry_mock, hass_mock, robot_mock
 from unittest.mock import AsyncMock, MagicMock, patch
 
 
@@ -240,7 +240,7 @@ class TestFireMaintenanceResetEvent:
         from custom_components.roomba_plus.services import _fire_maintenance_reset_event
         from custom_components.roomba_plus.const import EVENT_MAINTENANCE_RESET
 
-        hass = MagicMock()
+        hass = hass_mock()
         entry = _make_config_entry(entry_id="e1", title="Roomba 980")
 
         _fire_maintenance_reset_event(hass, entry, "filter", 142)
@@ -254,7 +254,7 @@ class TestFireMaintenanceResetEvent:
         """Calendar-based inspect resets (wheel/contact/bin) have no hr baseline."""
         from custom_components.roomba_plus.services import _fire_maintenance_reset_event
 
-        hass = MagicMock()
+        hass = hass_mock()
         entry = _make_config_entry()
 
         _fire_maintenance_reset_event(hass, entry, "wheel", None)
@@ -295,7 +295,7 @@ class TestHandleSmartStartConnectionTypeBranching:
         from custom_components.roomba_plus.services import async_handle_smart_start
         from custom_components.roomba_plus.models import ConnectionType
 
-        hass = MagicMock()
+        hass = hass_mock()
         entry = _make_config_entry(entry_id="entry1")
         entry.runtime_data.connection_type = ConnectionType.CLOUD_ONLY
         entry.runtime_data.blocking_manager = None
@@ -313,7 +313,7 @@ class TestHandleSmartStartConnectionTypeBranching:
         from custom_components.roomba_plus.services import async_handle_smart_start
         from custom_components.roomba_plus.models import ConnectionType
 
-        hass = MagicMock()
+        hass = hass_mock()
         entry = _make_config_entry(entry_id="entry1")
         entry.runtime_data.connection_type = ConnectionType.LOCAL_PUSH
         entry.runtime_data.blocking_manager = None
@@ -355,7 +355,7 @@ class TestHandleSmartStartConnectionTypeBranching:
         from custom_components.roomba_plus.models import ConnectionType
         from homeassistant.exceptions import ServiceValidationError
 
-        hass = MagicMock()
+        hass = hass_mock()
         entry = _make_config_entry(entry_id="entry1")
         entry.runtime_data.connection_type = ConnectionType.CLOUD_ONLY
         entry.runtime_data.prime_robot = MagicMock()
@@ -379,7 +379,7 @@ class TestHandleSmartStartConnectionTypeBranching:
         from custom_components.roomba_plus.services import async_handle_smart_start
         from custom_components.roomba_plus.models import ConnectionType
 
-        hass = MagicMock()
+        hass = hass_mock()
         entry = _make_config_entry(entry_id="entry1")
         entry.runtime_data.connection_type = ConnectionType.CLOUD_ONLY
         entry.runtime_data.blocking_manager = AsyncMock()
@@ -398,7 +398,7 @@ class TestHandleResetServiceFiresEvent:
         from custom_components.roomba_plus.services import _handle_reset_service
         from custom_components.roomba_plus.const import EVENT_MAINTENANCE_RESET
 
-        hass = MagicMock()
+        hass = hass_mock()
         entry = _make_config_entry(entry_id="e1", title="Roomba 980")
         hass.config_entries.async_get_entry.return_value = entry
 
@@ -443,7 +443,7 @@ class TestHandleInspectResetServiceFiresEvent:
         from custom_components.roomba_plus.services import _handle_inspect_reset_service
         from custom_components.roomba_plus.const import EVENT_MAINTENANCE_RESET
 
-        hass = MagicMock()
+        hass = hass_mock()
         entry = _make_config_entry(entry_id="e1", title="Roomba 980")
         hass.config_entries.async_get_entry.return_value = entry
 
@@ -543,7 +543,7 @@ def _make_clean_room_call(hass, entity_id="vacuum.test", **data):
 def _make_smart_config_entry(*, zone_data, two_pass_state=False, global_two_pass=None):
     from custom_components.roomba_plus.models import MapCapability
 
-    config_entry = MagicMock()
+    config_entry = entry_mock()
     config_entry.options = {"smart_zone_data": zone_data}
     data = config_entry.runtime_data
     data.map_capability = MapCapability.SMART
@@ -568,7 +568,7 @@ class TestCleanRoomPerRoomPasses:
     }
 
     def _make_hass(self, config_entry):
-        hass = MagicMock()
+        hass = hass_mock()
         hass.config_entries.async_get_entry.return_value = config_entry
 
         async def _run_executor(func, *args):
@@ -580,7 +580,7 @@ class TestCleanRoomPerRoomPasses:
     async def test_room_name_and_room_passes_conflict_raises(self):
         from custom_components.roomba_plus.services import async_handle_clean_room
 
-        hass = MagicMock()
+        hass = hass_mock()
         call = _make_clean_room_call(
             hass, room_name="Kitchen",
             room_passes=[{"name": "Hallway"}],
@@ -595,7 +595,7 @@ class TestCleanRoomPerRoomPasses:
     async def test_neither_room_name_nor_room_passes_raises(self):
         from custom_components.roomba_plus.services import async_handle_clean_room
 
-        hass = MagicMock()
+        hass = hass_mock()
         call = _make_clean_room_call(hass)
         with pytest.raises(Exception) as exc_info:
             await async_handle_clean_room(call)
@@ -726,7 +726,7 @@ class TestCleanRoomSmartGateMessage:
     def _make_non_smart_call(self, hass, capability):
         from custom_components.roomba_plus.models import MapCapability
 
-        config_entry = MagicMock()
+        config_entry = entry_mock()
         config_entry.options = {"smart_zone_data": {}}
         data = config_entry.runtime_data
         data.map_capability = capability
@@ -745,7 +745,7 @@ class TestCleanRoomSmartGateMessage:
         from custom_components.roomba_plus.models import MapCapability
 
         capability = getattr(MapCapability, capability_name)
-        hass = MagicMock()
+        hass = hass_mock()
         call = self._make_non_smart_call(hass, capability)
 
         with pytest.raises(Exception) as exc_info:
@@ -1418,7 +1418,7 @@ class TestCleanOverdueRooms:
             async_handle_clean_overdue_rooms,
         )
         entry = self._entry(MapCapability.EPHEMERAL)
-        hass = MagicMock()
+        hass = hass_mock()
         call = self._call(hass, entry)
         ent = MagicMock(); ent.config_entry_id = "ce1"
         with patch("custom_components.roomba_plus.services.er.async_get") as er_m:
@@ -1437,7 +1437,7 @@ class TestCleanOverdueRooms:
         entry = self._entry(MapCapability.SMART, records=[
             self._rec(1, "2026-07-03T10:00:00+00:00", ["7", "9"]),
         ])
-        hass = MagicMock()
+        hass = hass_mock()
         hass.services.async_call = AsyncMock()
         call = self._call(hass, entry)
         ent = MagicMock(); ent.config_entry_id = "ce1"
@@ -1462,7 +1462,7 @@ class TestCleanOverdueRooms:
             MapCapability.SMART, records=recs,
             options={"room_schedule": {"Kitchen": "daily", "Hall": "every_2_days"}},
         )
-        hass = MagicMock()
+        hass = hass_mock()
         hass.services.async_call = AsyncMock()
         call = self._call(hass, entry)
         ent = MagicMock(); ent.config_entry_id = "ce1"
@@ -1494,7 +1494,7 @@ class TestCleanOverdueRooms:
             MapCapability.SMART, records=recs,
             options={"room_schedule": {"Kitchen": "daily", "Hall": "daily"}},
         )
-        hass = MagicMock()
+        hass = hass_mock()
         hass.services.async_call = AsyncMock()
         call = self._call(hass, entry, max_rooms=1)
         ent = MagicMock(); ent.config_entry_id = "ce1"
@@ -1568,7 +1568,7 @@ class TestAutoCleanDirtyRooms:
         )
         entry = self._entry([])
         entry.runtime_data.map_capability = MapCapability.EPHEMERAL
-        hass = MagicMock()
+        hass = hass_mock()
         call = self._call(hass, entry)
         ent = MagicMock(); ent.config_entry_id = "ce1"
         with patch("custom_components.roomba_plus.services.er.async_get") as er_m:
@@ -1589,7 +1589,7 @@ class TestAutoCleanDirtyRooms:
             self._recs("7", 5) + self._recs("9", 5),
             dirt_index={"7": 4.0, "9": 1.0},
         )
-        hass = MagicMock()
+        hass = hass_mock()
         hass.services.async_call = AsyncMock()
         async def _run(func, *a): return func(*a)
         hass.async_add_executor_job = AsyncMock(side_effect=_run)
@@ -1616,7 +1616,7 @@ class TestAutoCleanDirtyRooms:
             {"id": "7", "name": "Kitchen"}, {"id": "9", "name": "Hall"},
             {"id": "4", "name": "Bedroom"},
         ]
-        hass = MagicMock()
+        hass = hass_mock()
         hass.services.async_call = AsyncMock()
         call = self._call(hass, entry)
         ent = MagicMock(); ent.config_entry_id = "ce1"
@@ -1642,7 +1642,7 @@ class TestAutoCleanDirtyRooms:
             {"id": "7", "name": "Kitchen"}, {"id": "9", "name": "Hall"},
             {"id": "4", "name": "Bedroom"},
         ]
-        hass = MagicMock()
+        hass = hass_mock()
         hass.services.async_call = AsyncMock()
         call = self._call(hass, entry, max_rooms=1)
         ent = MagicMock(); ent.config_entry_id = "ce1"
@@ -1740,7 +1740,7 @@ class TestSeamSensorService:
         data.cloud_coordinator.regions = []
         data.umf_aligner.aligned = True
         data.umf_aligner.rid_to_name.return_value = {"7": "Kitchen"}
-        hass = MagicMock()
+        hass = hass_mock()
         hass.services.async_call = AsyncMock()
         hass.config_entries.async_get_entry.return_value = entry
         call = MagicMock(); call.hass = hass
@@ -1766,7 +1766,7 @@ def _make_backup_hass(tmp_path):
     """A hass double whose async_add_executor_job really runs the blocking
     fn against a real (tmp_path-backed) filesystem — the ZIP read/write
     logic is exercised for real, not mocked away."""
-    hass = MagicMock()
+    hass = hass_mock()
     hass.config.path.side_effect = lambda name: str(tmp_path / name)
 
     async def _run_executor(fn, *args):
@@ -2138,10 +2138,10 @@ class TestCleanZoneService:
         runtime = MagicMock()
         runtime.prime_room_names = zone_names or {}
 
-        config_entry = MagicMock()
+        config_entry = entry_mock()
         config_entry.runtime_data = runtime
 
-        hass = MagicMock()
+        hass = hass_mock()
         hass.config_entries.async_get_entry.return_value = config_entry
         return hass, backend
 
@@ -2249,9 +2249,9 @@ class TestCleanZoneCleaningMode:
         # test that leaves it to a MagicMock is asserting whichever
         # branch the mock happens to fall into.
         backend._data.connection_type = ConnectionType.CLOUD_ONLY
-        config_entry = MagicMock()
+        config_entry = entry_mock()
         config_entry.runtime_data.prime_room_names = names or {}
-        hass = MagicMock()
+        hass = hass_mock()
         hass.config_entries.async_get_entry.return_value = config_entry
         return hass, backend
 

@@ -32,6 +32,7 @@ from custom_components.roomba_plus.const import (
     CONF_BLID, CONF_IROBOT_PASSWORD, CONF_IROBOT_USERNAME,
         )
 from unittest.mock import MagicMock, patch
+from tests.conftest import hass_mock, entry_mock
 from custom_components.roomba_plus.const import (
     CONF_CORRELATION_ENTITIES,
     CONF_ROOM_SCHEDULE,
@@ -111,7 +112,7 @@ def _make_options_flow(room_seg_store=None):
 
     flow = RoombaPlusOptionsFlow.__new__(RoombaPlusOptionsFlow)
     flow._pending_zone_edits = {}
-    config_entry = MagicMock()
+    config_entry = entry_mock()
     config_entry.runtime_data.map_capability = MapCapability.EPHEMERAL
     config_entry.runtime_data.room_seg_store = room_seg_store
     config_entry.options = {}
@@ -125,8 +126,9 @@ def _make_options_flow(room_seg_store=None):
         # RuntimeError). `_config_entry` above is what the flow reads,
         # so both are survivable.
         pass
-    flow.hass = MagicMock()
-    flow.hass.async_create_task = MagicMock()
+    flow.hass = hass_mock()
+    # `flow.hass.async_create_task` is left to hass_mock(): it records
+    # calls AND closes the coroutine; a bare MagicMock drops it.
     # HA 2026.x: `config_entry` resolves through `_config_entry_id`,
     # which is `self.handler`, then looks the entry up on hass. Setting
     # the attribute directly stopped working -- the setter is gone -- so
@@ -353,7 +355,7 @@ def _make_reauth_flow(reauth_entry_data=None):
     from custom_components.roomba_plus.const import CONF_BLID
 
     flow = object.__new__(RoombaPlusConfigFlow)
-    flow.hass = MagicMock()
+    flow.hass = hass_mock()
     flow.context = {}
     flow.flow_id = "test_flow_id"
     flow.handler = "roomba_plus"
@@ -570,7 +572,7 @@ class TestValidateInput:
 
         from custom_components.roomba_plus.const import ROOMBA_SESSION
 
-        hass = MagicMock()
+        hass = hass_mock()
         hass.async_add_executor_job = AsyncMock(return_value=MagicMock())
 
         with patch.object(config_flow, "async_connect_or_timeout",
@@ -592,7 +594,7 @@ class TestValidateInput:
         # is a different class than the one config_flow catches.
         from custom_components.roomba_plus import CannotConnect
 
-        hass = MagicMock()
+        hass = hass_mock()
         hass.async_add_executor_job = AsyncMock(return_value=MagicMock())
 
         with patch.object(config_flow, "async_connect_or_timeout",
@@ -609,7 +611,7 @@ class TestValidateInput:
         from custom_components.roomba_plus import config_flow
         from custom_components.roomba_plus.const import ROOMBA_SESSION
 
-        hass = MagicMock()
+        hass = hass_mock()
         hass.async_add_executor_job = AsyncMock(return_value=MagicMock())
         disconnect = AsyncMock()
 
@@ -631,7 +633,7 @@ class TestValidateInput:
 
         from custom_components.roomba_plus.const import ROOMBA_SESSION
 
-        hass = MagicMock()
+        hass = hass_mock()
         hass.async_add_executor_job = AsyncMock(return_value=MagicMock())
 
         with patch.object(config_flow, "async_connect_or_timeout",
@@ -661,7 +663,7 @@ class TestCloudCredentialsStep:
         from custom_components.roomba_plus.config_flow import RoombaPlusConfigFlow
 
         flow = object.__new__(RoombaPlusConfigFlow)
-        flow.hass = MagicMock()
+        flow.hass = hass_mock()
         flow.hass.config.country = "DE"
         flow.name = "Rosie"
         flow._pending_config = {"blid": "B"}
@@ -789,7 +791,7 @@ class TestLinkStep:
         from custom_components.roomba_plus.config_flow import RoombaPlusConfigFlow
 
         flow = object.__new__(RoombaPlusConfigFlow)
-        flow.hass = MagicMock()
+        flow.hass = hass_mock()
         flow.host = "192.168.1.50"
         flow.blid = "TESTBLID"
         flow.name = name
@@ -1028,7 +1030,7 @@ from custom_components.roomba_plus.config_flow import (  # noqa: E402
 
 def _flow(options=None, regions=None, capability="smart", has_cloud=True):
     flow = object.__new__(RoombaPlusOptionsFlow)
-    entry = MagicMock()
+    entry = entry_mock()
     entry.options = options or {}
     data = entry.runtime_data
     data.map_capability.value = capability

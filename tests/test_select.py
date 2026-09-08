@@ -427,10 +427,16 @@ class TestCarpetBoostSlugMigration:
         await v.async_set_fan_speed("Automatic")
         # Should not log an error, and should write both keys of the pair.
         #
-        # ASSERTS ON THE ROBOT, not on the executor: the call goes
-        # straight to the client since roombapy 2.x, so counting
-        # executor jobs measures a transport that is no longer used.
-        assert v.vacuum.set_preference.await_count == 2
+        # ONE CALL WITH BOTH KEYS, not two calls with one each.
+        #
+        # This asserted two separate `set_preference` calls, which is
+        # precisely the bug: the firmware reads `carpetBoost` and
+        # `vacHigh` in one handler and drops both when either is
+        # missing, so two messages changed nothing while returning
+        # success. The test was pinning the failure.
+        v.vacuum.set_preferences.assert_awaited_once()
+        sent = v.vacuum.set_preferences.await_args[0][0]
+        assert set(sent) == {"carpetBoost", "vacHigh"}
 
     def test_all_seven_languages_have_lowercase_state_keys(self):
         """strings.json + all 7 translations must use lowercase slug keys
@@ -1418,4 +1424,71 @@ class TestAFunctionScopedImportUsedInBothBranches:
             f"imported inside one branch and used in another: "
             f"{sorted(set(problems))} -- UnboundLocalError on the path "
             f"that skips the import"
+        )
+
+
+class TestPairedSettingsGoOutTogether:
+    """Two settings the firmware reads as one, sent as one message.
+
+    `noAutoPasses`+`twoPass` and `carpetBoost`+`vacHigh` each resolve to
+    a single three-state value inside one firmware handler. That handler
+    looks up both members and takes an early exit if either is absent,
+    so a delta carrying half a pair does nothing -- no error, no echo,
+    nothing on the wire at all.
+
+    Three independent lines of evidence: the handler itself in two
+    firmware families (lewis `ctv_common_get_num_passes_flags`, ruby
+    `ctv_common_get_pass_preference`); a wire measurement on an i3 where
+    single keys were dropped and the pair echoed in 0.65 s; and
+    dorita980, which has never sent these any other way and offers no
+    single-key setter for them.
+
+    Both controls shipped sending single keys, so cleaning passes and
+    suction did nothing on lewis, ruby and daredevil. `set_preferences()`
+    was contributed to roombapy for this and is in 2.0.2.
+    """
+
+    def test_cleaning_passes_sends_one_message(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus import select as select_mod
+
+        source = inspect.getsource(select_mod)
+
+        assert 'set_preferences(' in source
+        assert 'set_preference("noAutoPasses"' not in source
+        assert 'set_preference("twoPass"' not in source
+
+    def test_suction_sends_one_message(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus import vacuum as vacuum_mod
+
+        source = inspect.getsource(vacuum_mod)
+
+        assert 'set_preference("carpetBoost"' not in source
+        assert 'set_preference("vacHigh"' not in source
+
+    def test_no_pair_member_is_ever_sent_alone(self) -> None:
+        """The guard. Either half on its own is a silent no-op, and a
+        future edit adding one back would look perfectly reasonable."""
+        import pathlib
+        import re
+
+        paired = ("noAutoPasses", "twoPass", "carpetBoost", "vacHigh")
+        offenders: list[str] = []
+        component = (
+            pathlib.Path(__file__).parent.parent
+            / "custom_components"
+            / "roomba_plus"
+        )
+        for path in sorted(component.glob("*.py")):
+            text = path.read_text(encoding="utf-8")
+            for key in paired:
+                if re.search(rf'set_preference\(\s*["\']{key}["\']', text):
+                    offenders.append(f"{path.name}: {key}")
+
+        assert not offenders, (
+            "these send one half of a paired setting, which the firmware "
+            f"silently drops -- use set_preferences(): {offenders}"
         )

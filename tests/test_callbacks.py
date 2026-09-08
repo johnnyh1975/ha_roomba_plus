@@ -23,6 +23,7 @@ from custom_components.roomba_plus.callbacks import make_mission_callback
 from custom_components.roomba_plus.callbacks import make_mission_complete_callback
 from custom_components.roomba_plus.const import CLEANING_PHASES
 from custom_components.roomba_plus.const import MISSION_END_PHASES
+from tests.conftest import hass_mock
 
 
 @contextmanager
@@ -104,6 +105,17 @@ def _make_hass(loop=None):
             import asyncio as _asyncio
             loop = _asyncio.get_event_loop()
             return await loop.run_in_executor(None, fn, *args)
+
+        def async_create_task(self, coro, *args, **kwargs):
+            # CLOSES IT rather than dropping it. Production launches
+            # repair checks this way from synchronous callbacks; a stub
+            # that ignores the argument leaves the coroutine to be
+            # garbage-collected, and Python reports every one of them as
+            # "was never awaited". That noise is indistinguishable from
+            # a real missing await.
+            import asyncio as _asyncio
+            if _asyncio.iscoroutine(coro):
+                coro.close()
         def __init__(self):
             self.loop = loop
             self.data = {}
@@ -143,8 +155,7 @@ def _msg(phase: str, nstuck: int = 0, sqft: int = 100) -> dict:
 
 def _make_callback_env():
     """Return (hass, entry, recorded_missions) for make_mission_callback tests."""
-    hass = MagicMock()
-
+    hass = hass_mock()
     def _close_coro(*args, **kwargs):
         for a in args:
             if asyncio.iscoroutine(a):
@@ -938,7 +949,7 @@ class TestMissionCompleteCallback:
     def _setup(self, latest_record=None):
         cc = MagicMock()
         cc.async_request_refresh = AsyncMock()
-        hass = MagicMock()
+        hass = hass_mock()
         hass.loop = asyncio.new_event_loop()
         entry = MagicMock()
         entry.runtime_data.mission_store.latest.return_value = latest_record
@@ -1083,7 +1094,7 @@ class TestMissionCompleteCallback:
 
         cc = MagicMock()
         cc.async_request_refresh = AsyncMock()
-        hass = MagicMock()
+        hass = hass_mock()
         hass.loop = asyncio.new_event_loop()
         entry = MagicMock()
         entry.runtime_data.mission_store.latest.side_effect = lambda: state["latest"]
@@ -1132,7 +1143,7 @@ class TestMissionCompleteCallback:
 
         cc = MagicMock()
         cc.async_request_refresh = AsyncMock()
-        hass = MagicMock()
+        hass = hass_mock()
         hass.loop = asyncio.new_event_loop()
         entry = MagicMock()
         entry.runtime_data.mission_store.latest.side_effect = lambda: state["latest"]
@@ -2002,7 +2013,7 @@ class TestStuckBypassCloudRefreshCallback:
 
         coordinator = MagicMock()
         coordinator.async_request_refresh = AsyncMock(return_value=None)
-        hass = MagicMock()
+        hass = hass_mock()
         hass.loop = asyncio.new_event_loop()
         entry = MagicMock()
         entry.runtime_data.mission_store.latest.return_value = {"timeline": {"finEvents": []}}
@@ -2618,7 +2629,7 @@ class TestCloudRefreshCallbackDispatchesV320Checks:
     def _run_callback(self):
         from custom_components.roomba_plus.callbacks import make_cloud_refresh_callback
 
-        hass = MagicMock()
+        hass = hass_mock()
         config_entry = MagicMock()
         config_entry.entry_id = "test_entry"
         rd = config_entry.runtime_data
@@ -2669,7 +2680,7 @@ class TestCloudRefreshCallbackDispatchesV320Checks:
         from custom_components.roomba_plus.callbacks import make_cloud_refresh_callback
         from custom_components.roomba_plus.models import MapCapability
 
-        hass = MagicMock()
+        hass = hass_mock()
         config_entry = MagicMock()
         config_entry.entry_id = "test_entry"
         rd = config_entry.runtime_data
@@ -2702,7 +2713,7 @@ class TestCloudRefreshCallbackDispatchesV320Checks:
         from custom_components.roomba_plus.callbacks import make_cloud_refresh_callback
         from custom_components.roomba_plus.models import MapCapability
 
-        hass = MagicMock()
+        hass = hass_mock()
         config_entry = MagicMock()
         config_entry.entry_id = "test_entry"
         rd = config_entry.runtime_data
@@ -2731,7 +2742,7 @@ class TestCloudRefreshCallbackDispatchesV320Checks:
     def test_grid_store_dependent_checks_not_dispatched_without_grid_store(self):
         from custom_components.roomba_plus.callbacks import make_cloud_refresh_callback
 
-        hass = MagicMock()
+        hass = hass_mock()
         config_entry = MagicMock()
         config_entry.entry_id = "test_entry"
         rd = config_entry.runtime_data
@@ -3044,7 +3055,7 @@ class TestGsCoverageHookDispatch:
         from custom_components.roomba_plus.callbacks import make_cloud_refresh_callback
         from custom_components.roomba_plus.models import MapCapability
 
-        hass = MagicMock()
+        hass = hass_mock()
         config_entry = MagicMock()
         config_entry.entry_id = "test_entry"
         rd = config_entry.runtime_data
@@ -3125,7 +3136,7 @@ class TestGsCoverageHookDispatch:
 def _gs_coverage_env(*, aligned=True, watermark=0):
     """Minimal runtime_data + mission_store fixture for exercising
     _async_update_gs_smart_coverage() directly (not through the hook)."""
-    hass = MagicMock()
+    hass = hass_mock()
     entry = MagicMock()
     entry.entry_id = "test_entry"
 
