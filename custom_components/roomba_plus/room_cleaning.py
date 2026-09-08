@@ -594,6 +594,12 @@ class PrimeRoomCleaning(RoomCleaningBackend):
     #: Map documents fetched during one `get_segments()` listing.
     _map_meta_cache: dict[str, Any]
 
+    #: {region_id: p2map_id}, filled while reading region names.
+    #: A class-level default because tests build this backend past
+    #: __init__, and `get_segments()` reads it before anything has
+    #: filled it.
+    _region_map_ids: dict[str, str] = {}
+
     async def _named_regions_across_maps(self) -> dict[str, str]:
         """{region_id: name} for every named room AND zone, on every map.
 
@@ -628,6 +634,23 @@ class PrimeRoomCleaning(RoomCleaningBackend):
             return {}
 
         names: dict[str, str] = {}
+        # WHICH MAP EACH REGION CAME FROM, recorded alongside the name.
+        #
+        # A zone segment id has to carry its map exactly as a room's
+        # does. Without it, `clean_rooms()` cannot tell which map a
+        # zone belongs to, and on a robot with two maps it refuses the
+        # command rather than guess -- @chairstacker got "this robot has
+        # 2 maps and is not currently reporting which one it is on"
+        # every time he cleaned a zone, while rooms worked.
+        # A FRESH DICT PER CALL, never the class-level default.
+        #
+        # `getattr(self, "_region_map_ids", {})` would return the CLASS
+        # attribute here and then bind it to the instance -- so two
+        # robots in one Home Assistant would share one mapping and
+        # overwrite each other's zone-to-map assignments. The class
+        # attribute exists only so a backend built past __init__ can
+        # read it; it must never be written to.
+        self._region_map_ids = {}
         for p2map_id in await self._all_map_ids():
             try:
                 map_data = await self._map_metadata(p2map_id)
@@ -645,15 +668,27 @@ class PrimeRoomCleaning(RoomCleaningBackend):
             try:
                 found = await robot.get_map_region_names(p2map_id, version)
             except Exception:  # noqa: BLE001
-                _LOGGER.debug(
+                # WARNING, NOT DEBUG. Skipping a map here produces a
+                # SHORTER list that looks exactly like a complete one --
+                # the zones of that map simply are not there, and
+                # nothing says so.
+                #
+                # @chairstacker saw 18 entries in the selector and 17 in
+                # the area-mapping dialog. The selector loads once at
+                # startup; the dialog reads live. One of the two calls
+                # had a map fail, and at debug level there was nothing
+                # in his log to tell the two apart.
+                _LOGGER.warning(
                     "roomba_plus: could not read region names from map %s "
-                    "version %s for %s",
+                    "(version %s) for %s -- any zones on that map are "
+                    "missing from the room/zone list until this succeeds",
                     p2map_id, version, self._data.blid, exc_info=True,
                 )
                 continue
             for region_id, region_name in (found or {}).items():
                 if region_id and region_name:
                     names.setdefault(str(region_id), str(region_name))
+                    self._region_map_ids.setdefault(str(region_id), p2map_id)
         return names
 
     async def _map_metadata(self, p2map_id: str) -> Any:
@@ -750,7 +785,16 @@ class PrimeRoomCleaning(RoomCleaningBackend):
         ):
             if str(region_id) in rooms_by_id or not region_name:
                 continue
-            seg_id = f"{ZID_PREFIX}{region_id}"
+            # MAP-QUALIFIED, like the room ids above. `available_rooms()`
+            # returns `{p2map_id}/{room_id}` and clean_rooms() splits on
+            # the slash to learn the map; a bare zone id gave it nothing
+            # to split, so a two-map robot refused every zone clean.
+            _zone_map = getattr(self, "_region_map_ids", {}).get(str(region_id))
+            seg_id = (
+                f"{ZID_PREFIX}{_zone_map}/{region_id}"
+                if _zone_map
+                else f"{ZID_PREFIX}{region_id}"
+            )
             if seg_id in known:
                 continue
             segments.append(
@@ -774,12 +818,25 @@ class PrimeRoomCleaning(RoomCleaningBackend):
         # share the remainder". That is the danger for `rid_`, whose
         # remainder IS a room id. For `zid_` the remainder is a zone id,
         # and stripping it is what makes the two collide.
+        # THE MAP GOES FIRST, THE TYPE PREFIX SECOND.
+        #
+        # `clean_rooms()` splits on the first slash to learn which map
+        # the command is for, and `_send_region_command()` then looks
+        # for `zid_` on what is left. A zone id arrives here as
+        # `zid_<map>/<region>`, so the two have to swap: `<map>/zid_
+        # <region>`. Get it wrong in either direction and one of the two
+        # readers sees nothing it recognises.
         room_ids: list[str] = []
         for seg_id in segment_ids:
             if seg_id.startswith(self._SEGMENT_PREFIX):
                 room_ids.append(seg_id[len(self._SEGMENT_PREFIX):])
             elif seg_id.startswith(ZID_PREFIX):
-                room_ids.append(seg_id)
+                rest = seg_id[len(ZID_PREFIX):]
+                if "/" in rest:
+                    p2map, region = rest.split("/", 1)
+                    room_ids.append(f"{p2map}/{ZID_PREFIX}{region}")
+                else:
+                    room_ids.append(seg_id)
         if not room_ids:
             # A stale area mapping, or segments belonging to another
             # vacuum. Cleaning nothing quietly would look like success.

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from collections.abc import Callable
 from typing import Any, Final
 
 from homeassistant.components.vacuum import VacuumActivity
@@ -344,6 +345,23 @@ class ConsumableRole:
     action_slug: str
     mop_due_key: str | None = None
 
+    #: True when the robot has no hardware this consumable belongs to.
+    #:
+    #: NOT EVERY ROBOT HAS EVERY PART. `clean_base_bag` is the case:
+    #: a 900-series charges on a plain dock and has no bag to replace.
+    #: Every per-part ENTITY was already suppressed for those robots by
+    #: `has_clean_base`, but the maintenance-due path iterated all four
+    #: roles regardless -- so a Roomba 980 reported a bag due after
+    #: ~105 hours of runtime, for a bag that does not exist
+    #: (@liblit, R980020, diagnostics attached to the report).
+    #:
+    #: Only `clean_base_bag` carries this. Filters, main brushes and
+    #: side brushes exist on every robot in scope, Clean Base or not --
+    #: gating side_brush too, as the report suggested, would stop
+    #: legitimate side-brush reminders on every robot without a Clean
+    #: Base.
+    absent_when: Callable[[dict[str, Any]], bool] | None = None
+
 
 CONSUMABLE_ROLES: Final[dict[str, ConsumableRole]] = {
     IROBOT_PART_ROLE_FILTER: ConsumableRole(
@@ -369,6 +387,7 @@ CONSUMABLE_ROLES: Final[dict[str, ConsumableRole]] = {
         action_slug="replace_side_brush",
     ),
     IROBOT_PART_ROLE_CLEAN_BASE_BAG: ConsumableRole(
+        absent_when=lambda state: not has_clean_base(state),
         slot="clean_base_bag",
         due_key="clean_base_bag",
         conf_key=None,

@@ -690,8 +690,16 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
             )
             if _cmd_regions and _live_region_map:
                 from .mission_store import MissionStore as _MS
-                _rids = [_MS.extract_rid(r) for r in _cmd_regions]
-                _rids = [r for r in _rids if r]
+                # ONE COMPREHENSION, so the type narrows. Assigning the
+                # filtered list back over a `list[str | None]` leaves it
+                # `list[str | None]` as far as mypy is concerned, and
+                # `_live_region_map.get(rid, rid)` then takes an
+                # argument the dict does not accept.
+                _rids: list[str] = [
+                    rid
+                    for rid in (_MS.extract_rid(r) for r in _cmd_regions)
+                    if rid
+                ]
                 if _rids:
                     _names = [_live_region_map.get(rid, rid) for rid in _rids]
                     attrs["planned_room_order"]  = _names
