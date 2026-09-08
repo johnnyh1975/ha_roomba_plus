@@ -405,3 +405,189 @@ class TestZonesAcrossEveryMap:
             "10": "Kitchen",
             "101": "Under the table",
         }
+
+
+class TestAZoneCarriesItsMap:
+    """@chairstacker: rooms cleaned, zones failed with "this robot has 2
+    maps and is not currently reporting which one it is on".
+
+    `available_rooms()` returns `{p2map_id}/{room_id}`, and
+    `clean_rooms()` splits on that slash to learn which map the command
+    is for. Zone segment ids had no map in them, so there was nothing to
+    split and the two-map branch refused rather than guess. On a
+    one-map robot it would have worked by luck.
+
+    The two readers want the parts in opposite orders, which is the
+    whole difficulty: `clean_rooms()` wants the map first, and
+    `_send_region_command()` looks for `zid_` on what is left after the
+    split. So the id is `zid_<map>/<region>` in the UI and
+    `<map>/zid_<region>` on the way to the robot.
+    """
+
+    @staticmethod
+    def _backend():
+        from custom_components.roomba_plus.room_cleaning import (
+            PrimeRoomCleaning,
+        )
+
+        backend = PrimeRoomCleaning.__new__(PrimeRoomCleaning)
+        backend._data = MagicMock()
+        backend._data.blid = "BLID1"
+        return backend
+
+    async def test_the_map_moves_in_front_of_the_prefix(self) -> None:
+        from unittest.mock import AsyncMock
+
+        backend = self._backend()
+        backend.clean_rooms = AsyncMock()
+
+        await backend.clean_segments(["zid_MAP-A/107"])
+
+        assert backend.clean_rooms.await_args[0][0] == ["MAP-A/zid_107"]
+
+    async def test_a_room_still_loses_only_its_prefix(self) -> None:
+        """The negative control: rooms were never broken and must stay
+        exactly as they were."""
+        from unittest.mock import AsyncMock
+
+        backend = self._backend()
+        backend.clean_rooms = AsyncMock()
+
+        await backend.clean_segments(["rid_MAP-A/12"])
+
+        assert backend.clean_rooms.await_args[0][0] == ["MAP-A/12"]
+
+    async def test_an_unqualified_zone_is_left_alone(self) -> None:
+        """Stored zone data predating this has no map in it. Passing it
+        through unchanged keeps a one-map robot working rather than
+        turning a silent success into a crash."""
+        from unittest.mock import AsyncMock
+
+        backend = self._backend()
+        backend.clean_rooms = AsyncMock()
+
+        await backend.clean_segments(["zid_107"])
+
+        assert backend.clean_rooms.await_args[0][0] == ["zid_107"]
+
+
+class TestAShortListDoesNotLookComplete:
+    """@chairstacker: 18 entries in the selector, 17 in the area-mapping
+    dialog, and nothing in the log about the difference.
+
+    Both read the same backend method. They read it at different times:
+    the selector loaded once at startup, the dialog reads live on every
+    open. A per-map fetch that failed in one of those calls produced a
+    shorter list that looks exactly like a complete one.
+
+    Two separate faults, fixed separately below.
+    """
+
+    def test_a_failed_map_is_logged_as_a_warning(self) -> None:
+        """It was `debug`, so nothing appeared in a normal log. The
+        message has to say the list is incomplete, because a shorter
+        list is otherwise indistinguishable from a full one."""
+        import inspect
+
+        from custom_components.roomba_plus.room_cleaning import (
+            PrimeRoomCleaning,
+        )
+
+        source = inspect.getsource(PrimeRoomCleaning._named_regions_across_maps)
+
+        assert "_LOGGER.warning" in source
+        assert "_LOGGER.debug" not in source
+        assert "missing from the room/zone list" in source
+
+    def test_the_selector_reloads_rather_than_freezing(self) -> None:
+        """Loading once at `async_added_to_hass` left the list frozen
+        until the next restart -- a map retrained in the app, or a zone
+        renamed, would never show up."""
+        import inspect
+
+        from custom_components.roomba_plus.select_prime import PrimeZoneSelect
+
+        added = inspect.getsource(PrimeZoneSelect.async_added_to_hass)
+        assert "async_add_listener" in added
+
+        reload_src = inspect.getsource(PrimeZoneSelect._async_reload_segments)
+        assert "_async_load_segments" in reload_src
+
+    def test_the_reload_only_writes_state_when_something_changed(self) -> None:
+        """The coordinator fires often. Writing state on every tick
+        would be a state change per cloud poll for a list that hardly
+        ever moves."""
+        import inspect
+
+        from custom_components.roomba_plus.select_prime import PrimeZoneSelect
+
+        source = inspect.getsource(PrimeZoneSelect._async_reload_segments)
+
+        assert "if self._segments != before" in source
+
+    def test_the_reload_does_not_run_inside_the_callback(self) -> None:
+        """Coordinator listeners are called synchronously. Reading the
+        cloud in one holds up every listener behind it."""
+        import inspect
+
+        from custom_components.roomba_plus.select_prime import PrimeZoneSelect
+
+        source = inspect.getsource(PrimeZoneSelect._schedule_segment_reload)
+
+        assert "async_create_background_task" in source
+
+
+class TestTheSelectorWaitsForTheMapNames:
+    """@theChef163's zone "Litter" (region 100) was in the integration's
+    own `region_names` and absent from the selector.
+
+    The tell was in his report: Home Assistant's area-mapping dialog
+    found the zone, and cleaning through it worked. That dialog reads
+    the backend live. The selector read it once at
+    `async_added_to_hass` -- before any map had been drawn, and zone
+    names only arrive when the map image builds a floor plan.
+
+    `SIGNAL_PRIME_ROOM_NAMES` already existed for this exact shape of
+    problem: the per-region sensors were created only when a map
+    happened to be built before the sensor platform set up
+    (@chairstacker, #84). The selector now listens to the same signal
+    instead of a second mechanism being invented for it.
+    """
+
+    def test_it_listens_for_the_names_arriving(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus.select_prime import PrimeZoneSelect
+
+        source = inspect.getsource(PrimeZoneSelect.async_added_to_hass)
+
+        assert "SIGNAL_PRIME_ROOM_NAMES" in source
+        assert "async_dispatcher_connect" in source
+
+    def test_the_signal_is_the_one_the_map_sends(self) -> None:
+        """Both sides must agree on the name, and nothing checks a
+        dispatcher signal at runtime -- a typo is silent."""
+        import inspect
+
+        from custom_components.roomba_plus import prime_room_map
+        from custom_components.roomba_plus.select_prime import PrimeZoneSelect
+
+        sent = inspect.getsource(prime_room_map)
+        listened = inspect.getsource(PrimeZoneSelect.async_added_to_hass)
+
+        assert "async_dispatcher_send" in sent
+        assert prime_room_map.SIGNAL_PRIME_ROOM_NAMES.format("x") == (
+            "roomba_plus_prime_room_names_x"
+        )
+        assert "SIGNAL_PRIME_ROOM_NAMES.format(" in listened
+
+    def test_the_map_coordinator_is_still_watched_too(self) -> None:
+        """The names signal covers zones appearing. A retrained map
+        changes the rooms themselves, which it does not cover."""
+        import inspect
+
+        from custom_components.roomba_plus.select_prime import PrimeZoneSelect
+
+        source = inspect.getsource(PrimeZoneSelect.async_added_to_hass)
+
+        assert "async_add_listener" in source

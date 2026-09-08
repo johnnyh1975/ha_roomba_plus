@@ -326,8 +326,12 @@ class TestMaintenanceStoreDueItems:
         assert store.due_items(state, {"filter_threshold_hours": 5}) == ["filter"]
 
     def test_all_four_due_simultaneously_without_cloud_data(self):
+        """A CLEAN BASE IS NOW PART OF THE PREMISE. This passed
+        `{"bbrun": ...}` with no dock at all, which is a robot that has
+        no bag -- so it asserted the false positive @liblit reported on
+        his Roomba 980 rather than the behaviour it names."""
         store = MaintenanceStore()
-        state = {"bbrun": {"hr": 300}}
+        state = {"bbrun": {"hr": 300}, "dock": {"fwVer": "1.2.3"}}
         due = store.due_items(state, {})
         assert set(due) == {"filter", "brush", "side_brush", "clean_base_bag"}
 
@@ -389,15 +393,21 @@ class TestMaintenanceStoreDueItems:
         store.hydrate_from_cloud_parts(
             [self._cloud_part("139", count_remaining=0)], 300,
         )
-        assert "clean_base_bag" in store.due_items({"bbrun": {"hr": 300}}, {})
+        assert "clean_base_bag" in store.due_items(
+            {"bbrun": {"hr": 300}, "dock": {"fwVer": "1.2.3"}}, {}
+        )
 
     def test_clean_base_bag_not_due_below_hardcoded_threshold_without_cloud_data(self):
         store = MaintenanceStore()
-        assert "clean_base_bag" not in store.due_items({"bbrun": {"hr": 10}}, {})
+        assert "clean_base_bag" not in store.due_items(
+            {"bbrun": {"hr": 10}, "dock": {"fwVer": "1.2.3"}}, {}
+        )
 
     def test_clean_base_bag_due_at_hardcoded_threshold_without_cloud_data(self):
         store = MaintenanceStore()
-        assert "clean_base_bag" in store.due_items({"bbrun": {"hr": 30}}, {})
+        assert "clean_base_bag" in store.due_items(
+            {"bbrun": {"hr": 30}, "dock": {"fwVer": "1.2.3"}}, {}
+        )
 
     def test_cloud_exhausted_counter_overrides_local_threshold_for_filter(self):
         """Local elapsed hours alone would say "not due yet" (10h since
@@ -1689,3 +1699,68 @@ class TestMaxHoursPerRole:
         assert _consumable_max_hours(
             _wear_entity(500, store), "clean_base_bag"
         ) == 60
+
+
+class TestPartsTheRobotDoesNotHave:
+    """@liblit's Roomba 980 (R980020) reported a Clean Base bag due.
+
+    It charges on a plain dock. There is no bag. Every per-part entity
+    was already suppressed for it by `has_clean_base` -- no
+    `clean_base_status`, no wear-rate sensor, no reset button -- but
+    `due_items()` iterated all four consumable roles regardless.
+
+    The cloud never contradicted it, because there is no cloud record
+    for a part the robot does not have: `_cloud_exhaustion_state()`
+    returned None and `_is_due()` fell through to the local hour count,
+    which counts RUNTIME rather than bag use. With the bag never reset
+    (nothing to reset) and a 30-hour default, it went due at 30 hours
+    and reported 75 overdue at his 105.
+
+    The report also suggested gating `side_brush` the same way. That
+    would be wrong: a 980 has a side brush, and gating it would stop
+    legitimate reminders on every robot without a Clean Base.
+    """
+
+    #: The dock exactly as his diagnostics carry it.
+    _NO_CLEAN_BASE = {"bbrun": {"hr": 105}, "dock": {"known": False}}
+    _CLEAN_BASE = {"bbrun": {"hr": 105}, "dock": {"fwVer": "1.2.3"}}
+
+    def test_no_bag_is_due_without_a_clean_base(self) -> None:
+        store = MaintenanceStore()
+
+        assert "clean_base_bag" not in store.due_items(self._NO_CLEAN_BASE, {})
+
+    def test_the_bag_is_still_due_with_one(self) -> None:
+        """The other half: gating must not silence the robots that do
+        have a bag."""
+        store = MaintenanceStore()
+
+        assert "clean_base_bag" in store.due_items(self._CLEAN_BASE, {})
+
+    def test_the_other_three_roles_are_untouched(self) -> None:
+        """A 980 has a filter, a main brush and a side brush.
+
+        At his 105 hours only the filter is past its threshold (60);
+        the brushes sit at 200 and 150. The point is that the bag is
+        gone from the list and nothing else changed with it.
+        """
+        store = MaintenanceStore()
+
+        due = set(store.due_items(self._NO_CLEAN_BASE, {}))
+        with_base = set(store.due_items(self._CLEAN_BASE, {}))
+
+        assert due == {"filter"}
+        assert with_base - due == {"clean_base_bag"}
+
+    def test_only_the_bag_declares_itself_absent(self) -> None:
+        """Pinned so a later role does not acquire the condition by
+        being copied from the one above it."""
+        from custom_components.roomba_plus.const import CONSUMABLE_ROLES
+
+        gated = {
+            role for role, spec in CONSUMABLE_ROLES.items()
+            if spec.absent_when is not None
+        }
+
+        assert len(gated) == 1
+        assert CONSUMABLE_ROLES[next(iter(gated))].slot == "clean_base_bag"

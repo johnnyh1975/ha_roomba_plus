@@ -1138,11 +1138,19 @@ class TestMaintenanceResetButtonsFireLogbookEvent:
         assert payload["component"] == "battery"
 
 
-def _make_maintenance_due(store, *, options=None, hr=0, mop=False, language="en"):
+def _make_maintenance_due(
+    store, *, options=None, hr=0, mop=False, language="en", clean_base=True
+):
     """Build a real RoombaMaintenanceDue wired to the given MaintenanceStore."""
     from custom_components.roomba_plus.binary_sensor import RoombaMaintenanceDue
     roomba = MagicMock()
+    # A Clean Base by default: most of these tests are about the
+    # four-role list, and a robot without one has only three parts.
+    # `clean_base=False` gives a 900-series (@liblit's R980020 reported a
+    # bag due on a plain dock).
     state: dict = {"bbrun": {"hr": hr}}
+    if clean_base:
+        state["dock"] = {"fwVer": "1.2.3"}
     if mop:
         state["detectedPad"] = "wet"
     roomba.master_state = {"state": {"reported": state}}
