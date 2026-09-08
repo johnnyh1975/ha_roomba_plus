@@ -9,7 +9,19 @@ note are listed — most releases need zero action beyond updating.
 
 ---
 
-## v4.2.0b1 — from v4.1.0
+## v4.2.0b2 — from v4.2.0b1
+
+A straight update. Four field fixes and one that needed a library
+release; see the release notes.
+
+**Cleaning passes and suction actually work now** on i/s/j robots. They
+never did: the firmware reads each pair as one value and dropped both
+halves when they arrived separately, while reporting success. If you had
+given up on those two controls, try them again.
+
+---
+
+## v4.2.0b1 — from v4.1.2
 
 **Two settings disappear from the options form, and one of them may change
 how your robot behaves.**
@@ -37,6 +49,14 @@ exists to find.
 **Also:** the tested Home Assistant minimum is now genuinely 2025.5 (Python
 3.13.2+), which is what the manifest has claimed since 4.0. CI had been
 testing 2025.1.4 on Python 3.12 — a combination no installation can be in.
+
+---
+
+## v4.1.2 — from v4.1.x
+
+Nothing to do. Four field fixes; see the 4.1.2 release notes. Several
+were silent failures, so an automation written to work around one may
+behave differently now.
 
 ---
 

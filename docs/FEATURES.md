@@ -62,8 +62,8 @@ marked in their own headings.
 
 | Control | Type | Notes |
 |---|---|---|
-| Cleaning passes | Select | Auto / One pass / Two passes |
-| Carpet boost | Select | Automatic / Eco / Performance (900-series) |
+| Cleaning passes | Select | Auto / One pass / Two passes. Did nothing at all on i/s/j robots before v4.2 — the firmware reads this and the setting below as key pairs, and dropped both halves when they arrived in separate messages, reporting success either way |
+| Carpet boost | Select | Automatic / Eco / Performance (900-series). Same pairing, same silent failure until v4.2 |
 | Edge cleaning | Switch | |
 | Always finish | Switch | Keep cleaning even when bin is full (i7+/s9+/j7+ with Clean Base) |
 | Schedule hold | Switch | Freeze schedule without deleting it (i/s/j/Braava) |
@@ -72,6 +72,22 @@ marked in their own headings.
 | Select room or zone | Select | Rooms and zones in one list. Classic: one per map, because its region ids are bare. Prime: one for the whole home, because its ids already carry their map (v4.1.0) |
 | Clean selected room | Button | Sends the robot to whatever the selector holds. Works whichever map the robot last ran on — a robot accepts a region command for any of its maps (v4.1.0) |
 | *(one per favourite)* | Button | Runs a saved iRobot favourite. A favourite carries its own map, so this is the shortest route to a room on another floor |
+
+> **Where Prime zone names come from, and why one may be missing.** Rooms
+> are read from each map's own metadata, which always carries them. Zones
+> are not: their names live in the map *version* document, plus whatever
+> the last cleaning command happened to label. That version document has
+> been confirmed to carry zones on some robots and not others, so a zone
+> of yours may be absent from these lists while the map shows it
+> correctly. It is not a setting, and there is nothing to try — but it is
+> worth reporting, because which robots carry it is still being worked
+> out.
+>
+> A zone can also be missing simply because no map has been drawn yet.
+> Since v4.1.2 the list refills itself when the map arrives; before that
+> it needed a restart.
+
+
 
 **Actions** (Settings → Automations → Actions → Roomba+):
 
