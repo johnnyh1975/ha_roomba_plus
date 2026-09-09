@@ -1348,3 +1348,57 @@ class TestTheRoomsMapLookupMatchesTheEntity:
         assert '{data.blid}_rooms_map"' not in inspect.getsource(
             diagnostics
         ).replace('roomba_plus_{data.blid}_rooms_map"', "")
+
+
+class TestTheDownloadAnswersTheQuestionsItIsAskedFor:
+    """Two fields were missing from the download, and both cost a
+    round trip with a tester who had already done the work.
+
+    `robot_ids` / `shared` on a cloud map: asked @ScenicSystemsLLC to
+    check whether a map was shared between two robots, and he could
+    not -- the field is in the cloud response and the download drops
+    it. He compared `pmap_id` lists by hand instead.
+
+    `missionTelemetry`: present in the state of every i/s robot, read
+    nowhere in this integration, and visible in the download only as a
+    key name. Room progress is inferred from phase changes instead,
+    which works on `lewis` and leaves `soho` frozen on the first
+    planned room for an entire mission. Whether the robot reports its
+    own progress is answerable from one download now, rather than by
+    asking for a raw dump.
+    """
+
+    def test_map_ownership_is_reported(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus import diagnostics
+
+        source = inspect.getsource(diagnostics)
+
+        assert '"pmap_ownership"' in source
+        assert '"robot_ids": pm.get("robot_ids")' in source
+        assert '"shared": pm.get("shared")' in source
+
+    def test_mission_telemetry_is_reported_as_a_value(self) -> None:
+        """Not as a key name. The value is the whole point -- a name in
+        `master_state_keys` says the field exists and nothing else."""
+        import inspect
+
+        from custom_components.roomba_plus import diagnostics
+
+        source = inspect.getsource(diagnostics)
+
+        assert '"mission_telemetry": state.get("missionTelemetry")' in source
+
+    def test_the_reason_is_recorded_next_to_it(self) -> None:
+        """Somebody will wonder why a field nothing reads is in the
+        diagnostics. The answer is that reading it is the open
+        question."""
+        import inspect
+
+        from custom_components.roomba_plus import diagnostics
+
+        source = inspect.getsource(diagnostics)
+
+        assert "reads it" in source or "reads it\n" in source
+        assert "soho" in source
