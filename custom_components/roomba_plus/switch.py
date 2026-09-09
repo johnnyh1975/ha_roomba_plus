@@ -298,6 +298,25 @@ async def async_setup_entry(
     if "openOnly" in state:
         entities.append(EdgeCleanSwitch(roomba, blid))
 
+    # WHICH OF THESE THE ROBOT ACTUALLY ACCEPTS, measured rather than
+    # assumed. @AlakazipLabs wrote each key one at a time on a docked i3
+    # (daredevil 2.6.0) and watched the wire for the echo:
+    #
+    #   single key, echoed   binPause, openOnly, ecoCharge, schedHold,
+    #                        childLock
+    #   pair only            noAutoPasses + twoPass
+    #   silently dropped     vacHigh, carpetBoost, noPP
+    #
+    # Every switch built below is in the first group, so each is one
+    # write and each is confirmed to land. The pair goes out together
+    # since 4.2 (`set_preferences`), and `noPP` is not written anywhere
+    # in this integration -- which is just as well, since this robot
+    # ignores it.
+    #
+    # "Silently dropped" is the whole reason for measuring: the write
+    # returns, nothing echoes, and the switch snaps back with no error
+    # anywhere. n=1 robot, one firmware line.
+    #
     # Always finish: present when binPause key exists in state
     # (Clean Base models that support auto-evacuation mid-mission)
     if "binPause" in state:

@@ -75,6 +75,26 @@ CLOUD_CATCHUP_SECOND_DELAY_SEC = 600
 # record.
 _CLOUD_CATCHUP_MISSION_MATCH_SEC = 120
 
+#: Cycles that are explicitly NOT a cleaning run.
+#:
+#: EXACTLY ONE ENTRY, because exactly one is evidenced. A `dock` command
+#: sent to an already-docked robot is accepted and runs a bin
+#: evacuation, during which `phase` alternates `charge`/`run` while
+#: `cycle` stays `evac` (@AlakazipLabs, wire-timed on an i3, one publish
+#: and nothing else for 125 s). Those `run` messages carry the PREVIOUS
+#: mission's `mssnStrtTm` and `missionId`, and `nMssn` never increments
+#: -- so without this the burst opens a phantom mission against a run
+#: that ended days earlier.
+#:
+#: `dock` AND `none` WERE HERE BRIEFLY and are deliberately gone.
+#: Neither appeared in any capture, and `dock` is an ACTIVE cycle
+#: elsewhere in this project -- `button_prime.py` treats
+#: `("clean", "spot", "dock")` as "the robot is busy", because `dock`
+#: means heading home. Blocking it could have suppressed a real mission
+#: whose robot was returning. Adding cycles by reasoning about what they
+#: probably mean is how the bugs this list exists for got written.
+_NON_MISSION_CYCLES: frozenset[str] = frozenset({"evac"})
+
 # v2.8.0 AUTO-ADVANCE-ROOM — phases that may represent an inter-room transition
 # on lewis firmware (i7+/s9+) rather than a genuine mission end or recharge.
 # Restricted to "charge" and "hmPostMsn": these are the two phases observed
@@ -679,13 +699,26 @@ def make_mission_callback(
     current_mission_zones: list[str] = []
     mission_start_ts: int = 0
     nstuck_at_start: int = 0
-    # v3.2.0 ANOMALY-EXPLAIN — npicks (bbrun.nPicks, "robot picked up off
-    # the floor" events) at mission start, mirrors nstuck_at_start exactly.
-    # Unlike nStuck, nPicks has no existing proxy visible on the record
-    # (nstuck_delta only feeds into `result` classification, never stored
-    # directly) — npicks_delta needs its own record field since there's no
-    # other way to later tell "was this mission's anomaly caused by the
-    # robot being lifted".
+    # v3.2.0 ANOMALY-EXPLAIN — npicks (bbrun.nPicks) at mission start,
+    # mirrors nstuck_at_start exactly. Unlike nStuck, nPicks has no
+    # existing proxy visible on the record (nstuck_delta only feeds into
+    # `result` classification, never stored directly), so npicks_delta
+    # needs its own record field.
+    #
+    # WHAT IT COUNTS IS NOT SETTLED, and this said "robot picked up off
+    # the floor" as though it were. @AlakazipLabs went back through
+    # every increment in his archive -- ten of them -- and retracted his
+    # own earlier claim that it witnesses a lift:
+    #
+    #   * eight have no wheel-drop reading at all, and six of those
+    #     eight fall inside a dock-leave or dock-contact window
+    #   * it did NOT increment when he placed the robot on its dock by
+    #     hand
+    #
+    # So it counts something around dock contact, and a lift may or may
+    # not be part of it. The delta is still worth recording -- it
+    # correlates with missions that went wrong -- but nothing should
+    # present it to a user as "the robot was picked up". n=1 robot.
     npicks_at_start: int = 0
     # v2.8.1 (END-DEBOUNCE) — consecutive-message counter for the genuine-end
     # debounce below. Resets to 0 whenever a message does not look like a
@@ -785,8 +818,38 @@ def make_mission_callback(
         # (stale/re-delivered MQTT state), not a genuine resume — treat it
         # as inert enrichment instead of re-opening the mission.
         _candidate_mission_start_ts = mission.get("mssnStrtTm") or 0
+        # A CLEANING CYCLE, NOT JUST A CLEANING PHASE.
+        #
+        # `phase` alone opens a mission for things that are not one. A
+        # `dock` command sent to an ALREADY DOCKED robot is accepted and
+        # runs an evacuation: cycle goes to `evac` and phase alternates
+        # `charge`/`run` in a 317 ms burst before settling
+        # (@AlakazipLabs, i3 daredevil 2.6.0, wire-timed -- one publish,
+        # nothing else sent for 125 s).
+        #
+        # Those `run` messages carry the mssnStrtTm and missionId of the
+        # LAST mission, three days old in his capture, and `nMssn` never
+        # increments. `_mission_already_terminal()` does not stop it
+        # either: that guard only suppresses a terminal record from the
+        # last 120 seconds, deliberately, so a genuinely resumed segment
+        # is not swallowed. Three days is far outside it.
+        #
+        # `cycle` is the discriminator that holds -- the same one his
+        # recharge-resume capture established for the other end of a
+        # mission.
+        # ACTS ON WHAT THE ROBOT SAYS, rather than requiring it to say
+        # it. A cycle of `evac` is an explicit statement that this is not
+        # a cleaning run; a cycle that is absent is no statement at all.
+        #
+        # Real robots always send it -- confirmed in field diagnostics --
+        # but this path also sees cloud-derived and partial state, and
+        # demanding the key would risk suppressing a genuine mission for
+        # a message that merely arrived thin. The bug being fixed here is
+        # a robot that TOLD us it was evacuating.
+        _candidate_cycle = mission.get("cycle")
         if (
             phase in _ACTIVE_CLEANING_PHASES
+            and _candidate_cycle not in _NON_MISSION_CYCLES
             and not had_cleaning_phase
             and not _mission_already_terminal(entry, _candidate_mission_start_ts)
         ):

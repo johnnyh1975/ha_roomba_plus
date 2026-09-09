@@ -360,9 +360,27 @@ class IRobotEntity(Entity):
 
         # 2. Patch the live DeviceRegistry entry so the UI updates immediately
         registry = dr.async_get(self.hass)
-        device = registry.async_get_device(
-            identifiers={(DOMAIN, self.robot_unique_id)}
-        )
+
+        # THE NEW CALL WHERE IT EXISTS, the old one otherwise.
+        #
+        # `async_get_device()` is deprecated -- identifiers are no
+        # longer unique across config entries -- and Home Assistant
+        # names this integration in the user's log for it, with a
+        # deadline of 2027.8. But `async_get_device_by_identifier()` is
+        # not in HA 2025.5, which is the minimum this integration
+        # supports, so switching outright would break the floor rather
+        # than the ceiling.
+        #
+        # Both take the same identifier, and only one lookup happens
+        # either way.
+        _by_identifier = getattr(registry, "async_get_device_by_identifier", None)
+        if _by_identifier is not None:
+            device = _by_identifier((DOMAIN, self.robot_unique_id))
+        else:
+            device = registry.async_get_device(
+                identifiers={(DOMAIN, self.robot_unique_id)}
+            )
+
         if device is None:
             _LOGGER.debug(
                 "IRobotEntity: device not yet in registry, skipping name patch"

@@ -141,6 +141,25 @@ class RoombaData:
     #: schedule coordinator does not. Filled whenever a floor plan is
     #: built, and read by the calendar to fill gaps in its own summaries.
     prime_room_names: dict[str, str] = field(default_factory=dict)
+
+    #: The last map the robot said it was standing on.
+    #:
+    #: NOT `active_pmap_id`, which is the order of the cloud's map
+    #: list and says nothing about location. This is
+    #: `cleanMissionStatus.p2mapId` -- the robot's own relocalisation
+    #: -- remembered from the last time it was reported.
+    #:
+    #: WHY REMEMBER IT AT ALL: the robot only reports it while it
+    #: knows where it is. Parked on its dock it reports nothing, and
+    #: that is exactly when somebody presses a button. A dock does not
+    #: move, so the floor it last cleaned is where it still is --
+    #: unless a person carried it, which is the one case this gets
+    #: wrong, and the one case where they know they did it.
+    #:
+    #: For LABELLING ONLY. Never gate a command on it: refusing on a
+    #: remembered value would block the carried-upstairs case, which
+    #: is the whole reason someone cleans another map's room.
+    last_known_map_id: str | None = None
     #: The HomeAssistant instance, for callers that only hold the config
     #: entry.
     #:
