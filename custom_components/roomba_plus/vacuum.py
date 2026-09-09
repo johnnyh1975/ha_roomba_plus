@@ -1134,7 +1134,25 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         When cleaning: pauses and waits up to 10 s for confirmation before
         sending dock. If the pause is not confirmed in time, sends stop first
         so the robot is in a defined state before the dock command.
-        When already docked or idle: sends dock directly (no-op on robot side).
+        When already docked or idle: sends dock directly.
+
+        NOT A NO-OP ON THE ROBOT, which this said for a long time. A
+        `dock` command reaching a docked robot is accepted and starts a
+        BIN EVACUATION -- @AlakazipLabs sent exactly one, to a robot at
+        100% on its dock with nothing before or after it, and captured
+        22 seconds of evac cycle and dock handshake on the wire.
+
+        So the same verb means two things: a recall when the robot is
+        away, an empty-the-bin when it is home. Home Assistant offers
+        `vacuum.return_to_base` with no notion of that, and a user
+        pressing it twice gets a second evacuation.
+
+        Left as it is deliberately. Suppressing the send would mean this
+        integration deciding the robot is docked, and `activity` is not
+        reliable enough for that on either generation -- a wrong guess
+        would swallow a recall, which is worse than an unwanted
+        evacuation. Documented rather than guarded, and the entity
+        description says so too.
 
         NEW (V4/Prime): sends "dock" directly, skipping the pause-then-
         wait dance above entirely -- self.activity isn't reliable for

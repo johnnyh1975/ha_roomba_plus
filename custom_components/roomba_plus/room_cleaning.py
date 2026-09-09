@@ -189,6 +189,21 @@ class RoomCleaningBackend(ABC):
         what they will type into a service call or automation.
         """
 
+    async def map_names(self) -> dict[str, str]:
+        """{p2map_id: display name}. Empty unless the backend has maps.
+
+        Declared here so callers need not know which generation they
+        hold. Classic robots have one map and no name for it, so an
+        empty mapping is the honest answer there rather than an error.
+
+        NOT `active_pmap_id`. That is the order of the cloud's map
+        list, not a location -- the distinction that made
+        @ScenicSystemsLLC's cross-map favourite work and
+        @chairstacker's cross-map room fail. Anything asking WHERE
+        the robot is must read `cleanMissionStatus.p2mapId`.
+        """
+        return {}
+
     async def _all_map_ids(self) -> list[str]:
         """Every map this robot holds, or empty when it has only one.
 
@@ -211,6 +226,15 @@ class RoomCleaningBackend(ABC):
         Same story as `_all_map_ids` above.
         """
         return None
+
+    async def where_the_robot_is(self) -> tuple[str | None, bool]:
+        """(map id, whether the robot is saying so right now).
+
+        Base default: whatever `_current_map_id()` gives, always as a
+        live reading. Only the Prime backend has more than one map to
+        tell apart, so only it needs the remembering half.
+        """
+        return await self._current_map_id(), True
 
     @abstractmethod
     async def get_segments(self) -> list[Any]:
@@ -428,6 +452,30 @@ class PrimeRoomCleaning(RoomCleaningBackend):
         current = coordinator.data.get("ro-currentstate") or {}
         mission = current.get("cleanMissionStatus") or {}
         return mission.get("p2mapId") or mission.get("p2map_id") or None
+
+    async def where_the_robot_is(self) -> tuple[str | None, bool]:
+        """(map id, whether the robot is saying so right now).
+
+        `_current_map_id()` is the truth and is often silent: the
+        robot reports its map while it knows where it is, and a
+        parked one reports nothing. That silence lands exactly when
+        somebody opens a dashboard and presses a button.
+
+        So a live reading is remembered, and returned again later
+        with `False` to say it is a memory rather than a statement.
+        A dock does not move: the floor the robot last cleaned is
+        where it still is, unless a person carried it -- and that
+        person knows they did.
+
+        THE FLAG IS THE POINT. A caller that shows the user which
+        floor a room is on can say "currently" or "last seen";
+        without it, a remembered value looks like a measurement.
+        """
+        live = await self._current_map_id()
+        if live:
+            self._data.last_known_map_id = live
+            return live, True
+        return getattr(self._data, "last_known_map_id", None), False
 
     def _raise_if_map_updating(self) -> None:
         """Refuses while the robot is rebuilding its map.
@@ -710,6 +758,36 @@ class PrimeRoomCleaning(RoomCleaningBackend):
             cache[p2map_id] = await self._robot.get_map_metadata(p2map_id)
         return cache[p2map_id]
 
+    async def map_names(self) -> dict[str, str]:
+        """{p2map_id: display name} for every map on the account.
+
+        Read from `get_active_map_versions()`, which carries the name
+        beside the id -- the same call `_all_map_ids()` already makes.
+
+        Exists so the room/zone selector can say WHICH floor a room is
+        on before someone presses the button. A raw p2map id means
+        nothing to a person; "Upstairs" does.
+        """
+        robot = getattr(self, "_robot", None)
+        if robot is None:
+            return {}
+        try:
+            versions = await robot.get_active_map_versions()
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug(
+                "roomba_plus: could not read map names for %s",
+                self._data.blid, exc_info=True,
+            )
+            return {}
+        names: dict[str, str] = {}
+        for entry in versions or []:
+            if not isinstance(entry, dict):
+                continue
+            map_id = entry.get("p2map_id")
+            if map_id:
+                names[str(map_id)] = str(entry.get("name") or map_id)
+        return names
+
     async def get_segments(self) -> list[Any]:
         """Prime rooms as HA Clean Area segments.
 
@@ -777,7 +855,23 @@ class PrimeRoomCleaning(RoomCleaningBackend):
             )
             or {}
         )
-        rooms_by_id = {v: k for k, v in rooms.items()}
+        # THE BARE REGION ID, because that is what `names` is keyed by.
+        #
+        # `available_rooms()` returns `{p2map_id}/{room_id}`, so a
+        # straight inversion gives keys like "MAP-A/11" -- and the check
+        # below compares them against "11". It never matched, so EVERY
+        # room was also emitted as a zone: 21 segments where 11 were
+        # meant, each room duplicated under a `zid_` id.
+        #
+        # Invisible in the selector, which keys by NAME and silently
+        # collapsed each pair back to one. Visible in the area-mapping
+        # dialog, which keys by id and showed both -- @chairstacker's
+        # "they both still have rooms and zones in them", which I had
+        # read as a description of the grouping rather than a bug.
+        rooms_by_id = {
+            str(room_id).rsplit("/", 1)[-1]: name
+            for name, room_id in rooms.items()
+        }
         # SORTED BY NAME, as the rooms above are. This sorted by region
         # id, so the zone half of the area-mapping dialog came out in an
         # order that looks random next to an alphabetical room list
@@ -893,6 +987,42 @@ class PrimeRoomCleaning(RoomCleaningBackend):
             # clears it when the robot names a map that is not in its
             # own list, and the fallback keys on `not p2map_id`.
             p2map_id: str | None = maps.pop()
+
+            # SAY SO WHEN THE ROBOT IS SOMEWHERE ELSE.
+            #
+            # The command still goes out: the "active map" this
+            # integration knows is what the robot last reported, and it
+            # is routinely stale. @ScenicSystemsLLC ran a favourite for
+            # a map we did not consider active and the robot went
+            # straight there -- because it was physically standing on
+            # that floor, whatever our flag said. Refusing on the flag
+            # would have blocked a mission that worked.
+            #
+            # But the reverse costs the user a real three minutes.
+            # @chairstacker targeted a room on his secondary map with
+            # the robot downstairs; it accepted, wandered, and gave up
+            # with "Roomba is a little lost" and error 69. Nothing in
+            # his log connected the two.
+            #
+            # A robot can only ever be on one floor. Cleaning another
+            # map's room means someone carried it there -- so this is a
+            # warning, not a refusal, and it names both maps.
+            try:
+                _on_map, _is_live = await self.where_the_robot_is()
+            except Exception:  # noqa: BLE001
+                _on_map, _is_live = None, False
+            if _on_map and p2map_id and _on_map != p2map_id:
+                _LOGGER.warning(
+                    "roomba_plus: cleaning a room on map %s while %s %s map "
+                    "%s. Sending anyway -- if somebody carried the robot to "
+                    "that floor this is exactly right -- but if not, it will "
+                    "search, fail to place itself and stop with a navigation "
+                    "error a few minutes from now",
+                    p2map_id,
+                    self._data.blid,
+                    "reports being on" if _is_live else "was last seen on",
+                    _on_map,
+                )
             room_ids = [r.split("/", 1)[1] for r in qualified]
             self._raise_if_map_updating()
             # `maps.pop()` yields a str; the annotation is Optional
@@ -1222,6 +1352,38 @@ class ClassicRoomCleaning(RoomCleaningBackend):
                 translation_domain=DOMAIN,
                 translation_key="map_updating",
             )
+
+    async def map_names(self) -> dict[str, str]:
+        """{pmap_id: display name}, from the cloud map list.
+
+        Parity with Prime: the room/zone selector labels each room
+        with its floor, and a raw pmap id means nothing to a person.
+
+        The name lives in `active_pmapv_details.map_header.name` --
+        not at the top of the pmap entry, where there is no name at
+        all. Falls back to the id so a map with no name still gets a
+        label rather than an empty one.
+        """
+        # `self._cloud` RAISES when there is no cloud -- it is the
+        # accessor room targeting goes through, and refusing there is
+        # right. Labelling a list is not room targeting: no names is a
+        # fine answer, a failed segment listing is not.
+        try:
+            cloud = self._cloud
+        except Exception:  # noqa: BLE001
+            return {}
+        if cloud is None or not getattr(cloud, "data", None):
+            return {}
+        names: dict[str, str] = {}
+        for pmap in cloud.data.get("pmaps", []) or []:
+            if not isinstance(pmap, dict):
+                continue
+            details = pmap.get("active_pmapv_details") or {}
+            header = details.get("map_header") or {}
+            pmap_id = (details.get("active_pmapv") or {}).get("pmap_id")
+            if pmap_id:
+                names[str(pmap_id)] = str(header.get("name") or pmap_id)
+        return names
 
     async def available_rooms(self) -> dict[str, str]:
         # NO EARLY RETURN ON A MISSING COORDINATOR.
@@ -1576,16 +1738,51 @@ class ClassicRoomCleaning(RoomCleaningBackend):
             self._config_entry.options.get(CONF_FLOOR) or None
             if self._config_entry else None
         )
-        # Room segments (rid)
-        segments = [
-            Segment(
-                id=f"{active_pmap_id}_{region['id']}",
-                name=region.get("name", region["id"]),
-                group=floor_label,
-            )
-            for region in self._cloud.regions
-            if region.get("id")
-        ]
+        # ROOM SEGMENTS FROM EVERY MAP, each id carrying its own.
+        #
+        # This offered the cloud-active map alone, and prefixed every id
+        # with it. Two problems followed from that one choice: rooms on
+        # a second floor could not be mapped to a Home Assistant area at
+        # all, and a stored mapping stopped working whenever the cloud's
+        # notion of "active" moved -- silently, because `clean_segments`
+        # then dropped the foreign prefix without a word.
+        #
+        # `clean_rooms()` has resolved the map per region since 4.1.0
+        # ("every requested region carries its own map"); only this path
+        # was left behind. `regions_by_pmap` gives every map's regions,
+        # and since today its zones too.
+        #
+        # THE ACTIVE MAP GOES FIRST so its names win a duplicate --
+        # "Hallway" upstairs and downstairs is ordinary, and the floor
+        # the robot is on is the reading that is right more often.
+        by_map: dict[str, dict[str, str]] = dict(
+            getattr(self._cloud, "regions_by_pmap", None) or {}
+        )
+        seen_names: set[str] = set()
+        segments: list[Any] = []
+        for pmap_id in [active_pmap_id, *(m for m in by_map if m != active_pmap_id)]:
+            for region_id, region_name in (by_map.get(pmap_id) or {}).items():
+                if not region_id or region_name in seen_names:
+                    continue
+                seen_names.add(region_name)
+                segments.append(Segment(
+                    id=f"{pmap_id}_{region_id}",
+                    name=region_name or region_id,
+                    group=floor_label,
+                ))
+        if not segments:
+            # No per-map data yet: fall back to the active map's own
+            # list, which is what this did before and is still right
+            # when the coordinator has only that.
+            segments = [
+                Segment(
+                    id=f"{active_pmap_id}_{region['id']}",
+                    name=region.get("name", region["id"]),
+                    group=floor_label,
+                )
+                for region in self._cloud.regions
+                if region.get("id")
+            ]
         # IA74-ZONE full (v2.7.0): zone segments (zid).
         # Zone segment IDs use the format "{pmap_id}_zid_{zone_id}" so
         # async_clean_segments can distinguish them from room segments.
@@ -1644,14 +1841,51 @@ class ClassicRoomCleaning(RoomCleaningBackend):
                 translation_key="no_valid_segments",
             )
         region_ids: list[str] = []
-        prefix = f"{active_pmap_id}_"
+        # ANY MAP, NOT JUST THE ACTIVE ONE.
+        #
+        # The prefix is the map the segment belongs to, and
+        # `clean_rooms()` resolves the map per region anyway. Matching
+        # only the active prefix meant a stored area mapping stopped
+        # working the moment the cloud's list order moved -- and stopped
+        # in silence, which is the failure this project has spent a week
+        # removing.
+        #
+        # ONE MAP PER COMMAND, because the payload carries a single
+        # pmap_id. Rooms from two floors in one call is refused with the
+        # same message Prime gives, rather than half of them being
+        # dropped.
+        by_map: dict[str, list[str]] = {}
         for seg_id in segment_ids:
-            # v2.4.3 PMAP-UNDERSCORE: pmap_ids may contain underscores (URL-safe
-            # base64 encoding). partition("_") splits on the first underscore and
-            # produces a wrong pmap_id for IDs like "2Bly_kGURy6OcUVTX7FN3w_19".
-            # Use a prefix check instead — region_ids are always plain integers.
-            if seg_id.startswith(prefix):
-                region_ids.append(seg_id[len(prefix):])
+            # A plain split on "_" is wrong: map ids contain them, and
+            # "2Bly_kGURy6OcUVTX7FN3w_19" would lose most of its map.
+            # The region part is always what follows the LAST underscore
+            # of the map id, so match against known maps instead.
+            for candidate in (
+                active_pmap_id,
+                *(m for m in (getattr(self._cloud, "regions_by_pmap", None) or {})),
+            ):
+                marker = f"{candidate}_"
+                if seg_id.startswith(marker):
+                    by_map.setdefault(candidate, []).append(seg_id[len(marker):])
+                    break
+            else:
+                _LOGGER.warning(
+                    "roomba_plus: segment %s does not name a map this robot "
+                    "has, and was not cleaned. Re-map that area in Home "
+                    "Assistant -- a map retrain renumbers everything",
+                    seg_id,
+                )
+
+        if len(by_map) > 1:
+            # The message this project already has for the same
+            # situation on the room-name path -- one wording for one
+            # problem, rather than a second key saying the same thing.
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="rooms_different_floors",
+                translation_placeholders={"pmap_ids": ", ".join(sorted(by_map))},
+            )
+        region_ids = next(iter(by_map.values()), [])
 
         if not region_ids:
             raise ServiceValidationError(
@@ -1672,10 +1906,24 @@ class ClassicRoomCleaning(RoomCleaningBackend):
 
         # Validate + auto-heal room IDs against the current cloud map (zone IDs
         # are stable across map retrains — no validation needed for them).
+        # THE SEGMENT'S OWN MAP, not just the active one.
+        #
+        # `self._cloud.regions` is the active map alone, so a region on
+        # any other map failed this check and was discarded as "stale" --
+        # which turned the newly-allowed foreign-map segment straight
+        # back into a silent no-op, one step further down.
+        #
+        # The healing itself still needs the active map's names: a
+        # retrain renumbers rooms THERE, which is what it exists to
+        # repair. Widening only the validity test keeps that intact.
         current_regions = self._cloud.regions
+        _segment_map = next(iter(by_map), active_pmap_id)
+        _regions_on_that_map = (
+            getattr(self._cloud, "regions_by_pmap", None) or {}
+        ).get(_segment_map) or {}
         current_region_ids: set[str] = {
             str(r["id"]) for r in current_regions if r.get("id")
-        }
+        } | {str(rid) for rid in _regions_on_that_map}
         validated_room_ids = list(raw_room_ids)
         if current_region_ids and raw_room_ids:
             stale = [rid for rid in raw_room_ids if rid not in current_region_ids]

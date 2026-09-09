@@ -1106,6 +1106,12 @@ HEALTH_BAND_RANK: Final[dict[str, int]] = {"critical": 0, "degraded": 1, "health
 #
 # Indexing an enum by the value would be meaningless if it were a mask.
 #
+# CONFIRMED FROM THE FIELD, independently and later: @AlakazipLabs
+# watched the field switch from 1 (cliff) straight to 15 (insufficient
+# charge) as the battery fell past about 15 per cent -- one code
+# replacing another, never both together. A mask would have carried
+# them at once.
+#
 # WHERE THE 64 CAME FROM: wire value 67 decodes to `DownloadingMap` --
 # literally "the map is being updated". The intent was right and the
 # mechanism was inferred. But `67 & 64` is true, and so is `64 & 64`,

@@ -1174,6 +1174,20 @@ def _settings_keys(config_entry: RoombaConfigEntry) -> set[str] | None:
     return set(reported)
 
 
+
+def _map_of(segment_id: str) -> str:
+    """The p2map id inside a segment id, or "" when it carries none.
+
+    Room ids are `rid_<map>/<region>`; zone ids are `zid_<map>/<region>`
+    since 4.1.2. Older stored ids have no map at all, and an empty
+    string is the honest answer for those rather than a guess.
+    """
+    for prefix in ("rid_", "zid_"):
+        if segment_id.startswith(prefix):
+            rest = segment_id[len(prefix):]
+            return rest.split("/", 1)[0] if "/" in rest else ""
+    return ""
+
 class PrimeZoneSelect(IRobotEntity, SelectEntity):
     """Which room or zone the Prime clean-zone button will send the robot to.
 
@@ -1209,6 +1223,9 @@ class PrimeZoneSelect(IRobotEntity, SelectEntity):
         self._selected: str | None = None
         #: name -> segment id, refreshed on every read.
         self._segments: dict[str, str] = {}
+        self._segment_maps: dict[str, str] = {}
+        self._robot_on_map: str | None = None
+        self._robot_map_is_live: bool = False
 
     async def async_added_to_hass(self) -> None:
         """Load the room and zone list once the entity is registered.
@@ -1314,6 +1331,32 @@ class PrimeZoneSelect(IRobotEntity, SelectEntity):
             return
         self._segments = {segment.name: segment.id for segment in segments}
 
+        # WHICH FLOOR EACH ONE IS ON, for the attributes. Best effort:
+        # a failure here must not cost the room list, which is what the
+        # entity is actually for.
+        try:
+            map_names = await backend.map_names()
+            self._segment_maps = {
+                segment.name: map_names.get(_map_of(segment.id), "")
+                for segment in segments
+                if _map_of(segment.id)
+            }
+            # `where_the_robot_is()`, not `_current_map_id()`: a docked
+            # robot reports no map, and docked is when somebody is
+            # looking at this. The flag says whether the answer is the
+            # robot speaking or the last thing it said.
+            _where, _live = await backend.where_the_robot_is()
+            self._robot_on_map = map_names.get(_where or "")
+            self._robot_map_is_live = _live
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug(
+                "roomba_plus: could not label the room list by map",
+                exc_info=True,
+            )
+            self._segment_maps = {}
+            self._robot_on_map = None
+            self._robot_map_is_live = False
+
     @property
     def options(self) -> list[str]:
         """Every room and zone this robot knows, across all its maps."""
@@ -1330,6 +1373,35 @@ class PrimeZoneSelect(IRobotEntity, SelectEntity):
         """Remember the choice. Nothing is sent until the button."""
         self._selected = option
         self.async_write_ha_state()
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Which floor each room is on, and which one the robot is on.
+
+        BEFORE THE PRESS, not after. A robot is on one floor at a time;
+        sending it to a room on another map means it will search, fail
+        to place itself and stop with a navigation error -- three
+        minutes and an unexplained error 69 in @chairstacker's case.
+
+        The command is deliberately not blocked: the map the robot
+        reports is routinely stale, and refusing on it would block
+        missions that work. So the information is offered instead, in
+        the place a person looking at this entity will find it.
+
+        Names rather than p2map ids: "Upstairs" means something,
+        `a1b2c3...` does not.
+        """
+        if not self._segment_maps:
+            return {}
+        return {
+            "segment_map": dict(self._segment_maps),
+            "robot_on_map": self._robot_on_map,
+            # Whether that is the robot speaking or the last thing it
+            # said. A remembered floor is right until somebody carries
+            # the robot, and showing it without this reads as a
+            # measurement.
+            "robot_map_is_live": self._robot_map_is_live,
+        }
 
     @property
     def available(self) -> bool:

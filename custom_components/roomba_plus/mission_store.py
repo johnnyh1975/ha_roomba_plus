@@ -443,6 +443,27 @@ class MissionStore:
             "mission_id": record.get("id"),
             "is_anomalous": reason is not None,
             "anomaly_reason": reason,
+            # RENAMED FROM WHAT IT MEASURES, not from what it means.
+            #
+            # This was `robot_lifted`, on the reading that `bbrun.nPicks`
+            # counts the robot being picked up. @AlakazipLabs retracted
+            # that after going back through every increment in his
+            # archive: eight of ten had no wheel-drop reading at all,
+            # six of those eight fell inside a dock-leave or
+            # dock-contact window, and it did not increment when he put
+            # the robot on its dock by hand.
+            #
+            # So the counter moves around dock contact and a lift may or
+            # may not be part of it. The number is still worth having --
+            # it correlates with missions that went wrong -- but naming
+            # it after an event nobody has witnessed put a guess in
+            # front of the user as a fact.
+            #
+            # `robot_lifted` is kept alongside for now: it is in the API
+            # response and in the daily-digest blueprint, and removing a
+            # published key is a separate decision from correcting what
+            # this project believes.
+            "pick_events": npicks_delta > 0,
             "robot_lifted": npicks_delta > 0,
             "error_code": record.get("error_code"),
             # `reason` may be None -- one line above records exactly

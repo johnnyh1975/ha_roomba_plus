@@ -287,6 +287,31 @@ class _SetupContext:
     mission_timer_store: MissionTimerStore | None = None
 
 
+
+def _warm_tls_context() -> None:
+    """Populate roombapy's cached TLS context, off the event loop.
+
+    Called before the first `RoombaClient(...)`. `generate_tls_context()`
+    is `@cache`d in the library, so this fills the cache once and every
+    later construction is free -- which is what makes constructing the
+    client in the loop safe rather than merely quiet.
+
+    Failing here is not fatal: the constructor would then build the
+    context itself and Home Assistant would log the blocking call again.
+    That is a warning, not a broken robot, and raising during setup for
+    it would be the worse outcome.
+    """
+    try:
+        from roombapy.tls import generate_tls_context  # noqa: PLC0415
+
+        generate_tls_context()
+    except Exception:  # noqa: BLE001
+        _LOGGER.debug(
+            "roomba_plus: could not pre-build the TLS context; the client "
+            "will build it on construction",
+            exc_info=True,
+        )
+
 async def _phase_connect(ctx: _SetupContext) -> bool:
     """Phase 1 — Migrate options, create the client, connect, register stop listener.
 
@@ -322,8 +347,24 @@ async def _phase_connect(ctx: _SetupContext) -> bool:
             sorted(_zone_data_keys - _discovered),
         )
 
-    # CONSTRUCTED DIRECTLY, and no longer in an executor: roombapy 2.x
-    # dropped `RoombaFactory` and the constructor does no I/O.
+    # THE CONSTRUCTOR DOES DO I/O, contrary to what this comment said
+    # when the executor call was removed in 4.2. `RoombaClient.__init__`
+    # builds a TLS context, and `ssl.SSLContext.load_default_certs()`
+    # reads the system trust store from disk. Home Assistant caught it
+    # and said so:
+    #
+    #     Detected blocking call to load_default_certs ... inside the
+    #     event loop by custom integration 'roomba_plus'
+    #
+    # roombapy's `generate_tls_context()` is `@cache`d, so the cost is
+    # paid once per process -- but that once was landing in the loop, on
+    # every fresh start. Warming the cache in the executor first leaves
+    # the constructor with nothing left to read.
+    await hass.async_add_executor_job(_warm_tls_context)
+
+    # Constructed directly after that: roombapy 2.x dropped
+    # `RoombaFactory`, and with the context cached this is pure
+    # attribute assignment.
     #
     # `continuous` AND `delay` ARE GONE from the library. 2.x keeps one
     # supervised connection and reconnects on its own -- the behaviour

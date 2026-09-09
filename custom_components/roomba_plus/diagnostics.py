@@ -252,7 +252,16 @@ def _prime_room_preferences(
     # argument. Passing it down is all this needed.
     data = config_entry.runtime_data
     registry = er.async_get(hass)
-    unique = f"{data.blid}_rooms_map"
+    # THE PREFIX WAS MISSING. The image entity sets its unique id from
+    # `IRobotEntity.robot_unique_id`, which is `roomba_plus_{blid}` --
+    # so looking up `{blid}_rooms_map` never matched, and every
+    # diagnostics download said "no rooms map entity" whether one
+    # existed or not.
+    #
+    # Two Prime users reported map problems with that note in their
+    # file while their map was on screen and working (@theChef163,
+    # @mrsnyds). It sent me looking at map creation twice for nothing.
+    unique = f"roomba_plus_{data.blid}_rooms_map"
     entity_id = registry.async_get_entity_id("image", DOMAIN, unique)
     if entity_id is None:
         return {"note": "no rooms map entity"}
