@@ -44,6 +44,26 @@ def _cloud_diag(data: Any) -> dict[str, Any]:
         result["active_pmap_id"] = cc.active_pmap_id
         result["region_count_active"] = len(cc.regions)   # active pmap only (post-filter)
         result["zone_count_active"] = len(cc.zones)       # active pmap only (post-filter)
+
+        # WHO OWNS EACH MAP. A cloud pmap entry carries `robot_ids` and
+        # `shared`, and this download dropped both -- so when a
+        # multi-robot household reports something that looks like one
+        # robot showing another's rooms, the file cannot answer whether
+        # a map is genuinely shared between them.
+        #
+        # @ScenicSystemsLLC hit exactly that: asked to check the field,
+        # he found it absent and had to compare `pmap_id` lists by hand
+        # instead. That was a gap here, not something he missed.
+        result["pmap_ownership"] = [
+            {
+                "pmap_id": pm.get("pmap_id"),
+                "robot_ids": pm.get("robot_ids"),
+                "shared": pm.get("shared"),
+                "merged_pmap_ids": pm.get("merged_pmap_ids"),
+            }
+            for pm in (cc.data.get("pmaps") or [])
+            if isinstance(pm, dict)
+        ]
     return result
 
 
@@ -1408,6 +1428,19 @@ async def _build_diagnostics(
             "map_upload_allowed": state.get("mapUploadAllowed"),
             "pmap_learning_allowed": state.get("pmapLearningAllowed"),
             "not_ready_raw": state.get("cleanMissionStatus", {}).get("notReady"),
+            # THE VALUE, not just the key name. `missionTelemetry` is in
+            # the state of every i/s robot and this integration reads it
+            # nowhere -- room progress is inferred from phase changes
+            # instead, which works on `lewis` and leaves `soho` frozen
+            # on the first planned room for a whole mission
+            # (@ScenicSystemsLLC, two S9+ robots).
+            #
+            # `master_state_keys` lists the key and stops there, so
+            # nobody could see what is inside it without being asked for
+            # a raw dump. If the robot reports its own progress, this is
+            # where it will show up.
+            "mission_telemetry": state.get("missionTelemetry"),
+            "mssn_nav_stats_live": state.get("mssnNavStats"),
             "pmap_ids": [
                 next(iter(p)) for p in state.get("pmaps", []) if p
             ],
