@@ -69,7 +69,7 @@ marked in their own headings.
 | Schedule hold | Switch | Freeze schedule without deleting it (i/s/j/Braava) |
 | Locate robot | Button | Play find-me tone |
 | Evacuate bin | Button | Clean Base models only |
-| Select room or zone | Select | Rooms and zones in one list. Classic: one per map, because its region ids are bare. Prime: one for the whole home, because its ids already carry their map (v4.1.0) |
+| Select room or zone | Select | Rooms and zones from every map in one list, on both generations. Each id carries the map it belongs to, so a room upstairs can be mapped to a Home Assistant area and cleaned by name. Cleaning rooms from two maps in one command is refused rather than half-done |
 | Clean selected room | Button | Sends the robot to whatever the selector holds. Works whichever map the robot last ran on — a robot accepts a region command for any of its maps (v4.1.0) |
 | *(one per favourite)* | Button | Runs a saved iRobot favourite. A favourite carries its own map, so this is the shortest route to a room on another floor |
 

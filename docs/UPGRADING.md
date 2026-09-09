@@ -9,6 +9,20 @@ note are listed — most releases need zero action beyond updating.
 
 ---
 
+## v4.2.0b3 — from v4.2.0b2
+
+A straight update, and a worthwhile one for anyone with more than one
+map: rooms on every floor can now be mapped to Home Assistant areas on
+both generations, and a stored mapping that quietly stopped working
+should work again.
+
+**If you built an automation around `robot_lifted`**, it still reads
+exactly the same. The same value now also appears as `pick_events`,
+which is what it actually measures — the old key is not going away
+without notice.
+
+---
+
 ## v4.2.0b2 — from v4.2.0b1
 
 A straight update. Four field fixes and one that needed a library
@@ -52,7 +66,7 @@ testing 2025.1.4 on Python 3.12 — a combination no installation can be in.
 
 ---
 
-## v4.1.2 — from v4.1.x
+## v4.1.3 — from v4.1.x
 
 Nothing to do. Four field fixes; see the 4.1.2 release notes. Several
 were silent failures, so an automation written to work around one may
