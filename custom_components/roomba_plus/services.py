@@ -1593,7 +1593,24 @@ def async_register_services(hass: HomeAssistant) -> None:
                     })
                 ]),
             }),
-            supports_response=SupportsResponse.OPTIONAL,
+            # NO RESPONSE, because the handler does not return one.
+            #
+            # This said OPTIONAL while `async_handle_clean_room` is
+            # typed `-> None` and has no `return` with a value. The
+            # robot cleaned, the service finished, and Home Assistant
+            # then rejected the empty result:
+            #
+            #     Failed to process the returned action response data,
+            #     expected a dictionary, but got <class 'NoneType'>
+            #
+            # An error in the log after a command that worked, which is
+            # the most confusing shape a bug can take (@mrsnyds).
+            #
+            # OPTIONAL is not "may return nothing" -- it means the
+            # CALLER may ask for a response, and the handler must then
+            # produce one. The three other services registered with a
+            # response all return a dict; this one never did.
+            supports_response=SupportsResponse.NONE,
         )
         _LOGGER.debug("Registered %s.%s action", DOMAIN, SERVICE_CLEAN_ROOM)
 

@@ -361,26 +361,38 @@ class IRobotEntity(Entity):
         # 2. Patch the live DeviceRegistry entry so the UI updates immediately
         registry = dr.async_get(self.hass)
 
-        # THE NEW CALL WHERE IT EXISTS, the old one otherwise.
+        # THE ENTITY'S OWN DEVICE, not a registry lookup.
         #
-        # `async_get_device()` is deprecated -- identifiers are no
-        # longer unique across config entries -- and Home Assistant
-        # names this integration in the user's log for it, with a
-        # deadline of 2027.8. But `async_get_device_by_identifier()` is
-        # not in HA 2025.5, which is the minimum this integration
-        # supports, so switching outright would break the floor rather
-        # than the ceiling.
+        # Home Assistant's own migration note says it plainly: "Inside
+        # an entity, prefer `self.device_entry` over a registry lookup."
+        # It has been on `Entity` for years, so it works on every
+        # supported version, and it sidesteps the whole question of
+        # which lookup method to call.
         #
-        # Both take the same identifier, and only one lookup happens
-        # either way.
-        _by_identifier = getattr(registry, "async_get_device_by_identifier", None)
-        if _by_identifier is not None:
-            device = _by_identifier((DOMAIN, self.robot_unique_id))
-        else:
+        # WHY THIS IS WORTH A COMMENT: 4.1.3 shipped a shim preferring
+        # `async_get_device_by_identifier()` and broke EVERY entity on
+        # every robot for anyone on HA 2026.x --
+        #
+        #     TypeError: async_get_device_by_identifier() missing 1
+        #     required positional argument: 'config_entry_id'
+        #
+        # -- because I wrote that call from the method's name. It takes
+        # `(identifier, config_entry_id)`, both positional. The method
+        # does not exist in HA 2025.5, the minimum supported here, so
+        # nothing in this project's test environment could have caught
+        # it (@ScenicSystemsLLC, @mcrath1201).
+        #
+        # The registry fallback below stays for the case
+        # `device_entry` is not populated yet -- it is set when the
+        # entity is added to the platform, and this runs from
+        # `async_added_to_hass`, so it normally is. `async_get_device`
+        # is deprecated with a 2027.8 deadline; for a custom
+        # integration it logs a warning and keeps working until then.
+        device = self.device_entry
+        if device is None:
             device = registry.async_get_device(
                 identifiers={(DOMAIN, self.robot_unique_id)}
             )
-
         if device is None:
             _LOGGER.debug(
                 "IRobotEntity: device not yet in registry, skipping name patch"
