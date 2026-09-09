@@ -569,3 +569,156 @@ class TestTheSelectorWaitsForTheMapNames:
         source = inspect.getsource(PrimeZoneSelect.async_added_to_hass)
 
         assert "async_add_listener" in source
+
+
+class TestCleaningAMapTheRobotIsNotOn:
+    """@chairstacker sent the robot to a room on his secondary map while
+    it stood downstairs. It accepted, wandered about three minutes, then
+    stopped with "Roomba is a little lost" and error 69.
+
+    NOT A BUG TO FIX, and the reason is worth writing down because the
+    obvious fix is wrong. A robot is on one floor at a time; cleaning
+    another map's room means someone carried it there. Blocking the
+    command would mean trusting the "active map" this integration knows
+    -- which is what the robot last reported and is routinely stale.
+
+    @ScenicSystemsLLC's favourite went to a map we did not consider
+    active and worked, because the robot was physically on that floor
+    whatever the flag said. A refusal on that flag blocks missions that
+    work; a warning costs nothing and connects an unexplained navigation
+    error to the command that caused it.
+    """
+
+    def test_a_mismatch_is_warned_about_and_not_blocked(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus.room_cleaning import (
+            PrimeRoomCleaning,
+        )
+
+        source = inspect.getsource(PrimeRoomCleaning.clean_rooms)
+        after = source[source.index("_on_map"):]
+
+        assert "_LOGGER.warning" in after
+        assert "raise" not in after.split("_LOGGER.warning")[0]
+
+    def test_the_warning_names_both_maps(self) -> None:
+        """"Wrong map" without saying which two is not actionable."""
+        import inspect
+
+        from custom_components.roomba_plus.room_cleaning import (
+            PrimeRoomCleaning,
+        )
+
+        source = inspect.getsource(PrimeRoomCleaning.clean_rooms)
+
+        assert "p2map_id," in source
+        assert "self._data.blid," in source
+        assert "_on_map," in source
+
+    def test_reading_the_current_map_cannot_break_the_command(self) -> None:
+        """The map read is a courtesy. If it raises, the clean must
+        still go out -- it worked without this check for two releases."""
+        import inspect
+
+        from custom_components.roomba_plus.room_cleaning import (
+            PrimeRoomCleaning,
+        )
+
+        source = inspect.getsource(PrimeRoomCleaning.clean_rooms)
+        block = source[source.index("_on_map, _is_live = await"):]
+
+        assert "except Exception" in block[:300]
+
+    def test_users_are_told_where_they_will_look(self) -> None:
+        import pathlib
+
+        doc = (
+            pathlib.Path(__file__).parent.parent / "docs" / "TROUBLESHOOTING.md"
+        ).read_text(encoding="utf-8")
+
+        assert "sent it to a room on another floor and it got lost" in doc
+        assert "error 69" in doc
+
+
+class TestKnowingWhichFloorTheRobotIsOn:
+    """The robot reports its map only while it knows where it is.
+
+    Parked on its dock it reports nothing — and that is exactly when
+    somebody opens a dashboard and presses a button. @theChef163's
+    diagnostics show it plainly: `phase: charge, cycle: none`, and no
+    `p2mapId` anywhere.
+
+    So a live reading is remembered and offered again later, flagged as
+    a memory. A dock does not move: the floor the robot last cleaned is
+    where it still is, unless a person carried it — and a person who
+    carried it knows they did.
+
+    FOR LABELLING, NEVER FOR GATING. Refusing a command on a remembered
+    value would block the carried-upstairs case, which is the only
+    reason anyone cleans another map's room in the first place.
+    """
+
+    @staticmethod
+    def _backend(live_map):
+        from custom_components.roomba_plus.room_cleaning import (
+            PrimeRoomCleaning,
+        )
+
+        backend = PrimeRoomCleaning.__new__(PrimeRoomCleaning)
+        backend._data = MagicMock()
+        backend._data.blid = "BLID1"
+        backend._data.last_known_map_id = None
+        coordinator = MagicMock()
+        coordinator.data = {
+            "ro-currentstate": {
+                "cleanMissionStatus": (
+                    {"p2mapId": live_map} if live_map else {"phase": "charge"}
+                )
+            }
+        }
+        backend._data.prime_status_coordinator = coordinator
+        return backend
+
+    async def test_a_live_reading_is_reported_as_live(self) -> None:
+        backend = self._backend("MAP-B")
+
+        where, is_live = await backend.where_the_robot_is()
+
+        assert (where, is_live) == ("MAP-B", True)
+
+    async def test_a_live_reading_is_remembered(self) -> None:
+        backend = self._backend("MAP-B")
+        await backend.where_the_robot_is()
+
+        assert backend._data.last_known_map_id == "MAP-B"
+
+    async def test_silence_falls_back_to_the_memory(self) -> None:
+        """The docked case: the robot says nothing, and the last floor
+        it cleaned is the answer."""
+        backend = self._backend(None)
+        backend._data.last_known_map_id = "MAP-B"
+
+        where, is_live = await backend.where_the_robot_is()
+
+        assert (where, is_live) == ("MAP-B", False)
+
+    async def test_nothing_known_says_nothing(self) -> None:
+        """A fresh install has no memory yet. Guessing a map here would
+        put a wrong floor label on every room."""
+        backend = self._backend(None)
+
+        assert await backend.where_the_robot_is() == (None, False)
+
+    def test_it_is_never_used_to_refuse(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus.room_cleaning import (
+            PrimeRoomCleaning,
+        )
+
+        source = inspect.getsource(PrimeRoomCleaning.clean_rooms)
+        after = source[source.index("where_the_robot_is"):]
+        upto_warning = after.split("_LOGGER.warning")[0]
+
+        assert "raise" not in upto_warning

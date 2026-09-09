@@ -124,3 +124,61 @@ class TestRepairIssuesAreClearedOnUnload:
         assert "_async_clear_repair_issues" in inspect.getsource(
             async_unload_entry
         )
+
+
+class TestTheTlsContextIsBuiltOffTheLoop:
+    """Home Assistant caught this on a live install:
+
+        Detected blocking call to load_default_certs ... inside the
+        event loop by custom integration 'roomba_plus' at
+        __init__.py, line 355: roomba = RoombaClient(
+
+    The 4.2 migration took the client construction out of the executor
+    with the comment "the constructor does no I/O". It does:
+    `RoombaClient.__init__` builds a TLS context, and
+    `load_default_certs()` reads the system trust store from disk.
+
+    roombapy caches that context, so the cost is paid once per process
+    -- but once in the event loop is still once in the event loop, on
+    every fresh start.
+
+    Nothing in this project's own guards catches this shape. They check
+    that coroutines are awaited rather than threaded; a synchronous
+    constructor doing hidden file I/O is the opposite mistake, and only
+    Home Assistant's own loop protection sees it.
+    """
+
+    def test_the_cache_is_warmed_before_the_client_is_built(self) -> None:
+        import inspect
+
+        import custom_components.roomba_plus as integration
+
+        source = inspect.getsource(integration._phase_connect)
+
+        warm = source.index("_warm_tls_context")
+        build = source.index("roomba = RoombaClient(")
+
+        assert warm < build, "the context must be cached before construction"
+
+    def test_the_warm_up_runs_in_the_executor(self) -> None:
+        import inspect
+
+        import custom_components.roomba_plus as integration
+
+        source = inspect.getsource(integration._phase_connect)
+
+        assert "async_add_executor_job(_warm_tls_context)" in source
+
+    def test_a_failure_to_warm_is_not_fatal(self) -> None:
+        """The fallback is a log line, not a failed setup: the
+        constructor would build the context itself and Home Assistant
+        would warn again. A warning beats a robot that will not set up.
+        """
+        import inspect
+
+        import custom_components.roomba_plus as integration
+
+        source = inspect.getsource(integration._warm_tls_context)
+
+        assert "except Exception" in source
+        assert "raise" not in source

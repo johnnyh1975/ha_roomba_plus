@@ -4319,3 +4319,55 @@ class TestABatteryAbortIsNotAnEntrapment:
     def test_another_error_is_not(self):
         """Deliberately narrow — only code 46, not any error at all."""
         assert not self._is_battery_abort({"phase": "stuck", "error": 1010})
+
+
+class TestThePickCounterIsNotALiftWitness:
+    """`bbrun.nPicks` was read as "the robot was picked up". It is not.
+
+    @AlakazipLabs made that claim in August and retracted it after
+    reviewing every increment in his archive: eight of ten had no
+    wheel-drop reading at all, six of those eight fell inside a
+    dock-leave or dock-contact window, and the counter did not move
+    when he placed the robot on its dock by hand.
+
+    So it counts something around dock contact. A lift may or may not be
+    part of it, and nobody has seen one witnessed.
+
+    The number stays -- it correlates with missions that went wrong --
+    under a name that says what was measured. `robot_lifted` is kept
+    beside it because it is a published API key; correcting a belief and
+    breaking a consumer are separate decisions.
+    """
+
+    @staticmethod
+    def _explanation(npicks_delta):
+        from custom_components.roomba_plus.mission_store import MissionStore
+
+        store = MissionStore()
+        return store.explain_mission(
+            record_override={"id": "m_1", "npicks_delta": npicks_delta}
+        )
+
+    def test_the_measured_name_is_offered(self) -> None:
+        assert self._explanation(2)["pick_events"] is True
+
+    def test_it_agrees_with_the_old_key(self) -> None:
+        """Same number, two names -- a consumer of either sees the same
+        thing, which is the point of keeping both."""
+        explanation = self._explanation(2)
+
+        assert explanation["pick_events"] == explanation["robot_lifted"]
+
+    def test_no_pick_events_reads_false(self) -> None:
+        assert self._explanation(0)["pick_events"] is False
+
+    def test_nothing_calls_it_a_lift_in_the_code_comments(self) -> None:
+        """The claim was in a comment presented as fact. If it comes
+        back, it should come back with a capture behind it."""
+        import inspect
+
+        from custom_components.roomba_plus import callbacks
+
+        source = inspect.getsource(callbacks)
+
+        assert '"robot picked up off\n    # the floor" events' not in source
