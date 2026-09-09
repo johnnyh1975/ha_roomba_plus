@@ -9,6 +9,14 @@ note are listed — most releases need zero action beyond updating.
 
 ---
 
+## v4.2.0b4 — from v4.2.0b3
+
+**Take this one.** b3 stopped every entity from loading on Home
+Assistant 2026.x. If your robots disappeared after updating to b3, this
+restores them; nothing needs reconfiguring.
+
+---
+
 ## v4.2.0b3 — from v4.2.0b2
 
 A straight update, and a worthwhile one for anyone with more than one
@@ -66,7 +74,7 @@ testing 2025.1.4 on Python 3.12 — a combination no installation can be in.
 
 ---
 
-## v4.1.3 — from v4.1.x
+## v4.1.4 — from v4.1.x
 
 Nothing to do. Four field fixes; see the 4.1.2 release notes. Several
 were silent failures, so an automation written to work around one may
