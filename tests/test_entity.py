@@ -356,72 +356,74 @@ class TestEveryReaderOfConfigEntryIsGuaranteedOne:
         assert len(readers) >= 40
 
 
-class TestTheDeviceLookupSurvivesBothHomeAssistants:
-    """`async_get_device()` is deprecated and Home Assistant names this
-    integration in the user's log for calling it:
+class TestTheEntityUsesItsOwnDeviceEntry:
+    """4.1.3 shipped a call written from a method's NAME and broke every
+    entity on every robot for anyone on HA 2026.x:
 
-        Detected that custom integration 'roomba_plus' calls
-        `device_registry.async_get_device`, which is deprecated ...
-        This will stop working in Home Assistant 2027.8.0
+        TypeError: async_get_device_by_identifier() missing 1 required
+        positional argument: 'config_entry_id'
 
-    The replacement, `async_get_device_by_identifier()`, does not exist
-    in HA 2025.5 -- the minimum this integration supports. Switching
-    outright would break the floor to fix the ceiling, so the call is
-    chosen at runtime.
+    339 entities across three robots (@ScenicSystemsLLC), 100+ across
+    two (@mcrath1201). The method does not exist in HA 2025.5, the
+    minimum supported here, so nothing in this test environment could
+    have called it.
+
+    THE REAL SIGNATURE, from Home Assistant's own migration note:
+
+        async_get_device_by_identifier((DOMAIN, serial), entry.entry_id)
+
+    Both positional, identifier first. But the same note gives better
+    advice than either version of the fix: inside an entity, prefer
+    `self.device_entry` over a registry lookup. That has been on
+    `Entity` for years, works on every supported release, and removes
+    the question entirely.
     """
 
-    @staticmethod
-    def _entity(registry):
-        from unittest.mock import patch
-
-        from custom_components.roomba_plus.entity import IRobotEntity
-
-        entity = IRobotEntity.__new__(IRobotEntity)
-        entity._blid = "BLID1"
-        entity.hass = MagicMock()
-        entity._attr_device_info = {}
-        entity.vacuum = MagicMock()
-        entity.vacuum_state = {}
-        entity._resolve_name = MagicMock(return_value="Rosie")
-        return entity, patch(
-            "custom_components.roomba_plus.entity.dr.async_get",
-            return_value=registry,
-        )
-
-    def test_the_new_call_is_preferred_when_present(self) -> None:
-        registry = MagicMock()
-        registry.async_get_device_by_identifier.return_value = None
-        entity, patched = self._entity(registry)
-
-        with patched:
-            import asyncio
-
-            asyncio.run(entity._async_update_device_name())
-
-        registry.async_get_device_by_identifier.assert_called_once()
-        registry.async_get_device.assert_not_called()
-
-    def test_the_old_call_is_used_when_it_is_not(self) -> None:
-        """HA 2025.5 has no replacement. Removing the fallback would
-        make the integration fail to load on its own stated minimum."""
-        registry = MagicMock(spec=["async_get_device"])
-        registry.async_get_device.return_value = None
-        entity, patched = self._entity(registry)
-
-        with patched:
-            import asyncio
-
-            asyncio.run(entity._async_update_device_name())
-
-        registry.async_get_device.assert_called_once()
-
-    def test_both_are_asked_for_the_same_device(self) -> None:
-        """A shim that looks up different things on different versions
-        would be worse than the warning."""
+    def test_the_entity_device_is_used_first(self) -> None:
         import inspect
 
         from custom_components.roomba_plus.entity import IRobotEntity
 
-        source = inspect.getsource(IRobotEntity)
-        assert 'self.robot_unique_id))' in source
-        assert 'identifiers={(DOMAIN, self.robot_unique_id)}' in source
+        source = inspect.getsource(IRobotEntity._async_update_device_name)
+
+        assert "device = self.device_entry" in source
+
+    def test_device_entry_exists_on_the_minimum_home_assistant(self) -> None:
+        """The whole point of preferring it. If a release ever drops it,
+        this fails here rather than in every user's log."""
+        from homeassistant.helpers.entity import Entity
+
+        assert hasattr(Entity, "device_entry")
+
+    def test_the_fallback_uses_the_call_that_works_everywhere(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus.entity import IRobotEntity
+
+        source = inspect.getsource(IRobotEntity._async_update_device_name)
+
+        assert "registry.async_get_device(" in source
+
+    def test_nothing_calls_the_unverifiable_method(self) -> None:
+        """Code lines only -- the name appears in the comment above,
+        which is where the next person needs to read why."""
+        import pathlib
+
+        component = (
+            pathlib.Path(__file__).parent.parent
+            / "custom_components"
+            / "roomba_plus"
+        )
+        offenders = []
+        for path in sorted(component.glob("*.py")):
+            for line in path.read_text(encoding="utf-8").splitlines():
+                stripped = line.strip()
+                if stripped.startswith(("#", "#:")):
+                    continue
+                if "async_get_device_by_identifier(" in stripped:
+                    offenders.append(f"{path.name}: {stripped[:60]}")
+
+        assert not offenders, (
+            "this signature cannot be verified against the minimum "
+            f"supported Home Assistant; calling it broke 4.1.3: {offenders}"
+        )

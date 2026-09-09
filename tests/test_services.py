@@ -2440,3 +2440,110 @@ class TestASwallowedCommandIsReported:
             0,
         ):
             await _async_warn_if_swallowed(MagicMock(), entry, "clean_room")
+
+
+class TestAServicePromisingAResponseReturnsOne:
+    """`clean_room` was registered `SupportsResponse.OPTIONAL` while its
+    handler is typed `-> None` and returns nothing.
+
+    The robot cleaned, the service finished, and Home Assistant then
+    rejected the empty result:
+
+        Failed to process the returned action response data, expected a
+        dictionary, but got <class 'NoneType'>
+
+    An error in the log after a command that visibly worked, which is
+    about the most confusing shape a bug can take (@mrsnyds, who filed
+    it as low priority for exactly that reason and asked what he had
+    left out -- nothing; the answer was not on his side at all).
+
+    OPTIONAL does not mean "may return nothing". It means the CALLER
+    may ask for a response, and the handler must then produce one.
+    """
+
+    @staticmethod
+    def _promising_services():
+        """(handler name, response mode) for every registration that
+        promises a response."""
+        import ast
+        import pathlib
+        import re
+
+        found = []
+        component = (
+            pathlib.Path(__file__).parent.parent
+            / "custom_components"
+            / "roomba_plus"
+        )
+        for path in sorted(component.glob("*.py")):
+            src = path.read_text(encoding="utf-8")
+            if "SupportsResponse" not in src:
+                continue
+            tree = ast.parse(src)
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                for kw in node.keywords:
+                    if kw.arg != "supports_response":
+                        continue
+                    mode = ast.unparse(kw.value).rsplit(".", 1)[-1]
+                    if mode == "NONE":
+                        continue
+                    # The handler is the first positional-ish argument
+                    # that names a coroutine in the same file.
+                    names = [
+                        ast.unparse(a) for a in node.args
+                        if isinstance(a, ast.Name)
+                    ]
+                    found.append((path.name, names, mode))
+        return found
+
+    def test_every_such_handler_returns_a_dict(self) -> None:
+        import ast
+        import pathlib
+
+        component = (
+            pathlib.Path(__file__).parent.parent
+            / "custom_components"
+            / "roomba_plus"
+        )
+        offenders = []
+        for path_name, handler_names, mode in self._promising_services():
+            tree = ast.parse(
+                (component / path_name).read_text(encoding="utf-8")
+            )
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.AsyncFunctionDef):
+                    continue
+                if node.name not in handler_names:
+                    continue
+                returns_value = any(
+                    isinstance(x, ast.Return) and x.value is not None
+                    for x in ast.walk(node)
+                )
+                if not returns_value:
+                    offenders.append(f"{path_name}: {node.name} ({mode})")
+
+        assert not offenders, (
+            "registered as returning a response but returns nothing; "
+            "Home Assistant rejects the call after it has already "
+            f"succeeded: {offenders}"
+        )
+
+    def test_clean_room_no_longer_promises_one(self) -> None:
+        import pathlib
+
+        src = (
+            pathlib.Path(__file__).parent.parent
+            / "custom_components"
+            / "roomba_plus"
+            / "services.py"
+        ).read_text(encoding="utf-8")
+
+        # The registration block, not the first mention -- the constant
+        # appears several times before it.
+        start = src.index("has_service(DOMAIN, SERVICE_CLEAN_ROOM)")
+        block = src[start : src.index("SERVICE_CLEAN_ZONE", start)]
+
+        assert "SupportsResponse.NONE" in block
+        assert "SupportsResponse.OPTIONAL" not in block
