@@ -409,6 +409,7 @@ GET /api/roomba_plus/{entry_id}/mission/latest/explain
   "mission_id": "m_20260616_0912",
   "is_anomalous": true,
   "anomaly_reason": "obstacle_or_blockage",
+  "pick_events": false,
   "robot_lifted": false,
   "error_code": null,
   "recommended_action": "Check for an obstacle or narrow gap the robot may be stuck navigating around."
@@ -418,7 +419,8 @@ GET /api/roomba_plus/{entry_id}/mission/latest/explain
 | Field | Type | Null? | Notes |
 |---|---|---|---|
 | `anomaly_reason` | string | Yes — when not anomalous | `obstacle_or_blockage` / `excessive_recharge` / `dirt_spike` / `incomplete_coverage` |
-| `robot_lifted` | bool | Never | `bbrun.nPicks` increased during this mission — independent of `anomaly_reason` |
+| `pick_events` | bool | Never | `bbrun.nPicks` increased during this mission — independent of `anomaly_reason` |
+| `robot_lifted` | bool | Never | The same value under its former name. It was called this on the reading that the counter records the robot being picked up; a field review of every increment found eight of ten with no wheel-drop reading at all, six of those inside a dock-contact window, and no increment when the robot was placed on its dock by hand. Prefer `pick_events`, which says what was measured |
 | `error_code` | int | Yes | This mission's own recorded error, if any — independent of `anomaly_reason` |
 | `recommended_action` | string | Yes — when not anomalous | Plain-language suggestion matching `anomaly_reason` |
 

@@ -663,6 +663,69 @@ None of these needs any action beyond updating. If you built an
 automation around one of them, though, it is worth re-checking: an
 automation written to work around a bug can break when the bug does not.
 
+## I sent it to a room on another floor and it got lost
+
+Expected, and not something this integration can prevent.
+
+A robot can only be on one floor at a time. Asking it to clean a room on
+a map it is not standing on means asking it to find landmarks that are
+not there: it drives, searches, fails to place itself, and stops. On
+Prime robots that surfaces as a navigation error — @chairstacker saw
+about three minutes of wandering, then "Roomba is a little lost" and
+**error 69**.
+
+**Why the command is not blocked.** This integration knows which map the
+robot last *reported*, and that value is routinely stale. Another tester
+ran a favourite for a map we did not consider active and the robot went
+straight there — because it was physically on that floor, whatever the
+flag said. Refusing on a stale flag would block missions that work.
+
+Since v4.2 a mismatch is written to the Home Assistant log when the
+command is sent, naming both maps, so an unexplained navigation error a
+few minutes later has something to connect it to.
+
+**What actually works across floors:** carry the robot to that floor
+first, or use a **favourite** created in the iRobot app for that map.
+Favourites carry their own map, which is what makes them the shortest
+route to a one-press control for another floor.
+
+**On Prime error numbers.** Prime robots report a different error
+namespace from the older Classic ones — the same number means different
+things on the two, with no overlap at all across the sixteen codes they
+share. Rather than show a Classic label that would be wrong, Roomba+
+shows the raw code. `Error 69` is the robot's own number for this.
+
+## The robot emptied its bin and I did not ask it to
+
+Most likely you sent it home while it was already home.
+
+A `dock` command means two different things depending on where the robot
+is. Away from the dock it is a recall. **On the dock it is an
+evacuation** — the robot runs its bin-empty cycle and settles back to
+idle, about 22 seconds end to end.
+
+That is the robot's own behaviour, not something this integration adds.
+It was established by a deliberate test: one `dock` command to a robot
+sitting at 100% on its dock, nothing sent before or after, every packet
+captured (@AlakazipLabs, i3).
+
+So `vacuum.return_to_base` — the **Return to dock** button, or the
+service in an automation — will empty the bin if the robot is already
+there. Home Assistant has no separate notion of "go home" versus "empty
+now", so pressing it twice gives you two evacuations.
+
+**What this integration deliberately does not do** is suppress the
+command when it thinks the robot is docked. Deciding that would mean
+trusting the reported activity, and a wrong guess would swallow a real
+recall — a robot left stranded mid-floor is a worse outcome than an
+unwanted bin empty.
+
+**If your bin empties more often than you expect**, an automation
+sending `return_to_base` on a schedule or at the end of a mission is the
+first thing to check. Robots with a Clean Base also have their own
+`autoevac_frequency` setting, which iRobot's own service has been known
+to ignore.
+
 ## Sending a diagnostics download
 
 Settings → Devices & Services → Roomba+ → the three dots → Download

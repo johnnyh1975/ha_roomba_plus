@@ -9,9 +9,17 @@ note are listed — most releases need zero action beyond updating.
 
 ---
 
-## v4.1.2 — from v4.1.x or v4.0.x
+## v4.1.3 — from v4.1.x or v4.0.x
 
-Nothing to do. Four field fixes; see the release notes.
+Nothing to do. Field fixes; see the release notes.
+
+**Worth knowing if you have more than one map.** Rooms on every floor
+can now be mapped to Home Assistant areas, and a stored mapping that had
+quietly stopped working should work again.
+
+**If you built an automation around `robot_lifted`**, it still reads
+exactly the same. The same value now also appears as `pick_events`,
+which is what it actually measures.
 
 **One thing worth re-checking if you built around a bug.** Several of
 these were silent failures — a zone clean that reported success and did
