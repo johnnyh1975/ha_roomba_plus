@@ -9,6 +9,22 @@ note are listed — most releases need zero action beyond updating.
 
 ---
 
+## v4.1.5 — from v4.1.4
+
+Nothing to do. Diagnostics downloads carry two more fields; no
+behaviour changes.
+
+---
+
+## v4.1.4 — from v4.1.3
+
+**Take this one if you are on 4.1.3.** That release stopped every
+entity from loading on Home Assistant 2026.x — if your robots
+disappeared, this restores them. It also clears an error `clean_room`
+logged after the robot had already cleaned.
+
+---
+
 ## v4.1.3 — from v4.1.x or v4.0.x
 
 Nothing to do. Field fixes; see the release notes.
