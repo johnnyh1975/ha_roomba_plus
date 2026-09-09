@@ -187,3 +187,70 @@ class TestTheSubSecondBounces:
 
         assert armed == {1788619598}, "the deadline must be constant while charging"
         assert moving == {0}, "and absent while moving"
+
+
+class TestADockedEvacuationIsNotAMission:
+    """A `dock` command sent to an ALREADY DOCKED robot is not ignored.
+
+    @AlakazipLabs ran the test: one publish to a robot on its dock at
+    100%, nothing else sent for 125 s, every MQTT packet captured. The
+    robot accepted it and ran an evacuation -- 22 seconds of bin-empty
+    and dock handshake, then idle. No search, no mission, `nMssn`
+    unchanged.
+
+    THE HAZARD IS IN THE FIRST THREE SECONDS. Four cleanMissionStatus
+    updates arrive in 317 ms alternating `charge` and `run`, with
+    `cycle` staying `evac` throughout. The two `run` messages carry the
+    `mssnStrtTm` and `missionId` of the LAST mission -- three days old
+    in his capture.
+
+    `phase` alone would open a mission on those. So would the
+    replay-pulse guard, which only suppresses a terminal record from the
+    last 120 seconds, deliberately, so that a genuinely resumed segment
+    is not swallowed. Three days is far outside it.
+
+    `cycle` is what holds -- the same discriminator his recharge capture
+    established for the other end of a mission.
+    """
+
+    #: The burst at +3.3 s, as the robot sent it.
+    _EVAC_BURST = [
+        ("charge", "evac", 0),
+        ("run", "evac", 1788609326),
+        ("charge", "evac", 0),
+        ("run", "evac", 1788609326),
+    ]
+
+    @pytest.mark.parametrize(("phase", "cycle", "mssn_strt_tm"), _EVAC_BURST)
+    def test_no_message_in_the_burst_starts_a_mission(
+        self, phase: str, cycle: str, mssn_strt_tm: int
+    ) -> None:
+        from custom_components.roomba_plus.callbacks import _NON_MISSION_CYCLES
+        from custom_components.roomba_plus.const import CLEANING_PHASES
+
+        # `run` and `evac` are both cleaning phases, so phase alone says
+        # yes to half of these.
+        looks_like_cleaning = phase in CLEANING_PHASES
+        blocked_by_cycle = cycle in _NON_MISSION_CYCLES
+
+        assert not (looks_like_cleaning and not blocked_by_cycle)
+
+    def test_a_real_mission_start_is_untouched(self) -> None:
+        """The negative control: `run` with `cycle: clean` must still
+        open a mission, or this fix costs more than the bug."""
+        from custom_components.roomba_plus.callbacks import _NON_MISSION_CYCLES
+        from custom_components.roomba_plus.const import CLEANING_PHASES
+
+        assert "run" in CLEANING_PHASES
+        assert "clean" not in _NON_MISSION_CYCLES
+        assert "quick" not in _NON_MISSION_CYCLES
+
+    def test_an_absent_cycle_is_not_treated_as_a_refusal(self) -> None:
+        """A missing key is no statement. Requiring the cycle to be
+        present would suppress a genuine mission for a message that
+        merely arrived thin -- cloud-derived state does not always carry
+        everything the robot sends."""
+        from custom_components.roomba_plus.callbacks import _NON_MISSION_CYCLES
+
+        assert None not in _NON_MISSION_CYCLES
+        assert "" not in _NON_MISSION_CYCLES

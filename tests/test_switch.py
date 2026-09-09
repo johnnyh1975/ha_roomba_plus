@@ -1031,3 +1031,61 @@ class TestPadDrySwitchReadsTheRightDockField:
         )
 
         assert sw.is_on is False, "pd_state decides, not state"
+
+
+class TestOnlyKeysTheRobotAcceptsAreWritten:
+    """Which preference keys land, measured on the wire.
+
+    @AlakazipLabs wrote each one alone on a docked i3 (daredevil 2.6.0)
+    and watched for the echo. Three are dropped in silence -- the write
+    returns, nothing comes back, the switch snaps to its old value and
+    no error appears anywhere:
+
+        vacHigh, carpetBoost   accepted only as a pair with their
+                               partner (fixed in 4.2)
+        noPP                   dropped alone; no partner known
+
+    `noPP` is not written anywhere in this integration, and this test
+    is what keeps it that way. A switch for it would look entirely
+    reasonable to write and would do nothing.
+
+    n=1 robot, one firmware line. If another robot accepts these, this
+    test is the place to record that -- with the capture that shows it.
+    """
+
+    #: Keys this robot ignored as single writes.
+    _DROPPED_ALONE = ("vacHigh", "carpetBoost", "noPP")
+
+    def test_none_of_them_is_written_as_a_single_key(self) -> None:
+        import pathlib
+        import re
+
+        component = (
+            pathlib.Path(__file__).parent.parent
+            / "custom_components"
+            / "roomba_plus"
+        )
+        offenders: list[str] = []
+        for path in sorted(component.glob("*.py")):
+            text = path.read_text(encoding="utf-8")
+            for key in self._DROPPED_ALONE:
+                if re.search(rf'set_preference\(\s*["\']{key}["\']', text):
+                    offenders.append(f"{path.name}: {key}")
+
+        assert not offenders, (
+            "this robot drops these when they arrive alone, without an "
+            f"error of any kind: {offenders}"
+        )
+
+    def test_every_switch_built_here_writes_an_accepted_key(self) -> None:
+        """The other direction: each switch below is one of the five
+        confirmed to echo on a single write."""
+        import inspect
+
+        from custom_components.roomba_plus import switch as switch_mod
+
+        source = inspect.getsource(switch_mod)
+        accepted = ("binPause", "openOnly", "ecoCharge", "schedHold", "childLock")
+
+        for key in accepted:
+            assert f'"{key}"' in source, f"{key} is no longer wired up"

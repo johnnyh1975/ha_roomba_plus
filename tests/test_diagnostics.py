@@ -1307,3 +1307,44 @@ class TestTheBlidSurvivesNowhere:
 
         assert out["phase"] == "run"
         assert out["battery"] == 36
+
+
+class TestTheRoomsMapLookupMatchesTheEntity:
+    """Diagnostics said "no rooms map entity" for every robot.
+
+    The image entity's unique id comes from
+    `IRobotEntity.robot_unique_id`, which is `roomba_plus_{blid}`. The
+    diagnostics lookup used `{blid}` alone, so it never matched and the
+    note appeared whether a map existed or not.
+
+    Two Prime users sent files carrying that note while their map was on
+    screen and working (@theChef163, @mrsnyds). It sent me looking at
+    map creation twice, both times for nothing.
+
+    The two are built in different modules, which is how they drifted.
+    This test is the only thing tying them together.
+    """
+
+    def test_the_two_id_shapes_agree(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus import diagnostics
+        from custom_components.roomba_plus.entity import IRobotEntity
+
+        # It is a property; `.fget` is the function behind it.
+        entity_shape = inspect.getsource(IRobotEntity.robot_unique_id.fget)
+        assert 'f"roomba_plus_{self._blid}"' in entity_shape
+
+        lookup = inspect.getsource(diagnostics)
+        assert 'f"roomba_plus_{data.blid}_rooms_map"' in lookup
+
+    def test_the_bare_blid_form_is_gone(self) -> None:
+        """The exact string that was wrong, pinned so it cannot come
+        back through a copy from an older revision."""
+        import inspect
+
+        from custom_components.roomba_plus import diagnostics
+
+        assert '{data.blid}_rooms_map"' not in inspect.getsource(
+            diagnostics
+        ).replace('roomba_plus_{data.blid}_rooms_map"', "")

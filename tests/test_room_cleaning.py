@@ -1905,3 +1905,273 @@ class TestStoredZonesSurviveWithoutCloud:
         b = self._backend({}, with_cloud=False)
 
         assert await b.available_rooms() == {}
+
+
+class TestEveryRoomWasAlsoOfferedAsAZone:
+    """@theChef163's zone "Litter" was missing and every room was
+    duplicated. One line caused both.
+
+    `available_rooms()` has returned map-qualified ids since 4.1.0 --
+    `{p2map_id}/{room_id}` -- but the zone loop's "is this already a
+    room?" check inverted that dict and compared its keys against the
+    BARE region ids that `prime_room_names` is keyed by. "MAP-A/11"
+    never equals "11", so the check never matched and every room was
+    emitted a second time under a `zid_` id.
+
+    Invisible in the selector, which keys by name and collapsed each
+    pair back to one entry -- which is why it read as "the zone is
+    missing" rather than "everything is doubled". Visible in the
+    area-mapping dialog, which keys by id: @chairstacker reported
+    "they both still have rooms and zones in them", and I read it as a
+    description of the grouping rather than the bug it was.
+
+    Reproduced from his diagnostics before being fixed: 21 segments
+    where 11 were meant.
+    """
+
+    @staticmethod
+    def _backend(rooms, names):
+        from unittest.mock import AsyncMock
+
+        from custom_components.roomba_plus.room_cleaning import (
+            PrimeRoomCleaning,
+        )
+
+        backend = PrimeRoomCleaning.__new__(PrimeRoomCleaning)
+        backend._data = MagicMock()
+        backend._data.blid = "BLID1"
+        backend.available_rooms = AsyncMock(return_value=rooms)
+        backend._named_regions_across_maps = AsyncMock(return_value={})
+        backend._region_map_ids = {}
+        entry = MagicMock()
+        entry.runtime_data.prime_room_names = names
+        backend._config_entry = entry
+        return backend
+
+    #: His ten rooms and one zone, ids as his diagnostics carry them.
+    _ROOMS = {
+        "Dining Room": "MAP-A/10", "Living Room": "MAP-A/11",
+        "Kitchen": "MAP-A/14", "Laundry": "MAP-A/19",
+    }
+    _NAMES = {
+        "10": "Dining Room", "11": "Living Room",
+        "14": "Kitchen", "19": "Laundry", "100": "Litter",
+    }
+
+    async def test_a_room_is_not_repeated_as_a_zone(self) -> None:
+        backend = self._backend(self._ROOMS, self._NAMES)
+
+        segments = await backend.get_segments()
+
+        rooms = [s for s in segments if s.group == "Room"]
+        zones = [s for s in segments if s.group == "Zone"]
+
+        assert len(rooms) == 4
+        assert [z.name for z in zones] == ["Litter"]
+
+    async def test_the_zone_is_actually_offered(self) -> None:
+        """The half @theChef163 saw: his one zone, absent from a list
+        that had ten rooms in it."""
+        backend = self._backend(self._ROOMS, self._NAMES)
+
+        segments = await backend.get_segments()
+
+        assert "Litter" in {s.name for s in segments}
+
+    async def test_a_bare_room_id_still_matches(self) -> None:
+        """Not every path returns qualified ids -- stored zone data and
+        older entries do not. Both spellings have to suppress."""
+        backend = self._backend({"Kitchen": "14"}, {"14": "Kitchen"})
+
+        segments = await backend.get_segments()
+
+        assert [s.group for s in segments] == ["Room"]
+
+
+class TestClassicOffersEveryMapToo:
+    """Parity with Prime for Home Assistant's area mapping.
+
+    `clean_rooms()` has resolved the map per region since 4.1.0 --
+    "every requested region carries its own map" -- but the segment
+    path was left behind. It built every id with the cloud-ACTIVE map's
+    prefix and, at clean time, dropped anything not matching it.
+
+    Two consequences. A room on a second floor could not be mapped to an
+    area at all. And a mapping that was correct when it was made stopped
+    working the moment the cloud's list order moved -- in silence, which
+    is the failure this project has spent a week removing.
+    """
+
+    @staticmethod
+    def _backend(by_map, active="MAP-A"):
+        from custom_components.roomba_plus.room_cleaning import (
+            ClassicRoomCleaning,
+        )
+
+        backend = ClassicRoomCleaning.__new__(ClassicRoomCleaning)
+        data = MagicMock()
+        data.blid = "BLID1"
+        data.has_cloud = True
+        cloud = MagicMock()
+        cloud.active_pmap_id = active
+        cloud.regions_by_pmap = by_map
+        cloud.regions = [
+            {"id": rid, "name": name}
+            for rid, name in (by_map.get(active) or {}).items()
+        ]
+        cloud.zones = []
+        data.cloud_coordinator = cloud
+        # `_cloud` is a property reading `_data.cloud_coordinator`;
+        # setting it directly raises.
+        backend._data = data
+        backend._config_entry = MagicMock()
+        backend._config_entry.options = {}
+        # The rest of `clean_segments` needs these; the decode half is
+        # what these tests are about.
+        # On this line the command goes through
+        # `hass.async_add_executor_job`, so the ROBOT stays synchronous
+        # and the executor is what has to be awaitable. In 4.2 the call
+        # is direct and this inverts.
+        from unittest.mock import AsyncMock as _AsyncMock
+
+        backend._roomba = MagicMock()
+        backend._hass = MagicMock()
+        backend._hass.async_add_executor_job = _AsyncMock()
+        backend._pmap_by_region = {}
+        return backend
+
+    _TWO_MAPS = {
+        "MAP-A": {"10": "Kitchen", "11": "Hallway"},
+        "MAP-B": {"20": "Master Bathroom", "21": "Hallway"},
+    }
+
+    async def test_rooms_from_the_second_map_are_offered(self) -> None:
+        backend = self._backend(self._TWO_MAPS)
+
+        names = {s.name for s in await backend.get_segments()}
+
+        assert "Master Bathroom" in names
+
+    async def test_each_id_carries_its_own_map(self) -> None:
+        backend = self._backend(self._TWO_MAPS)
+
+        ids = {s.name: s.id for s in await backend.get_segments()}
+
+        assert ids["Master Bathroom"].startswith("MAP-B_")
+        assert ids["Kitchen"].startswith("MAP-A_")
+
+    async def test_the_active_map_wins_a_duplicate_name(self) -> None:
+        """"Hallway" exists on both floors. The one the robot is on is
+        the reading that is right more often -- the same rule
+        `available_rooms()` follows."""
+        backend = self._backend(self._TWO_MAPS)
+
+        ids = {s.name: s.id for s in await backend.get_segments()}
+
+        assert ids["Hallway"] == "MAP-A_11"
+
+    async def test_a_stored_id_for_another_map_still_cleans(self) -> None:
+        """The regression risk: existing area mappings hold ids in this
+        exact format. One naming a non-active map was silently dropped;
+        it has to reach the robot now, not merely warn.
+
+        Asserts on the command sent: `clean_segments` builds and sends
+        the payload itself on Classic rather than delegating to
+        `clean_rooms()`, which is a thing worth knowing before writing
+        a test against it."""
+        backend = self._backend(self._TWO_MAPS)
+        backend._raise_if_map_updating = MagicMock()
+
+        await backend.clean_segments(["MAP-B_20"])
+
+        _fn, command, params = backend._hass.async_add_executor_job.await_args[0]
+        assert command == "start"
+        assert [r["region_id"] for r in params["regions"]] == ["20"]
+
+    async def test_two_maps_in_one_command_are_refused(self) -> None:
+        """The payload carries one pmap_id. Cleaning half of what was
+        asked for would be worse than saying no."""
+        from unittest.mock import AsyncMock
+
+        from homeassistant.exceptions import ServiceValidationError
+
+        backend = self._backend(self._TWO_MAPS)
+        backend.clean_rooms = AsyncMock()
+        backend._raise_if_map_updating = MagicMock()
+
+        with pytest.raises(ServiceValidationError):
+            await backend.clean_segments(["MAP-A_10", "MAP-B_20"])
+
+        backend._hass.async_add_executor_job.assert_not_awaited()
+
+    async def test_a_map_id_containing_underscores_survives(self) -> None:
+        """Real p2map ids contain underscores. Splitting on the first
+        one would have made "2Bly_kGURy6OcUVTX7FN3w_19" lose its map."""
+        from unittest.mock import AsyncMock
+
+        backend = self._backend({"2Bly_kGURy6OcUVTX7FN3w": {"19": "Laundry"}},
+                                active="2Bly_kGURy6OcUVTX7FN3w")
+        backend._raise_if_map_updating = MagicMock()
+
+        await backend.clean_segments(["2Bly_kGURy6OcUVTX7FN3w_19"])
+
+        _fn, _command, params = backend._hass.async_add_executor_job.await_args[0]
+        assert [r["region_id"] for r in params["regions"]] == ["19"]
+        assert params["pmap_id"] == "2Bly_kGURy6OcUVTX7FN3w"
+
+
+class TestBothGenerationsNameTheirMaps:
+    """Parity: the selector labels each room with its floor, and a raw
+    pmap id means nothing to a person.
+
+    Prime reads the name from `get_active_map_versions()`. Classic has
+    it too, but in a different place -- `active_pmapv_details.
+    map_header.name`, not at the top of the pmap entry, where there is
+    no name at all. Verified against a real /pmaps capture.
+    """
+
+    async def test_classic_reads_the_name_from_the_map_header(self) -> None:
+        import json
+        import pathlib
+
+        from custom_components.roomba_plus.room_cleaning import (
+            ClassicRoomCleaning,
+        )
+
+        pmaps = json.loads(
+            (
+                pathlib.Path(__file__).parent / "fixtures"
+                / "irobot_pmaps_i3plus.json"
+            ).read_text(encoding="utf-8")
+        )
+        backend = ClassicRoomCleaning.__new__(ClassicRoomCleaning)
+        data = MagicMock()
+        cloud = MagicMock()
+        cloud.data = {"pmaps": pmaps}
+        data.cloud_coordinator = cloud
+        backend._data = data
+
+        assert await backend.map_names() == {"D8MepS5KRD6DTWlG-g5IEw": "Dom"}
+
+    async def test_no_cloud_is_not_an_error(self) -> None:
+        from custom_components.roomba_plus.room_cleaning import (
+            ClassicRoomCleaning,
+        )
+
+        backend = ClassicRoomCleaning.__new__(ClassicRoomCleaning)
+        data = MagicMock()
+        data.cloud_coordinator = None
+        backend._data = data
+
+        assert await backend.map_names() == {}
+
+    def test_both_backends_implement_it(self) -> None:
+        """The point of the exercise. A method only Prime has is a
+        feature only Prime users get."""
+        from custom_components.roomba_plus.room_cleaning import (
+            ClassicRoomCleaning,
+            PrimeRoomCleaning,
+        )
+
+        assert "map_names" in ClassicRoomCleaning.__dict__
+        assert "map_names" in PrimeRoomCleaning.__dict__

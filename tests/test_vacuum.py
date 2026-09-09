@@ -2745,3 +2745,55 @@ class TestAPrimeRobotToppingUpIsNotDocked:
         from homeassistant.components.vacuum import VacuumActivity
 
         assert self._activity("hmUsrDock", "none") == VacuumActivity.DOCKED
+
+
+class TestDockOnADockedRobotIsAnEvacuation:
+    """`async_return_to_base`'s docstring said sending `dock` to a docked
+    robot was a "no-op on robot side". It is not.
+
+    @AlakazipLabs sent exactly one `dock` to an i3 sitting at 100% on
+    its dock, with nothing before it and nothing for 125 s after, and
+    captured the wire: the robot accepted it, opened `cycle: evac`, ran
+    the bin-empty and dock handshake for 22 seconds, and went back to
+    idle. `nMssn` never moved.
+
+    NOT GUARDED, DELIBERATELY. Suppressing the send would mean this
+    integration deciding the robot is docked, and `activity` is not
+    reliable enough for that on either generation. A wrong guess
+    swallows a real recall and leaves a robot stranded mid-floor, which
+    is worse than an unwanted bin empty. The behaviour is documented
+    instead -- in the docstring, and in TROUBLESHOOTING.md where a user
+    wondering why the bin emptied will actually look.
+    """
+
+    def test_the_docstring_no_longer_claims_it_is_a_no_op(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus.vacuum import IRobotVacuum
+
+        doc = inspect.getdoc(IRobotVacuum.async_return_to_base) or ""
+
+        assert "no-op on robot side" not in doc
+        assert "EVACUATION" in doc
+
+    def test_the_reason_for_not_guarding_is_written_down(self) -> None:
+        """A future reader will want to add the guard. The argument
+        against it has to be somewhere they will see it."""
+        import inspect
+
+        from custom_components.roomba_plus.vacuum import IRobotVacuum
+
+        doc = inspect.getdoc(IRobotVacuum.async_return_to_base) or ""
+
+        assert "swallow a recall" in doc
+
+    def test_users_are_told_where_they_will_look(self) -> None:
+        import pathlib
+
+        doc = (
+            pathlib.Path(__file__).parent.parent
+            / "docs"
+            / "TROUBLESHOOTING.md"
+        ).read_text(encoding="utf-8")
+
+        assert "emptied its bin and I did not ask it to" in doc
