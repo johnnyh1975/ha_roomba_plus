@@ -334,10 +334,18 @@ async def async_setup_entry(
     if "ecoCharge" in state:
         entities.append(EcoChargeSwitch(roomba, blid))
 
-    # Gentle mode: present when gentle key exists in state (v3.4.3
-    # GENTLE-MODE — confirmed stable across multiple i7 firmware
-    # generations in real field data, analogous to EdgeCleanSwitch above)
-    if "gentle" in state:
+    # Gentle mode: TWO KEY NAMES, one feature.
+    #
+    # This looked for `gentle` alone, confirmed on i7 firmware. An S9+
+    # on `soho` reports `cap.gentle: 1` -- the robot has the feature --
+    # and carries it in state as **`gentleMode`**. So the switch was
+    # never created there, on a robot that supports it
+    # (@ScenicSystemsLLC, two S9+ units, both key lists identical).
+    #
+    # Which name a robot uses is firmware-dependent, like so much else
+    # in this state document. Accepting both is the only reading that
+    # works on all of them.
+    if "gentle" in state or "gentleMode" in state:
         entities.append(GentleModeSwitch(roomba, blid))
 
     async_add_entities(entities)
@@ -577,7 +585,12 @@ class GentleModeSwitch(IRobotEntity, SwitchEntity):
     @property
     def is_on(self) -> bool:
         """Return True when gentle mode is active."""
-        return bool(self.vacuum_state.get("gentle", False))
+        # Whichever name this firmware uses -- see the note at the
+        # platform's setup for why there are two.
+        state = self.vacuum_state
+        if "gentleMode" in state:
+            return bool(state.get("gentleMode", False))
+        return bool(state.get("gentle", False))
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Enable gentle mode."""

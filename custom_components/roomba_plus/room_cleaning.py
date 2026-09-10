@@ -574,6 +574,11 @@ class PrimeRoomCleaning(RoomCleaningBackend):
         rooms: dict[str, str] = {}
         from_current: set[str] = set()
 
+        # Region ids the robot itself marks as zones. Recorded rather
+        # than dropped: `get_segments()` offers them under the zone
+        # prefix, so they stay usable -- they just stop being rooms.
+        zone_ids: set[str] = set()
+
         for p2map_id in await self._all_map_ids():
             try:
                 map_data = await self._map_metadata(p2map_id)
@@ -607,6 +612,30 @@ class PrimeRoomCleaning(RoomCleaningBackend):
                 _name = room.name or _fallback.get(str(room.room_id))
                 if not (_name and room.room_id):
                     continue
+
+                # ZONES ARE NOT ROOMS, and the robot says which is which.
+                #
+                # `rooms_metadata` lists every region on the map, zones
+                # included, and each entry carries `region_type` -- the
+                # library reads it from a confirmed live response and
+                # maps it to `rid` or `zid`. This loop ignored it, so a
+                # user-drawn zone was offered as a room and the button
+                # sent its id as a ROOM id.
+                #
+                # @theChef163's zone "Litter" is region 100 on a robot
+                # whose rooms are 10-19. Sent as `rid` 100 the robot
+                # accepts the command, finds no such room, and reports
+                # `completed` after 71 seconds with zero area cleaned --
+                # which looks exactly like "starts and immediately
+                # returns to the dock".
+                #
+                # Absence still means room: not every capture carries
+                # the field, and rooms outnumber zones by far.
+                _rt = getattr(room, "region_type", None)
+                _rt = getattr(_rt, "value", _rt)
+                if _rt and str(_rt).lower() == "zid":
+                    zone_ids.add(str(room.room_id))
+                    continue
                 # LOCAL NAME, not a rewritten object. `replace()` needs
                 # a dataclass and this loop also sees plain namespaces
                 # from tests and from other readers.
@@ -635,6 +664,10 @@ class PrimeRoomCleaning(RoomCleaningBackend):
                 rooms[room_name] = f"{p2map_id}/{room.room_id}"
                 if is_current:
                     from_current.add(room_name)
+
+        # Handed to `get_segments()` so the zones it skipped here can be
+        # offered under the `zid_` prefix instead of vanishing.
+        self._zone_region_ids = zone_ids
         return rooms
 
     _SEGMENT_PREFIX = "rid_"
@@ -2141,7 +2174,9 @@ def _resolve_pmapv_id(state: dict[str, Any], pmap_id: str) -> str | None:
     return None
 
 
-def region_names_across_maps(cloud_coordinator: Any) -> dict[str, str]:
+def region_names_across_maps(
+    cloud_coordinator: Any, prefer_pmap_id: str | None = None
+) -> dict[str, str]:
     """{region_id: name} from every map the account holds.
 
     ONE PLACE, because there were four. `cloud_coordinator.regions`
@@ -2169,6 +2204,33 @@ def region_names_across_maps(cloud_coordinator: Any) -> dict[str, str]:
     # and always have been -- reading one of them is the mistake this
     # helper exists to stop repeating.
     names: dict[str, str] = {}
+
+    # THE MAP THE COMMAND ACTUALLY TARGETED WINS, when the caller knows
+    # which one that was.
+    #
+    # Region ids are unique per map, not across maps. @ScenicSystemsLLC
+    # ran a favourite against his "Second Floor" map while a one-room
+    # "master bathroom" map was active; both have a region "1". The
+    # active map won, and the display said "Primary Bathroom" for the
+    # whole 80-minute mission while the robot worked through five rooms
+    # upstairs.
+    #
+    # That is worse than the placeholder problem this helper was
+    # written for. "Room ID 18" is obviously broken; a real, wrong,
+    # confident room name is not.
+    #
+    # Optional and last-resort by design: every existing caller keeps
+    # the old behaviour, and one that knows the command's `pmap_id` --
+    # from `lastCommand` -- gets the right answer instead of the
+    # active map's.
+    if prefer_pmap_id:
+        _preferred = (
+            getattr(cloud_coordinator, "regions_by_pmap", None) or {}
+        ).get(prefer_pmap_id) or {}
+        for region_id, region_name in _preferred.items():
+            if region_id and region_name:
+                names[str(region_id)] = str(region_name)
+
     for source in (cloud_coordinator.regions, cloud_coordinator.zones):
         for r in source or []:
             if r.get("id") and r.get("name"):

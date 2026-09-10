@@ -9,6 +9,16 @@ note are listed — most releases need zero action beyond updating.
 
 ---
 
+## v4.1.6 — from v4.1.5
+
+Nothing to do.
+
+**If you have zones**, cleaning one from the room selector works now.
+Before this it started a mission that ended within a minute with nothing
+cleaned — the zone was being sent as a room.
+
+---
+
 ## v4.1.5 — from v4.1.4
 
 Nothing to do. Diagnostics downloads carry two more fields; no
