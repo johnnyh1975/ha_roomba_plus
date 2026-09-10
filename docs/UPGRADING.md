@@ -9,6 +9,12 @@ note are listed — most releases need zero action beyond updating.
 
 ---
 
+## v4.2.0b5 — from v4.2.0b4
+
+Nothing to do. Three fixes, also in 4.1.6 — see those notes.
+
+---
+
 ## v4.2.0b4 — from v4.2.0b3
 
 **Take this one.** b3 stopped every entity from loading on Home

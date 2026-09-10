@@ -1085,3 +1085,50 @@ class TestOnlyKeysTheRobotAcceptsAreWritten:
 
         for key in accepted:
             assert f'"{key}"' in source, f"{key} is no longer wired up"
+
+
+class TestGentleModeAnswersToTwoNames:
+    """The switch appeared only when a robot reported `gentle`.
+
+    S9+ robots advertise the feature in their capabilities (`cap.gentle:
+    1`) and carry it in state as **`gentleMode`**, so the switch was
+    never created for them at all -- on a robot that supports it
+    (@ScenicSystemsLLC, two S9+ units, identical key lists).
+
+    Which name a robot uses is firmware-dependent, like `cleanSchedule`
+    versus `cleanSchedule2` and `bbpanic` versus `bbrun.nPanics`.
+    Accepting both is the only reading that works everywhere.
+    """
+
+    def test_both_names_create_the_switch(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus import switch as switch_mod
+
+        source = inspect.getsource(switch_mod)
+
+        assert '"gentle" in state or "gentleMode" in state' in source
+
+    def test_both_names_are_read_back(self) -> None:
+        """Creating the entity is half of it -- reading the wrong key
+        would leave it permanently off."""
+        import inspect
+
+        from custom_components.roomba_plus.switch import GentleModeSwitch
+
+        source = inspect.getsource(GentleModeSwitch)
+
+        assert '"gentleMode" in state' in source
+        assert 'state.get("gentle", False)' in source
+
+    def test_the_s9_key_is_not_the_only_one_handled(self) -> None:
+        """The i7 firmware this was originally written for still uses
+        `gentle`; dropping it to fix the S9 would trade one silent gap
+        for another."""
+        import inspect
+
+        from custom_components.roomba_plus.switch import GentleModeSwitch
+
+        source = inspect.getsource(GentleModeSwitch)
+
+        assert source.count("gentle") >= 2

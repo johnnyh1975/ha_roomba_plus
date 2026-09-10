@@ -669,7 +669,7 @@ source; one that is happy with an estimate carries on unchanged.
 | Attribute | When | Notes |
 |---|---|---|
 | `planned_room_order` | **During mission** | Rooms in requested order; populated at mission start |
-| `mission_destination` | **During mission** | Last room in `planned_room_order` |
+| `mission_destination` | **During mission** | The last room in `planned_room_order` — where the mission ENDS, not where the robot is heading next. Recomputed from the commanded list every update, so it does not move as the robot progresses. Classic robots report no live position, so no attribute here can tell you where one currently is |
 | `last_cleaned_rooms` | **Post-mission** | Rooms confirmed cleaned |
 | `room_coverage` | **Post-mission** | Per-room cleaned fraction (0.0–1.0) |
 

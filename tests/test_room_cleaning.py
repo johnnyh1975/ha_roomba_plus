@@ -2263,3 +2263,251 @@ class TestBothGenerationsNameTheirMaps:
 
         assert "map_names" in ClassicRoomCleaning.__dict__
         assert "map_names" in PrimeRoomCleaning.__dict__
+
+
+class TestARegionIdMeansNothingWithoutItsMap:
+    """@ScenicSystemsLLC's Braava ran a favourite against her "Second
+    Floor" map while a one-room "master bathroom" map was active. Both
+    maps have a region `1`.
+
+    The command was correct -- diagnostics confirm
+    `pmap_id: jUdHT1VfTZCaZklWE-_6tw`, regions `["1","5","16","10","18"]`
+    -- and the robot cleaned the right five rooms. The DISPLAY said
+    "Primary Bathroom" for the whole eighty minutes, because region `1`
+    resolved against the active map.
+
+    WORSE THAN THE BUG THIS HELPER WAS WRITTEN FOR. That one produced
+    "Room ID 18" -- obviously broken. This produces a real room name
+    from a real map, and nothing about it looks wrong.
+
+    Region ids are unique per map, never across maps. The only thing
+    that disambiguates them is which map the command named.
+    """
+
+    @staticmethod
+    def _coordinator():
+        cc = MagicMock()
+        # Active map: one room, whose id collides with the other map's.
+        cc.regions = [{"id": "1", "name": "Primary Bathroom"}]
+        cc.zones = []
+        cc.regions_by_pmap = {
+            "ND9h7_4oR0qDPddhVuW8AQ": {"1": "Primary Bathroom"},
+            "jUdHT1VfTZCaZklWE-_6tw": {
+                "1": "Master Bedroom", "5": "Bedroom",
+                "16": "Bedroom 2", "10": "Guest Bathroom", "18": "Hallway",
+            },
+        }
+        return cc
+
+    def test_without_the_hint_the_active_map_still_wins(self) -> None:
+        """Unchanged for every existing caller. The old behaviour is not
+        wrong in general -- it is wrong when the command named a
+        different map, which the caller has to say."""
+        from custom_components.roomba_plus.room_cleaning import (
+            region_names_across_maps,
+        )
+
+        names = region_names_across_maps(self._coordinator())
+
+        assert names["1"] == "Primary Bathroom"
+
+    def test_the_commanded_map_wins_when_named(self) -> None:
+        from custom_components.roomba_plus.room_cleaning import (
+            region_names_across_maps,
+        )
+
+        names = region_names_across_maps(
+            self._coordinator(), "jUdHT1VfTZCaZklWE-_6tw"
+        )
+
+        assert names["1"] == "Master Bedroom"
+
+    def test_his_whole_room_list_resolves(self) -> None:
+        """All five, in the order the favourite commanded them."""
+        from custom_components.roomba_plus.room_cleaning import (
+            region_names_across_maps,
+        )
+
+        names = region_names_across_maps(
+            self._coordinator(), "jUdHT1VfTZCaZklWE-_6tw"
+        )
+        commanded = ["1", "5", "16", "10", "18"]
+
+        assert [names[r] for r in commanded] == [
+            "Master Bedroom", "Bedroom", "Bedroom 2",
+            "Guest Bathroom", "Hallway",
+        ]
+
+    def test_an_unknown_map_does_not_lose_the_other_names(self) -> None:
+        """A stale or misspelled pmap id must not empty the list --
+        the hint is a preference, not a filter."""
+        from custom_components.roomba_plus.room_cleaning import (
+            region_names_across_maps,
+        )
+
+        names = region_names_across_maps(self._coordinator(), "no-such-map")
+
+        assert names["1"] == "Primary Bathroom"
+        assert names["18"] == "Hallway"
+
+
+class TestTheRobotSaysWhichRegionsAreZones:
+    """@theChef163's "Clean selected room" started a mission that ended
+    71 seconds later, `completed`, with zero area cleaned.
+
+    His mission record shows why:
+
+        Region(region_id='100', region_type=RegionType.RID)
+
+    Region 100 is his zone "Litter". His rooms are 10-19; there is no
+    room 100. The robot accepted a room id that does not exist, found
+    nothing to clean and reported success.
+
+    `rooms_metadata` lists every region on the map -- zones included --
+    and each entry carries `region_type`, which the library reads from a
+    confirmed live response and maps to `rid` or `zid`. This code
+    ignored it and treated every entry as a room.
+
+    Absence still means room: not every capture carries the field, and
+    rooms outnumber zones by far.
+    """
+
+    @staticmethod
+    def _backend(entries):
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        from custom_components.roomba_plus.room_cleaning import (
+            PrimeRoomCleaning,
+        )
+
+        backend = PrimeRoomCleaning.__new__(PrimeRoomCleaning)
+        backend._data = MagicMock()
+        backend._data.blid = "BLID1"
+        backend._config_entry = MagicMock()
+        backend._config_entry.runtime_data.prime_room_names = {}
+        backend._all_map_ids = AsyncMock(return_value=["MAP-A"])
+        backend._current_map_id = AsyncMock(return_value="MAP-A")
+        backend._map_metadata = AsyncMock(
+            return_value=SimpleNamespace(rooms_metadata=entries)
+        )
+        return backend
+
+    @staticmethod
+    def _entry(room_id, name, region_type):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            room_id=room_id, name=name, region_type=region_type
+        )
+
+    #: His map as the cloud reports it.
+    def _his_map(self):
+        return [
+            self._entry("10", "Dining Room", "rid"),
+            self._entry("14", "Kitchen", "rid"),
+            self._entry("19", "Laundry", "rid"),
+            self._entry("100", "Litter", "zid"),
+        ]
+
+    async def test_a_zone_is_not_offered_as_a_room(self) -> None:
+        backend = self._backend(self._his_map())
+
+        rooms = await backend.available_rooms()
+
+        assert "Litter" not in rooms
+        assert set(rooms) == {"Dining Room", "Kitchen", "Laundry"}
+
+    async def test_the_zone_is_recorded_rather_than_dropped(self) -> None:
+        """It still has to reach the user -- under the zone prefix, so
+        the command goes out as `zid`."""
+        backend = self._backend(self._his_map())
+
+        await backend.available_rooms()
+
+        assert backend._zone_region_ids == {"100"}
+
+    async def test_a_missing_region_type_still_means_room(self) -> None:
+        """Older captures carry no such field. Treating absence as
+        "zone" would empty the room list on every one of them."""
+        backend = self._backend([self._entry("10", "Dining Room", None)])
+
+        rooms = await backend.available_rooms()
+
+        assert "Dining Room" in rooms
+        assert backend._zone_region_ids == set()
+
+    async def test_the_enum_form_is_accepted_too(self) -> None:
+        """The library maps the wire value to a `RegionType`; a plain
+        string arrives from older or hand-built data."""
+        from roombapy_prime.models import RegionType
+
+        backend = self._backend([self._entry("100", "Litter", RegionType.ZID)])
+
+        rooms = await backend.available_rooms()
+
+        assert rooms == {}
+        assert backend._zone_region_ids == {"100"}
+
+
+class TestAZoneReachesTheRobotAsAZone:
+    """End to end for @theChef163's case: the zone has to survive from
+    the segment list to the wire.
+
+    Before the `region_type` fix his zone was offered as a ROOM, so the
+    command went out as `RegionType.RID` with region 100 -- an id no
+    room on his map has. The robot accepted it, found nothing and
+    reported `completed` in 71 seconds.
+    """
+
+    @staticmethod
+    def _backend():
+        from unittest.mock import AsyncMock
+
+        from custom_components.roomba_plus.room_cleaning import (
+            PrimeRoomCleaning,
+        )
+
+        backend = PrimeRoomCleaning.__new__(PrimeRoomCleaning)
+        backend._data = MagicMock()
+        backend._data.blid = "BLID1"
+        backend._raise_if_map_updating = MagicMock()
+        backend._send_region_command = AsyncMock()
+        backend._current_map_id = AsyncMock(return_value="MAP-A")
+        backend._all_map_ids = AsyncMock(return_value=["MAP-A"])
+        backend._region_to_map = AsyncMock(return_value={})
+        backend._note_mission_plan = MagicMock()
+        return backend
+
+    async def test_the_prefix_survives_to_the_send(self) -> None:
+        """`_send_region_command()` picks RID or ZID from this prefix.
+        Strip it anywhere earlier and the zone goes out as a room."""
+        backend = self._backend()
+
+        await backend.clean_segments(["zid_100"])
+
+        _map, region_ids = backend._send_region_command.await_args[0][:2]
+        assert region_ids == ["zid_100"]
+
+    async def test_a_room_still_arrives_bare(self) -> None:
+        """The other half: a room must NOT gain a zone prefix."""
+        backend = self._backend()
+
+        await backend.clean_segments(["rid_MAP-A/14"])
+
+        _map, region_ids = backend._send_region_command.await_args[0][:2]
+        assert region_ids == ["14"]
+
+    def test_the_send_decides_by_prefix(self) -> None:
+        """Pinned because it is the only thing that distinguishes them
+        at that point -- there is no separate type argument."""
+        import inspect
+
+        from custom_components.roomba_plus.room_cleaning import (
+            PrimeRoomCleaning,
+        )
+
+        source = inspect.getsource(PrimeRoomCleaning._send_region_command)
+
+        assert "RegionType.ZID" in source
+        assert "rid.startswith(ZID_PREFIX)" in source

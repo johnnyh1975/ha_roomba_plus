@@ -531,7 +531,27 @@ async def async_record_mission(
     rps = getattr(data, "robot_profile_store", None)
     if rps is not None:
         nav_stats = reported.get("mssnNavStats")
-        if isinstance(nav_stats, dict) and "reLc" in nav_stats:
+        # AN EMPTY RECORD IS NOT A MEASUREMENT OF ZERO.
+        #
+        # Two of three robots on the same `lewis` firmware report
+        # `mssnNavStats` with EVERY counter at zero -- no landmarks
+        # seen, none tracked, no relocalisations -- during a mission and
+        # after it, unchanged. A robot navigating by vSLAM does not see
+        # zero landmarks; the record is simply never populated on those
+        # units (@veronoicc, i7+ and i8+).
+        #
+        # `reLc` feeds a per-robot percentile of localisation quality.
+        # Taking those zeros as real readings fills that distribution
+        # with values the robot never measured, and the percentile then
+        # describes nothing.
+        #
+        # `gLmk` and `lmk` are the tell: a genuine record has landmarks
+        # in it even when `reLc` is legitimately 0.
+        _looks_populated = any(
+            nav_stats.get(k) for k in ("gLmk", "lmk", "mTrk")
+        ) if isinstance(nav_stats, dict) else False
+
+        if isinstance(nav_stats, dict) and "reLc" in nav_stats and _looks_populated:
             try:
                 relocs = int(nav_stats["reLc"])
             except (TypeError, ValueError):

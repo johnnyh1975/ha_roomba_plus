@@ -3632,3 +3632,65 @@ class TestPropertiesAreNotCalledAsMethods:
             or MissionStore.__dict__.get("records"),
             property,
         )
+
+
+class TestAnEmptyNavRecordIsNotAReading:
+    """Two of three robots on the same `lewis` firmware report
+    `mssnNavStats` with every counter at zero, during a mission and
+    after it, unchanged (@veronoicc, i7+ i857640 and i7+ i755840).
+
+    A robot navigating by vSLAM does not see zero landmarks. The record
+    is never populated on those units.
+
+    `reLc` from such a record used to feed the per-robot percentile of
+    localisation quality, filling the distribution with values the
+    robot never measured. `gLmk`/`lmk`/`mTrk` are the tell: a genuine
+    record carries landmarks even when `reLc` is legitimately 0.
+    """
+
+    #: Exactly as @veronoicc's i8+ reported it, mid-mission and docked.
+    _EMPTY = {
+        "nMssn": 428, "missionId": "01KTYYK0YGAGPH50EM0MZS2JFA",
+        "gLmk": 0, "lmk": 0, "reLc": 0, "plnErr": "none", "mTrk": 0,
+        "kdp": 0, "sfkdp": 0, "nmc": 0, "nmmc": 0, "nrmc": 0,
+        "mpSt": "idle", "l_drift": 0, "h_drift": 0,
+        "l_squal": 0, "h_squal": 0,
+    }
+
+    #: His other i7+, same firmware, same moment in a mission.
+    _POPULATED = {
+        "nMssn": 1280, "missionId": "01KV0FB3SRG31D85V6Y6P78E35",
+        "gLmk": 16, "lmk": 2, "reLc": 0, "plnErr": "none", "mTrk": 36,
+        "kdp": 0, "sfkdp": 0, "nmc": 1, "nmmc": 1, "nrmc": 0,
+        "mpSt": "idle", "l_drift": 0, "h_drift": 0,
+        "l_squal": 0, "h_squal": 12,
+    }
+
+    @staticmethod
+    def _accepted(nav_stats: dict) -> bool:
+        """The guard, as the callback applies it."""
+        return bool(
+            any(nav_stats.get(k) for k in ("gLmk", "lmk", "mTrk"))
+        )
+
+    def test_the_empty_record_is_rejected(self) -> None:
+        assert not self._accepted(self._EMPTY)
+
+    def test_a_real_record_is_accepted(self) -> None:
+        assert self._accepted(self._POPULATED)
+
+    def test_a_genuine_zero_reloc_still_counts(self) -> None:
+        """`reLc: 0` is a real and common reading -- a mission with no
+        relocalisation at all. The guard must not throw those away."""
+        assert self._POPULATED["reLc"] == 0
+        assert self._accepted(self._POPULATED)
+
+    def test_the_callback_applies_it(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus import callbacks
+
+        source = inspect.getsource(callbacks)
+
+        assert "_looks_populated" in source
+        assert '("gLmk", "lmk", "mTrk")' in source
