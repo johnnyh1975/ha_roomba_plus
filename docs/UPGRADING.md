@@ -9,6 +9,12 @@ note are listed — most releases need zero action beyond updating.
 
 ---
 
+## v4.2.0b6 — from v4.2.0b5
+
+Nothing to do. Same changes as 4.1.7 — see those notes.
+
+---
+
 ## v4.2.0b5 — from v4.2.0b4
 
 Nothing to do. Three fixes, also in 4.1.6 — see those notes.
