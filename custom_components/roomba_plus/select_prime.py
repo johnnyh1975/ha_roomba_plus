@@ -45,7 +45,11 @@ from homeassistant.core import callback
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.restore_state import RestoreEntity
 
-from .const import CLEANING_MODES_PRIME, cleaning_modes_for
+from .const import (
+    CLEANING_MODES_PRIME,
+    cleaning_modes_available,
+    cleaning_modes_for,
+)
 from .models import ConnectionType
 from .entity import IRobotEntity
 from .prime_room_map import SIGNAL_PRIME_ROOM_NAMES
@@ -990,8 +994,12 @@ class PrimeCleaningModeSelect(IRobotEntity, RestoreEntity, SelectEntity):
     nobody can check, it is REFLECTED FROM THE ROBOT'S OWN LAST START.
 
     WHY THE STATUS FIELD IS NOT THE SOURCE, though it looks like one.
-    `cleanMissionStatus.operatingMode` uses a different vocabulary from
-    the command:
+    `cleanMissionStatus.operatingMode` is the SAME enum as the command
+    -- decompilation of both the app and the firmware settled that --
+    but it means something else: what the robot is doing RIGHT NOW,
+    not what was asked for. Same words, different tense.
+
+    That is why the values do not line up:
 
         command 32  (vacuum and mop)   ->  status 6
         command 512 (vacuum then mop)  ->  status 4
@@ -1044,7 +1052,79 @@ class PrimeCleaningModeSelect(IRobotEntity, RestoreEntity, SelectEntity):
 
     @property
     def options(self) -> list[str]:
-        return list(self.MODES)
+        # ONLY WHAT THIS ROBOT CAN DO.
+        #
+        # `MODES` is the full vocabulary for the tier. `cap.oMode` says
+        # which jobs the hardware actually has, in the same bits as
+        # `operatingMode`: an S9+ reports 2, a Braava jet m6 reports 4.
+        #
+        # Offering all four to every robot meant a mopping mode could be
+        # selected on a vacuum, stick, and then be quietly ignored --
+        # @chairstacker picked one and the robot went off and vacuumed.
+        #
+        # Read live rather than cached at construction: capabilities
+        # arrive with the first full state, which can be after the
+        # entity exists. Unknown falls back to the full list.
+        available = cleaning_modes_available(
+            self._is_classic_tier, self._robot_o_mode()
+        )
+
+        # PLUS WHATEVER THE ROBOT HAS ACTUALLY DONE.
+        #
+        # `current_option` reports the mode of the last start command --
+        # what the robot really did, not what we think it can do. If
+        # that falls outside the filtered list, the filter is wrong, not
+        # the robot, and Home Assistant would log the current value as
+        # invalid on every update.
+        #
+        # Including it makes the list self-correcting: a capability mask
+        # we read too narrowly cannot hide a mode the robot demonstrably
+        # performs.
+        options = list(available)
+        current = self.current_option
+        if current is not None and current not in options:
+            options.append(current)
+        return options
+
+    @property
+    def _is_classic_tier(self) -> bool:
+        return (
+            getattr(self._config_entry.runtime_data, "connection_type", None)
+            is ConnectionType.CLOUD_ONLY
+        )
+
+    def _robot_o_mode(self) -> object:
+        """`cap.oMode`, from wherever this generation puts it.
+
+        TWO PLACES, and missing the second made this filter a no-op on
+        exactly the robots it was written for. Classic reports it in the
+        MQTT state under `cap`; Prime carries it in the shadow, and
+        `device.capabilities` is empty there -- every Prime diagnostics
+        file on hand shows `oMode: None` at the Classic path.
+
+        A Roomba Combo reports 38 = 2|4|32: vacuum, mop, and the combo
+        mode. That decodes cleanly against the enum in `const.py`, which
+        is good evidence the two really are the same vocabulary.
+        """
+        state = getattr(self, "vacuum_state", None)
+        if isinstance(state, dict):
+            caps = state.get("cap")
+            if isinstance(caps, dict) and caps.get("oMode") is not None:
+                return caps["oMode"]
+
+        coordinator = getattr(
+            self._config_entry.runtime_data, "prime_status_coordinator", None
+        )
+        shadows = getattr(coordinator, "data", None)
+        if not isinstance(shadows, dict):
+            return None
+        for body in shadows.values():
+            if not isinstance(body, dict):
+                continue
+            block = body.get("cap")
+            if isinstance(block, dict) and block.get("oMode") is not None:
+                return block["oMode"]
+        return None
 
     def _mode_from_last_start(self) -> str | None:
         """The mode of the robot's last START command, if it had one.
@@ -1103,6 +1183,22 @@ class PrimeCleaningModeSelect(IRobotEntity, RestoreEntity, SelectEntity):
     async def async_select_option(self, option: str) -> None:
         if option not in self.MODES:
             raise ServiceValidationError(f"{option} is not a cleaning mode")
+        # A SERVICE CALL BYPASSES THE DROPDOWN.
+        #
+        # Filtering `options` shapes the UI only. An automation calling
+        # `select.select_option` with a mode this robot cannot perform
+        # would otherwise set it, have it stick, and have the robot
+        # quietly do something else -- which is the exact failure this
+        # filter exists to stop (@chairstacker).
+        #
+        # Refused with the modes it CAN do, rather than ignored. When
+        # capabilities are unknown this list is the full one and nothing
+        # is refused.
+        if option not in self.options:
+            raise ServiceValidationError(
+                f"This robot cannot {option.replace('_', ' ')}. "
+                f"It can: {', '.join(self.options)}"
+            )
         self._restored = option
         self.async_write_ha_state()
 

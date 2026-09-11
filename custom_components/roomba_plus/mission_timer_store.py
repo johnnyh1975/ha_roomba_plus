@@ -82,6 +82,22 @@ class MissionTimerStore:
         self.total_estimated_sec: float | None = None
         self.planned_rooms: list[str] = []
         self.current_room_idx: int = 0
+
+        #: True once `advance_room()` has moved the index this mission.
+        #:
+        #: THE INDEX STARTS AT 0 AND MAY NEVER MOVE. It advances on a
+        #: phase transition, and `soho` robots do not emit one:
+        #: @ScenicSystemsLLC sampled `cleanMissionStatus` thirteen times
+        #: across a confirmed room boundary and `cycle`/`phase` stayed
+        #: `clean`/`run` throughout. `operatingMode` flickered twice,
+        #: uncorrelated with the boundary; `mssnM` never left 0.
+        #:
+        #: So on that firmware the displayed room is the FIRST PLANNED
+        #: room for the whole mission -- not a stale reading, a value
+        #: that was never a reading at all. This flag is what lets a
+        #: consumer tell the two apart instead of presenting a plan as
+        #: an observation.
+        self.room_progress_observed: bool = False
         self.recharge_positions: list[int] = []
         self.snapshot_ts: float = 0.0
         self._last_phase_ts: float = 0.0
@@ -246,6 +262,7 @@ class MissionTimerStore:
             self.mission_id          = mission_id
             self.run_sec             = 0.0
             self.current_room_idx    = 0
+            self.room_progress_observed = False
             self.recharge_positions  = []
             self._last_phase_ts      = 0.0
             self.room_entered_run_sec = 0.0
@@ -393,6 +410,7 @@ class MissionTimerStore:
         if self.current_room_idx >= len(self.planned_rooms) - 1:
             return False  # already at last room
         self.current_room_idx += 1
+        self.room_progress_observed = True
         self.room_entered_run_sec = self.run_sec
         self._schedule_save(hass, entry_id)
         _LOGGER.debug(

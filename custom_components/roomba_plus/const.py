@@ -450,6 +450,81 @@ ATTR_TWO_PASS: Final = "two_pass"
 #: hoping: 32 is confirmed on Prime and unknown on Classic, and this is
 #: not a field to be adventurous with -- it decides whether water goes
 #: on the floor.
+# THE FULL `operatingMode` BITMASK, for reference.
+#
+# Decoded from the iRobot app's own `core::OperatingMode::toString()` in
+# `libcore_base.so`: each block there loads a Type value, calls
+# `contains()`, and appends a name -- the Type sits as an immediate
+# right before it.
+#
+#     Type 0   value   1   Traveling        <- `str wzr` into the vector
+#     Type 1   value   2   Vacuuming
+#     Type 2   value   4   Mopping
+#     Type 3   value   8   VideoStreaming
+#     Type 4   value  16   AirPurifying
+#     Type 5   value  32   VacMopComboOnly  <- a mode of its own
+#     Type 6   value  64   Scrubbing
+#     Type 8   value 256   MopOnly
+#     {1,2}    value   6   ComboCleaning
+#
+# NOT CONSTANTS, because nothing reads them yet and a constant nobody
+# uses is dead weight -- there is a guard for that. Written here so the
+# next person does not repeat the decompilation.
+#
+# TWO CORRECTIONS TO WHAT THIS FILE USED TO ASSUME:
+#
+#   * Command and status are the SAME enum, not two tables. The
+#     difference is requested versus currently active.
+#   * `32` on Prime is not "6 encoded differently" -- it is Type 5,
+#     a distinct mode. Prime is a plain bitmask like the rest.
+#
+# WHY A TRAVELLING ROBOT REPORTS 1 AND NOT 3: travelling and cleaning
+# are mutually exclusive. The robot reports either a repositioning drive
+# or active cleaning, never both -- which is what makes the value usable
+# as a room-transition signal.
+#
+# Observed in the field before it was named: an S9+ over a 73-minute
+# whole-house run showed six excursions to 1, three verified live as
+# room changes, with flip duration scaling with distance driven
+# (@ScenicSystemsLLC).
+#
+# CONFIRMED IN THE FIRMWARE, independently of the app.
+#
+# `MissionStatusMessage::get_operating_mode()` (ruby @0x00d4fd40, lewis
+# @0x0118d7bc, 126 bytes, byte-identical structure) opens with a
+# branch-free test:
+#
+#     bl    robot_cleaning_mode_get()   ; current mode -> r0
+#     sub.w r0, r0, #6                  ; r0 - 6
+#     clz   r0, r0                      ; 32 iff r0 == 0
+#     lsrs  r0, r0, #5                  ; -> 1 iff mode == 6
+#
+# Bit 0 of the status value is set exactly when the internal cleaning
+# mode is 6, and mode 6 is `CLEANING_MODE_TRAVEL`:
+#
+#     0 NONE · 1 PERF · 2 AUTO · 3 ECO · 4 TRAIN · 5 BINLESS
+#     6 TRAVEL · 7 GYRO_NULL
+#
+# Two entirely different mechanisms agreeing: the app reads a bitmask
+# class with a name table, the firmware computes the same bit from its
+# own mode. Supporting strings in the same binary:
+#
+#     [DBG] Strategy: switch to travel mode for evade
+#     [DBG] Strategy: switch to travel mode for reloc
+#     set_travel_mode_and_update_cleanbits
+#
+# -- evading, relocalising and driving to a target, which is exactly
+# when the S9+ reported 1.
+#
+# ONE SOFT SPOT: the enum ORDER was read off the string order in the
+# binary, not off a jump table. A `%s (%d)` mapper makes it very likely
+# but it is not proven the way the error codes were. The conclusion does
+# not rest on it -- the comparison against 6 plus the presence of
+# `CLEANING_MODE_TRAVEL` in sixth position carries it alone.
+#
+# `512` in the tables below is bit 9 and appears in NO decoded block.
+# Its name here is ours, not the app's.
+
 CLEANING_MODES_PRIME: Final[dict[str, int]] = {
     "vacuum": 2,
     "mop": 4,
@@ -472,6 +547,49 @@ def cleaning_modes_for(is_prime: bool) -> dict[str, int]:
     the two tables differ stays in one place.
     """
     return CLEANING_MODES_PRIME if is_prime else CLEANING_MODES_CLASSIC
+
+
+#: Which job bits each offered mode needs the robot to have.
+#:
+#: Same vocabulary as `operatingMode`: bit 1 vacuum, bit 2 mop. Both
+#: combination modes need both.
+_MODE_REQUIRES: Final[dict[str, int]] = {
+    "vacuum": 2,
+    "mop": 4,
+    "vacuum_and_mop": 6,
+    "vacuum_then_mop": 6,
+}
+
+
+def cleaning_modes_available(
+    is_prime: bool, o_mode: object
+) -> dict[str, int]:
+    """The modes this robot can actually perform.
+
+    `cap.oMode` is a capability mask in the same bits as
+    `operatingMode`: an S9+ reports 2 (vacuum), a Braava jet m6 reports
+    4 (mop). A robot that can do both reports both bits.
+
+    WHY THIS EXISTS: the selector offered all four modes to every robot.
+    @chairstacker picked a mopping mode, it stuck, and the robot went off
+    and vacuumed -- an option that could never work, presented as though
+    it could. That is the silent kind of failure: no error, no log line,
+    just a robot doing something other than what was asked.
+
+    UNKNOWN MEANS OFFER EVERYTHING. A robot that has not reported its
+    capabilities yet, or one whose firmware omits `oMode`, must not end
+    up with an empty selector -- the previous behaviour is the safe
+    fallback there.
+    """
+    modes = cleaning_modes_for(is_prime)
+    if not isinstance(o_mode, int) or isinstance(o_mode, bool) or o_mode <= 0:
+        return modes
+    return {
+        name: value
+        for name, value in modes.items()
+        # Every bit the mode needs must be one the robot has.
+        if not (_MODE_REQUIRES.get(name, 0) & ~o_mode)
+    }
 
 
 ATTR_CLEANING_MODE: Final = "cleaning_mode"

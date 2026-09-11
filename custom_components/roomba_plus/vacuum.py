@@ -760,7 +760,27 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
                     self._last_resolved_coverage = _coverage
                 attrs["last_cleaned_rooms"] = _rooms
                 attrs["room_coverage"]      = _coverage
-            elif getattr(self, "_last_resolved_rooms", None):
+            elif (
+                getattr(self, "_last_resolved_rooms", None)
+                and phase not in CLEANING_PHASES
+            ):
+                # NOT WHILE A MISSION IS RUNNING.
+                #
+                # This is a sticky cache: it re-serves the last list that
+                # resolved, so a momentary lookup failure does not blank
+                # the attribute. Between missions that is right.
+                #
+                # DURING one it is a false claim. A whole-house start
+                # carries no region list at all, so nothing resolves,
+                # and the attribute went on reporting the rooms of an
+                # EARLIER mission while the robot was working. On
+                # @ScenicSystemsLLC's bare `vacuum.start` it showed
+                # `["Guest Bathroom"]` -- a real room, from the day
+                # before, that nobody saw him enter on that run.
+                #
+                # He flagged it as probably stale rather than claiming
+                # it as a room visit, which is the only reason it did
+                # not become evidence for something else.
                 attrs["last_cleaned_rooms"] = self._last_resolved_rooms
                 attrs["room_coverage"]      = self._last_resolved_coverage
                 # planned_room_order and mission_destination: only update from

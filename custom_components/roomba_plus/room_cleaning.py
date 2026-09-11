@@ -293,9 +293,11 @@ class RoomCleaningBackend(ABC):
         know which generation it is talking to.
 
         DELIBERATELY NOT OFFERED: operatingMode, which the confirmed
-        Prime payload also carries. It relates to the fitted mop pad,
-        and the compatibility rule lives robot-side where this code
-        cannot check it -- our own diagnostic script says as much when
+        Prime payload also carries. It selects the JOB -- vacuum, mop,
+        or a combination; see the decoded bitmask in `const.py` -- and
+        which values a given robot accepts depends on its hardware and
+        on the pad fitted at the time. That rule lives robot-side where
+        this code cannot check it -- our own diagnostic script says as much when
         it reports the value. Exposing a setting whose valid range we
         cannot determine invites a service call that is silently
         rejected, or worse, accepted and wrong. It stays out until
@@ -745,6 +747,23 @@ class PrimeRoomCleaning(RoomCleaningBackend):
                 or getattr(map_data, "p2mapv_id", None)
             )
             if not version:
+                # SILENT UNTIL NOW, and that was the problem.
+                #
+                # No version means no region names, which means the
+                # zones on this map get no map assignment, which means
+                # their segment ids stay bare -- and a bare zone id on a
+                # multi-map robot is refused by `clean_rooms()` with
+                # "not currently reporting which one it is on".
+                #
+                # @chairstacker sees exactly that error on 4.1.6 while
+                # his room list is correct. Nothing in the log said why,
+                # because this path took the `continue` without a word.
+                _LOGGER.warning(
+                    "roomba_plus: map %s for %s carries no version id, so its "
+                    "region names cannot be read -- any ZONES on that map will "
+                    "have no map assignment and cannot be cleaned by name",
+                    p2map_id, self._data.blid,
+                )
                 continue
             try:
                 found = await robot.get_map_region_names(p2map_id, version)
@@ -1086,8 +1105,25 @@ class PrimeRoomCleaning(RoomCleaningBackend):
         # below, which refuse honestly.
         if not p2map_id:
             region_to_map = await self._region_to_map()
+
+            # ZONE IDS CARRY A PREFIX; THE INDEX DOES NOT.
+            #
+            # `_region_to_map()` is keyed by bare region id, because it
+            # reads `rooms_metadata` -- which lists every region on the
+            # map, zones included. A zone arrives here as `zid_100`, so
+            # the lookup missed every time and the map stayed unknown.
+            #
+            # On a one-map robot that is invisible: the fallback below
+            # picks the only map. On a robot with two, it raises "not
+            # currently reporting which one it is on" -- which is what
+            # @chairstacker sees on 4.1.6 with a correct room list.
+            def _bare(rid: str) -> str:
+                return rid[len(ZID_PREFIX):] if rid.startswith(ZID_PREFIX) else rid
+
             wanted = {
-                region_to_map[r] for r in room_ids if region_to_map.get(r)
+                region_to_map[_bare(r)]
+                for r in room_ids
+                if region_to_map.get(_bare(r))
             }
             if len(wanted) == 1:
                 p2map_id = wanted.pop()

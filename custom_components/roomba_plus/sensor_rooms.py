@@ -135,7 +135,20 @@ def _get_planned_room_order(data: Any) -> list[str]:
             return list(mts.planned_rooms)
         return []
 
-    id_to_name = region_names_across_maps(cc)
+    # Every map, not just the active one -- see
+    # `region_names_across_maps()` for why, and for the bug that made it
+    # visible.
+    #
+    # AND THE COMMAND'S OWN MAP WINS A TIE. Region ids repeat across
+    # maps: @ScenicSystemsLLC's favourite targeted map "Second Floor"
+    # region 1 = Master Bedroom, while a one-room map whose region 1 is
+    # "Primary Bathroom" was active. Without the hint the active map won
+    # and the display named the wrong room, confidently, for eighty
+    # minutes.
+    #
+    # `lastCommand.pmap_id` is what the robot was actually told, and it
+    # is already read three lines above for the region ids themselves.
+    id_to_name = region_names_across_maps(cc, last_cmd.get("pmap_id"))
     result = [id_to_name[rid] for rid in region_ids if rid in id_to_name]
 
     # v2.9.0 — region_ids had entries, but not all of them resolved via
@@ -527,6 +540,23 @@ def _resolve_smart_tier_room_state(config_entry: Any) -> dict[str, Any]:
         # verified. His framing, and it is the right one.
         "current_room_source": (
             "estimate" if current_room is not None else "mission_timer"
+        ),
+        # WHETHER THE ROBOT HAS ACTUALLY BEEN SEEN TO MOVE ON.
+        #
+        # The room index starts at 0 and only advances when a transition
+        # is detected. Until one is, the name above is the FIRST PLANNED
+        # ROOM -- a plan, not an observation, and indistinguishable from
+        # a real reading without this flag.
+        #
+        # That distinction was invisible for a long time: on `soho`
+        # firmware no transition was ever detected, so the display sat
+        # on the first planned room for entire missions while the robot
+        # worked through the house (@ScenicSystemsLLC, 80 minutes).
+        # Transitions are now also detected from the robot returning
+        # out of travel, but a consumer still deserves to know which of
+        # the two it is looking at.
+        "room_progress_observed": bool(
+            getattr(mts, "room_progress_observed", False)
         ),
         "elapsed_run_min": round(elapsed / 60, 1),
         "estimated_remaining_min": estimated_remaining_min,
