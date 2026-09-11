@@ -1259,3 +1259,208 @@ class TestTheChoiceSurvivesARestart:
         await entity._async_load_names()
 
         assert entity._config_entry.runtime_data.prime_selected_map_id is None
+
+
+class TestOnlyModesTheRobotCanActuallyPerform:
+    """The cleaning-mode selector offered all four modes to every robot.
+
+    @chairstacker picked a mopping mode on a robot that vacuums. The
+    selection stuck, and the robot went off and vacuumed -- no error, no
+    log line, just something other than what was asked for. An option
+    that can never work, presented as though it can.
+
+    `cap.oMode` is a capability mask in the same bits as
+    `operatingMode`: bit 1 vacuum, bit 2 mop. Observed values from real
+    diagnostics: an S9+ reports 2, a Braava jet m6 reports 4.
+    """
+
+    def test_a_vacuum_is_not_offered_mopping(self) -> None:
+        """@ScenicSystemsLLC's S9+, `cap.oMode: 2`."""
+        from custom_components.roomba_plus.const import (
+            cleaning_modes_available,
+        )
+
+        assert sorted(cleaning_modes_available(False, 2)) == ["vacuum"]
+
+    def test_a_mop_is_not_offered_vacuuming(self) -> None:
+        """His Braava jet m6, `cap.oMode: 4`."""
+        from custom_components.roomba_plus.const import (
+            cleaning_modes_available,
+        )
+
+        assert sorted(cleaning_modes_available(False, 4)) == ["mop"]
+
+    def test_a_combo_gets_everything(self) -> None:
+        from custom_components.roomba_plus.const import (
+            cleaning_modes_available,
+        )
+
+        assert len(cleaning_modes_available(True, 6)) == 4
+
+    def test_unknown_capability_offers_everything(self) -> None:
+        """Capabilities arrive with the first full state, which can be
+        after the entity exists. An empty selector on a slow connection
+        would be a worse bug than the one this fixes."""
+        from custom_components.roomba_plus.const import (
+            cleaning_modes_available,
+            cleaning_modes_for,
+        )
+
+        for absent in (None, 0, "", {}, -1):
+            assert cleaning_modes_available(True, absent) == cleaning_modes_for(
+                True
+            ), absent
+
+    def test_a_bool_is_not_a_capability_mask(self) -> None:
+        """`True` is an int in Python and would read as bit 1 -- a robot
+        that can only vacuum. Guarded explicitly."""
+        from custom_components.roomba_plus.const import (
+            cleaning_modes_available,
+            cleaning_modes_for,
+        )
+
+        assert cleaning_modes_available(True, True) == cleaning_modes_for(True)
+
+    def test_the_values_sent_are_unchanged(self) -> None:
+        """This filters WHICH modes are offered, never what they send.
+        32 on Prime and 6 on Classic are field-verified and must stay."""
+        from custom_components.roomba_plus.const import (
+            cleaning_modes_available,
+        )
+
+        assert cleaning_modes_available(True, 6)["vacuum_and_mop"] == 32
+        assert cleaning_modes_available(False, 6)["vacuum_and_mop"] == 6
+
+    def test_the_selector_reads_it_live(self) -> None:
+        """Cached at construction would miss capabilities that arrive
+        later."""
+        import inspect
+
+        from custom_components.roomba_plus import select_prime
+
+        source = inspect.getsource(select_prime)
+
+        assert "def _robot_o_mode" in source
+        assert "cleaning_modes_available(" in source
+
+
+class TestTheCapabilityIsReadOnBothGenerations:
+    """The capability filter read `cap.oMode` from the MQTT state only.
+
+    That is where CLASSIC robots put it. Prime carries it in the shadow
+    instead, and `device.capabilities` is empty there -- every Prime
+    diagnostics file on hand reports `oMode: None` at the Classic path.
+
+    So the filter was a no-op on exactly the generation @chairstacker
+    runs, which is the generation the report came from.
+
+    A Roomba Combo reports **38 = 2|4|32** -- vacuum, mop, and the combo
+    mode. It decodes cleanly against the enum in `const.py`, which is
+    good evidence the two are the same vocabulary.
+    """
+
+    def test_the_combo_value_decodes_to_its_three_jobs(self) -> None:
+        assert [b for b in (2, 4, 32, 256) if 38 & b] == [2, 4, 32]
+
+    def test_a_combo_is_offered_both_jobs(self) -> None:
+        from custom_components.roomba_plus.const import (
+            cleaning_modes_available,
+        )
+
+        offered = cleaning_modes_available(True, 38)
+
+        assert "vacuum" in offered
+        assert "mop" in offered
+
+    def test_both_lookup_paths_are_present(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus.select_prime import (
+            PrimeCleaningModeSelect,
+        )
+
+        source = inspect.getsource(PrimeCleaningModeSelect._robot_o_mode)
+
+        assert 'state.get("cap")' in source
+        assert "prime_status_coordinator" in source
+
+    def test_the_classic_path_wins_when_it_has_a_value(self) -> None:
+        """Checked first, and only falls through on a real absence --
+        not on a 0, which is a meaningful reading."""
+        import inspect
+
+        from custom_components.roomba_plus.select_prime import (
+            PrimeCleaningModeSelect,
+        )
+
+        source = inspect.getsource(PrimeCleaningModeSelect._robot_o_mode)
+
+        assert 'caps.get("oMode") is not None' in source
+
+
+class TestTheFilterCannotHideWhatTheRobotDoes:
+    """Two gaps the capability filter opened, and how they are closed.
+
+    **The current value.** `current_option` reports the mode of the last
+    start command -- what the robot really did. If that fell outside the
+    filtered list, Home Assistant would log it as invalid on every
+    update, and the filter would be hiding a mode the robot demonstrably
+    performs. The current value is therefore always included.
+
+    **Service calls.** Filtering `options` shapes the dropdown only. An
+    automation calling `select.select_option` directly would set an
+    impossible mode, have it stick, and have the robot quietly do
+    something else -- the exact failure the filter exists to stop.
+    """
+
+    def test_the_current_value_is_always_offered(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus.select_prime import (
+            PrimeCleaningModeSelect,
+        )
+
+        source = inspect.getsource(PrimeCleaningModeSelect)
+        block = source[source.index("def options"):]
+
+        assert "current not in options" in block
+        assert "options.append(current)" in block
+
+    def test_a_service_call_is_refused_not_ignored(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus.select_prime import (
+            PrimeCleaningModeSelect,
+        )
+
+        source = inspect.getsource(
+            PrimeCleaningModeSelect.async_select_option
+        )
+
+        assert "option not in self.options" in source
+        assert "ServiceValidationError" in source
+
+    def test_the_refusal_names_what_is_possible(self) -> None:
+        """An error that only says no leaves the user guessing which
+        mode to use instead."""
+        import inspect
+
+        from custom_components.roomba_plus.select_prime import (
+            PrimeCleaningModeSelect,
+        )
+
+        source = inspect.getsource(
+            PrimeCleaningModeSelect.async_select_option
+        )
+
+        assert "It can:" in source
+
+    def test_unknown_capabilities_refuse_nothing(self) -> None:
+        """With no capability mask the available list is the full list,
+        so the new guard cannot reject anything that used to work."""
+        from custom_components.roomba_plus.const import (
+            cleaning_modes_available,
+            cleaning_modes_for,
+        )
+
+        assert cleaning_modes_available(True, None) == cleaning_modes_for(True)

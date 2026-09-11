@@ -3694,3 +3694,77 @@ class TestAnEmptyNavRecordIsNotAReading:
 
         assert "_looks_populated" in source
         assert '("gLmk", "lmk", "mTrk")' in source
+
+
+class TestARoomAdvanceOnReturnFromTravel:
+    """`soho` robots emit no phase change between rooms -- 13 samples
+    across a confirmed boundary held `cycle=clean phase=run` throughout
+    (@ScenicSystemsLLC) -- so the phase route never fires and the
+    display sits on the first planned room for the whole mission.
+
+    `operatingMode` bit 0 is `Traveling`, confirmed twice over: the app
+    names it in a bitmask class, and the firmware sets that bit exactly
+    when its internal mode is `CLEANING_MODE_TRAVEL`.
+
+    THE EDGE IS THE RETURN, not the departure. The robot is in the new
+    room once the drive ends. And travel also covers evading and
+    relocalising, so counting departures would over-count -- his
+    seven-room run showed six excursions, two of which were not room
+    changes.
+    """
+
+    @staticmethod
+    def _travelling(operating_mode: int) -> bool:
+        """The test as the callback applies it."""
+        return bool(operating_mode & 1)
+
+    def test_the_working_values_are_not_travel(self) -> None:
+        """2 vacuuming, 4 mopping, 6 both -- none has bit 0."""
+        for mode in (2, 4, 6, 32):
+            assert not self._travelling(mode), mode
+
+    def test_travel_is_bit_zero(self) -> None:
+        assert self._travelling(1)
+
+    def test_idle_is_not_travel(self) -> None:
+        """`0` on the dock is the absence of a job, not a fourth state.
+        Confirmed on two robots across three firmware families."""
+        assert not self._travelling(0)
+
+    def test_his_whole_house_run_yields_the_flips_he_saw(self) -> None:
+        """@ScenicSystemsLLC's 73-minute bare `vacuum.start`, as
+        sampled. Six excursions, each ending in a return."""
+        samples = [2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 0]
+
+        was, returns = False, 0
+        for mode in samples:
+            now = self._travelling(mode)
+            if was and not now:
+                returns += 1
+            was = now
+
+        assert returns == 6
+
+    def test_a_departure_alone_does_not_count(self) -> None:
+        """If the mission ends while travelling -- the return-to-dock
+        leg -- there is no return, and nothing is advanced for it."""
+        samples = [2, 1]
+
+        was, returns = False, 0
+        for mode in samples:
+            now = self._travelling(mode)
+            if was and not now:
+                returns += 1
+            was = now
+
+        assert returns == 0
+
+    def test_the_callback_uses_the_return_edge(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus import callbacks
+
+        source = inspect.getsource(callbacks)
+
+        assert "_returned_from_travel" in source
+        assert "_travelling is False" in source
