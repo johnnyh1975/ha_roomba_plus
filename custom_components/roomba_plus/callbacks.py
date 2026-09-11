@@ -719,6 +719,7 @@ def make_mission_callback(
     Closure holds mutable state for phase tracking across messages.
     """
     last_phase: str = ""
+    was_travelling: bool = False
     current_mission_zones: list[str] = []
     mission_start_ts: int = 0
     nstuck_at_start: int = 0
@@ -782,7 +783,7 @@ def make_mission_callback(
     had_cleaning_phase: bool = False
 
     def _on_mission_message(json_data: dict[str, Any], _synthetic: bool = False) -> None:
-        nonlocal last_phase, current_mission_zones, mission_start_ts
+        nonlocal last_phase, was_travelling, current_mission_zones, mission_start_ts
         nonlocal nstuck_at_start, recharge_min_accumulator, last_recharge_phase_ts
         nonlocal current_leg_rechrgM
         nonlocal _last_mirrored_recharge_min
@@ -1651,9 +1652,43 @@ def make_mission_callback(
                 # e.g. "charge" across multiple consecutive MQTT messages only
                 # attempts the advance once — prevents repeatedly advancing
                 # current_room_idx during a single genuine recharge dwell.
+                # SECOND ROUTE: the robot came back from a travel leg.
+                #
+                # The phase route above works on `lewis` firmware, which
+                # emits `charge`/`hmPostMsn` between rooms. `soho` does
+                # not: 13 samples across a confirmed room boundary held
+                # `cycle=clean phase=run` throughout (@ScenicSystemsLLC),
+                # so the display sat on the first planned room for the
+                # whole mission.
+                #
+                # `operatingMode` bit 0 is `Traveling`, confirmed twice
+                # over -- the app names it in a bitmask class, and the
+                # firmware sets that bit exactly when its internal mode
+                # is `CLEANING_MODE_TRAVEL`. See `const.py`.
+                #
+                # EDGE-TRIGGERED ON THE RETURN, not on entering travel:
+                # the robot is in the new room once the drive ENDS. And
+                # travel covers evading and relocalising too, so a bare
+                # "entered travel" would over-count -- @ScenicSystemsLLC
+                # saw six excursions on a seven-room run, two of which
+                # were not room changes.
+                _mode = mission.get("operatingMode")
+                _travelling = bool(_mode & 1) if isinstance(_mode, int) else None
+                _returned_from_travel = (
+                    _travelling is False
+                    and was_travelling
+                )
+                if isinstance(_travelling, bool):
+                    was_travelling = _travelling
+
                 if (
-                    last_phase != phase
-                    and phase in _ROOM_TRANSITION_CANDIDATE_PHASES
+                    (
+                        (
+                            last_phase != phase
+                            and phase in _ROOM_TRANSITION_CANDIDATE_PHASES
+                        )
+                        or _returned_from_travel
+                    )
                     and _room_transition_confidence_ok(mission, _mts_upd)
                 ):
                     _advanced = _mts_upd.advance_room(hass, entry.entry_id)

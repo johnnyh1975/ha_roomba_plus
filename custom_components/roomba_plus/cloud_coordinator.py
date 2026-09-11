@@ -827,6 +827,20 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """
         if not self.data:
             return getattr(self, "_seeded_pmap_id", None)
+        # WHAT THIS IS NOT: where the robot currently is.
+        #
+        # It picks the map with the most recent version timestamp --
+        # "most recently updated", not "most recently cleaned" and
+        # certainly not "the floor it is standing on".
+        #
+        # @ScenicSystemsLLC checked this directly on a two-map Braava:
+        # two missions run against the "Second Floor" map (confirmed via
+        # `lastCommand.pmap_id`), forced fresh reads after each, and the
+        # active map stayed "master bathroom" throughout. RUNNING A
+        # MISSION DOES NOT BUMP THE TIMESTAMP.
+        #
+        # The robot's actual location, where it reports one, is
+        # `cleanMissionStatus.p2mapId` -- see `where_the_robot_is()`.
         best_pid: str | None = None
         best_ts: str = ""
         for pmap in self.data.get("pmaps", []):
