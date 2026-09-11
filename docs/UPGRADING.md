@@ -9,6 +9,21 @@ note are listed — most releases need zero action beyond updating.
 
 ---
 
+## v4.1.7 — from v4.1.6
+
+Nothing to do.
+
+**If your robot is an S9-series**, the room display will now follow it
+through the house instead of staying on the first planned room.
+
+**If you have two maps**, cleaning a zone works now.
+
+**If you use the cleaning-mode selector**, it now lists only the modes
+your robot can perform. If an option you used to pick has disappeared,
+your robot could not do it — selecting it was being quietly ignored.
+
+---
+
 ## v4.1.6 — from v4.1.5
 
 Nothing to do.

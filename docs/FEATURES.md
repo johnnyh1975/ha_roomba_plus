@@ -63,6 +63,7 @@ marked in their own headings.
 | Control | Type | Notes |
 |---|---|---|
 | Cleaning passes | Select | Auto / One pass / Two passes |
+| Cleaning mode | Select | Vacuum / Mop / Vacuum and mop / Vacuum then mop. **Only the modes your robot can actually perform are offered** — a vacuum does not list mopping. Read from the robot's own capabilities; if it has not reported them yet, all four are shown |
 | Carpet boost | Select | Automatic / Eco / Performance (900-series) |
 | Edge cleaning | Switch | |
 | Always finish | Switch | Keep cleaning even when bin is full (i7+/s9+/j7+ with Clean Base) |
@@ -669,7 +670,8 @@ source; one that is happy with an estimate carries on unchanged.
 | Attribute | When | Notes |
 |---|---|---|
 | `planned_room_order` | **During mission** | Rooms in requested order; populated at mission start |
-| `mission_destination` | **During mission** | Last room in `planned_room_order` |
+| `mission_destination` | **During mission** | The last room in `planned_room_order` — where the mission ENDS, not where the robot is heading next. Recomputed from the commanded list every update, so it does not move as the robot progresses. Classic robots report no live position, so no attribute here can tell you where one currently is |
+| `room_progress_observed` | **During mission** | Whether the robot has been seen to move on from the first planned room. `false` means the room name above is still the PLAN, not an observation |
 | `last_cleaned_rooms` | **Post-mission** | Rooms confirmed cleaned |
 | `room_coverage` | **Post-mission** | Per-room cleaned fraction (0.0–1.0) |
 
