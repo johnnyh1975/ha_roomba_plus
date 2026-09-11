@@ -1130,3 +1130,57 @@ class TestRoomNamesDoNotFlicker:
         """A negative control: no invented value before the first
         mission."""
         assert self._attrs(None, None) is None
+
+
+class TestAPlanIsNotAnObservation:
+    """`current_room` starts at the first planned room and stays there
+    until a transition is detected. Until one is, it is a PLAN -- and
+    from outside it looks exactly like a reading.
+
+    That was invisible for a long time. On `soho` firmware no
+    transition was ever detected, so the attribute reported the first
+    planned room for entire missions while the robot worked through the
+    house (@ScenicSystemsLLC, 80 minutes). Transitions are now also
+    detected from the robot returning out of travel, but a consumer
+    still deserves to know which of the two it has.
+    """
+
+    def test_the_flag_is_exposed(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus import sensor_rooms
+
+        source = inspect.getsource(sensor_rooms)
+
+        assert '"room_progress_observed"' in source
+
+    def test_it_defaults_to_false(self) -> None:
+        """A store that predates the flag, or one where nothing has
+        advanced, must read as unobserved -- not as missing."""
+        from unittest.mock import MagicMock
+
+        store = MagicMock(spec=[])  # nothing defined on it
+
+        assert bool(getattr(store, "room_progress_observed", False)) is False
+
+    def test_the_store_sets_it_on_a_real_advance(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus.mission_timer_store import (
+            MissionTimerStore,
+        )
+
+        source = inspect.getsource(MissionTimerStore.advance_room)
+
+        assert "room_progress_observed = True" in source
+
+    def test_it_is_reset_between_missions(self) -> None:
+        """Otherwise the second mission of the day would claim
+        observation it has not made."""
+        import inspect
+
+        from custom_components.roomba_plus import mission_timer_store
+
+        source = inspect.getsource(mission_timer_store)
+
+        assert "room_progress_observed = False" in source

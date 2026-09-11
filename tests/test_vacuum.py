@@ -2797,3 +2797,55 @@ class TestDockOnADockedRobotIsAnEvacuation:
         ).read_text(encoding="utf-8")
 
         assert "emptied its bin and I did not ask it to" in doc
+
+
+class TestStaleRoomsDoNotSurviveIntoANewMission:
+    """`last_cleaned_rooms` is served from a sticky cache when the live
+    lookup yields nothing. Between missions that is right -- a momentary
+    resolution failure should not blank the attribute.
+
+    During a mission it is a false claim. A whole-house start carries no
+    region list at all, so nothing resolves, and the attribute went on
+    reporting an EARLIER mission's rooms while the robot worked.
+    @ScenicSystemsLLC saw `["Guest Bathroom"]` on a bare `vacuum.start`
+    -- a real room from the previous day that nobody saw the robot enter
+    on that run.
+
+    He flagged it as probably stale rather than offering it as a
+    room-visit data point, which is the only reason it did not become
+    evidence for something else.
+    """
+
+    def test_the_cache_is_gated_on_the_phase(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus.vacuum import IRobotVacuum
+
+        source = inspect.getsource(IRobotVacuum)
+        block = source[source.index('_last_resolved_rooms", None)'):]
+
+        assert "phase not in CLEANING_PHASES" in block[:200]
+
+    def test_between_missions_the_cache_still_serves(self) -> None:
+        """The other half. Removing the fallback entirely would blank
+        the attribute on every update where the name lookup happens to
+        miss, which is what it was added to prevent."""
+        import inspect
+
+        from custom_components.roomba_plus.vacuum import IRobotVacuum
+
+        source = inspect.getsource(IRobotVacuum)
+
+        assert 'attrs["last_cleaned_rooms"] = self._last_resolved_rooms' in source
+
+    def test_a_whole_house_start_carries_no_regions(self) -> None:
+        """Why the gap exists at all: `vacuum.start` sends a bare
+        command, so there is no region list for anything to resolve
+        against -- confirmed from his `lastCommand`."""
+        import inspect
+
+        from custom_components.roomba_plus.vacuum import IRobotVacuum
+
+        source = inspect.getsource(IRobotVacuum.async_start)
+
+        assert "regions" not in source

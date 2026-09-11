@@ -2423,3 +2423,78 @@ class TestAZoneReachesTheRobotAsAZone:
 
         assert "RegionType.ZID" in source
         assert "rid.startswith(ZID_PREFIX)" in source
+
+
+class TestAZoneKnowsItsMapEvenWhenTheRobotDoesNot:
+    """@chairstacker's robot has two maps and does not populate
+    `cleanMissionStatus.p2mapId`. Cleaning a zone failed with:
+
+        This robot has 2 maps and is not currently reporting which one
+        it is on, so there is no way to tell which floor's rooms you
+        mean.
+
+    The map was knowable the whole time. `_region_to_map()` reads
+    `rooms_metadata`, which lists every region including zones, and is
+    keyed by BARE region id. A zone arrives as `zid_100`, so the lookup
+    missed and the map stayed unknown.
+
+    Invisible on a one-map robot -- the fallback picks the only map.
+    Fatal on two.
+    """
+
+    @staticmethod
+    def _backend(region_to_map, map_ids):
+        from unittest.mock import AsyncMock
+
+        from custom_components.roomba_plus.room_cleaning import (
+            PrimeRoomCleaning,
+        )
+
+        backend = PrimeRoomCleaning.__new__(PrimeRoomCleaning)
+        backend._data = MagicMock()
+        backend._data.blid = "BLID1"
+        backend._raise_if_map_updating = MagicMock()
+        backend._send_region_command = AsyncMock()
+        backend._note_mission_plan = MagicMock()
+        backend._current_map_id = AsyncMock(return_value=None)
+        backend._all_map_ids = AsyncMock(return_value=map_ids)
+        backend._region_to_map = AsyncMock(return_value=region_to_map)
+        return backend
+
+    async def test_a_zone_resolves_its_map_on_a_two_map_robot(self) -> None:
+        backend = self._backend({"100": "UPSTAIRS", "11": "DOWN"},
+                                ["DOWN", "UPSTAIRS"])
+
+        await backend.clean_segments(["zid_100"])
+
+        p2map_id = backend._send_region_command.await_args[0][0]
+        assert p2map_id == "UPSTAIRS"
+
+    async def test_the_prefix_still_reaches_the_send(self) -> None:
+        """Resolving the map must not consume the prefix -- the send
+        decides room-versus-zone from it."""
+        backend = self._backend({"100": "UPSTAIRS"}, ["DOWN", "UPSTAIRS"])
+
+        await backend.clean_segments(["zid_100"])
+
+        region_ids = backend._send_region_command.await_args[0][1]
+        assert region_ids == ["zid_100"]
+
+    async def test_an_unknown_zone_still_refuses_honestly(self) -> None:
+        """If the id is on no map we know of, guessing between two is
+        worse than refusing. That guard stays."""
+        from homeassistant.exceptions import HomeAssistantError
+
+        backend = self._backend({"11": "DOWN"}, ["DOWN", "UPSTAIRS"])
+
+        with pytest.raises(HomeAssistantError):
+            await backend.clean_segments(["zid_999"])
+
+    async def test_one_map_was_never_affected(self) -> None:
+        """Why this went unnoticed: with a single map the fallback picks
+        it regardless of whether the lookup matched."""
+        backend = self._backend({}, ["ONLY"])
+
+        await backend.clean_segments(["zid_100"])
+
+        assert backend._send_region_command.await_args[0][0] == "ONLY"
