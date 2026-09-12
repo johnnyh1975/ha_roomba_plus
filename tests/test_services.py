@@ -2547,3 +2547,50 @@ class TestAServicePromisingAResponseReturnsOne:
 
         assert "SupportsResponse.NONE" in block
         assert "SupportsResponse.OPTIONAL" not in block
+
+
+class TestCleanZoneDoesNotAcceptRoomNames:
+    """The mirror image of the zone-sent-as-a-room bug.
+
+    `clean_zone` resolves names against `prime_room_names`, which is
+    flat: every region on the map with no type attached. A ROOM name
+    resolved there too, and its id went out with a `zid_` prefix -- a
+    zone id that does not exist, which is the same dead end from the
+    other direction.
+
+    `discovered_zone_ids` is the only thing that tells the two apart
+    from names alone. An entry with none recorded keeps the old
+    behaviour rather than refusing everything.
+    """
+
+    def test_the_service_filters_by_recorded_zones(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus import services
+
+        source = inspect.getsource(services.async_handle_clean_zone)
+
+        assert "discovered_zone_ids" in source
+        assert "str(zid) in _zone_only" in source
+
+    def test_an_entry_without_recorded_zones_is_not_crippled(self) -> None:
+        """Filtering on an empty set would reject every name, which is
+        worse than the fault being fixed."""
+        import inspect
+
+        from custom_components.roomba_plus import services
+
+        source = inspect.getsource(services.async_handle_clean_zone)
+
+        assert "if _zone_only:" in source
+
+    def test_the_filter_runs_before_the_name_index(self) -> None:
+        """Building the index first and filtering after would leave the
+        error message listing rooms as 'known zones'."""
+        import inspect
+
+        from custom_components.roomba_plus import services
+
+        source = inspect.getsource(services.async_handle_clean_zone)
+
+        assert source.index("_zone_only") < source.index("names_to_ids = {")

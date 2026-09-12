@@ -1,5 +1,15 @@
+"""Sensor helper behaviour, including readiness decoding."""
+
+import datetime
+from unittest.mock import MagicMock, patch
 
 
+from custom_components.roomba_plus.sensor_core import SENSORS
+from custom_components.roomba_plus.sensor_helpers import (
+    _parse_netinfo_addr,
+    _raw_wifi_floor,
+    _raw_wifi_stability,
+)
 
 def _make_entity(mission_status: dict):
     class _FakeEntity:
@@ -34,93 +44,118 @@ class _FakeEntity:
 
 
 class TestReadinessStateDecoding:
-    """The readiness sensor was untested and wrong.
+    """`notReady` is decoded through an explicit wire-to-index table.
 
-    It treated notReady as a bitmask: a nine-entry table of exact values
-    plus a bit-by-bit fallback that assembled labels like "Updating map,
-    Pending task" out of a premise that does not hold.
+    THERE IS NO OFFSET RULE. This used to apply `raw <= 10 ? raw :
+    raw - 3`, taken from the app, and it was wrong for most of the
+    range: the firmware maps wire values through an arbitrary lookup
+    whose order is deliberately broken. `BUMPED` is wire 33 and state
+    21; no arithmetic joins them.
 
-    The iRobot Home app reads it as a scalar index into a 73-state enum
-    with an offset above 10. Six of the nine entries were wrong against
-    that; only 0 and 15 held up. Nothing caught it because nothing
-    tested it -- the whole function had no coverage.
+    The rule worked below 10, where wire and index were assigned in
+    step, and LOOKED right above 60, where they run parallel again but
+    four apart rather than three. Everywhere else it produced a
+    confident wrong name.
+
+    Two field reports paid for that: @Thonno's i7+ and
+    @ScenicSystemsLLC's S9+ both reported wire 68 while docked and
+    charging, and it was read as "Off dock". It is `LOADING_MAP`.
+
+    The sensor returns translation KEYS, not English labels -- see
+    `_readiness_slug`.
     """
 
-    def _value(self, not_ready):
+    @staticmethod
+    def _value(not_ready):
         from unittest.mock import MagicMock
 
-        from custom_components.roomba_plus.sensor_helpers import _not_ready_value
+        from custom_components.roomba_plus.sensor_helpers import (
+            _not_ready_value,
+        )
 
         entity = MagicMock()
         entity.clean_mission_status = {"notReady": not_ready}
         return _not_ready_value(entity)
 
     def test_ready(self):
-        assert self._value(0) == "Ready"
+        assert self._value(0) == "ready"
 
-    def test_the_six_that_were_wrong(self):
-        """Each of these showed something the app does not say."""
-        assert self._value(2) == "Wheel drop both"      # was "Uneven ground"
-        assert self._value(16) == "Bin full"            # was "Bumped unexpectedly"
-        assert self._value(31) == "Schedule no clock"   # was "Fill tank"
-        assert self._value(39) == "Charge timeout"      # was "Pending"
-        assert self._value(48) == "Safety fault hardware"  # was "Path blocked"
-        assert self._value(68) == "Off dock"            # was "Updating map"
+    def test_the_block_that_was_off_by_one(self):
+        """Four consecutive firmware pairs. All four were wrong before,
+        each naming the state one place below the right one."""
+        assert self._value(66) == "subscription_expired"
+        assert self._value(67) == "dead_navigation_board"
+        assert self._value(68) == "downloading_map"
+        assert self._value(69) == "off_dock"
 
-    def test_the_map_state_is_67_not_68(self):
-        """The seed of the whole bitmask story: 68 was labelled "Updating
-        map", and 68 & 64 is true, so a bit test looked like it worked.
-        The state that means the map is updating is 67."""
-        assert self._value(67) == "Downloading map"
-        assert self._value(68) != "Downloading map"
+    def test_sixty_eight_is_the_map_not_the_dock(self):
+        """The one that cost two testers their diagnosis. Both robots
+        were charging on their docks while this read "Off dock"."""
+        assert self._value(68) == "downloading_map"
+        assert self._value(68) != "off_dock"
 
-    def test_the_two_that_were_right_still_are(self):
-        assert self._value(15) == "Insufficient charge"  # was "Low battery"
+    def test_where_no_arithmetic_could_have_worked(self):
+        """Wire 33 is state 21, wire 39 is state 37. Any single offset
+        gets both wrong, which is why the table is explicit."""
+        assert self._value(33) == "bumped"
+        assert self._value(39) == "saving_map"
 
-    def test_the_offset_applies_above_ten(self):
-        """Wire 25 is index 22. Reading the wire value straight out of a
-        73-entry list would give a different state."""
-        assert self._value(25) == "Map version mismatch"
+    def test_below_ten_wire_and_state_coincide(self):
+        """Firmware-confirmed, and the reason the old rule survived."""
+        assert self._value(1) == "cliff"
+        assert self._value(2) == "wheel_drop_both"
+        assert self._value(6) == "brush_stall"
+        assert self._value(7) == "no_bin"
 
-    def test_an_unlisted_value_keeps_its_number(self):
-        """No decomposition into invented parts. A state this project
-        does not know should say so."""
-        assert self._value(200) == "Not ready (200)"
+    def test_the_everyday_states(self):
+        """The ones a user actually meets. All were bare numbers until
+        the firmware table was extracted."""
+        assert self._value(16) == "bin_full"
+        assert self._value(15) == "insufficient_charge"
+        assert self._value(31) == "tank_low"
+        assert self._value(24) == "map_version_mismatch"
+        assert self._value(34) == "invalid_pad"
+
+    def test_three_wire_values_share_one_state(self):
+        """The app has only `BatteryAuthError` for four firmware
+        constants. Collapsing them is the app's doing, not ours."""
+        assert self._value(23) == "battery_auth_error"
+        assert self._value(37) == "battery_auth_error"
+        assert self._value(38) == "battery_auth_error"
+
+    def test_states_the_firmware_cannot_express(self):
+        """`LocalizationFailed`, `NotDocked`, `LidOpen`, `ChargeTimeout`,
+        `NoPad` and `OtaUpdate` are in the app's enum and absent from the
+        firmware's map. A robot hitting one reports 99, not a state.
+
+        This is why @Thonno's failed start showed 68 (LOADING_MAP)
+        rather than a localisation state while erroring with 224
+        "Smart Map localization failed" -- not a contradiction.
+        """
+        from custom_components.roomba_plus.const import (
+            READINESS_STATE_LABELS,
+            READINESS_WIRE_TO_INDEX,
+        )
+
+        reachable = set(READINESS_WIRE_TO_INDEX.values())
+        for index, label in (
+            (48, "Localization failed"),
+            (53, "Not docked"),
+            (20, "Lid open"),
+        ):
+            assert READINESS_STATE_LABELS[index] == label
+            assert index not in reachable, label
+
+    def test_an_unconfirmed_value_keeps_its_number(self):
+        """No invented name. A value this project has not confirmed
+        should say so -- guessing one is what caused the bug above."""
+        assert self._value(200) == "not_ready_200"
+        assert self._value(45) == "not_ready_45"
 
     def test_a_non_integer_does_not_raise(self):
-        assert self._value("busy") == "Not ready (busy)"
-        assert self._value(None) == "Ready"
+        assert self._value("nonsense") is not None
+        assert self._value(None) is not None
 
-
-# ============================================================================
-# WI-FI AND NETWORK READERS.
-#
-# Moved here from test_sensors.py (August 2026). `_raw_wifi_floor`,
-# `_raw_wifi_stability` and `_parse_netinfo_addr` are all defined in
-# this module.
-#
-# Not all the "Wifi" test classes came: the ones testing
-# `RoombaWifiHealthSensor` and its siblings went to test_sensor_cloud.py
-# instead, because those entity classes live there. The functions and
-# the entities that call them sit in different modules, and the test
-# file names now say which is which.
-# ============================================================================
-
-
-from unittest.mock import MagicMock  # noqa: E402
-
-# Imported from sensor_helpers directly. test_sensors.py reached these
-# through the sensor.py facade, which re-exports them -- which is why
-# searching for "who imports sensor_helpers" found nothing.
-import datetime  # noqa: E402
-from unittest.mock import patch  # noqa: E402
-
-from custom_components.roomba_plus.sensor import SENSORS  # noqa: E402
-from custom_components.roomba_plus.sensor_helpers import (  # noqa: E402
-    _parse_netinfo_addr,
-    _raw_wifi_floor,
-    _raw_wifi_stability,
-)
 
 
 class TestWifiFloor:
@@ -268,17 +303,11 @@ class TestParseNetinfoAddr:
 
 
 from custom_components.roomba_plus.sensor_helpers import (  # noqa: E402
-    _area_cleaned_today,
-    _battery_age_days,
-    _estimated_battery_eol,
-    _expire_minutes_remaining,
-    _last_mission_team_id,
     _mission_elapsed_value,
     _mop_behavior,
     _mop_clean_mode,
     _mop_tank_status,
     _phase_value,
-    _recharge_minutes_remaining,
     _ts_or_none,
 )
 
@@ -739,7 +768,6 @@ class TestMissionElapsedValue:
 
 # ── ERROR_CODE_LABELS ─────────────────────────────────────────────────────────
 
-from custom_components.roomba_plus.const import ERROR_CODE_LABELS
 
 
 

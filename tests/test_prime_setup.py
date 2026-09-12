@@ -842,10 +842,17 @@ class TestClassicShapedReadsOnPrime:
             for p in base.glob("*.py")
         )
 
-        assert count == 28, (
-            f"{count} call sites, expected 28 — a new one needs a decision "
+        # 29 since ClassicRoomCleaning.where_the_robot_is().
+        #
+        # THE DECISION THIS GUARD ASKS FOR: no Prime entry reaches it.
+        # `PrimeRoomCleaning` overrides `where_the_robot_is()` with its
+        # own implementation reading `cleanMissionStatus.p2mapId`, so
+        # the Classic-shaped read below is only ever executed by a
+        # Classic backend. No Prime fallback is needed.
+        assert count == 29, (
+            f"{count} call sites, expected 29 — a new one needs a decision "
             "about whether a Prime entry reaches it, and a Prime fallback "
-            "if it does. Four of the 28 are inside the fallback helpers "
+            "if it does. Four of the 29 are inside the fallback helpers "
             "themselves, which read Classic first on purpose."
         )
 
