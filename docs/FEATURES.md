@@ -50,7 +50,7 @@ marked in their own headings.
 |---|---|
 | Phase | Idle / Stopped detection beyond the standard HA states |
 | Error code | 80+ error codes with `description` and `action` attributes |
-| Readiness | Whether the robot is ready to start |
+| Readiness | Whether the robot is ready to start, and why not. **The state is a key, not the displayed text** — `ready`, `off_dock`, `bin_full` — so an automation compares against those, never against the translated label. A value this integration cannot name yet reads as `not_ready_<number>` rather than a guess |
 | Job initiator | Who triggered the current mission (`schedule`, `manual`, `demand`) |
 | Next scheduled clean | From `cleanSchedule2` or legacy `cleanSchedule` |
 | Battery level | Charge percentage |
@@ -611,6 +611,7 @@ Every mission is recorded to a persistent log (up to 365 entries, FIFO). Survive
 
 | Sensor | Notes |
 |---|---|
+| Last mission result | How the last mission ended: `completed`, `cancelled`, `error`, `stuck`, `stuck_and_resumed`, `stuck_and_abandoned`. Like readiness, **the state is a key** — translated for display, compared as written here |
 | Clean streak | Consecutive days with at least one completed mission |
 | Missions last 30 days | Count of completed missions |
 | Completion rate (30 days) | Completed ÷ total × 100 |

@@ -9,6 +9,19 @@ note are listed — most releases need zero action beyond updating.
 
 ---
 
+## v4.2.0b7 — from v4.2.0b6
+
+**The readiness sensor changes its values — check your automations.**
+It used to report English text as its state: `Ready`, `Off dock`. It now
+reports a key your language file translates: `ready`, `off_dock`.
+
+An automation comparing the state to `"Ready"` stops matching, and it
+stops silently. Compare to `"ready"` instead.
+
+Otherwise the same fixes as 4.1.8.
+
+---
+
 ## v4.2.0b6 — from v4.2.0b5
 
 Nothing to do. Same changes as 4.1.7 — see those notes.

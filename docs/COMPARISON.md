@@ -2,11 +2,14 @@
 
 # Roomba Integrations — Feature Comparison
 
-> **Fully re-verified August 2026**, all three columns read from source.
+> **All three columns read from source, August 2026.** The Roomba+ column
+> has been kept current since; the other two have not been re-read, so a
+> row added after that date states what Roomba+ does and leaves the
+> comparison to a reader who checks them.
 >
 > | Column | Version | How it was checked |
 > |---|---|---|
-> | **Roomba+** | v4.2.0b1 | this repository |
+> | **Roomba+** | v4.1.7 / v4.2.0b6 | this repository |
 > | **HA Core** `roomba` | ships with Home Assistant, `roombapy==1.8.1` | the installed component |
 > | **roomba_rest980** | v1.20.0-beta4 (`ia74/roomba_rest980`) | cloned from GitHub |
 >
@@ -163,6 +166,9 @@ does not apply to those robots at all.
 | Live cleaning path during mission | ✅ local MQTT `pose` stream ★ | ❌ | ❌ |
 | Map survives HA restart | ✅ hass.storage persistence ★ | ❌ | ❌ |
 | Room outline — Smart Map robots | ✅ UMF polygon overlay, per-room colour palette, embedded font, cached per map version (v2.9.0) | ❌ | ✅ rendered on UMF floor plan ³ |
+| Which room is being cleaned, live | ✅ advances when a travel leg ends, from the robot's own `Traveling` signal — works on firmware that emits no phase between rooms (v4.1.7) | ❌ | ❌ |
+| Plan versus observation, told apart | ✅ `room_progress_observed` says whether the robot has been seen to move on, or the name is still the first planned room (v4.1.7) | ❌ | ❌ |
+| Zones told apart from rooms | ✅ read from the robot's own `region_type`, so a zone is never commanded as a room (v4.1.6) | ❌ | ❌ |
 | Room outline — 900-series | ✅ progressive edge detection (v2.4+) ★ | ❌ | ❌ |
 | Zone / room selection | ✅ local via `region_id` | ❌ | ✅ select per room with real names ★ |
 | Zone selection — fully local | ✅ ★ | ❌ | ❌ cloud required |
