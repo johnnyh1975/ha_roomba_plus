@@ -317,7 +317,15 @@
         "name": "Area pulita totale"
       },
       "last_mission": {
-        "name": "Missioni – Ultima"
+        "name": "Missioni – Ultima",
+        "state": {
+          "completed": "Completata",
+          "cancelled": "Annullata",
+          "error": "Errore",
+          "stuck": "Bloccato",
+          "stuck_and_resumed": "Bloccato, poi ripreso",
+          "stuck_and_abandoned": "Bloccato, poi interrotto"
+        }
       },
       "phase": {
         "name": "Stato",
@@ -462,6 +470,7 @@
       "readiness": {
         "name": "Stato – Disponibilità",
         "state": {
+          "ready": "Pronto",
           "none": "Nessuno",
           "cliff": "Dislivello",
           "wheel_drop_both": "Caduta di entrambe le ruote",
@@ -608,7 +617,15 @@
         "name": "Missioni – Riepilogo ultima missione"
       },
       "last_mission_result": {
-        "name": "Missioni – Ultimo risultato"
+        "name": "Missioni – Ultimo risultato",
+        "state": {
+          "completed": "Completata",
+          "cancelled": "Annullata",
+          "error": "Errore",
+          "stuck": "Bloccato",
+          "stuck_and_resumed": "Bloccato, poi ripreso",
+          "stuck_and_abandoned": "Bloccato, poi interrotto"
+        }
       },
       "last_mission_duration": {
         "name": "Missioni – Ultima durata"

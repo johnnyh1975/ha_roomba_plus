@@ -317,7 +317,15 @@
         "name": "Área limpa total"
       },
       "last_mission": {
-        "name": "Missões – Última"
+        "name": "Missões – Última",
+        "state": {
+          "completed": "Concluída",
+          "cancelled": "Cancelada",
+          "error": "Erro",
+          "stuck": "Preso",
+          "stuck_and_resumed": "Preso e retomado",
+          "stuck_and_abandoned": "Preso e abandonado"
+        }
       },
       "phase": {
         "name": "Estado",
@@ -462,6 +470,7 @@
       "readiness": {
         "name": "Estado – Disponibilidade",
         "state": {
+          "ready": "Pronto",
           "none": "Nenhum",
           "cliff": "Desnível",
           "wheel_drop_both": "Queda de ambas as rodas",
@@ -608,7 +617,15 @@
         "name": "Missões – Resumo da última missão"
       },
       "last_mission_result": {
-        "name": "Missões – Último resultado"
+        "name": "Missões – Último resultado",
+        "state": {
+          "completed": "Concluída",
+          "cancelled": "Cancelada",
+          "error": "Erro",
+          "stuck": "Preso",
+          "stuck_and_resumed": "Preso e retomado",
+          "stuck_and_abandoned": "Preso e abandonado"
+        }
       },
       "last_mission_duration": {
         "name": "Missões – Última duração"

@@ -89,11 +89,33 @@ def _not_ready_value(entity: "IRobotEntity") -> str:
     raw = entity.clean_mission_status.get("notReady", 0)
     index = decode_not_ready(raw)
     if index is None:
-        return "Ready" if not raw else f"Not ready ({raw})"
+        return "ready" if not raw else f"not_ready_{raw}"
     if index == 0:
-        return "Ready"
+        return "ready"
     label = READINESS_STATE_LABELS.get(index)
-    return label if label else f"Not ready ({raw})"
+    return _readiness_slug(label) if label else f"not_ready_{raw}"
+
+
+def _readiness_slug(label: str) -> str:
+    """The translation key for a readiness label.
+
+    THIS SENSOR USED TO RETURN THE ENGLISH LABEL ITSELF -- "Ready",
+    "Off dock", "Not ready (68)". The translation files are keyed by
+    slug (`ready`, `off_dock`, `wheel_drop_both`), as Home Assistant
+    requires: a key cannot contain spaces or capitals.
+
+    So not one of the 73 translations ever applied. They were written,
+    reviewed and shipped in every language, and the sensor produced a
+    value none of them could match. A German user read "Off dock" with
+    "Nicht in Station" sitting unused in the file beside it.
+
+    Slugifying the label rather than keeping a second table: all 73
+    labels slugify onto existing keys, checked, so the tables cannot
+    drift apart by having two of them.
+    """
+    import re  # noqa: PLC0415
+
+    return re.sub(r"[^a-z0-9]+", "_", label.lower()).strip("_")
 
 
 def recent_pause_reasons(entity: "IRobotEntity") -> list[int]:

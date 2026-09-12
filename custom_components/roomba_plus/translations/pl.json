@@ -317,7 +317,15 @@
         "name": "Łączna posprzątana powierzchnia"
       },
       "last_mission": {
-        "name": "Misje – Ostatnia"
+        "name": "Misje – Ostatnia",
+        "state": {
+          "completed": "Zakończona",
+          "cancelled": "Anulowana",
+          "error": "Błąd",
+          "stuck": "Utknął",
+          "stuck_and_resumed": "Utknął, potem wznowił",
+          "stuck_and_abandoned": "Utknął, potem przerwał"
+        }
       },
       "phase": {
         "name": "Status",
@@ -462,6 +470,7 @@
       "readiness": {
         "name": "Status – Gotowość",
         "state": {
+          "ready": "Gotowy",
           "none": "Brak",
           "cliff": "Czujnik krawędzi",
           "wheel_drop_both": "Opadnięcie obu kół",
@@ -608,7 +617,15 @@
         "name": "Misje – Podsumowanie ostatniej misji"
       },
       "last_mission_result": {
-        "name": "Misje – Ostatni wynik"
+        "name": "Misje – Ostatni wynik",
+        "state": {
+          "completed": "Zakończona",
+          "cancelled": "Anulowana",
+          "error": "Błąd",
+          "stuck": "Utknął",
+          "stuck_and_resumed": "Utknął, potem wznowił",
+          "stuck_and_abandoned": "Utknął, potem przerwał"
+        }
       },
       "last_mission_duration": {
         "name": "Misje – Czas trwania ostatniej"

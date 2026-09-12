@@ -317,7 +317,15 @@
         "name": "Surface nettoyée à vie"
       },
       "last_mission": {
-        "name": "Missions – Dernière"
+        "name": "Missions – Dernière",
+        "state": {
+          "completed": "Terminé",
+          "cancelled": "Annulé",
+          "error": "Erreur",
+          "stuck": "Bloqué",
+          "stuck_and_resumed": "Bloqué, puis repris",
+          "stuck_and_abandoned": "Bloqué, puis abandonné"
+        }
       },
       "phase": {
         "name": "Statut",
@@ -462,6 +470,7 @@
       "readiness": {
         "name": "Statut – Disponibilité",
         "state": {
+          "ready": "Prêt",
           "none": "Aucun",
           "cliff": "Détecteur de vide",
           "wheel_drop_both": "Chute des deux roues",
@@ -608,7 +617,15 @@
         "name": "Missions – Résumé de la dernière mission"
       },
       "last_mission_result": {
-        "name": "Missions – Dernier résultat"
+        "name": "Missions – Dernier résultat",
+        "state": {
+          "completed": "Terminé",
+          "cancelled": "Annulé",
+          "error": "Erreur",
+          "stuck": "Bloqué",
+          "stuck_and_resumed": "Bloqué, puis repris",
+          "stuck_and_abandoned": "Bloqué, puis abandonné"
+        }
       },
       "last_mission_duration": {
         "name": "Missions – Dernière durée"

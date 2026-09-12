@@ -317,7 +317,15 @@
         "name": "Área limpiada total"
       },
       "last_mission": {
-        "name": "Misiones – Última"
+        "name": "Misiones – Última",
+        "state": {
+          "completed": "Completada",
+          "cancelled": "Cancelada",
+          "error": "Error",
+          "stuck": "Atascado",
+          "stuck_and_resumed": "Atascado y reanudado",
+          "stuck_and_abandoned": "Atascado y abandonado"
+        }
       },
       "phase": {
         "name": "Estado",
@@ -462,6 +470,7 @@
       "readiness": {
         "name": "Estado – Disponibilidad",
         "state": {
+          "ready": "Listo",
           "none": "Ninguno",
           "cliff": "Sensor de desnivel",
           "wheel_drop_both": "Ambas ruedas descolgadas",
@@ -608,7 +617,15 @@
         "name": "Misiones – Resumen de la última misión"
       },
       "last_mission_result": {
-        "name": "Misiones – Último resultado"
+        "name": "Misiones – Último resultado",
+        "state": {
+          "completed": "Completada",
+          "cancelled": "Cancelada",
+          "error": "Error",
+          "stuck": "Atascado",
+          "stuck_and_resumed": "Atascado y reanudado",
+          "stuck_and_abandoned": "Atascado y abandonado"
+        }
       },
       "last_mission_duration": {
         "name": "Misiones – Última duración"

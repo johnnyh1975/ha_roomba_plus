@@ -317,7 +317,15 @@
         "name": "Totaal schoongemaakt oppervlak"
       },
       "last_mission": {
-        "name": "Missies – Laatste"
+        "name": "Missies – Laatste",
+        "state": {
+          "completed": "Voltooid",
+          "cancelled": "Geannuleerd",
+          "error": "Fout",
+          "stuck": "Vastgelopen",
+          "stuck_and_resumed": "Vastgelopen, daarna hervat",
+          "stuck_and_abandoned": "Vastgelopen, daarna gestopt"
+        }
       },
       "phase": {
         "name": "Status",
@@ -462,6 +470,7 @@
       "readiness": {
         "name": "Status – Gereedheid",
         "state": {
+          "ready": "Gereed",
           "none": "Geen",
           "cliff": "Valsensor",
           "wheel_drop_both": "Beide wielen omlaag",
@@ -608,7 +617,15 @@
         "name": "Missies – Samenvatting laatste missie"
       },
       "last_mission_result": {
-        "name": "Missies – Laatste resultaat"
+        "name": "Missies – Laatste resultaat",
+        "state": {
+          "completed": "Voltooid",
+          "cancelled": "Geannuleerd",
+          "error": "Fout",
+          "stuck": "Vastgelopen",
+          "stuck_and_resumed": "Vastgelopen, daarna hervat",
+          "stuck_and_abandoned": "Vastgelopen, daarna gestopt"
+        }
       },
       "last_mission_duration": {
         "name": "Missies – Laatste duur"
