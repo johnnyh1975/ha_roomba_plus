@@ -321,7 +321,15 @@
         "name": "Gesamte gereinigte Fläche"
       },
       "last_mission": {
-        "name": "Missionen – Letzte"
+        "name": "Missionen – Letzte",
+        "state": {
+          "completed": "Abgeschlossen",
+          "cancelled": "Abgebrochen",
+          "error": "Fehler",
+          "stuck": "Steckengeblieben",
+          "stuck_and_resumed": "Steckengeblieben, dann fortgesetzt",
+          "stuck_and_abandoned": "Steckengeblieben, dann aufgegeben"
+        }
       },
       "phase": {
         "name": "Status",
@@ -466,6 +474,7 @@
       "readiness": {
         "name": "Status – Bereitschaft",
         "state": {
+          "ready": "Bereit",
           "none": "Keine",
           "cliff": "Absturzsensor",
           "wheel_drop_both": "Radabsenkung beidseitig",
@@ -612,7 +621,15 @@
         "name": "Missionen – Letzte Mission Zusammenfassung"
       },
       "last_mission_result": {
-        "name": "Missionen – Letztes Ergebnis"
+        "name": "Missionen – Letztes Ergebnis",
+        "state": {
+          "completed": "Abgeschlossen",
+          "cancelled": "Abgebrochen",
+          "error": "Fehler",
+          "stuck": "Steckengeblieben",
+          "stuck_and_resumed": "Steckengeblieben, dann fortgesetzt",
+          "stuck_and_abandoned": "Steckengeblieben, dann aufgegeben"
+        }
       },
       "last_mission_duration": {
         "name": "Missionen – Letzte Dauer"

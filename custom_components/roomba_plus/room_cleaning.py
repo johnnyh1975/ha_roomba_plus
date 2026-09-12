@@ -35,6 +35,8 @@ and it needs no flag to be interpreted correctly at 32 call sites.
 
 from __future__ import annotations
 
+import contextlib
+
 
 import logging
 from abc import ABC, abstractmethod
@@ -230,11 +232,28 @@ class RoomCleaningBackend(ABC):
     async def where_the_robot_is(self) -> tuple[str | None, bool]:
         """(map id, whether the robot is saying so right now).
 
-        Base default: whatever `_current_map_id()` gives, always as a
-        live reading. Only the Prime backend has more than one map to
-        tell apart, so only it needs the remembering half.
+        Base default: NOTHING, and not live.
+
+        This used to return `_current_map_id()` marked as a live
+        reading, on the stated assumption that "only the Prime backend
+        has more than one map to tell apart". That assumption is
+        false -- @Thonno runs a two-map Classic i7+, @ScenicSystemsLLC
+        two-map Classic robots -- and the value was wrong twice over.
+
+        On Classic `_current_map_id()` is the CLOUD's active map, which
+        is the most recently updated one. @ScenicSystemsLLC checked
+        directly: running a mission does not change it. So it is not a
+        location at all, not even a stale one, and returning it as a
+        live reading told consumers the robot was on a floor nobody had
+        established.
+
+        A Classic robot does not report where it is. Saying so is the
+        honest answer; a confident wrong floor is worse than none --
+        @Thonno's i7+ failed to start with "Smart Map localization
+        failed" precisely because the robot and the target map were on
+        different floors, and nothing could have warned him.
         """
-        return await self._current_map_id(), True
+        return None, False
 
     @abstractmethod
     async def get_segments(self) -> list[Any]:
@@ -581,7 +600,9 @@ class PrimeRoomCleaning(RoomCleaningBackend):
         # prefix, so they stay usable -- they just stop being rooms.
         zone_ids: set[str] = set()
 
+        seen_map_ids: list[str] = []
         for p2map_id in await self._all_map_ids():
+            seen_map_ids.append(p2map_id)
             try:
                 map_data = await self._map_metadata(p2map_id)
             except Exception:  # noqa: BLE001
@@ -670,6 +691,65 @@ class PrimeRoomCleaning(RoomCleaningBackend):
         # Handed to `get_segments()` so the zones it skipped here can be
         # offered under the `zid_` prefix instead of vanishing.
         self._zone_region_ids = zone_ids
+
+        # NOTHING FROM THE MAPS? FALL BACK TO THE NAMES WE ALREADY HAVE.
+        #
+        # This whole method reads `rooms_metadata`. When that is empty --
+        # a map not fetched yet, or a fetch that failed -- it returns
+        # nothing, and `clean_room` then reports every room the user
+        # named as unknown.
+        #
+        # Meanwhile `prime_room_names` holds those very names: it is what
+        # the room display and the selector show, so a user sees the
+        # rooms listed and is told they do not exist. @mrsnyds hit
+        # exactly that, passing "Guest Bath" and "Dining Room" -- both
+        # real rooms on his robot -- and getting "Unknown room(s)".
+        #
+        # ONLY WITH A SINGLE MAP. `prime_room_names` is merged across
+        # maps and carries no map of its own, so on a multi-map robot
+        # there is no honest way to qualify an id. Refusing there is
+        # correct; silently guessing a floor is not.
+        if not rooms:
+            # A read-only backend carries no config entry; callers that
+            # only wanted the map list pass none. Neither is an error.
+            _names = getattr(
+                getattr(self._config_entry, "runtime_data", None),
+                "prime_room_names",
+                None,
+            )
+            if len(seen_map_ids) == 1 and isinstance(_names, dict):
+                only_map = seen_map_ids[0]
+                # ZONES STAY OUT, EVEN HERE.
+                #
+                # `prime_room_names` is a flat id-to-name map with no
+                # region types in it, so this fallback cannot tell a
+                # zone from a room by itself -- and offering a zone as a
+                # room is the bug fixed one release earlier: the command
+                # goes out with a room id that does not exist, the robot
+                # finds nothing and reports success.
+                #
+                # `discovered_zone_ids` is what the config entry has
+                # recorded as zones. It is the only zone knowledge
+                # available when map metadata is not.
+                _known_zones = {
+                    str(z)
+                    for z in (
+                        getattr(self._config_entry, "options", None) or {}
+                    ).get("discovered_zone_ids", ())
+                } | {str(z) for z in zone_ids}
+
+                rooms = {
+                    str(name): f"{only_map}/{region_id}"
+                    for region_id, name in _names.items()
+                    if region_id and name and str(region_id) not in _known_zones
+                }
+                if rooms:
+                    _LOGGER.debug(
+                        "roomba_plus: map metadata gave no rooms for %s; "
+                        "using the %d cached room names instead",
+                        self._data.blid, len(rooms),
+                    )
+
         return rooms
 
     _SEGMENT_PREFIX = "rid_"
@@ -1420,6 +1500,42 @@ class ClassicRoomCleaning(RoomCleaningBackend):
                 translation_key="map_updating",
             )
 
+    async def where_the_robot_is(self) -> tuple[str | None, bool]:
+        """The floor the robot was last sent to, never a live reading.
+
+        A CLASSIC ROBOT DOES NOT SAY WHERE IT IS. There is no
+        `p2mapId` in its `cleanMissionStatus` -- that is Prime's.
+
+        But it does not need to. `lastCommand.pmap_id` is the map the
+        last command targeted, and a robot that finished a mission on
+        one floor is standing on that floor: it drove back to the dock
+        there. Carried robots exist; missions that end somewhere else
+        do not.
+
+        WHY NOT `active_pmap_id`: it is the CLOUD's notion, the most
+        recently updated map. @ScenicSystemsLLC checked it directly on a
+        two-map Classic robot -- two missions run against one map,
+        forced fresh reads after each, and the active map never moved
+        off the other one. It is not a location.
+
+        The two disagree in the field, and `lastCommand` is the one that
+        tracks reality: on his Braava the last command named the map she
+        actually cleaned while the active map named a different one. On
+        @Thonno's two-map i7+ the same split appears, and his start
+        failed with "Smart Map localization failed" -- the robot was on
+        the floor `lastCommand` names, not the one the cloud calls
+        active.
+
+        Marked NOT live, always. This is a memory, and a memory is right
+        until somebody carries the robot upstairs.
+        """
+        with contextlib.suppress(Exception):
+            state = self._data.roomba_reported_state() or {}
+            pmap_id = (state.get("lastCommand") or {}).get("pmap_id")
+            if pmap_id:
+                return str(pmap_id), False
+        return None, False
+
     async def map_names(self) -> dict[str, str]:
         """{pmap_id: display name}, from the cloud map list.
 
@@ -1628,6 +1744,34 @@ class ClassicRoomCleaning(RoomCleaningBackend):
                 "start a whole-house clean instead. Wait for the map to load, "
                 "or start the robot without naming rooms."
             )
+        # WRONG FLOOR? SAY SO, BUT SEND IT.
+        #
+        # The Prime path has warned about this for a while. Classic
+        # could not, because nothing here knew where the robot was --
+        # and Classic is where it matters most: @Thonno's two-map i7+
+        # and @ScenicSystemsLLC's household are both Classic.
+        #
+        # `where_the_robot_is()` reads `lastCommand.pmap_id` -- the
+        # floor the robot was last sent to, which is where it drove back
+        # to its dock. Never live, always a memory.
+        #
+        # NOT BLOCKED. Somebody may have carried the robot upstairs, and
+        # then this command is exactly right. But when @Thonno's start
+        # failed with "Smart Map localization failed", nothing in the
+        # log connected that to the floor -- and this is the line that
+        # would have.
+        with contextlib.suppress(Exception):
+            _on_map, _is_live = await self.where_the_robot_is()
+            if _on_map and pmap_id and _on_map != pmap_id:
+                _LOGGER.warning(
+                    "roomba_plus: cleaning map %s, but %s was last sent to "
+                    "map %s and should be standing there. Sending anyway -- "
+                    "if the robot was carried to the other floor this is "
+                    "right, otherwise expect it to refuse with a "
+                    "localisation error and stay on the dock.",
+                    pmap_id, self._data.blid, _on_map,
+                )
+
         user_pmapv_id: str = (
             (self._cloud.active_user_pmapv_id
              if self._data.has_cloud else None)
@@ -1961,6 +2105,29 @@ class ClassicRoomCleaning(RoomCleaningBackend):
                 translation_domain=DOMAIN,
                 translation_key="no_valid_segments",
             )
+
+        # THE BUTTON PATH NEEDS THE SAME WARNING AS THE SERVICE.
+        #
+        # Prime's `clean_segments()` hands off to its `clean_rooms()`
+        # and inherits the check there. This one does not -- it is a
+        # separate method on purpose -- so the warning had to be
+        # repeated rather than inherited, and was not.
+        #
+        # Which means pressing "Clean selected room" on a two-map
+        # Classic robot, the most ordinary way to reach this code, was
+        # the one route with nothing to say about floors.
+        _target_map = next(iter(by_map), "")
+        with contextlib.suppress(Exception):
+            _on_map, _is_live = await self.where_the_robot_is()
+            if _on_map and _target_map and _on_map != _target_map:
+                _LOGGER.warning(
+                    "roomba_plus: cleaning map %s, but %s was last sent to "
+                    "map %s and should be standing there. Sending anyway -- "
+                    "if the robot was carried to the other floor this is "
+                    "right, otherwise expect it to refuse with a "
+                    "localisation error and stay on the dock.",
+                    _target_map, self._data.blid, _on_map,
+                )
 
         # IA74-ZONE full (v2.7.0): split room IDs from zone IDs.
         # Zone segment IDs were encoded as "zid_{zone_id}" after prefix-stripping

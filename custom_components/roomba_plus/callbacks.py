@@ -1668,7 +1668,30 @@ def make_mission_callback(
                 # "entered travel" would over-count -- @ScenicSystemsLLC
                 # saw six excursions on a seven-room run, two of which
                 # were not room changes.
-                _mode = mission.get("operatingMode")
+                # CLASSIC ONLY. Bit 0 = `Traveling` is confirmed twice
+                # over for Classic firmware -- the app names it, and
+                # `MissionStatusMessage::get_operating_mode()` sets it
+                # when the internal mode is `CLEANING_MODE_TRAVEL`.
+                #
+                # PRIME HAS NO SUCH PRODUCER. `operatingMode` appears
+                # exactly once in its firmware, as an entry in a
+                # pass-through shadow key list; there is no counterpart
+                # to that function and the names `Traveling`,
+                # `Vacuuming`, `Mopping` do not occur at all. Prime
+                # models a repositioning drive as a TIMELINE EVENT
+                # (`travel`, `traversal`, `reloc`) instead.
+                #
+                # Prime robots do report the field -- @theChef163's
+                # shows `operatingMode: 0` -- so an absence check is not
+                # enough. If it ever carried a different meaning there,
+                # this would advance rooms on the wrong signal. Scoped
+                # rather than trusted.
+                _mode = (
+                    mission.get("operatingMode")
+                    if getattr(entry.runtime_data, "prime_status_coordinator", None)
+                    is None
+                    else None
+                )
                 _travelling = bool(_mode & 1) if isinstance(_mode, int) else None
                 _returned_from_travel = (
                     _travelling is False

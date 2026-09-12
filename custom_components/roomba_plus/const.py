@@ -450,7 +450,7 @@ ATTR_TWO_PASS: Final = "two_pass"
 #: hoping: 32 is confirmed on Prime and unknown on Classic, and this is
 #: not a field to be adventurous with -- it decides whether water goes
 #: on the floor.
-# THE FULL `operatingMode` BITMASK, for reference.
+# THE FULL `operatingMode` BITMASK, for reference. CLASSIC ONLY.
 #
 # Decoded from the iRobot app's own `core::OperatingMode::toString()` in
 # `libcore_base.so`: each block there loads a Type value, calls
@@ -524,6 +524,28 @@ ATTR_TWO_PASS: Final = "two_pass"
 #
 # `512` in the tables below is bit 9 and appears in NO decoded block.
 # Its name here is ours, not the app's.
+#
+# PRIME DOES NOT WORK THIS WAY. `operatingMode` occurs exactly once in
+# Prime firmware -- an entry in a pass-through shadow key list beside
+# `oModeStats`, `rid`, `zid`, `pmap_id`, `regions`. There is no
+# counterpart to `MissionStatusMessage::get_operating_mode()`, and the
+# names `Traveling`, `Vacuuming`, `Mopping` do not appear anywhere.
+#
+# Prime models a repositioning drive as a MISSION TIMELINE EVENT
+# instead. Its vocabulary, from `everest-server`:
+#
+#     start · fin · oClean · room · zone · polygon · disc · explore ·
+#     travel · traversal · reloc · plan · cmd · pause · kidnap ·
+#     charge · error · binFull
+#
+# That fits the split in that platform: navigation and mission history
+# belong to the 3irobotix layer, while `operatingMode` is an iRobot
+# cloud field passed through. Prime robots DO report it -- observed as
+# `0` -- so absence is not a safe test; anything reading it for travel
+# has to be scoped to Classic explicitly.
+#
+# `travel` and `traversal` in that list are the Prime equivalent, and
+# the obvious place to look if room progress is ever wanted there.
 
 CLEANING_MODES_PRIME: Final[dict[str, int]] = {
     "vacuum": 2,
@@ -1273,9 +1295,131 @@ def decode_not_ready(raw: object) -> int | None:
         return None
     if raw < 0:
         return None
-    return raw if raw <= 10 else raw - 3
+    mapped = READINESS_WIRE_TO_INDEX.get(raw)
+    if mapped is not None:
+        return mapped
+    return raw if raw <= 10 else None
+
+
+#: Wire value -> index into READINESS_STATE_LABELS, where confirmed.
+#:
+#: THERE IS NO OFFSET RULE. This decoder applied `raw <= 10 ? raw :
+#: raw - 3`, taken from the app, and it is wrong for most of the range.
+#: The firmware maps wire values to states through an ARBITRARY LOOKUP
+#: TABLE whose order is deliberately broken -- `BUMPED` sits at wire 33
+#: while its state is index 21, and no arithmetic connects the two.
+#:
+#: The old rule happened to work below 10, where wire and index were
+#: assigned in step, and happened to look plausible above 60, where they
+#: run parallel again but four apart rather than three. Everywhere else
+#: it produced a confident wrong label.
+#:
+#: WHAT IT COST: two field reports. @Thonno's i7+ and
+#: @ScenicSystemsLLC's S9+ both reported wire 68 while docked and
+#: charging, and this decoder called it "Off dock". It is `LOADING_MAP`.
+#: @Thonno had also noticed his map-saving notification stop and his
+#: automations stall -- the same cause, read as a docking fault.
+#:
+#: Confirmed pairs only. An unconfirmed value above 10 returns None and
+#: is reported as its raw number, because a wrong state name sends
+#: someone to the wrong place -- which is exactly what happened here.
+#:
+#: EXTRACTED FROM `ruby-0.7.12`, initialiser @0x008fb0b8, where the wire
+#: value is the cloud constant minus 200. The wire values and firmware
+#: names are read from the binary; the mapping onto a state index is
+#: inference by name, and it was checked independently against this
+#: project's own 73-entry label table -- all 22 land on a label whose
+#: name matches.
+#:
+#: CONFIRMED ACROSS TWO FIRMWARES. Read from `ruby` first, then found in
+#: `lewis` -- which builds the same table as half-word stores on the
+#: stack rather than 32-bit immediates, which is why it took a second
+#: attempt to locate. The `CleaningResult` keys are shifted by one
+#: between them (lewis' enum has one extra entry below index 31), but
+#: the WIRE VALUES are identical. The table travels between generations.
+#:
+#: `soho` and `sanmarino` remain unread. Nothing suggests they differ.
+#:
+#: WIRE 99 IS NOT MAPPED HERE, ON PURPOSE. The firmware returns it for
+#: anything it cannot express -- `ctv_get_cloud_not_ready` logs
+#: "UNKNOWN START REFUSE" and returns 299, i.e. wire 99. The app's enum
+#: does carry `Unknown` at index 71, confirmed. But the step FROM 99 TO
+#: 71 was never found in the app, and this table takes only what is
+#: read, not what is plausible. 99 therefore shows as `not_ready_99`,
+#: which is at least honest about being unknown.
+#:
+#: THREE WIRE VALUES FROM lewis ARE STILL UNNAMED: 25, 32 and 40 are in
+#: its table and absent from ruby's. Their meaning needs lewis'
+#: `CleaningResult` enum counted out -- the extra entry that shifts the
+#: keys sits between index 17 and 31.
+#:
+#: SOME STATES HAVE NO WIRE VALUE AT ALL. `LocalizationFailed`,
+#: `NotDocked`, `LidOpen`, `ChargeTimeout`, `NoPad` and `OtaUpdate` are
+#: in the app's enum and absent from the firmware's map. A robot that
+#: hits one reports **99** -- `UNKNOWN START REFUSE`, logged as such by
+#: `ctv_get_cloud_not_ready`.
+#:
+#: That matters for reading reports: @Thonno's start failed with error
+#: 224 "Smart Map localization failed", and `notReady` showed 68
+#: (LOADING_MAP) rather than a localisation state. Not a contradiction
+#: -- the firmware cannot express that one through this field.
+READINESS_WIRE_TO_INDEX: Final[dict[int, int]] = {
+    # Below 10 wire and index coincide; firmware-confirmed.
+    1: 1,    # CLIFFED            -> Cliff
+    2: 2,    # WHEEL_DROP_BOTH    -> Wheel drop both
+    3: 3,    # WHEEL_DROP_LEFT    -> Wheel drop left
+    4: 4,    # WHEEL_DROP_RIGHT   -> Wheel drop right
+    6: 6,    # MAIN_BRUSH_STALLED -> Brush stall
+    7: 7,    # BIN_NOT_PRESENT    -> No bin
+    10: 10,  # INSIDE_RCON            -> In rcon
+    15: 12,  # LOW_BATTERY            -> Insufficient charge
+    16: 13,  # BIN_FULL               -> Bin full
+    18: 15,  # UPGRADING_SOFTWARE     -> In cloud upgrade
+    21: 18,  # SAFETY_OFFLINE         -> Safety offline
+    22: 19,  # GYRO                   -> Gyro
+    24: 22,  # MAP_VERSION_MISMATCH   -> Map version mismatch
+    26: 26,  # POWER_OFFLINE          -> Power offline
+    28: 31,  # INVALID_CAL            -> Invalid cal
+    29: 32,  # INSIDE_HALO            -> In dock halo
+    31: 23,  # TANK_LOW               -> Tank low
+    34: 17,  # INVALID_PAD            -> Invalid pad
+    35: 33,  # PAD_DETECTION_TIMEOUT  -> Pad detection timeout
+    36: 34,  # EVAC_CLOGGED           -> Auto evacuation clogged
+    51: 38,  # CAMERA_DEAD            -> Dead camera
+    57: 39,  # BACKUP_REFUSED         -> Backup refused
+    72: 66,  # TANK_LEAKING           -> Tank leaking
+    78: 69,  # CSSC_HW_MISMATCH       -> Cleaning head hw mismatch
+    # FOUR FIRMWARE CONSTANTS, ONE STATE. The app has only
+    # `BatteryAuthError` for all of them, so three wire values collapse
+    # onto it: BATTERY_AUTH_FAILED, CHARGING_REPLACE_BATT /
+    # BATTERY_NOT_INITIALIZED, CHARGING_REMOVE_BATT. Distinguishing
+    # them would need labels this project does not have.
+    23: 29,  # BATTERY_AUTH_FAILED    -> Battery auth error
+    37: 29,  # CHARGING_REPLACE_BATT / BATTERY_NOT_INITIALIZED
+    38: 29,  # CHARGING_REMOVE_BATT
+    # WIRE 27 IS DELIBERATELY ABSENT.
+    #
+    # The firmware calls it `PP_COMM` and the closest app state is
+    # `MobilityOffline`, but "Peripheral Processor comms" is not
+    # obviously mobility, and the person who extracted it said they
+    # would hesitate before adopting that bridge.
+    #
+    # A wrong label sends someone to the wrong hardware. Wire 27 shows
+    # as `not_ready_27` until somebody confirms what it means -- which
+    # is the whole reason unmapped values report their number.
+    # Where the arithmetic breaks down entirely.
+    33: 21,  # BUMPED             -> Bumped
+    39: 37,  # SAVING_MAP         -> Saving map
+    # The 62-68 block, four apart rather than three.
+    66: 62,  # RAAS_SUBSCRIPTION_ERROR -> Subscription expired
+    67: 63,  # VISION_BOARD_DEAD       -> Dead navigation board
+    68: 64,  # LOADING_MAP             -> Downloading map
+    69: 65,  # DRC_OFF_DOCK            -> Off dock
+}
 # Escalation thresholds for the map_retrain_workflow Repair Issue: WARNING
-# once notReady has read 67 (DownloadingMap) continuously for this long (a
+# once notReady has read 68 (LOADING_MAP, shown as DownloadingMap)
+# continuously for this long -- 67 is VISION_BOARD_DEAD and was the wrong
+# value to watch (a
 # normal retrain
 # is usually done within a few minutes; this is a conservative first-pass
 # value, not derived from field data), ERROR if it's still set after the

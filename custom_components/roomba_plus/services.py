@@ -33,6 +33,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.storage import Store
 
 from .const import (
+    PRIME_ERROR_SEVERITY,
     cleaning_modes_for,
     ATTR_ORDERED,
     IROBOT_PART_ROLE_FILTER,
@@ -279,9 +280,27 @@ async def _async_warn_if_swallowed(
     # the code, not from a report.
 
     not_ready = status.get("notReady")
+    err = status.get("error")
+
+    # SAY WHAT THE NUMBERS MEAN, not just what they are.
+    #
+    # @Thonno's i7+ reported `error=224, notReady=68` here and had to
+    # ask what that was -- and `roombapy` itself logged "Error looking
+    # up Roomba error message: 224" alongside, so the raw number was
+    # the only thing anyone saw. This module already carries the
+    # catalogue; it simply was not consulted at the one moment it
+    # mattered.
+    _detail = ""
+    with contextlib.suppress(Exception):
+        entry = PRIME_ERROR_SEVERITY.get(int(err or 0)) or {}
+        if entry.get("label"):
+            _detail = f" Error {err} is {entry['label']!r}."
+            if entry.get("action"):
+                _detail += f" {entry['action']}"
+
     _LOGGER.warning(
         "%s was accepted by the robot but no mission started within %ds "
-        "(phase=%r, notReady=%r, error=%r). The robot takes a command "
+        "(phase=%r, notReady=%r, error=%r).%s The robot takes a command "
         "and silently ignores it in several situations: a cliff sensor "
         "reading a dark floor as a drop-off, a region-targeted start "
         "sent while the robot is away from its dock, or a stale map "
@@ -290,7 +309,8 @@ async def _async_warn_if_swallowed(
         _SWALLOWED_COMMAND_GRACE_SEC,
         status.get("phase"),
         not_ready,
-        status.get("error"),
+        err,
+        _detail,
     )
 
 
@@ -492,6 +512,33 @@ async def async_handle_clean_zone(call: ServiceCall) -> None:
                     prime_region_names_from_command(config_entry.runtime_data)
                 )
             names_by_id.update(config_entry.runtime_data.prime_room_names or {})
+
+            # ROOMS ARE NOT ZONES, and this map holds both.
+            #
+            # `prime_room_names` is flat: every region on the map, with
+            # no type attached. Resolving a name against it accepts a
+            # ROOM name here and sends its id with a `zid_` prefix --
+            # the mirror image of the bug where a zone went out as a
+            # room and the robot cleaned nothing while reporting
+            # success.
+            #
+            # `discovered_zone_ids` is what the config entry has
+            # recorded as zones; without it there is no way to tell the
+            # two apart from names alone. An entry that has none
+            # recorded yet keeps the old behaviour rather than refusing
+            # everything.
+            _zone_only = {
+                str(z)
+                for z in (getattr(config_entry, "options", None) or {}).get(
+                    "discovered_zone_ids", ()
+                )
+            }
+            if _zone_only:
+                names_by_id = {
+                    zid: name
+                    for zid, name in names_by_id.items()
+                    if str(zid) in _zone_only
+                }
 
             names_to_ids = {name: zid for zid, name in names_by_id.items()}
             zone_ids = []

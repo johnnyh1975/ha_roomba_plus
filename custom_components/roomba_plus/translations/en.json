@@ -321,7 +321,15 @@
         "name": "Lifetime cleaned area"
       },
       "last_mission": {
-        "name": "Missions – Last"
+        "name": "Missions – Last",
+        "state": {
+          "completed": "Completed",
+          "cancelled": "Cancelled",
+          "error": "Error",
+          "stuck": "Stuck",
+          "stuck_and_resumed": "Stuck, then resumed",
+          "stuck_and_abandoned": "Stuck, then gave up"
+        }
       },
       "phase": {
         "name": "Status",
@@ -466,6 +474,7 @@
       "readiness": {
         "name": "Status – Readiness",
         "state": {
+          "ready": "Ready",
           "none": "None",
           "cliff": "Cliff",
           "wheel_drop_both": "Wheel drop both",
@@ -612,7 +621,15 @@
         "name": "Missions – Last mission summary"
       },
       "last_mission_result": {
-        "name": "Missions – Last result"
+        "name": "Missions – Last result",
+        "state": {
+          "completed": "Completed",
+          "cancelled": "Cancelled",
+          "error": "Error",
+          "stuck": "Stuck",
+          "stuck_and_resumed": "Stuck, then resumed",
+          "stuck_and_abandoned": "Stuck, then gave up"
+        }
       },
       "last_mission_duration": {
         "name": "Missions – Last duration"
