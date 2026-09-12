@@ -9,6 +9,25 @@ note are listed — most releases need zero action beyond updating.
 
 ---
 
+## v4.1.8 — from v4.1.7
+
+Nothing to do.
+
+**If `clean_room` ever told you a room does not exist** while you could
+see it in the selector, that is fixed.
+
+**The readiness sensor changes its values — check your automations.**
+It used to report English text as its state: `Ready`, `Off dock`,
+`Not ready (68)`. It now reports a key that your language file
+translates for display: `ready`, `off_dock`, `not_ready_68`.
+
+The dashboard will read better than before. But an automation comparing
+the state to `"Ready"` stops matching, and it stops silently. Compare to
+`"ready"` instead — lower case, and the displayed German text is never
+what you compare against.
+
+---
+
 ## v4.1.7 — from v4.1.6
 
 Nothing to do.
