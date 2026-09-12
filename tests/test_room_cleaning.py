@@ -2586,3 +2586,284 @@ class TestAZoneKnowsItsMapEvenWhenTheRobotDoesNot:
         await backend.clean_segments(["zid_100"])
 
         assert backend._send_region_command.await_args[0][0] == "ONLY"
+
+
+class TestTheServiceKnowsTheRoomsTheDisplayShows:
+    """@mnsnyds passed "Guest Bath" and "Dining Room" to `clean_room`.
+    Both are real rooms on his robot -- they appear in his room names,
+    in the selector and in the display. The service answered:
+
+        Unknown room(s) for vacuum.ronald_roomba:
+        ['Guest Bath', 'Dining Room']
+
+    The name matcher handles both fine, including whitespace and case.
+    What was empty was the LIST it matched against.
+
+    TWO SOURCES FOR THE SAME NAMES. The display and the selector read
+    `prime_room_names`; `available_rooms()` read only `rooms_metadata`.
+    When map metadata is empty -- not fetched, or a failed fetch -- the
+    service sees no rooms at all while the names sit visible beside it.
+    """
+
+    #: His nine rooms, from his own diagnostics.
+    HIS_ROOMS = {
+        "10": "Great Room", "11": "Master Bedroom", "17": "Kitchen",
+        "18": "Dining Room", "13": "Guest Room", "12": "Master Bath",
+        "14": "Hallway", "16": "Master Closet", "15": "Guest Bath",
+    }
+
+    def _backend(self, map_ids, names=None):
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        from custom_components.roomba_plus.room_cleaning import (
+            PrimeRoomCleaning,
+        )
+
+        backend = PrimeRoomCleaning.__new__(PrimeRoomCleaning)
+        backend._data = MagicMock()
+        backend._data.blid = "BLID1"
+        entry = MagicMock()
+        entry.runtime_data.prime_room_names = (
+            self.HIS_ROOMS if names is None else names
+        )
+        backend._config_entry = entry
+        backend._all_map_ids = AsyncMock(return_value=map_ids)
+        backend._current_map_id = AsyncMock(
+            return_value=map_ids[0] if map_ids else None
+        )
+        backend._map_metadata = AsyncMock(
+            return_value=SimpleNamespace(rooms_metadata=[])
+        )
+        return backend
+
+    async def test_his_request_resolves(self) -> None:
+        from custom_components.roomba_plus.room_cleaning import (
+            match_room_names,
+        )
+
+        available = await self._backend(["MAP-A"]).available_rooms()
+        room_ids, unknown = match_room_names(
+            available, ["Guest Bath", "Dining Room"]
+        )
+
+        assert unknown == []
+        assert room_ids == ["MAP-A/15", "MAP-A/18"]
+
+    async def test_every_named_room_comes_through(self) -> None:
+        available = await self._backend(["MAP-A"]).available_rooms()
+
+        assert len(available) == len(self.HIS_ROOMS)
+
+    async def test_two_maps_still_refuse(self) -> None:
+        """`prime_room_names` is merged across maps and carries no map of
+        its own. Qualifying an id on a two-map robot would be guessing a
+        floor -- refusing is the honest answer."""
+        available = await self._backend(["MAP-A", "MAP-B"]).available_rooms()
+
+        assert available == {}
+
+    async def test_metadata_wins_when_it_has_anything(self) -> None:
+        """The fallback is last-resort. Real metadata carries per-map,
+        user-set names and must not be displaced by the merged cache."""
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        backend = self._backend(["MAP-A"])
+        backend._map_metadata = AsyncMock(
+            return_value=SimpleNamespace(
+                rooms_metadata=[
+                    SimpleNamespace(
+                        room_id="10", name="Renamed Room", region_type="rid"
+                    )
+                ]
+            )
+        )
+
+        available = await backend.available_rooms()
+
+        assert available == {"Renamed Room": "MAP-A/10"}
+
+    async def test_no_names_cached_is_not_an_error(self) -> None:
+        backend = self._backend(["MAP-A"], names=None if False else {})
+
+        assert await backend.available_rooms() == {}
+
+
+class TestTheNameFallbackDoesNotUndoTheZoneFix:
+    """The cached-name fallback added for @mrsnyds nearly reintroduced
+    @theChef163's bug one release later.
+
+    `prime_room_names` is a flat id-to-name map with NO region types in
+    it. Building rooms from it offers every region as a room -- zones
+    included -- which is exactly the fault that made his "Clean selected
+    room" start a mission that ended in 71 seconds with nothing cleaned.
+
+    `discovered_zone_ids` on the config entry is the only zone knowledge
+    available when map metadata is not.
+    """
+
+    def _backend(self, names, zone_ids=()):
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        from custom_components.roomba_plus.room_cleaning import (
+            PrimeRoomCleaning,
+        )
+
+        backend = PrimeRoomCleaning.__new__(PrimeRoomCleaning)
+        backend._data = MagicMock()
+        backend._data.blid = "BLID1"
+        entry = MagicMock()
+        entry.runtime_data.prime_room_names = names
+        entry.options = {"discovered_zone_ids": list(zone_ids)}
+        backend._config_entry = entry
+        backend._all_map_ids = AsyncMock(return_value=["MAP-A"])
+        backend._current_map_id = AsyncMock(return_value="MAP-A")
+        backend._map_metadata = AsyncMock(
+            return_value=SimpleNamespace(rooms_metadata=[])
+        )
+        return backend
+
+    async def test_a_known_zone_is_not_offered_as_a_room(self) -> None:
+        """His layout: 100 is the zone "Litter", 10-19 are rooms."""
+        backend = self._backend(
+            {"100": "Litter", "10": "Dining Room", "14": "Kitchen"},
+            zone_ids=["100"],
+        )
+
+        rooms = await backend.available_rooms()
+
+        assert "Litter" not in rooms
+        assert sorted(rooms) == ["Dining Room", "Kitchen"]
+
+    async def test_the_rooms_still_come_through(self) -> None:
+        backend = self._backend({"15": "Guest Bath", "18": "Dining Room"})
+
+        rooms = await backend.available_rooms()
+
+        assert sorted(rooms) == ["Dining Room", "Guest Bath"]
+
+    async def test_the_ids_carry_their_map(self) -> None:
+        """Qualified, so `clean_rooms()` takes the explicit-map path and
+        never needs the region-to-map lookup -- which reads the same
+        empty metadata and would have failed the same way."""
+        backend = self._backend({"15": "Guest Bath"})
+
+        rooms = await backend.available_rooms()
+
+        assert rooms["Guest Bath"] == "MAP-A/15"
+
+    async def test_the_map_lookup_is_not_consulted(self) -> None:
+        from unittest.mock import AsyncMock
+
+        from custom_components.roomba_plus.room_cleaning import (
+            match_room_names,
+        )
+
+        backend = self._backend({"15": "Guest Bath", "18": "Dining Room"})
+        backend._raise_if_map_updating = MagicMock()
+        backend._send_region_command = AsyncMock()
+        backend._note_mission_plan = MagicMock()
+        backend._region_to_map = AsyncMock(
+            side_effect=AssertionError("should not be needed")
+        )
+
+        available = await backend.available_rooms()
+        room_ids, _ = match_room_names(
+            available, ["Guest Bath", "Dining Room"]
+        )
+        await backend.clean_rooms(room_ids)
+
+        p2map_id, regions = backend._send_region_command.await_args[0][:2]
+        assert p2map_id == "MAP-A"
+        assert regions == ["15", "18"]
+
+
+class TestClassicKnowsWhichFloorItIsOn:
+    """A Classic robot reports no `p2mapId` -- that is Prime's field --
+    so `where_the_robot_is()` returned nothing for it, and the wrong-floor
+    warning could never fire on the generation that needed it most.
+
+    IT DOES NOT NEED TO REPORT ONE. `lastCommand.pmap_id` names the map
+    the robot was last sent to, and a robot that finished a mission on a
+    floor is standing on that floor: it drove back to the dock there.
+
+    NOT `active_pmap_id`, which is the cloud's most-recently-updated map.
+    @ScenicSystemsLLC checked directly -- two missions against one map,
+    forced fresh reads, and the active map never moved off the other.
+    On his Braava and on @Thonno's i7+ the two disagree, and
+    `lastCommand` is the one that tracks reality.
+
+    @Thonno's start failed with "Smart Map localization failed" because
+    the robot was on the floor `lastCommand` names. Nothing in the log
+    connected the error to the floor.
+    """
+
+    @staticmethod
+    def _backend(last_command):
+        from custom_components.roomba_plus.room_cleaning import (
+            ClassicRoomCleaning,
+        )
+
+        backend = ClassicRoomCleaning.__new__(ClassicRoomCleaning)
+        backend._data = MagicMock()
+        backend._data.blid = "BLID1"
+        backend._data.roomba_reported_state = MagicMock(
+            return_value={"lastCommand": last_command}
+        )
+        return backend
+
+    async def test_the_last_commanded_map_is_the_remembered_floor(self) -> None:
+        """His real values: the command named one map, the cloud another."""
+        backend = self._backend({"pmap_id": "oGwE49YGTeWffssbEVx65g"})
+
+        on_map, is_live = await backend.where_the_robot_is()
+
+        assert on_map == "oGwE49YGTeWffssbEVx65g"
+
+    async def test_it_is_never_reported_as_live(self) -> None:
+        """A memory, not a measurement. It is right until somebody
+        carries the robot upstairs, and a consumer has to be able to
+        tell the difference."""
+        backend = self._backend({"pmap_id": "MAP-A"})
+
+        _on_map, is_live = await backend.where_the_robot_is()
+
+        assert is_live is False
+
+    async def test_no_last_command_means_no_claim(self) -> None:
+        """A robot that has never been sent anywhere has no floor, and
+        guessing one would be worse than admitting it."""
+        for empty in ({}, {"pmap_id": None}, {"pmap_id": ""}):
+            backend = self._backend(empty)
+
+            assert await backend.where_the_robot_is() == (None, False)
+
+    def test_the_warning_reaches_the_classic_path(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus.room_cleaning import (
+            ClassicRoomCleaning,
+        )
+
+        source = inspect.getsource(ClassicRoomCleaning.clean_rooms)
+
+        assert "where_the_robot_is()" in source
+        assert "Sending anyway" in source
+
+    def test_the_warning_does_not_block(self) -> None:
+        """Somebody may have carried the robot. Refusing would turn a
+        hint into an obstacle."""
+        import inspect
+
+        from custom_components.roomba_plus.room_cleaning import (
+            ClassicRoomCleaning,
+        )
+
+        source = inspect.getsource(ClassicRoomCleaning.clean_rooms)
+        # From the CALL, not the comment that mentions it first.
+        block = source[source.index("await self.where_the_robot_is()"):]
+
+        assert "_LOGGER.warning" in block[:600]
+        assert "raise" not in block[:600]

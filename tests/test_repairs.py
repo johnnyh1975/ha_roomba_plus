@@ -2879,40 +2879,75 @@ class TestCleanupRemovedRepairs:
 
 
 class TestDecodeNotReady:
-    """`cleanMissionStatus.notReady` as the iRobot Home app reads it:
+    """`cleanMissionStatus.notReady` is decoded through an explicit
+    wire-to-index table, not a formula.
 
-        mReadyState = jsonInt <= 10 ? values()[jsonInt] : values()[jsonInt - 3]
+    THREE THEORIES, TWO WRONG. First a bitmask, for four releases.
+    Then the app's `jsonInt <= 10 ? jsonInt : jsonInt - 3`, which held
+    below 10 by coincidence and looked right above 60 -- where wire and
+    index do run parallel, but FOUR apart rather than three.
 
-    A scalar index into a 73-entry readiness enum, not a bitmask. This
-    project treated it as a mask for four releases.
+    The firmware settles it: the mapping is an arbitrary lookup table
+    whose order is deliberately broken. `BUMPED` is wire 33 and state
+    21; nothing arithmetic joins them.
+
+    Cost of the second theory: two field reports. @Thonno's i7+ and
+    @ScenicSystemsLLC's S9+ both reported wire 68 while docked and
+    charging, read as "Off dock". It is `LOADING_MAP`.
     """
 
-    def _decode(self, raw):
+    @staticmethod
+    def _decode(raw):
         from custom_components.roomba_plus.const import decode_not_ready
 
         return decode_not_ready(raw)
 
-    def test_values_up_to_ten_are_their_own_index(self):
-        for value in range(11):
-            assert self._decode(value) == value
+    def test_the_block_that_was_off_by_one(self):
+        """Four consecutive firmware pairs, all wrong under the old
+        rule, each naming the state one place below the right one."""
+        assert self._decode(66) == 62
+        assert self._decode(67) == 63
+        assert self._decode(68) == 64
+        assert self._decode(69) == 65
 
-    def test_above_ten_the_offset_applies(self):
-        # Wire 25 and index 22 are the same state (MapVersionMisMatch).
-        assert self._decode(25) == 22
-        assert self._decode(67) == 64
+    def test_no_offset_could_have_worked(self):
+        """Wire 33 is state 21, wire 39 is state 37. Any single offset
+        gets at least one of them wrong."""
+        assert self._decode(33) == 21
+        assert self._decode(39) == 37
 
-    def test_the_documented_collision_is_not_hidden(self):
-        """Wire 11, 12 and 13 land on 8, 9 and 10 -- and the app cannot
-        tell them apart either. Returned as the colliding index rather
-        than as an error, because that is what the robot's own app would
-        show."""
-        assert self._decode(11) == 8
-        assert self._decode(12) == 9
-        assert self._decode(13) == 10
+    def test_below_ten_wire_and_index_coincide(self):
+        """Firmware-confirmed, and why the old rule survived so long."""
+        for wire in (1, 2, 3, 4, 6, 7, 10):
+            assert self._decode(wire) == wire
 
-    def test_anything_that_is_not_a_count_yields_nothing(self):
-        """A robot reporting a string, or a fixture handing back a mock,
-        must not make a caller raise. A wrong refusal is worse than no
-        refusal."""
-        for raw in ("67", None, True, False, -1, 3.5, object()):
-            assert self._decode(raw) is None
+    def test_an_unmapped_value_is_not_guessed(self):
+        """The old rule answered for every number. That is how a docked
+        robot came to report "Off dock" -- an answer where there was no
+        knowledge. Unmapped values return None and surface as their raw
+        number instead."""
+        assert self._decode(25) is None
+        assert self._decode(45) is None
+        assert self._decode(200) is None
+
+    def test_states_the_firmware_cannot_express(self):
+        """`LocalizationFailed`, `NotDocked`, `LidOpen` and others are
+        in the app's enum with no wire value at all. A robot hitting one
+        reports 99 (`UNKNOWN START REFUSE`).
+
+        Which is why @Thonno's start could fail with error 224 "Smart
+        Map localization failed" while `notReady` showed a map state --
+        the two fields have different vocabularies.
+        """
+        from custom_components.roomba_plus.const import (
+            READINESS_WIRE_TO_INDEX,
+        )
+
+        reachable = set(READINESS_WIRE_TO_INDEX.values())
+        for unreachable in (48, 53, 20, 36, 24, 72):
+            assert unreachable not in reachable
+
+    def test_a_non_integer_is_rejected(self):
+        for junk in ("68", None, 1.5, True):
+            assert self._decode(junk) is None
+
