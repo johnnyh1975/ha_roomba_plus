@@ -35,8 +35,8 @@ It fails only on an absence nobody has written down.
 
 from __future__ import annotations
 
-import inspect
-import sys
+import ast
+from pathlib import Path
 
 #: Concern -> the marker that shows a path addresses it.
 CONCERNS: dict[str, str] = {
@@ -61,20 +61,58 @@ ACCEPTED: dict[tuple[str, str], str] = {
 }
 
 
-def main() -> int:
-    sys.path.insert(0, ".")
-    from custom_components.roomba_plus.room_cleaning import (  # noqa: PLC0415
-        ClassicRoomCleaning,
-        PrimeRoomCleaning,
-    )
+def _method_sources() -> dict[str, str]:
+    """The four command paths, read from source rather than imported.
 
-    paths = {
-        "Prime.clean_rooms": PrimeRoomCleaning.clean_rooms,
-        "Prime.clean_segments": PrimeRoomCleaning.clean_segments,
-        "Classic.clean_rooms": ClassicRoomCleaning.clean_rooms,
-        "Classic.clean_segments": ClassicRoomCleaning.clean_segments,
+    IMPORTING WOULD NEED THE ROBOT LIBRARIES. This guard runs in the
+    Stage 0 job, which installs nothing -- it exists to catch shape
+    problems before anything heavier runs. An `import` here made it
+    fail with `No module named 'roombapy'`, which is a broken guard
+    rather than a finding.
+
+    `check_generation_parity.py` next door reads the tree with `ast`
+    for the same reason.
+    """
+    tree = ast.parse(
+        Path("custom_components/roomba_plus/room_cleaning.py").read_text(
+            encoding="utf-8"
+        )
+    )
+    wanted = {
+        "PrimeRoomCleaning": "Prime",
+        "ClassicRoomCleaning": "Classic",
     }
-    sources = {name: inspect.getsource(fn) for name, fn in paths.items()}
+    out: dict[str, str] = {}
+    for node in tree.body:
+        if not isinstance(node, ast.ClassDef) or node.name not in wanted:
+            continue
+        for item in node.body:
+            if (
+                isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and item.name in ("clean_rooms", "clean_segments")
+            ):
+                out[f"{wanted[node.name]}.{item.name}"] = ast.unparse(item)
+    return out
+
+
+def main() -> int:
+    sources = _method_sources()
+
+    missing_paths = [
+        name
+        for name in (
+            "Prime.clean_rooms", "Prime.clean_segments",
+            "Classic.clean_rooms", "Classic.clean_segments",
+        )
+        if name not in sources
+    ]
+    if missing_paths:
+        print(
+            "Could not find these command paths in room_cleaning.py: "
+            + ", ".join(missing_paths)
+            + "\nEither they were renamed or moved -- update this guard."
+        )
+        return 1
 
     findings: list[str] = []
     for concern, marker in CONCERNS.items():
@@ -96,7 +134,7 @@ def main() -> int:
 
     if not findings and not stale:
         print(
-            f"OK: {len(CONCERNS)} concern(s) across {len(paths)} command "
+            f"OK: {len(CONCERNS)} concern(s) across {len(sources)} command "
             f"paths, {len(ACCEPTED)} documented absence(s)."
         )
         return 0
