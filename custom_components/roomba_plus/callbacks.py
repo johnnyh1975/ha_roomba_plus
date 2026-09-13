@@ -13,6 +13,8 @@ https://github.com/tonylofgren/aurora-smart-home
 """
 from __future__ import annotations
 
+from time import monotonic
+
 import asyncio
 import datetime
 import logging
@@ -120,11 +122,23 @@ _UNVISITED_ROOMS_MAX_SUPPRESSION_SECONDS = UNVISITED_ROOMS_MAX_SUPPRESSION_SECON
 # Conservative (0.5) since expected_room_sec is a uniform-split heuristic, not
 # a true per-room estimate — large rooms legitimately take longer than average.
 _ROOM_TRANSITION_MIN_ELAPSED_RATIO: float = 0.5
+#: A travel edge sooner than this after entering a room reads as
+#: repositioning within it, not as a second boundary. Judgement, not
+#: measurement: the confirmed room crossings measured 8-32 s, and no
+#: intra-room hop was ever timed.
+_ROOM_TRANSITION_MIN_SECONDS: float = 60.0
+#: A travel edge sooner than this after entering a room reads as
+#: repositioning within it, not as a second boundary.
+#: A drive shorter than this is repositioning within a room, not a
+#: boundary crossing. Set under the shortest confirmed crossing.
+_TRAVEL_MIN_SECONDS: float = 6.0
 
 
 def _room_transition_confidence_ok(
     mission: dict[str, Any],
     mts: Any,
+    *,
+    from_travel: bool = False,
 ) -> bool:
     """AUTO-ADVANCE-ROOM (v2.8.0) confidence check.
 
@@ -183,6 +197,33 @@ def _room_transition_confidence_ok(
         return False  # cannot confirm timing — conservative refusal (see docstring)
 
     elapsed = mts.time_in_current_room_sec
+
+    # A TRAVEL EDGE IS NOT A TIMING GUESS.
+    #
+    # The ratio below asks "has this room had roughly enough time to be
+    # finished". That is the right question for the PHASE route, where
+    # a `charge` in the middle of a room must not read as a room change.
+    #
+    # It is the wrong question for a travel edge. The robot has said it
+    # was DRIVING and then stopped driving; how long it had been in the
+    # previous room does not bear on whether it left.
+    #
+    # WHAT IT COST: @Thonno's i7+ moved from Kitchen to Bathroom and the
+    # display followed NINE MINUTES LATER -- which is half of what this
+    # project estimates his kitchen takes. The travel signal fired on
+    # time and was held back by a clock.
+    #
+    # A FLOOR REMAINS, because a travel edge is not always a room
+    # boundary: @ScenicSystemsLLC watched one that was repositioning
+    # inside a single undivided hallway. A drive ending less than a
+    # minute after entering a room is far more likely to be that than a
+    # second room boundary.
+    #
+    # The minute is judgement, not measurement. It is the first thing to
+    # revisit if rooms start advancing too eagerly.
+    if from_travel:
+        return bool(elapsed >= _ROOM_TRANSITION_MIN_SECONDS)
+
     _ok = elapsed >= expected * _ROOM_TRANSITION_MIN_ELAPSED_RATIO
     if not _ok:
         _LOGGER.debug(
@@ -720,6 +761,7 @@ def make_mission_callback(
     """
     last_phase: str = ""
     was_travelling: bool = False
+    travel_started_at: float | None = None
     current_mission_zones: list[str] = []
     mission_start_ts: int = 0
     nstuck_at_start: int = 0
@@ -783,7 +825,7 @@ def make_mission_callback(
     had_cleaning_phase: bool = False
 
     def _on_mission_message(json_data: dict[str, Any], _synthetic: bool = False) -> None:
-        nonlocal last_phase, was_travelling, current_mission_zones, mission_start_ts
+        nonlocal last_phase, was_travelling, travel_started_at, current_mission_zones, mission_start_ts
         nonlocal nstuck_at_start, recharge_min_accumulator, last_recharge_phase_ts
         nonlocal current_leg_rechrgM
         nonlocal _last_mirrored_recharge_min
@@ -1466,7 +1508,47 @@ def make_mission_callback(
         # EDGE ON THE RETURN, not the departure: the robot is in the new
         # room once the drive ENDS. Travel also covers evading and
         # relocalising, so counting departures would over-count.
-        _returned_from_travel = _travelling is False and was_travelling
+        # HOW LONG THE DRIVE LASTED, which is the thing that separates
+        # a room boundary from a shuffle inside one room.
+        #
+        # An earlier version gated this on how long the robot had been
+        # in the PREVIOUS room. That measures the wrong thing entirely:
+        # it says nothing about whether a boundary was crossed, and it
+        # made @Thonno's display advance nine minutes late -- on a
+        # travel edge that happened INSIDE the new room, not on the one
+        # that entered it. Right room, wrong event, by luck.
+        #
+        # Drives between rooms are longer. @ScenicSystemsLLC timed his
+        # confirmed boundary crossings at 8, 16, 16, 24 and 32 seconds,
+        # and separately watched a repositioning drive within a single
+        # undivided hallway. The floor below sits under his shortest
+        # confirmed crossing.
+        #
+        # STILL A JUDGEMENT. Nobody has timed an intra-room drive, so
+        # the floor is set from one side only. It is logged on every
+        # edge so the next report can move it with evidence instead of
+        # taste.
+        _returned_from_travel = False
+        if _travelling is False and was_travelling:
+            _drive_sec = (
+                (monotonic() - travel_started_at)
+                if travel_started_at is not None
+                else None
+            )
+            _returned_from_travel = (
+                _drive_sec is not None and _drive_sec >= _TRAVEL_MIN_SECONDS
+            )
+            _LOGGER.debug(
+                "AUTO-ADVANCE-ROOM: travel ended after %ss (floor %ss) -> %s",
+                round(_drive_sec, 1) if _drive_sec is not None else "?",
+                _TRAVEL_MIN_SECONDS,
+                "counts as a room boundary" if _returned_from_travel
+                else "too short, treated as repositioning",
+            )
+            travel_started_at = None
+        elif _travelling is True and not was_travelling:
+            travel_started_at = monotonic()
+
         if isinstance(_travelling, bool):
             was_travelling = _travelling
 
@@ -1728,7 +1810,9 @@ def make_mission_callback(
                     )
                     or _returned_from_travel
                 )
-                and _room_transition_confidence_ok(mission, _mts_upd)
+                and _room_transition_confidence_ok(
+                    mission, _mts_upd, from_travel=_returned_from_travel
+                )
             ):
                 _advanced = _mts_upd.advance_room(hass, entry.entry_id)
                 if _advanced:

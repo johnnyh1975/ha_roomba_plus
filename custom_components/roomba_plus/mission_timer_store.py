@@ -60,6 +60,12 @@ _STORAGE_KEY_PREFIX = "roomba_plus_mission_timer"
 _STALE_THRESHOLD_SEC = 7200  # 2 hours — if snapshot is older, timer is stale
 
 
+#: Upper bound on a gap counted as run time when the phase was `run`
+#: on both sides. Half an hour is longer than any plausible quiet
+#: stretch and shorter than a host outage worth counting.
+_RUN_GAP_CAP_SEC: float = 1800.0
+
+
 class MissionTimerStore:
     """Persist elapsed run-only seconds and mission plan for the active mission.
 
@@ -76,6 +82,9 @@ class MissionTimerStore:
     def __init__(self) -> None:
         self.mission_id: str | None = None
         self.run_sec: float = 0.0
+        #: Whether the previous phase message was `run`; see the
+        #: continuity note in `on_phase_run`.
+        self._last_phase_was_run: bool = False
         # v3.3.0 DELAY-SAVE — cached Store handle; async_delay_save
         # debounces per Store instance (see _get_ha_store).
         self._ha_store: Store[dict[str, Any]] | None = None
@@ -353,17 +362,37 @@ class MissionTimerStore:
 
         if self._last_phase_ts > 0:
             delta = now - self._last_phase_ts
-            # Clamp: ignore gaps > 120 s (recharge, pause, restart)
-            if 0 < delta < 120:
+            # PHASE CONTINUITY, NOT A STOPWATCH.
+            #
+            # This clamped at 120 seconds, meaning to discard gaps where
+            # the robot was recharging, paused or the host restarted.
+            # It cannot tell those apart from a robot that simply had
+            # nothing new to say -- and during steady cleaning there
+            # often is nothing new, so real run time was thrown away and
+            # the total lagged the wall clock badly.
+            #
+            # The phase already answers the question the clamp was
+            # guessing at: if the robot was in `run` before this message
+            # and is in `run` now, it was running throughout, however
+            # quiet it was.
+            #
+            # AN OUTER BOUND REMAINS for the case the phase cannot
+            # cover: a host that was down for hours comes back with
+            # `run` on both sides of a gap the robot did not spend
+            # cleaning.
+            _continuous = self._last_phase_was_run
+            _cap = _RUN_GAP_CAP_SEC if _continuous else 120
+            if 0 < delta < _cap:
                 self.run_sec += delta
                 self._schedule_save(hass, entry_id)
             else:
                 _LOGGER.debug(
                     "MissionTimerStore: on_phase_run gap=%.1fs outside "
-                    "0-120s clamp — NOT accumulated into run_sec=%.0f",
+                    "run-gap cap — NOT accumulated into run_sec=%.0f",
                     delta, self.run_sec,
                 )
         self._last_phase_ts = now
+        self._last_phase_was_run = True
 
     def on_phase_other(
         self,
@@ -394,6 +423,7 @@ class MissionTimerStore:
                 if hass is not None and entry_id is not None:
                     self._schedule_save(hass, entry_id)
         self._last_phase_ts = 0.0
+        self._last_phase_was_run = False
 
     def advance_room(self, hass: HomeAssistant, entry_id: str) -> bool:
         """Advance current_room_idx by one and persist.

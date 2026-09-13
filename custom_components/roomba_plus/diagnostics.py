@@ -466,6 +466,52 @@ async def _prime_schedule_summary(data: Any) -> Any:
     }
 
 
+def _position_chain(data: Any) -> dict[str, Any]:
+    """Where the "which room" chain stands, link by link.
+
+    Each link is useless without the one before it, and each fails
+    quietly. Reporting them together turns a silent nothing into a
+    readable answer.
+    """
+    aligner = getattr(data, "umf_aligner", None)
+    renderer = getattr(data, "renderer", None)
+    return {
+        "position_points_collected": getattr(renderer, "point_count", None),
+        "aligner_present": aligner is not None,
+        "aligner_aligned": getattr(aligner, "aligned", None),
+        "room_polygons": len(
+            getattr(aligner, "room_polygons_umf", None) or {}
+        ) if aligner is not None else None,
+        # Two missions' worth of door sightings is what `align()` wants.
+        "door_markers": len(
+            getattr(
+                getattr(data, "geometry_store", None), "door_markers", None
+            ) or []
+        ),
+    }
+
+
+def _nav_stats_with_provenance(state: dict[str, Any]) -> dict[str, Any] | None:
+    """`mssnNavStats`, with whether it belongs to the running mission.
+
+    The robot writes this up after a run finishes, so during a mission
+    it usually describes the PREVIOUS one. Reporting it as `_live` made
+    that invisible.
+    """
+    stats = state.get("mssnNavStats")
+    if not isinstance(stats, dict):
+        return None
+    running = (state.get("cleanMissionStatus") or {}).get("nMssn")
+    return {
+        **stats,
+        "belongs_to_running_mission": (
+            None if running is None or stats.get("nMssn") is None
+            else running == stats.get("nMssn")
+        ),
+        "running_mission_nmssn": running,
+    }
+
+
 def _prime_shadow_dump(data: Any) -> dict[str, Any]:
     """Every named shadow's contents, minus identifying fields.
 
@@ -1378,6 +1424,18 @@ async def _build_diagnostics(
     # ── Map subsystem ──────────────────────────────────────────────────────────
     map_diag: dict[str, Any] = {
         "capability": data.map_capability.value,
+        # THE POSITION CHAIN, END TO END.
+        #
+        # Every part of resolving "which room is the robot in" was
+        # invisible here, and it cost a full round of guesswork on
+        # @Thonno's report: his `point_count: 0` was the answer, and it
+        # took reading the aligner's source to know that mattered.
+        #
+        # The chain is: position points collected -> door markers seen
+        # across missions -> aligner transform -> `room_name_at()`. It
+        # fails silently at whichever link is missing, and nothing said
+        # which.
+        "position_chain": _position_chain(data),
     }
     if data.renderer is not None:
         map_diag["renderer"] = data.renderer.diagnostic_info()
@@ -1478,7 +1536,17 @@ async def _build_diagnostics(
             # a raw dump. If the robot reports its own progress, this is
             # where it will show up.
             "mission_telemetry": state.get("missionTelemetry"),
-            "mssn_nav_stats_live": state.get("mssnNavStats"),
+            # "LIVE" ONLY WHEN IT IS. This handed `mssnNavStats` over
+            # under that name whatever it contained. @Thonno's dump
+            # showed nav stats from mission 1009 while mission 1010 was
+            # running -- read as live telemetry, it says the robot is
+            # idle mid-clean.
+            #
+            # The field is a delayed post-mission summary; the robot
+            # fills it when the previous run is written up. Same shape
+            # as the stale room list fixed in 4.1.7: correct data,
+            # wrong label.
+            "mssn_nav_stats": _nav_stats_with_provenance(state),
             "pmap_ids": [
                 next(iter(p)) for p in state.get("pmaps", []) if p
             ],

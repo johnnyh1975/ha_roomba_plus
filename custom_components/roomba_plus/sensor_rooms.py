@@ -91,6 +91,31 @@ class RoombaEdgeCoverageSensor(IRobotEntity, SensorEntity):
         return "pose" in new_state
 
 
+def _mission_elapsed_wall_sec(status: dict[str, Any] | None) -> float | None:
+    """Seconds since the robot said this mission started, or None.
+
+    `cleanMissionStatus.mssnStrtTm` is a unix timestamp the robot sets
+    at mission start. Where it is present this beats any accumulation:
+    no gaps to miss, no clamp to trip over, no dependence on how
+    talkative the robot happens to be.
+
+    None when absent, zero, or in the future -- a clock skew between
+    robot and host would otherwise produce a negative elapsed and a
+    progress bar running backwards.
+    """
+    import time  # noqa: PLC0415
+
+    if not isinstance(status, dict):
+        return None
+    started = status.get("mssnStrtTm")
+    if not isinstance(started, (int, float)) or started <= 0:
+        return None
+    elapsed = time.time() - float(started)
+    # A day is longer than any mission; past that the timestamp is
+    # stale rather than a running mission.
+    return elapsed if 0 <= elapsed < 86400 else None
+
+
 def _get_planned_room_order(data: Any) -> list[str]:
     """Resolve planned_room_order from lastCommand.regions in MQTT state.
 
@@ -731,9 +756,32 @@ class RoombaMissionProgress(IRobotEntity, SensorEntity):
         # robot-confirmed recharge_min (F4e), not the old gap-clamped
         # live-delta. Same fallback as _resolve_smart_tier_room_state() for
         # a mission already in progress when this code shipped.
+        # THE ROBOT'S OWN START TIME FIRST.
+        #
+        # Both sources below are accumulated from the gaps between MQTT
+        # messages, and that accumulation drops any gap longer than two
+        # minutes -- a clamp meant for recharges and restarts. A robot
+        # that simply has nothing new to say during steady cleaning
+        # falls foul of it too, and the total then lags real time badly.
+        #
+        # @Thonno's i7+ read 0% for a whole mission and reports
+        # `mssnM: 0`, so the robot's own minute counter was no help
+        # either. But `mssnStrtTm` is there -- a wall-clock timestamp of
+        # when this mission began -- and needs no accumulating at all.
+        #
+        # THIS IS DELIBERATELY WALL TIME, pauses and recharges included:
+        # "how far through is this mission" is a question about the
+        # clock on the wall. `run_sec` stays what it is, and the room
+        # transition guard keeps using it, because "has this room had
+        # enough cleaning" is a different question.
+        _elapsed_wall = _mission_elapsed_wall_sec(
+            getattr(self, "clean_mission_status", None)
+        )
+
         effective_min = mts.effective_elapsed_min
         elapsed = (
-            effective_min * 60 if effective_min is not None
+            _elapsed_wall if _elapsed_wall is not None
+            else effective_min * 60 if effective_min is not None
             else self._elapsed_sec(mts, phase)
         )
 

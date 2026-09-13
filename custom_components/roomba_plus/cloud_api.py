@@ -326,10 +326,22 @@ class IrobotCloudApi:
         self.login_result = result
 
         _LOGGER.info("iRobot cloud: authenticated, %d robot(s) found", len(self.robots))
+        # THE FIELD NAMES, NEVER THE VALUES.
+        #
+        # This printed the whole first robot record, which carries the
+        # robot's cloud PASSWORD in plaintext. Anyone who turned on
+        # debug logging to diagnose something unrelated wrote a live
+        # credential into their log file, and into every log they then
+        # attached to an issue (@ScenicSystemsLLC, who spotted it while
+        # debugging something else and did not paste the value).
+        #
+        # What the line was for is knowing WHICH fields the cloud
+        # returned, which the keys give without the contents.
+        _first: Any = next(iter(self.robots.values()), {})
         _LOGGER.debug(
-            "iRobot cloud: robots dict — keys=%s  first_robot=%s",
+            "iRobot cloud: robots dict — keys=%s  first_robot_fields=%s",
             sorted(self.robots.keys()),
-            next(iter(self.robots.values()), {}),
+            sorted(_first) if isinstance(_first, dict) else type(_first).__name__,
         )
 
     # ── Authenticated requests ─────────────────────────────────────────────────
