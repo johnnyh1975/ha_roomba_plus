@@ -3846,3 +3846,98 @@ class TestTheTravelSignalIsReadDuringCleaning:
         )
 
         assert not phases & set(_ROOM_TRANSITION_CANDIDATE_PHASES)
+
+
+class TestTheRoomFloorAgainstARealMission:
+    """@AlakazipLabs' i3 on `daredevil` 2.6.0, an ordered three-room run
+    from the dock, recalled unfinished after 51 minutes. Their own stack,
+    not this integration -- so the timeline is an independent check of
+    the logic rather than of the code.
+
+        mode 1  12 s      leaving the dock
+        mode 2  4.8 min   room 1
+        mode 1  11.3 min  drive to room 2
+        mode 2  17.3 min  room 2
+        mode 1  69 s      drive to room 3
+        mode 2  16.2 min  room 3, cut short by the recall
+
+    Phase stayed `run` throughout: zero non-run phases in 51 minutes. So
+    on this firmware, as on the S9-series, the driving signal is the only
+    boundary marker in the shadow.
+
+    THE ONE-MINUTE FLOOR EARNS ITS PLACE HERE. The drive off the dock
+    ends 12 seconds into the mission and is not a room change; every
+    real boundary follows minutes of cleaning.
+
+    AND IT SETTLES THAT DURATION IS USELESS as a discriminator -- an idea
+    considered and dropped. Their drives ran 12 seconds, 69 seconds and
+    **11.3 minutes**, the long one probably the robot re-finding itself
+    on a cold map. Nothing separates a boundary from a reposition by how
+    long the drive took.
+    """
+
+    #: (operatingMode, seconds, what it was)
+    TIMELINE = [
+        (1, 12, "leaving the dock"),
+        (2, 288, "room 1"),
+        (1, 678, "drive to room 2"),
+        (2, 1037, "room 2"),
+        (1, 69, "drive to room 3"),
+        (2, 970, "room 3"),
+    ]
+
+    @classmethod
+    def _advances(cls, floor_sec):
+        was_travelling, in_room, out = False, 0.0, []
+        for mode, duration, label in cls.TIMELINE:
+            travelling = bool(mode & 1)
+            if was_travelling and not travelling:
+                advanced = in_room >= floor_sec
+                out.append((label, in_room, advanced))
+                if advanced:
+                    in_room = 0.0
+            if not travelling:
+                in_room += duration
+            was_travelling = travelling
+        return out
+
+    def test_the_dock_departure_is_not_a_room_change(self) -> None:
+        from custom_components.roomba_plus.callbacks import (
+            _ROOM_TRANSITION_MIN_SECONDS,
+        )
+
+        first = self._advances(_ROOM_TRANSITION_MIN_SECONDS)[0]
+
+        assert first[0] == "room 1"
+        assert first[2] is False, "12 s off the dock is not a boundary"
+
+    def test_both_real_boundaries_advance(self) -> None:
+        from custom_components.roomba_plus.callbacks import (
+            _ROOM_TRANSITION_MIN_SECONDS,
+        )
+
+        advanced = [
+            label
+            for label, _elapsed, ok in self._advances(
+                _ROOM_TRANSITION_MIN_SECONDS
+            )
+            if ok
+        ]
+
+        assert advanced == ["room 2", "room 3"]
+
+    def test_an_eleven_minute_drive_is_still_one_edge(self) -> None:
+        """Their longest drive was 11.3 minutes. However long it runs, a
+        drive that ends is one boundary, not several."""
+        from custom_components.roomba_plus.callbacks import (
+            _ROOM_TRANSITION_MIN_SECONDS,
+        )
+
+        assert len(self._advances(_ROOM_TRANSITION_MIN_SECONDS)) == 3
+
+    def test_no_floor_would_count_the_dock_departure(self) -> None:
+        """Without a floor the mission starts one room ahead of itself,
+        and stays wrong for the rest of the run."""
+        first = self._advances(0)[0]
+
+        assert first[2] is True, "this is what the floor exists to stop"

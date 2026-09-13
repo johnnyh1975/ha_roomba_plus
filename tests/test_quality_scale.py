@@ -378,3 +378,58 @@ class TestTheScaleMatchesTheRules:
         assert not silent, "rules claiming a status with no reasoning: " + (
             ", ".join(sorted(silent))
         )
+
+
+class TestTheBadgeMatchesTheManifest:
+    """The manifest said `platinum` and the README badge still said Gold,
+    in three places -- one of which named every Platinum rule as met
+    while claiming the Gold tier in the same sentence.
+
+    `check_version_badge.py` next door catches exactly this shape for the
+    version number, and was written because the two drifted. The quality
+    tier is the same kind of claim in the same file and had no such
+    check.
+    """
+
+    @staticmethod
+    def _claimed() -> str:
+        import json
+
+        return json.load(
+            open(
+                "custom_components/roomba_plus/manifest.json", encoding="utf-8"
+            )
+        )["quality_scale"]
+
+    def test_the_readme_badge_says_the_same_tier(self) -> None:
+        import pathlib
+
+        readme = pathlib.Path("README.md").read_text(encoding="utf-8")
+        tier = self._claimed()
+
+        assert f"Quality%20Scale-{tier.capitalize()}-" in readme, (
+            f"manifest says {tier}, badge does not"
+        )
+
+    def test_no_user_facing_file_names_another_tier(self) -> None:
+        """Prose drifts more quietly than a badge does."""
+        import pathlib
+        import re
+
+        tier = self._claimed()
+        others = {"bronze", "silver", "gold", "platinum"} - {tier}
+        offenders = []
+        for name in ("README.md", "docs/COMPARISON.md"):
+            text = pathlib.Path(name).read_text(encoding="utf-8")
+            for line in text.splitlines():
+                low = line.lower()
+                # Only lines making a claim ABOUT THIS integration --
+                # the comparison table names other tiers for the other
+                # integrations on purpose.
+                if "quality" not in low and "-quality" not in low:
+                    continue
+                for other in others:
+                    if re.search(rf"\b{other}\b", low) and tier not in low:
+                        offenders.append(f"{name}: {line.strip()[:70]}")
+
+        assert not offenders, "stale tier claims: " + " | ".join(offenders)

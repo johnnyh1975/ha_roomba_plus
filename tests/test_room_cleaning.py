@@ -1413,7 +1413,6 @@ class TestBothZoneKeysCount:
 
     def _has_rooms(self, options):
         from types import SimpleNamespace
-        from unittest.mock import MagicMock
 
         from custom_components.roomba_plus.room_cleaning import (
             _classic_has_room_data,
@@ -1784,7 +1783,7 @@ class TestPrimeOffersZonesForAreaMapping:
 
     @staticmethod
     def _backend(rooms, names):
-        from unittest.mock import AsyncMock, MagicMock
+        from unittest.mock import AsyncMock
 
         from custom_components.roomba_plus.room_cleaning import PrimeRoomCleaning
 
@@ -2195,7 +2194,6 @@ class TestClassicOffersEveryMapToo:
     async def test_a_map_id_containing_underscores_survives(self) -> None:
         """Real p2map ids contain underscores. Splitting on the first
         one would have made "2Bly_kGURy6OcUVTX7FN3w_19" lose its map."""
-        from unittest.mock import AsyncMock
 
         backend = self._backend({"2Bly_kGURy6OcUVTX7FN3w": {"19": "Laundry"}},
                                 active="2Bly_kGURy6OcUVTX7FN3w")
@@ -3023,3 +3021,95 @@ class TestTheServiceRemembersWhatTheButtonRemembers:
         backend = self._backend([], [])
 
         assert await backend.available_rooms() == {}
+
+
+class TestTheMapAndItsVersionTravelTogether:
+    """A command carries a map id and that map's version id. Sending one
+    map's id with another map's version asks the robot to localise
+    against a pairing that does not exist, and it answers with error
+    224, "Smart Map localization failed".
+
+    @Thonno hit it on a two-map i7+ standing on its own dock, having
+    moved nothing. It happened whenever he cleaned rooms on the map the
+    cloud did not call active -- which on a two-map robot is half the
+    time.
+
+    TWO PATHS, TWO SHAPES OF THE SAME FAULT:
+
+      - `clean_rooms` resolved the map per region correctly and then
+        attached `active_user_pmapv_id` regardless
+      - `clean_segments` grouped segments by their own map and then put
+        `active_pmap_id` in the payload, so map A's id went out with map
+        B's regions
+
+    Invisible on a one-map robot, where active and requested are always
+    the same map. That is most robots, which is why it survived.
+    """
+
+    def test_clean_rooms_only_takes_the_cloud_version_for_the_active_map(
+        self,
+    ) -> None:
+        """Classic's `clean_rooms` -- Prime resolves its version through
+        a different path and never reaches for the active map's."""
+        import inspect
+
+        from custom_components.roomba_plus.room_cleaning import (
+            ClassicRoomCleaning,
+        )
+
+        source = inspect.getsource(ClassicRoomCleaning.clean_rooms)
+
+        assert "pmap_id == self._cloud.active_pmap_id" in source
+
+    def test_clean_segments_sends_the_segments_own_map(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus.room_cleaning import (
+            ClassicRoomCleaning,
+        )
+
+        source = inspect.getsource(ClassicRoomCleaning.clean_segments)
+        payload = source[source.index('params: dict[str, Any] = {'):]
+
+        assert '"pmap_id": _segment_map' in payload
+        assert '"pmap_id": active_pmap_id' not in payload
+
+    def test_clean_segments_matches_the_version_to_that_map(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus.room_cleaning import (
+            ClassicRoomCleaning,
+        )
+
+        source = inspect.getsource(ClassicRoomCleaning.clean_segments)
+
+        assert "_segment_map == active_pmap_id else None" in source
+        assert "_resolve_pmapv_id(\n                self._data.roomba_reported_state(), _segment_map" in source
+
+    def test_neither_path_pairs_a_map_with_another_maps_version(self) -> None:
+        """The shape to keep out, in either method: reaching for the
+        active map's version or id without first establishing that the
+        active map is the one being cleaned."""
+        import inspect
+
+        from custom_components.roomba_plus.room_cleaning import (
+            ClassicRoomCleaning,
+        )
+
+        for method in (
+            ClassicRoomCleaning.clean_rooms,
+            ClassicRoomCleaning.clean_segments,
+        ):
+            source = inspect.getsource(method)
+            lines = [
+                l for l in source.splitlines()
+                if not l.strip().startswith("#")
+            ]
+            for line_no, line in enumerate(lines):
+                if "active_user_pmapv_id" not in line:
+                    continue
+                window = "\n".join(lines[line_no: line_no + 4])
+                assert "active_pmap_id" in window, (
+                    f"{method.__qualname__} takes the active map's version "
+                    f"without checking the map matches"
+                )
