@@ -44,7 +44,7 @@ does not apply to those robots at all.
 | 🎮 [Control](#controls) | Room targeting, blocking sensors, favourites, sequences | Start / stop / return | Per-room staging select + cloud routines |
 | 🧠 [Intelligence](#intelligence--scheduling) | Presence scheduling, demand cleaning, anomaly detection, learned per-room rhythms, mission maps | None | None |
 | 📊 [Monitoring](#sensors--monitoring) | 100+ entities — maintenance, performance, error detail | 13 entities | ~29 base sensors + dynamic room selects and favourite buttons |
-| 🏆 [HA quality](#ha-integration-quality) | Gold, 5,590+ tests, 8 languages, CI/CD | Silver, built-in | Bronze, EN only |
+| 🏆 [HA quality](#ha-integration-quality) | Platinum, 6,390+ tests, 8 languages, CI/CD | Silver, built-in | Bronze, EN only |
 
 ---
 
@@ -84,7 +84,7 @@ does not apply to those robots at all.
 | Supported models | ✅ 600–900, i, s, j, Braava m6, **and Prime-generation** ★ | ⚠️ 690, 890, 960, 980, s9+, Braava m6 | ⚠️ Smart Map robots (i/s/j-series) only |
 | HA Long-Term Statistics backfill | ✅ area, duration, completions — auto-backfilled on startup ★ | ❌ | ❌ |
 | Unit tests | ✅ **5,499 tests** ★ | ✅ in the HA core suite | ❌ none in the repository |
-| Quality Scale | **Gold ★** | not declared in its manifest | **Bronze** (rules file present, several `todo`) |
+| Quality Scale | **Platinum ★** | not declared in its manifest | **Bronze** (rules file present, several `todo`) |
 | Translations | ✅ 8 languages, complete and enforced by a check | ✅ **38 languages ★** — it ships with Home Assistant | ⚠️ 1 |
 
 ---
@@ -219,7 +219,7 @@ does not apply to those robots at all.
 
 | Feature | Roomba+ | HA Core | roomba_rest980 |
 |---|---|---|---|
-| Quality Scale | **Gold ★** | Silver | **Bronze** — self-declared; `quality_scale.yaml` marks `config-flow-test-coverage`, `test-before-configure`, `test-before-setup`, `has-entity-name`, `unique-config-entry`, `docs-installation-instructions`, `docs-removal-instructions` as `todo`, even within Bronze tier |
+| Quality Scale | **Platinum ★** | Silver | **Bronze** — self-declared; `quality_scale.yaml` marks `config-flow-test-coverage`, `test-before-configure`, `test-before-setup`, `has-entity-name`, `unique-config-entry`, `docs-installation-instructions`, `docs-removal-instructions` as `todo`, even within Bronze tier |
 | `async_migrate_entry` | ✅ v1→v22 ★ | ✅ | ❌ |
 | `reconfiguration-flow` | ✅ ★ | ✅ | ❌ |
 | `icon-translations` | ✅ 98 icons ★ | ✅ | ❌ |

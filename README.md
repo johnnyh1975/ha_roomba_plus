@@ -3,7 +3,7 @@
 [![HACS](https://img.shields.io/badge/HACS-Default-blue.svg)](https://github.com/hacs/default)
 [![Version](https://img.shields.io/badge/Version-4.2.1-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2025.5%2B-blue.svg)](https://www.home-assistant.io/)
-[![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Gold-gold.svg)](https://www.home-assistant.io/docs/quality_scale/)
+[![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Platinum-blueviolet.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -15,7 +15,7 @@
 
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=johnnyh1975&repository=ha_roomba_plus&category=integration)
 
-Roomba+ is a Gold-quality Home Assistant custom integration for iRobot Roomba and Braava robots. It connects directly over local Wi-Fi MQTT — no cloud account required, no polling, no subscription — and exposes far more sensors, intelligence, and controls than the built-in HA integration.
+Roomba+ is a Platinum-quality Home Assistant custom integration for iRobot Roomba and Braava robots. It connects directly over local Wi-Fi MQTT — no cloud account required, no polling, no subscription — and exposes far more sensors, intelligence, and controls than the built-in HA integration.
 
 ## Which version do I need?
 
@@ -41,7 +41,7 @@ Roomba+ is a Gold-quality Home Assistant custom integration for iRobot Roomba an
 - **Full automation support** — replace `vacuum.start` with `smart_start`: it waits if a blocking sensor fires (a door contact, a baby monitor), skips rooms that aren't actually dirty, and can pause and resume around your presence — all from automations you already have, no new workarounds needed.
 - **Comprehensive monitoring** — 100+ entities covering maintenance life, wear rates, 365-entry mission history, performance trends, and error detail with recommended actions.
 - **Self-calibrating** — maintenance thresholds, navigation health, battery degradation, and per-room cleaning rhythms all adapt to your robot's own usage history rather than fixed thresholds or manual configuration.
-- **Gold quality scale**, and every Platinum rule met as of v4.2 — the last one, `async-dependency`, closed when the Classic library became async. 6,270+ tests, 8 languages, full config entry migration chain, CI/CD.
+- **Platinum quality scale**, Home Assistant's highest — the last rule, `async-dependency`, closed when the Classic library became async in v4.2. 6,390+ tests, 8 languages, full config entry migration chain, CI/CD.
 
 > 📊 **[Full feature comparison with HA Core and roomba_rest980 →](docs/COMPARISON.md)**
 
