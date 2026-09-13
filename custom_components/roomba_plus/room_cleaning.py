@@ -1802,11 +1802,22 @@ class ClassicRoomCleaning(RoomCleaningBackend):
                     pmap_id, self._data.blid, _on_map,
                 )
 
+        # THE VERSION OF THE MAP BEING CLEANED. This took the ACTIVE
+        # map's version whatever map the rooms were on, so cleaning a
+        # second floor sent that floor's id with the ground floor's
+        # version. The robot cannot localise against that pairing and
+        # returns error 224 (@Thonno, two-map i7+, robot never moved).
+        #
+        # Invisible on a one-map robot, where active and requested are
+        # always the same map.
+        _cloud_pmapv = (
+            self._cloud.active_user_pmapv_id
+            if self._data.has_cloud
+            and pmap_id == self._cloud.active_pmap_id
+            else None
+        )
         user_pmapv_id: str = (
-            (self._cloud.active_user_pmapv_id
-             if self._data.has_cloud else None)
-            or _resolve_pmapv_id(state, pmap_id)
-            or ""
+            _cloud_pmapv or _resolve_pmapv_id(state, pmap_id) or ""
         )
         # WHAT THE USER CHOSE, from the cleaning-mode select. None when
         # they never picked one, and then nothing is sent.
@@ -2249,9 +2260,20 @@ class ClassicRoomCleaning(RoomCleaningBackend):
 
         from .room_cleaning import _resolve_pmapv_id  # moved there with the Classic send path
         # Primary: cloud coordinator — always authoritative, never stale.
-        user_pmapv_id: str | None = self._cloud.active_user_pmapv_id
+        # THE VERSION OF THE MAP BEING CLEANED, not of the active one.
+        #
+        # `active_user_pmapv_id` is the version of whatever the cloud
+        # calls active. Pairing it with another map's id gives the robot
+        # a map and a version that do not belong together -- the same
+        # localisation failure from the other direction.
+        user_pmapv_id: str | None = (
+            self._cloud.active_user_pmapv_id
+            if _segment_map == active_pmap_id else None
+        )
         if not user_pmapv_id:
-            user_pmapv_id = _resolve_pmapv_id(self._data.roomba_reported_state(), active_pmap_id)
+            user_pmapv_id = _resolve_pmapv_id(
+                self._data.roomba_reported_state(), _segment_map
+            )
         if user_pmapv_id is None:
             _LOGGER.warning(
                 "async_clean_segments: user_pmapv_id not found in cloud or "
@@ -2264,9 +2286,19 @@ class ClassicRoomCleaning(RoomCleaningBackend):
         # are present. Mixed room+zone commands retain it for room-ID validation.
         include_pmapv = bool(validated_room_ids)
 
+        # THE SEGMENT'S OWN MAP, in the payload as well.
+        #
+        # Allowing foreign-map segments through the filter above without
+        # changing this sent map A's id with map B's region ids. The
+        # robot is asked to find regions that do not exist on the map it
+        # was given, and answers with error 224, "Smart Map localization
+        # failed" -- @Thonno, on a two-map i7+ standing on its dock.
+        #
+        # `_segment_map` was already computed above for the validity
+        # check and simply was not used here.
         params: dict[str, Any] = {
             "ordered": 1,
-            "pmap_id": active_pmap_id,
+            "pmap_id": _segment_map,
             "regions": regions,
         }
         if include_pmapv and user_pmapv_id is not None:

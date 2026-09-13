@@ -452,6 +452,16 @@ ATTR_TWO_PASS: Final = "two_pass"
 #: on the floor.
 # THE FULL `operatingMode` BITMASK, for reference. CLASSIC ONLY.
 #
+# SEEN LIVE ON THREE FIRMWARE FAMILIES. Decompiled from `ruby` and
+# `lewis`; observed in the field on `soho` (@ScenicSystemsLLC, nine
+# unbroken seconds at a confirmed crossing) and on `daredevil`
+# (@AlakazipLabs, an ordered three-room run where both returns to 2 fall
+# exactly where the commanded order puts the boundaries).
+#
+# `sanmarino` is the exception: a Braava polled at 40 ms across a whole
+# mission produced not one flip, which is thirty-five samples inside
+# every travel window. That robot does not emit the bit.
+#
 # Decoded from the iRobot app's own `core::OperatingMode::toString()` in
 # `libcore_base.so`: each block there loads a Type value, calls
 # `contains()`, and appends a name -- the Type sits as an immediate
@@ -1494,6 +1504,23 @@ READINESS_WIRE_TO_INDEX: Final[dict[int, int]] = {
     # That observation also confirms 39 and 68 as adjacent stages of
     # one process, which is why "Off dock" for 68 read so wrongly.
     39: 37,  # SAVING_MAP         -> Saving map
+    #
+    # 23, 39 and 68 have independent field support, from an archive
+    # rather than from the firmware (@AlakazipLabs, i3 on `daredevil`):
+    #
+    #   23  four appearances, each under half a second, every one
+    #       followed by `batInfo` being re-published -- the battery
+    #       identification step, not the "Lid open" the old formula
+    #       named. Their own correction of their own earlier report.
+    #   39  87 spells, all under 16 s, never mid-mission, always right
+    #       after a stop, a dock or a mission close, with 68 following
+    #       in 36 of them.
+    #   68  78 spells, 64 of them while docked and charging, usually
+    #       2-10 s after a spell of 39, never mid-mission.
+    #
+    # 39 THEN 68 IS ONE PROCESS. @Thonno watched his i7+ run
+    # `Saving map -> Downloading map -> Ready`, which is the same pair
+    # in the same order on a different firmware.
     # The 62-68 block, four apart rather than three.
     66: 62,  # RAAS_SUBSCRIPTION_ERROR -> Subscription expired
     67: 63,  # VISION_BOARD_DEAD       -> Dead navigation board
