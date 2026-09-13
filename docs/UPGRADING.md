@@ -9,6 +9,15 @@ note are listed — most releases need zero action beyond updating.
 
 ---
 
+## v4.2.2 — from v4.2.1
+
+Nothing to do.
+
+**If your robot has more than one map** and cleaning rooms on the
+second one used to fail with a localisation error, that is fixed.
+
+---
+
 ## v4.2.1 — from v4.2.0
 
 Nothing to do.
