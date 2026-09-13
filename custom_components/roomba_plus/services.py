@@ -314,6 +314,52 @@ async def _async_warn_if_swallowed(
     )
 
 
+def _unwrap_stringified_list(names: list[str]) -> list[str]:
+    """A list that arrived as its own printed form, restored.
+
+    `room_name: '{{ room_list }}'` in an automation renders the template
+    to text, and a list rendered to text is its Python repr:
+
+        ["['Master Closet', 'Hallway', 'Great Room']"]
+
+    One element, and no robot has a room by that name. @mrsnyds reported
+    it three times across as many releases, each time correctly saying
+    the rooms exist -- and the error message proved him right without
+    either of us noticing: it prints its list with `', '.join(...)`, so
+    the brackets and quotes he could see were INSIDE a single string.
+
+    THE TEMPLATE IS NOT WRONG. Quoting a template in YAML is how
+    everyone writes them, and Home Assistant renders most of them to
+    native types. This one does not survive the trip, and refusing it
+    teaches nobody anything.
+
+    Only touched when it is unmistakably that shape: exactly one entry,
+    bracketed, and parsing to a list of strings. Anything else is passed
+    through untouched -- a room legitimately called "[Attic]" still
+    reaches the matcher as itself.
+    """
+    import ast as _ast  # noqa: PLC0415
+
+    if len(names) != 1:
+        return names
+    only = names[0].strip()
+    if not (only.startswith("[") and only.endswith("]")):
+        return names
+    try:
+        parsed = _ast.literal_eval(only)
+    except (ValueError, SyntaxError):
+        return names
+    if isinstance(parsed, (list, tuple)) and all(
+        isinstance(x, str) for x in parsed
+    ):
+        _LOGGER.debug(
+            "clean_room: room_name arrived as a rendered list, unwrapped "
+            "to %d name(s)", len(parsed),
+        )
+        return [str(x) for x in parsed]
+    return names
+
+
 async def _async_clean_rooms_via_backend(
     backend: Any,
     entity_id: str,
@@ -455,6 +501,12 @@ async def async_handle_clean_zone(call: ServiceCall) -> None:
     entity_ids: list[str] = call.data["entity_id"]
 
     raw_names: list[str] | None = call.data.get("zone_name")
+    # Same trip as `room_name`: a quoted template renders a list to
+    # its printed form, and one string arrives where several were
+    # meant. Zones take names the same way, so they take the same
+    # unwrapping.
+    if isinstance(raw_names, list):
+        raw_names = _unwrap_stringified_list(raw_names)
     raw_ids: list[str] | None = call.data.get("zone_id")
 
     if raw_names and raw_ids:
@@ -629,6 +681,8 @@ async def async_handle_clean_room(call: ServiceCall) -> None:
 
     # CLEAN-ROOM-PER-ROOM-PASSES (v2.9.0): exactly one of room_name / room_passes.
     raw_room_name = call.data.get(ATTR_ROOM_NAME)
+    if isinstance(raw_room_name, list):
+        raw_room_name = _unwrap_stringified_list(raw_room_name)
     raw_room_passes: list[dict[str, Any]] | None = call.data.get(ATTR_ROOM_PASSES)
 
     if raw_room_name is not None and raw_room_passes is not None:
@@ -1855,7 +1909,18 @@ def async_register_services(hass: HomeAssistant) -> None:
 
 
 async def async_handle_run_favorite(call: ServiceCall) -> None:
-    """Runs a saved favorite by ID. V4/Prime only.
+    """Runs a saved favorite by ID, on either generation.
+
+    NOT PRIME-ONLY, despite what this said for several releases. The
+    Classic branch below has been here since the 4.1 line and
+    `docs/FEATURES.md` describes the service without qualification --
+    only this line still claimed the restriction, which is the kind of
+    stale comment that sends the next reader looking for a feature that
+    already exists.
+
+    A favourite is worth reaching on Classic precisely BECAUSE it
+    carries its own map: it will clean a room on a map the robot is not
+    currently using, which the room services refuse to guess at.
 
     BY ID rather than by name. The name is what the user typed in the
     iRobot app and can change there at any time; an automation keyed on

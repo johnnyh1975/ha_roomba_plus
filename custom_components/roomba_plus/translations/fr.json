@@ -1789,6 +1789,10 @@
     "favorite_multi_commanddefs": {
       "title": "Le favori comporte plusieurs étapes de commande",
       "description": "Le favori « {name} » comporte {count} étapes de commande, mais seule la première est envoyée au robot — les autres sont ignorées. Il s'agit d'une configuration rare dont le bon fonctionnement n'est pas confirmé."
+    },
+    "core_roomba_conflict": {
+      "title": "Deux intégrations Roomba installées",
+      "description": "L'intégration **Roomba** intégrée à Home Assistant est configurée en parallèle de Roomba+. Les deux utilisent la même bibliothèque `roombapy`, dont Home Assistant n'installe qu'une seule version — l'une des deux ne se chargera donc pas, généralement avec une `ImportError` dans le journal.\n\nAucune des deux ne peut corriger cela. Supprimez celle dont vous n'avez pas besoin."
     }
   },
   "device_automation": {

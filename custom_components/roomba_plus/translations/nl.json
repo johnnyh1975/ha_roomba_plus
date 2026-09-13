@@ -1789,6 +1789,10 @@
     "favorite_multi_commanddefs": {
       "title": "Favoriet heeft meerdere opdrachtstappen",
       "description": "De favoriet “{name}” heeft {count} opdrachtstappen, maar alleen de eerste wordt naar de robot gestuurd — de rest wordt genegeerd. Dit is een zeldzame configuratie waarvan niet is bevestigd dat deze correct werkt."
+    },
+    "core_roomba_conflict": {
+      "title": "Twee Roomba-integraties geïnstalleerd",
+      "description": "De ingebouwde **Roomba**-integratie van Home Assistant is naast Roomba+ ingesteld. Beide gebruiken dezelfde `roombapy`-bibliotheek, en Home Assistant installeert daarvan één versie — een van beide zal dus niet laden, meestal met een `ImportError` in het logboek.\n\nGeen van beide kan dit oplossen. Verwijder degene die u niet nodig hebt."
     }
   },
   "device_automation": {

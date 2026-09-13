@@ -1657,3 +1657,44 @@ async def async_cleanup_removed_repairs(hass: HomeAssistant) -> int:
     for issue_id in to_remove:
         ir.async_delete_issue(hass, DOMAIN, issue_id)
     return len(to_remove)
+
+
+async def async_check_core_roomba_conflict(hass: HomeAssistant) -> None:
+    """Warns when the built-in `roomba` integration is also configured.
+
+    HOME ASSISTANT INSTALLS INTEGRATION DEPENDENCIES INTO ONE SHARED
+    ENVIRONMENT. Roomba+ requires `roombapy` 2.x; the built-in `roomba`
+    integration expects the 1.x API. Only one of them can be installed,
+    so whichever loses stops working -- and it fails as an `ImportError`
+    buried in the log, with nothing anywhere connecting it to having two
+    integrations for the same robots.
+
+        ImportError: cannot import name 'Roomba' from 'roombapy'
+
+    @Thonno hit exactly that and mentioned it almost as an aside,
+    unsure whether it mattered.
+
+    WE CANNOT FIX THE CONFLICT. It is a property of the platform, not of
+    either integration, and resolving it means the built-in one moving
+    to 2.x -- which is not ours to do. What we can do is say so, rather
+    than let somebody find a stack trace and guess.
+
+    Not fixable in place: the choice is the user's, and both answers are
+    legitimate. Someone running only Classic robots may well prefer the
+    built-in one.
+    """
+    if not any(
+        entry.domain == "roomba" for entry in hass.config_entries.async_entries()
+    ):
+        ir.async_delete_issue(hass, DOMAIN, "core_roomba_conflict")
+        return
+
+    ir.async_create_issue(
+        hass,
+        DOMAIN,
+        "core_roomba_conflict",
+        is_fixable=False,
+        is_persistent=False,
+        severity=ir.IssueSeverity.WARNING,
+        translation_key="core_roomba_conflict",
+    )

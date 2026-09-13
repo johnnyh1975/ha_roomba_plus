@@ -624,6 +624,15 @@ async def _phase_data(ctx: _SetupContext) -> None:
         from .repairs import async_check_bbrun_reset
         await async_check_bbrun_reset(hass, config_entry, maintenance_store, _current_hr)
 
+    # TWO INTEGRATIONS, ONE SHARED LIBRARY. Checked at setup because
+    # that is when the other one being present starts to matter, and
+    # because the failure it causes -- an `ImportError` in the log --
+    # says nothing about having two integrations for the same robots.
+    with contextlib.suppress(Exception):
+        from .repairs import async_check_core_roomba_conflict
+
+        await async_check_core_roomba_conflict(hass)
+
     # Mission store
     mission_store = MissionStore()
     await mission_store.async_load(hass, config_entry.entry_id)

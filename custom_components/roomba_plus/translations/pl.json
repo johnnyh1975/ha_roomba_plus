@@ -1789,6 +1789,10 @@
     "favorite_multi_commanddefs": {
       "title": "Ulubiony ma wiele kroków poleceń",
       "description": "Ulubiony „{name}” ma {count} kroków poleceń, ale do robota wysyłany jest tylko pierwszy — pozostałe są ignorowane. To rzadka konfiguracja, dla której nie potwierdzono poprawnego działania."
+    },
+    "core_roomba_conflict": {
+      "title": "Zainstalowano dwie integracje Roomba",
+      "description": "Wbudowana integracja **Roomba** w Home Assistant jest skonfigurowana obok Roomba+. Obie korzystają z tej samej biblioteki `roombapy`, a Home Assistant instaluje tylko jedną jej wersję — jedna z nich się nie załaduje, zwykle z błędem `ImportError` w dzienniku.\n\nŻadna z nich nie może tego naprawić. Usuń tę, której nie potrzebujesz."
     }
   },
   "device_automation": {

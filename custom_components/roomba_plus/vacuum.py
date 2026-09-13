@@ -30,6 +30,7 @@ from homeassistant.util.unit_system import METRIC_SYSTEM
 
 from . import roomba_reported_state
 from .prime_commands import _send_confirmed
+from .button_prime import _raw_favorite_is_for
 from .const import (
     DOMAIN,
     ATTR_BIN_FULL,
@@ -569,6 +570,38 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
 
     # ── Extra attributes ──────────────────────────────────────────────────
 
+    def _classic_favorites_attribute(self) -> list[dict[str, str]]:
+        """Classic favourites in the shape the Prime attribute uses.
+
+        Same source and same per-robot filter as the Classic favourite
+        BUTTONS, which have worked all along: `/user/favorites` returns
+        the whole household, so a favourite belonging to another robot
+        must not be offered here either.
+
+        Reshaped to `{id, name}` rather than passed through raw, so a
+        template written against one generation works on the other.
+        """
+        entry = self._config_entry
+        coordinator = getattr(
+            getattr(entry, "runtime_data", None), "cloud_coordinator", None
+        )
+        raw = (getattr(coordinator, "data", None) or {}).get("favorites") or []
+        if not raw:
+            return []
+
+        blid = getattr(getattr(entry, "runtime_data", None), "blid", None)
+        out: list[dict[str, str]] = []
+        for fav in raw:
+            if not isinstance(fav, dict) or fav.get("hidden"):
+                continue
+            if blid and not _raw_favorite_is_for(fav, blid):
+                continue
+            fav_id = str(fav.get("favorite_id", "") or "")
+            if fav_id:
+                out.append({"id": fav_id, "name": str(fav.get("name", "") or "")})
+        return out
+
+
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return extra attributes.
@@ -823,8 +856,24 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
                         attrs["current_room_pass_count"] = current.room.pass_count
 
 
-        # SAVED FAVOURITES, id and name. Prime only -- Classic has no
-        # equivalent concept.
+        # SAVED FAVOURITES, id and name.
+        #
+        # PRIME ONLY HERE, AND THAT IS A GAP RATHER THAN A FACT. The
+        # comment that stood here said "Classic has no equivalent
+        # concept". It has: the cloud coordinator fetches them from
+        # `/user/favorites`, `async_run_classic_favorite()` runs them,
+        # and they already appear as buttons -- @ScenicSystemsLLC's
+        # Braava reports eight.
+        #
+        # What is missing is this attribute reading them. So on Classic
+        # the buttons work and the automations that iterate, the
+        # templates that list, and the map card menu below get nothing.
+        #
+        # BOTH GENERATIONS NOW. Prime keeps its own list; Classic reads
+        # the cloud coordinator's, filtered to this robot -- the same
+        # source and the same per-robot filter the Classic favourite
+        # buttons already use, reshaped to `{id, name}` so a template
+        # written against one generation works on the other.
         #
         # Costs no entity, and covers what buttons cannot: automations
         # that iterate, templates that list, and the
@@ -839,6 +888,7 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         # An entity built without one has no favourites to report.
         favorites = (
             getattr(self._config_entry.runtime_data, "prime_favorites", None)
+            or self._classic_favorites_attribute()
             if self._config_entry is not None
             else None
         )

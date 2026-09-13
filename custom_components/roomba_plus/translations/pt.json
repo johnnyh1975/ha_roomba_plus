@@ -1789,6 +1789,10 @@
     "favorite_multi_commanddefs": {
       "title": "O favorito tem vários passos de comando",
       "description": "O favorito “{name}” tem {count} passos de comando, mas apenas o primeiro é enviado ao robô — os restantes são ignorados. Trata-se de uma configuração rara cujo funcionamento correto não está confirmado."
+    },
+    "core_roomba_conflict": {
+      "title": "Duas integrações Roomba instaladas",
+      "description": "A integração **Roomba** incorporada no Home Assistant está configurada juntamente com o Roomba+. Ambas usam a mesma biblioteca `roombapy`, e o Home Assistant instala apenas uma versão — uma das duas não conseguirá carregar, normalmente com um `ImportError` no registo.\n\nNenhuma das duas pode resolver isto. Remova a que não precisa."
     }
   },
   "device_automation": {

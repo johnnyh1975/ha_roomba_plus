@@ -1550,6 +1550,24 @@ async def _build_diagnostics(
             "pmap_ids": [
                 next(iter(p)) for p in state.get("pmaps", []) if p
             ],
+            # THE VERSION EACH MAP CARRIES, not just which maps exist.
+            #
+            # A start command pairs a map id with THAT map's version id,
+            # and pairing one map with another's version makes the robot
+            # refuse to localise -- error 224, docked, no mission.
+            #
+            # `pmap_ids` showed which maps there are and nothing about
+            # their versions, so diagnosing that meant inferring the
+            # pairing from `lastCommand` rather than reading it. It took
+            # two wrong guesses on @Thonno's two-map i7+ before the real
+            # cause surfaced.
+            #
+            # Map ids and version stamps, no credentials.
+            "pmap_versions": {
+                str(next(iter(p))): str(p[next(iter(p))])
+                for p in state.get("pmaps", [])
+                if isinstance(p, dict) and p
+            },
             "last_command_summary": {
                 "command": state.get("lastCommand", {}).get("command"),
                 "pmap_id": state.get("lastCommand", {}).get("pmap_id"),

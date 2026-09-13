@@ -1789,6 +1789,10 @@
     "favorite_multi_commanddefs": {
       "title": "Favorite has multiple command steps",
       "description": "The favorite \"{name}\" has {count} command steps, but only the first one is sent to the robot — the rest are ignored. This is a rare configuration that hasn't been confirmed to work correctly."
+    },
+    "core_roomba_conflict": {
+      "title": "Two Roomba integrations installed",
+      "description": "Home Assistant's built-in **Roomba** integration is set up alongside Roomba+. Both use the same `roombapy` library, and Home Assistant installs only one copy of it — so one of the two will fail to load, usually with an `ImportError` in the log.\n\nThis is not something either integration can fix. Remove whichever one you do not need: Roomba+ covers everything the built-in one does and adds the newer cloud robots, but if you only have older robots and are happy with the built-in one, remove Roomba+ instead."
     }
   },
   "device_automation": {

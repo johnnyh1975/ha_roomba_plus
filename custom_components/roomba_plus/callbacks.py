@@ -761,6 +761,9 @@ def make_mission_callback(
     """
     last_phase: str = ""
     was_travelling: bool = False
+    #: Whether a working mode has been seen since the current room
+    #: was entered; see the note in the advance block.
+    cleaned_in_room: bool = False
     travel_started_at: float | None = None
     current_mission_zones: list[str] = []
     mission_start_ts: int = 0
@@ -825,7 +828,7 @@ def make_mission_callback(
     had_cleaning_phase: bool = False
 
     def _on_mission_message(json_data: dict[str, Any], _synthetic: bool = False) -> None:
-        nonlocal last_phase, was_travelling, travel_started_at, current_mission_zones, mission_start_ts
+        nonlocal last_phase, was_travelling, cleaned_in_room, travel_started_at, current_mission_zones, mission_start_ts
         nonlocal nstuck_at_start, recharge_min_accumulator, last_recharge_phase_ts
         nonlocal current_leg_rechrgM
         nonlocal _last_mirrored_recharge_min
@@ -1808,7 +1811,7 @@ def make_mission_callback(
                         last_phase != phase
                         and phase in _ROOM_TRANSITION_CANDIDATE_PHASES
                     )
-                    or _returned_from_travel
+                    or (_returned_from_travel and cleaned_in_room)
                 )
                 and _room_transition_confidence_ok(
                     mission, _mts_upd, from_travel=_returned_from_travel
@@ -1816,6 +1819,8 @@ def make_mission_callback(
             ):
                 _advanced = _mts_upd.advance_room(hass, entry.entry_id)
                 if _advanced:
+                    # The new room has not been cleaned yet.
+                    cleaned_in_room = False
                     _LOGGER.info(
                         "AUTO-ADVANCE-ROOM: advanced to room %d/%d (%s) "
                         "on phase=%s confidence signal",

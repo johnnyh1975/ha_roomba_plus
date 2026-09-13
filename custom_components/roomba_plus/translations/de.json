@@ -1789,6 +1789,10 @@
     "favorite_multi_commanddefs": {
       "title": "Favorit hat mehrere Befehlsschritte",
       "description": "Der Favorit „{name}“ hat {count} Befehlsschritte, aber nur der erste wird an den Roboter gesendet — die übrigen werden ignoriert. Das ist eine seltene Konfiguration, für die kein korrektes Verhalten bestätigt ist."
+    },
+    "core_roomba_conflict": {
+      "title": "Zwei Roomba-Integrationen installiert",
+      "description": "Die eingebaute **Roomba**-Integration von Home Assistant ist neben Roomba+ eingerichtet. Beide nutzen dieselbe `roombapy`-Bibliothek, und Home Assistant installiert davon nur eine Fassung – eine der beiden wird sich also nicht laden lassen, meist mit einem `ImportError` im Protokoll.\n\nDas kann keine der beiden Integrationen beheben. Entfernen Sie die, die Sie nicht brauchen: Roomba+ deckt alles ab, was die eingebaute kann, und zusätzlich die neueren Cloud-Roboter – haben Sie nur ältere Roboter und sind mit der eingebauten zufrieden, entfernen Sie stattdessen Roomba+."
     }
   },
   "device_automation": {

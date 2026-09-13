@@ -2411,6 +2411,11 @@ def async_get_room_cleaning_backend(
 # 21 existing clean_room tests cover this and were the check that the
 # move preserved behaviour.
 
+#: `Smart Map localization failed`. The robot records the command and
+#: then refuses to act on it, so its version must not be reused.
+_ERROR_LOCALIZATION_FAILED: int = 224
+
+
 def _resolve_pmapv_id(state: dict[str, Any], pmap_id: str) -> str | None:
     """Return user_pmapv_id for pmap_id from local MQTT state.
 
@@ -2425,7 +2430,31 @@ def _resolve_pmapv_id(state: dict[str, Any], pmap_id: str) -> str | None:
     robot was last commanded on a different map) or when cloud data is absent.
     """
     last = state.get("lastCommand", {})
-    if last.get("pmap_id") == pmap_id and last.get("user_pmapv_id"):
+
+    # A COMMAND THAT FAILED IS NOT A SOURCE OF TRUTH.
+    #
+    # "The version the robot last accepted" is the whole argument for
+    # preferring `lastCommand`. But the robot ACCEPTS a start it then
+    # refuses to act on: it records the command, sets `error: 224`
+    # ("Smart Map localization failed") and stays on the dock.
+    #
+    # So a wrong version, once sent, is written into `lastCommand` by
+    # the robot and read back here as authoritative on the next attempt.
+    # @Thonno's two-map i7+ was stuck in exactly that loop: 4.2.2 stopped
+    # PRODUCING the mismatched pairing, and the mismatched pairing was
+    # by then cached in his robot, so nothing changed for him.
+    #
+    # The error field says which case this is. A last command that ended
+    # in a localisation failure is skipped, and the per-map value below
+    # is used instead.
+    _last_error = (state.get("cleanMissionStatus") or {}).get("error")
+    _last_failed = _last_error == _ERROR_LOCALIZATION_FAILED
+
+    if (
+        last.get("pmap_id") == pmap_id
+        and last.get("user_pmapv_id")
+        and not _last_failed
+    ):
         return str(last["user_pmapv_id"])
     for pmap in state.get("pmaps", []):
         if pmap_id in pmap:
