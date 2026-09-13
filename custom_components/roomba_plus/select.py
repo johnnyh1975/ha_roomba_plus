@@ -386,24 +386,48 @@ async def _select_reusable_wetness(entity: SimpleRoombaSelect, option: str) -> N
 
 
 async def _select_carpet_boost(entity: SimpleRoombaSelect, option: str) -> None:
-    """v3.1.0 CARPET-BOOST-SLUG-FIX: case-insensitive so existing automations
-    calling select.select_option with the old Capital-Case value ("Automatic")
-    keep working after FAN_SPEEDS moved to lowercase slugs.
+    """Writes the Classic suction pair, the way cleaning passes does.
+
+    THIS USED TO CALL `vacuum.set_fan_speed`, and two things were wrong
+    with that at once.
+
+    It looked the vacuum entity up by the bare blid, while the vacuum
+    registers as `roomba_plus_<blid>` -- so the lookup missed on every
+    robot and logged an error nobody was reading. And had it found the
+    entity, `async_set_fan_speed()` writes `suctionLevel` through the
+    PRIME robot object and returns silently when there is none. This
+    select only exists on CLASSIC robots -- it is filtered on
+    `carpetBoost`/`vacHigh`, which Prime does not report -- so the call
+    could never have done anything.
+
+    @ScenicSystemsLLC reproduced it three times on an S9+: the dropdown
+    flashed the chosen value and snapped back to "automatic".
+
+    The pair is written directly, exactly as `_select_cleaning_passes`
+    does, and mirrors this descriptor's own read function above:
+
+        automatic    carpetBoost True,  vacHigh False
+        performance  carpetBoost False, vacHigh True
+        eco          carpetBoost False, vacHigh False
+
+    Both halves in one call, because the firmware reads them as a pair
+    and drops both when they arrive separately -- the same fault that
+    kept cleaning passes from working on i/s robots until roombapy
+    2.0.2.
     """
-    canonical = option.lower()
+    canonical = option.strip().lower()
     if canonical not in FAN_SPEEDS:
-        _LOGGER.error("CarpetBoostSelect: unknown option %r", option)
+        _LOGGER.error("CarpetBoostSelect: %r is not a suction level", option)
         return
-    from homeassistant.helpers import entity_registry as er
-    reg = er.async_get(entity.hass)
-    vac_entry = reg.async_get_entity_id("vacuum", "roomba_plus", entity._blid)
-    if vac_entry is None:
-        _LOGGER.error("CarpetBoostSelect: no vacuum entity for blid=%s", entity._blid)
-        return
-    await entity.hass.services.async_call(
-        "vacuum", "set_fan_speed",
-        {"entity_id": vac_entry, "fan_speed": canonical},
-        blocking=False,
+
+    carpet_boost = canonical == FAN_SPEED_AUTOMATIC
+    vac_high = canonical == FAN_SPEED_PERFORMANCE
+    _LOGGER.debug(
+        "CarpetBoostSelect: option=%r → carpetBoost=%s vacHigh=%s",
+        option, carpet_boost, vac_high,
+    )
+    await entity.vacuum.set_preferences(
+        {"carpetBoost": carpet_boost, "vacHigh": vac_high}
     )
 
 

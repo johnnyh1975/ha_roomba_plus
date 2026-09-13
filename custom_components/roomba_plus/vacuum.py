@@ -692,11 +692,11 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
             )
             if _cmd_regions and _live_region_map:
                 from .mission_store import MissionStore as _MS
-                # ONE COMPREHENSION, so the type narrows. Assigning the
-                # filtered list back over a `list[str | None]` leaves it
-                # `list[str | None]` as far as mypy is concerned, and
-                # `_live_region_map.get(rid, rid)` then takes an
-                # argument the dict does not accept.
+                # A NEW NAME FOR THE NARROWED LIST. `extract_rid()`
+                # returns `str | None`, and reassigning the same name
+                # after filtering does not tell a type checker that the
+                # Nones are gone -- the stronger return type on
+                # `region_names_across_maps()` is what surfaced it.
                 _rids: list[str] = [
                     rid
                     for rid in (_MS.extract_rid(r) for r in _cmd_regions)
@@ -1174,7 +1174,6 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         evacuation. Documented rather than guarded, and the entity
         description says so too.
 
-
         NEW (V4/Prime): sends "dock" directly, skipping the pause-then-
         wait dance above entirely -- self.activity isn't reliable for
         Prime yet (same reasoning as async_start()), so waiting for it
@@ -1558,7 +1557,16 @@ class RoombaVacuumCarpetBoost(RoombaVacuum):
         # both, because one handler reads the pair and needs each of
         # them present.
         await self.vacuum.set_preferences(
-            {"carpetBoost": str(carpet_boost), "vacHigh": str(high_perf)}
+            # BOOLEANS, NOT `str(...)`. This sent the Python strings
+            # "True"/"False", which nothing explains and no comment ever
+            # did. Its confirmed-working sibling one file over --
+            # cleaning passes, verified on hardware across two firmware
+            # families -- sends real booleans through the same call.
+            #
+            # Inference from that sibling rather than from a capture, so
+            # it is the first thing to re-check if suction still does
+            # not take.
+            {"carpetBoost": carpet_boost, "vacHigh": high_perf}
         )
 
 

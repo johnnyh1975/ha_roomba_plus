@@ -1071,6 +1071,36 @@ async def _build_diagnostics(
             # These are robot SETTINGS and STATE: child lock, eco
             # charging, suction level, schedules, firmware version, dock
             # status. Nothing here is a credential.
+            # THE ROOM PATH, which this branch said nothing about.
+            #
+            # `cloud` and `smart_map` below belong to the Classic branch
+            # and are absent here by design -- which reads like missing
+            # cloud data if you do not know that. It cost a wrong
+            # diagnosis on @mrsnyds' report: his `cloud: null` was
+            # normal and present in every file he ever sent, including
+            # ones from versions where room cleaning worked.
+            #
+            # What was actually needed was this: whether the map ids
+            # resolve, whether the room names are cached, and whether
+            # the two agree. `clean_room` fails when the first is empty
+            # and the second is not.
+            "rooms": {
+                "cached_names": len(
+                    getattr(data, "prime_room_names", None) or {}
+                ),
+                "cached_name_ids": sorted(
+                    str(k) for k in (
+                        getattr(data, "prime_room_names", None) or {}
+                    )
+                ),
+                "discovered_zone_ids": sorted(
+                    str(z) for z in (
+                        (getattr(config_entry, "options", None) or {}).get(
+                            "discovered_zone_ids", ()
+                        )
+                    )
+                ),
+            },
             "shadows": _prime_shadow_dump(data),
             "status_coordinator": {
                 "started": status_coordinator is not None,

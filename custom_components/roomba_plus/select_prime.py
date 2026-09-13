@@ -41,7 +41,6 @@ from typing import TYPE_CHECKING, Any, Final
 
 from homeassistant.components.select import SelectEntity, SelectEntityDescription
 from homeassistant.const import EntityCategory
-from homeassistant.core import callback
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.core import callback
 from homeassistant.helpers.restore_state import RestoreEntity
@@ -1341,6 +1340,16 @@ class PrimeZoneSelect(IRobotEntity, SelectEntity):
         await super().async_added_to_hass()
         await self._async_load_segments()
 
+        # AND AGAIN WHEN THE MAP CHANGES. Loading once at startup froze
+        # the list until the next reload: a map retrained in the app, a
+        # zone renamed, or simply a call that had one map fail would
+        # leave the selector showing yesterday's rooms with nothing to
+        # say so.
+        #
+        # @chairstacker saw 18 entries here and 17 in the area-mapping
+        # dialog, which reads live on every open. Two readings of the
+        # same list taken at different times, and only one of them able
+        # to notice a change.
         # THE MAP BUILD IS WHAT MATTERS, not the status poll.
         #
         # Zone names arrive in `prime_room_names` when the map image

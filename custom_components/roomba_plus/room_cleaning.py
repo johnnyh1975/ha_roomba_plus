@@ -692,6 +692,34 @@ class PrimeRoomCleaning(RoomCleaningBackend):
         # offered under the `zid_` prefix instead of vanishing.
         self._zone_region_ids = zone_ids
 
+        # THE LAST LIST THAT WORKED, kept for when a lookup yields
+        # nothing.
+        #
+        # WHY THE BUTTON WORKED AND THE SERVICE DID NOT. The selector
+        # already does this: it calls `get_segments()`, and on failure
+        # returns early, leaving its previous `{name: id}` map in place.
+        # Pressing the button then cleans the room the user picked, from
+        # the last list that resolved.
+        #
+        # `clean_room` had no such memory. It asked live, got nothing,
+        # and told the user his rooms were unknown -- while the same
+        # rooms sat in the dropdown beside it and the button cleaned
+        # them (@mrsnyds, whose button has worked since 4.1.3 and whose
+        # service call never has).
+        #
+        # A slightly stale room list is better than "your rooms do not
+        # exist". That is the selector's judgement already; this only
+        # makes the service share it.
+        if rooms:
+            self._last_known_rooms = dict(rooms)
+        elif getattr(self, "_last_known_rooms", None):
+            _LOGGER.debug(
+                "roomba_plus: no rooms resolved for %s; using the %d from "
+                "the last successful lookup",
+                self._data.blid, len(self._last_known_rooms),
+            )
+            return dict(self._last_known_rooms)
+
         # NOTHING FROM THE MAPS? FALL BACK TO THE NAMES WE ALREADY HAVE.
         #
         # This whole method reads `rooms_metadata`. When that is empty --
@@ -2371,6 +2399,7 @@ def _resolve_pmapv_id(state: dict[str, Any], pmap_id: str) -> str | None:
         if pmap_id in pmap:
             return str(pmap[pmap_id])
     return None
+
 
 
 def region_names_across_maps(

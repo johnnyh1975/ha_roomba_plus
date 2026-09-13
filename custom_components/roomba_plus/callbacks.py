@@ -842,6 +842,7 @@ def make_mission_callback(
         # (stale/re-delivered MQTT state), not a genuine resume — treat it
         # as inert enrichment instead of re-opening the mission.
         _candidate_mission_start_ts = mission.get("mssnStrtTm") or 0
+
         # A CLEANING CYCLE, NOT JUST A CLEANING PHASE.
         #
         # `phase` alone opens a mission for things that are not one. A
@@ -1434,6 +1435,41 @@ def make_mission_callback(
 
         # MP1 (v2.6.0): accumulate run-only seconds in MissionTimerStore
         _mts_upd = getattr(entry.runtime_data, "mission_timer_store", None)
+        # THE TRAVEL FLAG IS READ ON EVERY MESSAGE, whatever the phase.
+        #
+        # THIS WAS THE BUG. The read sat inside the `phase != "run"`
+        # branch below, and travel happens DURING `run`. So the field
+        # was only ever looked at in phases where it cannot be 1, and
+        # `was_travelling` stayed False for an entire mission -- the
+        # return edge could not fire even once.
+        #
+        # @ScenicSystemsLLC captured nine unbroken seconds of
+        # `operatingMode: 1` at a confirmed room boundary on his S9+,
+        # and the display did not move. The signal was there; we were
+        # reading the wrong branch.
+        #
+        # CLASSIC ONLY. Bit 0 = `Traveling` is confirmed twice over for
+        # Classic firmware -- the app names it, and
+        # `MissionStatusMessage::get_operating_mode()` sets it when the
+        # internal mode is `CLEANING_MODE_TRAVEL`. Prime has no such
+        # producer and models a repositioning drive as a timeline event
+        # instead; it does report the field, so absence is not a safe
+        # test and the scoping is explicit.
+        _mode = (
+            mission.get("operatingMode")
+            if getattr(entry.runtime_data, "prime_status_coordinator", None)
+            is None
+            else None
+        )
+        _travelling = bool(_mode & 1) if isinstance(_mode, int) else None
+
+        # EDGE ON THE RETURN, not the departure: the robot is in the new
+        # room once the drive ENDS. Travel also covers evading and
+        # relocalising, so counting departures would over-count.
+        _returned_from_travel = _travelling is False and was_travelling
+        if isinstance(_travelling, bool):
+            was_travelling = _travelling
+
         if _mts_upd is not None and mission_start_ts:
             _mission_id = f"{entry.data.get('blid', '')}_{mission_start_ts}"
             if phase == "run":
@@ -1671,93 +1707,74 @@ def make_mission_callback(
                 # "entered travel" would over-count -- @ScenicSystemsLLC
                 # saw six excursions on a seven-room run, two of which
                 # were not room changes.
-                # CLASSIC ONLY. Bit 0 = `Traveling` is confirmed twice
-                # over for Classic firmware -- the app names it, and
-                # `MissionStatusMessage::get_operating_mode()` sets it
-                # when the internal mode is `CLEANING_MODE_TRAVEL`.
-                #
-                # PRIME HAS NO SUCH PRODUCER. `operatingMode` appears
-                # exactly once in its firmware, as an entry in a
-                # pass-through shadow key list; there is no counterpart
-                # to that function and the names `Traveling`,
-                # `Vacuuming`, `Mopping` do not occur at all. Prime
-                # models a repositioning drive as a TIMELINE EVENT
-                # (`travel`, `traversal`, `reloc`) instead.
-                #
-                # Prime robots do report the field -- @theChef163's
-                # shows `operatingMode: 0` -- so an absence check is not
-                # enough. If it ever carried a different meaning there,
-                # this would advance rooms on the wrong signal. Scoped
-                # rather than trusted.
-                _mode = (
-                    mission.get("operatingMode")
-                    if getattr(entry.runtime_data, "prime_status_coordinator", None)
-                    is None
-                    else None
-                )
-                _travelling = bool(_mode & 1) if isinstance(_mode, int) else None
-                _returned_from_travel = (
-                    _travelling is False
-                    and was_travelling
-                )
-                if isinstance(_travelling, bool):
-                    was_travelling = _travelling
 
-                if (
+        if _mts_upd is not None and mission_start_ts:
+            # EVALUATED ON EVERY PHASE, not just the non-run ones.
+            #
+            # This sat inside the `phase != "run"` branch, together with
+            # the flag it reads. The phase route needs `charge` or
+            # `hmPostMsn` and was fine there; the travel route needs `run`
+            # and could never fire.
+            #
+            # One placement explained both field reports: @ScenicSystemsLLC's
+            # S9+ sent nine clean seconds of the travel signal and the
+            # display never moved, while his Braava -- which sends no travel
+            # signal at all -- advanced late through the phase route.
+            if (
+                (
                     (
-                        (
-                            last_phase != phase
-                            and phase in _ROOM_TRANSITION_CANDIDATE_PHASES
-                        )
-                        or _returned_from_travel
+                        last_phase != phase
+                        and phase in _ROOM_TRANSITION_CANDIDATE_PHASES
                     )
-                    and _room_transition_confidence_ok(mission, _mts_upd)
-                ):
-                    _advanced = _mts_upd.advance_room(hass, entry.entry_id)
-                    if _advanced:
-                        _LOGGER.info(
-                            "AUTO-ADVANCE-ROOM: advanced to room %d/%d (%s) "
-                            "on phase=%s confidence signal",
-                            _mts_upd.current_room_idx + 1,
-                            len(_mts_upd.planned_rooms),
-                            _mts_upd.current_room,
-                            phase,
-                        )
-                        # v2.9.0 EVENT-BUS — room_completed fires for the
-                        # room just LEFT (current_room_idx already advanced
-                        # above, so current_room now refers to the NEXT
-                        # room — use idx-1 / the previous room name).
-                        _completed_idx = _mts_upd.current_room_idx - 1
-                        _completed_room = (
-                            _mts_upd.planned_rooms[_completed_idx]
-                            if 0 <= _completed_idx < len(_mts_upd.planned_rooms)
-                            else None
-                        )
-                        # v2.9.0 BUGFIX (field report Thonno, v2.8.7) —
-                        # _on_mission_message runs on roombapy's MQTT thread,
-                        # not the event loop thread. hass.bus.async_fire is a
-                        # plain (non-coroutine) function that touches hass's
-                        # event bus — call_soon_threadsafe is the correct
-                        # bridge, same pattern already used for
-                        # async_check_map_retrain_workflow below. Calling it
-                        # directly raised RuntimeError on every room
-                        # transition on newer/stricter HA core versions,
-                        # crashing the entire paho-mqtt message thread —
-                        # which then explained the "mission never closes"
-                        # symptom: no further MQTT messages were ever
-                        # processed after the first room transition, so the
-                        # v2.9.0 stuck-end-state recheck kept re-evaluating
-                        # the same frozen cached state forever.
-                        hass.loop.call_soon_threadsafe(
-                            hass.bus.async_fire,
-                            EVENT_ROOM_COMPLETED,
-                            {
-                                "entry_id": entry.entry_id,
-                                "name": entry.title,
-                                "room_name": _completed_room,
-                                "room_idx": _completed_idx,
-                            },
-                        )
+                    or _returned_from_travel
+                )
+                and _room_transition_confidence_ok(mission, _mts_upd)
+            ):
+                _advanced = _mts_upd.advance_room(hass, entry.entry_id)
+                if _advanced:
+                    _LOGGER.info(
+                        "AUTO-ADVANCE-ROOM: advanced to room %d/%d (%s) "
+                        "on phase=%s confidence signal",
+                        _mts_upd.current_room_idx + 1,
+                        len(_mts_upd.planned_rooms),
+                        _mts_upd.current_room,
+                        phase,
+                    )
+                    # v2.9.0 EVENT-BUS — room_completed fires for the
+                    # room just LEFT (current_room_idx already advanced
+                    # above, so current_room now refers to the NEXT
+                    # room — use idx-1 / the previous room name).
+                    _completed_idx = _mts_upd.current_room_idx - 1
+                    _completed_room = (
+                        _mts_upd.planned_rooms[_completed_idx]
+                        if 0 <= _completed_idx < len(_mts_upd.planned_rooms)
+                        else None
+                    )
+                    # v2.9.0 BUGFIX (field report Thonno, v2.8.7) —
+                    # _on_mission_message runs on roombapy's MQTT thread,
+                    # not the event loop thread. hass.bus.async_fire is a
+                    # plain (non-coroutine) function that touches hass's
+                    # event bus — call_soon_threadsafe is the correct
+                    # bridge, same pattern already used for
+                    # async_check_map_retrain_workflow below. Calling it
+                    # directly raised RuntimeError on every room
+                    # transition on newer/stricter HA core versions,
+                    # crashing the entire paho-mqtt message thread —
+                    # which then explained the "mission never closes"
+                    # symptom: no further MQTT messages were ever
+                    # processed after the first room transition, so the
+                    # v2.9.0 stuck-end-state recheck kept re-evaluating
+                    # the same frozen cached state forever.
+                    hass.loop.call_soon_threadsafe(
+                        hass.bus.async_fire,
+                        EVENT_ROOM_COMPLETED,
+                        {
+                            "entry_id": entry.entry_id,
+                            "name": entry.title,
+                            "room_name": _completed_room,
+                            "room_idx": _completed_idx,
+                        },
+                    )
 
         last_phase = phase
 

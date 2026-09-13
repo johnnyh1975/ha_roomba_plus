@@ -1338,7 +1338,58 @@ def decode_not_ready(raw: object) -> int | None:
 #: between them (lewis' enum has one extra entry below index 31), but
 #: the WIRE VALUES are identical. The table travels between generations.
 #:
-#: `soho` and `sanmarino` remain unread. Nothing suggests they differ.
+#: `soho` and `sanmarino` remain unread, and there is no way to read
+#: them: no firmware image of either exists, and the availability
+#: endpoint returns nothing for both. The only route would be a tester
+#: being offered an update on one of those robots.
+#:
+#: TWO ARGUMENTS SAY THEY WILL NOT DIFFER IN MEANING.
+#:
+#: First, ruby and lewis agree on every wire value they share -- all 33
+#: -- despite building the table differently (32-bit immediates versus
+#: half-word stores on the stack) and carrying enums of different
+#: length. Two independent implementations reaching the same mapping is
+#: not a coincidence worth betting against.
+#:
+#: Second, and stronger: the iRobot app has exactly ONE
+#: `RobotReadinessState` enum, 73 entries, and no branch on codename or
+#: SKU anywhere in the readiness path. One binary serves i7, S9+, j9 and
+#: m6. It therefore CANNOT read the same wire value differently per
+#: family -- either the values are family-independent, or iRobot's own
+#: app shows wrong states on half its fleet.
+#:
+#: A THIRD SOURCE AGREES: the app's own display strings, keyed by wire
+#: value as `history_start_refuse_<n>`. Wire 68 reads "Map was
+#: unavailable" -- which settles the value that caused two field
+#: reports, from a third direction after the firmware constant
+#: (`LOADING_MAP`) and the enum index (`DownloadingMap`).
+#:
+#: Those strings are keyed by the NUMBER, family-independent, with
+#: explicit variants only where hardware differs -- wire 6 has three
+#: wordings for brush/brushes/extractors, and the mower values carry
+#: `_mow` suffixes. Same number, different noun. If a Braava needed a
+#: different MEANING for a shared value, iRobot would have needed a
+#: variant key rather than the same one; they did not.
+#:
+#: The Braava-relevant values are in that set already: 31 "Tank low",
+#: 34/35 "Unrecognized cleaning pad", 72 "Check tank for leaks".
+#:
+#: ONE CORRECTION FROM THAT SOURCE: wire 40 was read from lewis as
+#: `HARDWARE_MISMATCH`, but the app shows "Software update required".
+#: Firmware constant and user-facing label disagree there, which is
+#: another reason it stays unmapped.
+#:
+#: NOT ADOPTED FROM IT: the display strings cover roughly fifty wire
+#: values, many more than the 35 pairs extracted from firmware. They
+#: are user prose ("Not on charging station"), not enum names ("Not
+#: docked"), so bridging them onto this table would be inference of
+#: exactly the kind that produced a wrong label once already. They are
+#: worth revisiting if someone maps the string keys to enum ordinals
+#: directly.
+#:
+#: WHAT REMAINS UNCERTAIN IS EXTRA VALUES, not different ones. A Braava
+#: may emit wire values neither ruby nor lewis assigns -- mop-specific
+#: refusals. Those show as their raw number, which is correct.
 #:
 #: WIRE 99 IS NOT MAPPED HERE, ON PURPOSE. The firmware returns it for
 #: anything it cannot express -- `ctv_get_cloud_not_ready` logs
@@ -1388,7 +1439,31 @@ READINESS_WIRE_TO_INDEX: Final[dict[int, int]] = {
     51: 38,  # CAMERA_DEAD            -> Dead camera
     57: 39,  # BACKUP_REFUSED         -> Backup refused
     72: 66,  # TANK_LEAKING           -> Tank leaking
-    78: 69,  # CSSC_HW_MISMATCH       -> Cleaning head hw mismatch
+    # lewis-only, from its own table.
+    25: 25,  # BUMPER_OFFLINE         -> Bumper offline
+    32: 20,  # LID_OPEN               -> Lid open
+    # ------------------------------------------------------------------
+    # WHERE THE FAMILIES DIFFER, THEY ADD -- THEY DO NOT CONFLICT.
+    #
+    # Both firmwares carry a hardware-mismatch state, on different wire
+    # values under different names:
+    #
+    #     ruby   CSSC_HW_MISMATCH   -> wire 78, unknown to lewis
+    #     lewis  HARDWARE_MISMATCH  -> wire 40, unknown to ruby
+    #
+    # That looks like a contradiction and is not. A value-by-value
+    # comparison of the two tables shows every wire value present in
+    # BOTH means the same thing -- all 33 of them. The differences are
+    # values one family uses and the other never emits.
+    #
+    # Each family draws a subset of one shared value space. That is the
+    # opposite of a divergence, and it is why the table travels.
+    #
+    # 78 is mapped because ruby's name pins it to a known state. 40 is
+    # NOT: whether `HARDWARE_MISMATCH` is the same state as
+    # `CleaningHeadHwMismatch` was never established. A lewis robot
+    # reporting 40 shows `not_ready_40` until somebody confirms it.
+    78: 69,  # CSSC_HW_MISMATCH (ruby) -> Cleaning head hw mismatch
     # FOUR FIRMWARE CONSTANTS, ONE STATE. The app has only
     # `BatteryAuthError` for all of them, so three wire values collapse
     # onto it: BATTERY_AUTH_FAILED, CHARGING_REPLACE_BATT /
@@ -1409,6 +1484,15 @@ READINESS_WIRE_TO_INDEX: Final[dict[int, int]] = {
     # is the whole reason unmapped values report their number.
     # Where the arithmetic breaks down entirely.
     33: 21,  # BUMPED             -> Bumped
+    # `Saving map`, NOT the app's "Clean Map problem".
+    #
+    # The app frames it as a fault because it blocks a start. It is a
+    # normal step: @Thonno watched the sensor run
+    # `Saving map -> Downloading map -> Ready` on his i7+, which is a
+    # map lifecycle, not a problem followed by a recovery.
+    #
+    # That observation also confirms 39 and 68 as adjacent stages of
+    # one process, which is why "Off dock" for 68 read so wrongly.
     39: 37,  # SAVING_MAP         -> Saving map
     # The 62-68 block, four apart rather than three.
     66: 62,  # RAAS_SUBSCRIPTION_ERROR -> Subscription expired
