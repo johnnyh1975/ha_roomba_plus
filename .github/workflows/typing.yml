@@ -62,11 +62,9 @@ jobs:
                       "pycares==4.11.0" \
                       aiohttp pillow
 
-      # MYPY ITSELF, which this job forgot to install. The step below ran
-      # `check_typing_baseline.py`, which shells out to mypy, and got
-      # "No module named mypy" -- so the typing gate reported a failure
-      # that had nothing to do with the code, and could never have
-      # reported a real one.
+      # MYPY, INSTALLED EXPLICITLY. The step below shells out to it, and
+      # nothing else in this job brings it in -- no dependency here
+      # declares it.
       #
       # Pinned, because an unpinned type checker turns every one of its
       # releases into a build break nobody chose.
