@@ -9,6 +9,17 @@ note are listed — most releases need zero action beyond updating.
 
 ---
 
+## v4.2.3 — from v4.2.2
+
+Nothing to do.
+
+**If cleaning a room on a second map still failed after 4.2.2**, your
+robot was holding the bad value rather than us sending it. This clears
+it — or one cleaning started from the iRobot app on that map clears it
+immediately, on any version.
+
+---
+
 ## v4.2.2 — from v4.2.1
 
 Nothing to do.
