@@ -141,7 +141,6 @@ class TestReadinessStateDecoding:
         for index, label in (
             (48, "Localization failed"),
             (53, "Not docked"),
-            (20, "Lid open"),
         ):
             assert READINESS_STATE_LABELS[index] == label
             assert index not in reachable, label
@@ -151,6 +150,9 @@ class TestReadinessStateDecoding:
         should say so -- guessing one is what caused the bug above."""
         assert self._value(200) == "not_ready_200"
         assert self._value(45) == "not_ready_45"
+        # 40 is lewis' hardware mismatch; which state it is was not
+        # confirmed, so it stays a number rather than a guess.
+        assert self._value(40) == "not_ready_40"
 
     def test_a_non_integer_does_not_raise(self):
         assert self._value("nonsense") is not None
@@ -819,3 +821,106 @@ class TestTheRobotsOwnAbortHistory:
 
     def test_a_robot_without_the_field(self):
         assert self._read(None) == []
+
+
+class TestTheWireTableTravelsBetweenFamilies:
+    """Ruby and lewis assign different SUBSETS of one shared value
+    space. They do not disagree.
+
+    This was briefly recorded as a divergence, because the
+    hardware-mismatch state sits on wire 78 in ruby and wire 40 in
+    lewis. A value-by-value comparison showed the opposite: every wire
+    value present in both means the same thing, and the differences are
+    values one family uses and the other never emits.
+
+    THE STRONGER ARGUMENT IS ARCHITECTURAL. The iRobot app has one
+    `RobotReadinessState` enum and no branch on codename or SKU in the
+    readiness path -- one binary for i7, S9+, j9 and m6. It cannot read
+    a wire value differently per family, so either the values are
+    family-independent or iRobot's own app is wrong on half its fleet.
+
+    `soho` and `sanmarino` have never been read and cannot be: no
+    firmware image of either exists.
+    """
+
+    def test_the_two_family_specific_values_do_not_collide(self):
+        """40 and 78 both mean hardware mismatch, on different
+        generations. Neither family knows the other's number, so no
+        robot can send both."""
+        from custom_components.roomba_plus.const import (
+            READINESS_WIRE_TO_INDEX,
+        )
+
+        assert 78 in READINESS_WIRE_TO_INDEX
+        assert 40 not in READINESS_WIRE_TO_INDEX
+
+    def test_the_shared_values_are_the_bulk_of_the_table(self):
+        """33 wire values appear in both firmwares and agree in every
+        one. That agreement is what makes the table portable."""
+        from custom_components.roomba_plus.const import (
+            READINESS_WIRE_TO_INDEX,
+        )
+
+        shared = {
+            1, 2, 3, 4, 6, 7, 10, 15, 16, 18, 21, 22, 23, 24, 26, 28,
+            29, 31, 33, 34, 35, 36, 37, 38, 39, 51, 57, 66, 67, 68, 69, 72,
+        }
+        assert shared <= set(READINESS_WIRE_TO_INDEX)
+
+    def test_lewis_only_values_are_carried(self):
+        """25 and 32 exist in lewis and not in ruby. Adding them cannot
+        break a ruby robot, which never sends them."""
+        assert self_value_is(25, "bumper_offline")
+        assert self_value_is(32, "lid_open")
+
+
+def self_value_is(not_ready, expected):
+    """Helper: what the readiness sensor reports for a wire value."""
+    from unittest.mock import MagicMock
+
+    from custom_components.roomba_plus.sensor_helpers import (
+        _not_ready_value,
+    )
+
+    entity = MagicMock()
+    entity.clean_mission_status = {"notReady": not_ready}
+    return _not_ready_value(entity) == expected
+
+
+class TestSixtyEightIsSettledThreeWaysOver:
+    """The value that cost two field reports, confirmed from three
+    independent directions.
+
+        firmware constant   `LOADING_MAP`
+        app enum index      [64] `DownloadingMap`
+        app display string  `history_start_refuse_68` = "Map was
+                            unavailable"
+
+    Three artefacts, three extraction methods, one answer. It is not
+    "Off dock" -- that is wire 69, `DRC_OFF_DOCK`.
+
+    @Thonno's i7+ and @ScenicSystemsLLC's S9+ both reported it while
+    docked and charging, and the old formula named it one place short.
+    """
+
+    def test_the_map_state_and_the_dock_state_are_different_values(self):
+        from custom_components.roomba_plus.const import (
+            READINESS_STATE_LABELS,
+            READINESS_WIRE_TO_INDEX,
+        )
+
+        assert READINESS_STATE_LABELS[READINESS_WIRE_TO_INDEX[68]] == (
+            "Downloading map"
+        )
+        assert READINESS_STATE_LABELS[READINESS_WIRE_TO_INDEX[69]] == "Off dock"
+
+    def test_wire_forty_stays_unmapped(self):
+        """Read from lewis as `HARDWARE_MISMATCH`, shown by the app as
+        "Software update required". When the firmware constant and the
+        user-facing label disagree, neither is a safe basis for a
+        state name."""
+        from custom_components.roomba_plus.const import (
+            READINESS_WIRE_TO_INDEX,
+        )
+
+        assert 40 not in READINESS_WIRE_TO_INDEX

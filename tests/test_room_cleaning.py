@@ -1938,6 +1938,70 @@ class TestStoredZonesSurviveWithoutCloud:
         assert await b.available_rooms() == {}
 
 
+class TestAZoneCarriesItsMap:
+    """@chairstacker: rooms cleaned, zones failed with "this robot has 2
+    maps and is not currently reporting which one it is on".
+
+    `available_rooms()` returns `{p2map_id}/{room_id}`, and
+    `clean_rooms()` splits on that slash to learn which map the command
+    is for. Zone segment ids had no map in them, so there was nothing to
+    split and the two-map branch refused rather than guess. On a
+    one-map robot it would have worked by luck.
+
+    The two readers want the parts in opposite orders, which is the
+    whole difficulty: `clean_rooms()` wants the map first, and
+    `_send_region_command()` looks for `zid_` on what is left after the
+    split. So the id is `zid_<map>/<region>` in the UI and
+    `<map>/zid_<region>` on the way to the robot.
+    """
+
+    @staticmethod
+    def _backend():
+        from custom_components.roomba_plus.room_cleaning import (
+            PrimeRoomCleaning,
+        )
+
+        backend = PrimeRoomCleaning.__new__(PrimeRoomCleaning)
+        backend._data = MagicMock()
+        backend._data.blid = "BLID1"
+        return backend
+
+    async def test_the_map_moves_in_front_of_the_prefix(self) -> None:
+        from unittest.mock import AsyncMock
+
+        backend = self._backend()
+        backend.clean_rooms = AsyncMock()
+
+        await backend.clean_segments(["zid_MAP-A/107"])
+
+        assert backend.clean_rooms.await_args[0][0] == ["MAP-A/zid_107"]
+
+    async def test_a_room_still_loses_only_its_prefix(self) -> None:
+        """The negative control: rooms were never broken and must stay
+        exactly as they were."""
+        from unittest.mock import AsyncMock
+
+        backend = self._backend()
+        backend.clean_rooms = AsyncMock()
+
+        await backend.clean_segments(["rid_MAP-A/12"])
+
+        assert backend.clean_rooms.await_args[0][0] == ["MAP-A/12"]
+
+    async def test_an_unqualified_zone_is_left_alone(self) -> None:
+        """Stored zone data predating this has no map in it. Passing it
+        through unchanged keeps a one-map robot working rather than
+        turning a silent success into a crash."""
+        from unittest.mock import AsyncMock
+
+        backend = self._backend()
+        backend.clean_rooms = AsyncMock()
+
+        await backend.clean_segments(["zid_107"])
+
+        assert backend.clean_rooms.await_args[0][0] == ["zid_107"]
+
+
 class TestEveryRoomWasAlsoOfferedAsAZone:
     """@theChef163's zone "Litter" was missing and every room was
     duplicated. One line caused both.
@@ -2059,16 +2123,9 @@ class TestClassicOffersEveryMapToo:
         backend._config_entry.options = {}
         # The rest of `clean_segments` needs these; the decode half is
         # what these tests are about.
-        # On this line the command goes through
-        # `hass.async_add_executor_job`, so the ROBOT stays synchronous
-        # and the executor is what has to be awaitable. In 4.2 the call
-        # is direct and this inverts.
-        from unittest.mock import AsyncMock as _AsyncMock
-
-        backend._roomba = MagicMock()
-        backend._hass = MagicMock()
-        backend._hass.async_add_executor_job = _AsyncMock()
+        backend._roomba = robot_mock()
         backend._pmap_by_region = {}
+        backend._hass = MagicMock()
         return backend
 
     _TWO_MAPS = {
@@ -2115,7 +2172,7 @@ class TestClassicOffersEveryMapToo:
 
         await backend.clean_segments(["MAP-B_20"])
 
-        _fn, command, params = backend._hass.async_add_executor_job.await_args[0]
+        command, params = backend._roomba.send_command.await_args[0]
         assert command == "start"
         assert [r["region_id"] for r in params["regions"]] == ["20"]
 
@@ -2133,7 +2190,7 @@ class TestClassicOffersEveryMapToo:
         with pytest.raises(ServiceValidationError):
             await backend.clean_segments(["MAP-A_10", "MAP-B_20"])
 
-        backend._hass.async_add_executor_job.assert_not_awaited()
+        backend._roomba.send_command.assert_not_awaited()
 
     async def test_a_map_id_containing_underscores_survives(self) -> None:
         """Real p2map ids contain underscores. Splitting on the first
@@ -2146,7 +2203,7 @@ class TestClassicOffersEveryMapToo:
 
         await backend.clean_segments(["2Bly_kGURy6OcUVTX7FN3w_19"])
 
-        _fn, _command, params = backend._hass.async_add_executor_job.await_args[0]
+        _command, params = backend._roomba.send_command.await_args[0]
         assert [r["region_id"] for r in params["regions"]] == ["19"]
         assert params["pmap_id"] == "2Bly_kGURy6OcUVTX7FN3w"
 
@@ -2810,3 +2867,159 @@ class TestClassicKnowsWhichFloorItIsOn:
 
         assert "_LOGGER.warning" in block[:600]
         assert "raise" not in block[:600]
+
+
+class TestTheFourCommandPathsStayInStep:
+    """There are four ways to tell a robot to clean a region, and they
+    grew from two directions: the segment pair from Home Assistant's
+    vacuum platform, the room pair from this project's own service.
+
+    The name-resolution difference between them is real -- one takes a
+    selection, the other takes typed text. Everything else is the same
+    question asked four times: which map, is it a zone, is the robot
+    even on that floor.
+
+    Nothing kept the answers in step, and they drifted. The wrong-floor
+    warning reached two paths, then a third, and was missing from the
+    fourth until somebody asked. `clean_zone` carried the mirror of a
+    fault fixed in `clean_room` for a release.
+
+    `scripts/check_command_path_parity.py` asks the question once. This
+    pins that it exists, runs, and is wired in -- a guard nobody runs is
+    not a guard.
+    """
+
+    def test_the_guard_passes_on_the_current_tree(self) -> None:
+        import subprocess
+        import sys
+
+        result = subprocess.run(
+            [sys.executable, "scripts/check_command_path_parity.py"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        assert result.returncode == 0, result.stdout + result.stderr
+
+    def test_every_accepted_absence_carries_a_reason(self) -> None:
+        """An empty reason would make the entry a silencer rather than a
+        record."""
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "_parity", "scripts/check_command_path_parity.py"
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        assert mod.ACCEPTED
+        for (concern, path), reason in mod.ACCEPTED.items():
+            assert reason.strip(), f"{concern} / {path}"
+            assert len(reason) > 20, f"{concern} / {path}: {reason!r}"
+
+    def test_it_runs_in_ci(self) -> None:
+        import pathlib
+
+        workflow = pathlib.Path(".github/workflows/validate.yml").read_text(
+            encoding="utf-8"
+        )
+
+        assert "check_command_path_parity.py" in workflow
+
+
+class TestTheServiceRemembersWhatTheButtonRemembers:
+    """@mrsnyds' button has worked since 4.1.3. His `clean_room` call
+    with the same rooms has never worked. Same robot, same rooms, same
+    moment.
+
+    THE DIFFERENCE WAS A MEMORY. The selector calls `get_segments()`,
+    and on failure returns early -- leaving its previous `{name: id}`
+    map in place. The button then cleans from the last list that
+    resolved, and the user sees the rooms in the dropdown the whole
+    time.
+
+    `available_rooms()` asked live every time. When the lookup yielded
+    nothing it returned nothing, and the service told him his rooms were
+    unknown while the same rooms sat in the dropdown beside it.
+
+    A slightly stale list beats "your rooms do not exist" -- which is
+    the selector's judgement already. This only makes the service share
+    it.
+    """
+
+    @staticmethod
+    def _backend(map_ids, metadata_rooms):
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        from custom_components.roomba_plus.room_cleaning import (
+            PrimeRoomCleaning,
+        )
+
+        backend = PrimeRoomCleaning.__new__(PrimeRoomCleaning)
+        backend._data = MagicMock()
+        backend._data.blid = "BLID1"
+        entry = MagicMock()
+        entry.runtime_data.prime_room_names = {}
+        entry.options = {}
+        backend._config_entry = entry
+        backend._current_map_id = AsyncMock(return_value="MAP-A")
+        backend._all_map_ids = AsyncMock(return_value=map_ids)
+        backend._map_metadata = AsyncMock(
+            return_value=SimpleNamespace(rooms_metadata=metadata_rooms)
+        )
+        return backend
+
+    @staticmethod
+    def _room(room_id, name):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(room_id=room_id, name=name, region_type="rid")
+
+    async def test_his_rooms_survive_a_failed_lookup(self) -> None:
+        from unittest.mock import AsyncMock
+
+        from custom_components.roomba_plus.room_cleaning import (
+            match_room_names,
+        )
+
+        backend = self._backend(
+            ["MAP-A"],
+            [self._room("15", "Guest Bath"), self._room("18", "Dining Room")],
+        )
+        assert await backend.available_rooms()
+
+        # The maps go away, which is the state his diagnostics show.
+        backend._all_map_ids = AsyncMock(return_value=[])
+
+        available = await backend.available_rooms()
+        room_ids, unknown = match_room_names(
+            available, ["Guest Bath", "Dining Room"]
+        )
+
+        assert unknown == []
+        assert room_ids == ["MAP-A/15", "MAP-A/18"]
+
+    async def test_a_fresh_result_replaces_the_memory(self) -> None:
+        """Otherwise a renamed or deleted room would live forever."""
+        from unittest.mock import AsyncMock
+        from types import SimpleNamespace
+
+        backend = self._backend(["MAP-A"], [self._room("15", "Guest Bath")])
+        await backend.available_rooms()
+
+        backend._map_metadata = AsyncMock(
+            return_value=SimpleNamespace(
+                rooms_metadata=[self._room("15", "Powder Room")]
+            )
+        )
+
+        assert sorted(await backend.available_rooms()) == ["Powder Room"]
+
+    async def test_nothing_remembered_is_still_nothing(self) -> None:
+        """A robot that has never resolved a room must not appear to
+        have some."""
+        backend = self._backend([], [])
+
+        assert await backend.available_rooms() == {}

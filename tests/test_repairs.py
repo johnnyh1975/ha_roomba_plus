@@ -2926,8 +2926,8 @@ class TestDecodeNotReady:
         robot came to report "Off dock" -- an answer where there was no
         knowledge. Unmapped values return None and surface as their raw
         number instead."""
-        assert self._decode(25) is None
         assert self._decode(45) is None
+        assert self._decode(41) is None
         assert self._decode(200) is None
 
     def test_states_the_firmware_cannot_express(self):
@@ -2944,9 +2944,12 @@ class TestDecodeNotReady:
         )
 
         reachable = set(READINESS_WIRE_TO_INDEX.values())
-        for unreachable in (48, 53, 20, 36, 24, 72):
+        # 20 (Lid open) and 25 (Bumper offline) became reachable once
+        # lewis' own table was read -- ruby does not carry them.
+        for unreachable in (48, 53, 36, 24, 72):
             assert unreachable not in reachable
 
     def test_a_non_integer_is_rejected(self):
         for junk in ("68", None, 1.5, True):
             assert self._decode(junk) is None
+

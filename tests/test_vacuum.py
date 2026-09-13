@@ -2867,3 +2867,76 @@ class TestStaleRoomsDoNotSurviveIntoANewMission:
         source = inspect.getsource(IRobotVacuum.async_start)
 
         assert "regions" not in source
+
+
+class TestClassicSuctionSendsBooleans:
+    """`RoombaVacuumCarpetBoost` is the class chosen for CLASSIC robots
+    with carpet boost, and it writes the `carpetBoost`/`vacHigh` pair --
+    correctly, and always has.
+
+    WHAT WAS WRONG WAS THE VALUES. It sent the Python strings "True" and
+    "False". Nothing explained that, and its confirmed-working sibling
+    -- cleaning passes, verified on hardware across two firmware
+    families -- sends real booleans through the same call.
+
+    A NOTE ON HOW THIS WAS FOUND. The base class has its own
+    `async_set_fan_speed` that writes Prime's `suctionLevel`, and this
+    subclass overrides it. A source-level fix aimed at the base class
+    would have been dead code. These tests instantiate the class that is
+    actually used, which is why they caught it.
+    """
+
+    @staticmethod
+    async def _set(fan_speed):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from custom_components.roomba_plus.vacuum import (
+            RoombaVacuumCarpetBoost,
+        )
+
+        entity = RoombaVacuumCarpetBoost.__new__(RoombaVacuumCarpetBoost)
+        entity.vacuum = MagicMock()
+        entity.vacuum.set_preferences = AsyncMock()
+        await entity.async_set_fan_speed(fan_speed)
+        return entity.vacuum.set_preferences
+
+    async def test_automatic(self):
+        sent = await self._set("automatic")
+
+        sent.assert_awaited_once_with(
+            {"carpetBoost": True, "vacHigh": False}
+        )
+
+    async def test_performance(self):
+        sent = await self._set("performance")
+
+        sent.assert_awaited_once_with(
+            {"carpetBoost": False, "vacHigh": True}
+        )
+
+    async def test_eco(self):
+        sent = await self._set("eco")
+
+        sent.assert_awaited_once_with(
+            {"carpetBoost": False, "vacHigh": False}
+        )
+
+    async def test_the_values_are_booleans_not_strings(self):
+        """`"False"` is truthy in every language that reads it as a
+        string, which is the worst kind of wrong value to send."""
+        sent = await self._set("eco")
+
+        for key, value in sent.await_args[0][0].items():
+            assert isinstance(value, bool), f"{key}={value!r}"
+
+    async def test_both_halves_travel_together(self):
+        for option in ("automatic", "performance", "eco"):
+            sent = await self._set(option)
+
+            assert set(sent.await_args[0][0]) == {"carpetBoost", "vacHigh"}
+
+    async def test_an_unknown_level_sends_nothing(self):
+        sent = await self._set("turbo")
+
+        sent.assert_not_awaited()
+

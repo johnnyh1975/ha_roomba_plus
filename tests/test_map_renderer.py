@@ -712,6 +712,14 @@ class TestInferenceSuggestionsLayer:
         from PIL import Image
         import io
         img = Image.open(io.BytesIO(png)).convert("RGBA")
+        # `getdata()` is deprecated and goes away in Pillow 14
+        # (2027-10-15). NOT SWITCHED YET: the replacement,
+        # `get_flattened_data()`, does not exist in the Pillow this
+        # project pins, so the call could not be tested here -- and
+        # writing an untestable call from a deprecation notice is
+        # exactly what broke 4.1.3.
+        #
+        # Revisit when the pin moves past Pillow 12.
         pixels = list(img.getdata())
         white_pixel = (255, 255, 255, 255)
         all_white = all(p == white_pixel for p in pixels)

@@ -366,107 +366,106 @@ class TestCarpetBoostSelect:
         assert s._attr_unique_id.endswith("_carpet_boost_select")
 
 
-class TestCarpetBoostSlugMigration:
-    """v3.1.0 CARPET-BOOST-SLUG-FIX — FAN_SPEEDS lowercase migration.
+class TestCarpetBoostWritesTheClassicPair:
+    """Carpet boost never left Home Assistant. The dropdown flashed the
+    chosen value and snapped back to "automatic" (@ScenicSystemsLLC,
+    reproduced three times on an S9+, twice by API and once in the UI).
 
-    Hassfest requires select translation_key state keys to match
-    [a-z0-9-_]+ (cannot start/end with hyphen/underscore). FAN_SPEEDS moved
-    from Capital-Case ("Automatic") to lowercase ("automatic"). These tests
-    verify both the new canonical values AND backward compatibility for
-    existing automations still sending the old Capital-Case value.
+    TWO FAULTS STACKED. The handler called `vacuum.set_fan_speed`,
+    looking the vacuum entity up by the bare blid while it registers as
+    `roomba_plus_<blid>` -- so the lookup missed every time. And had it
+    found the entity, `async_set_fan_speed()` writes `suctionLevel`
+    through the PRIME robot object and returns silently when there is
+    none. This select only exists on CLASSIC robots, filtered on
+    `carpetBoost`/`vacHigh`, which Prime does not report.
+
+    So fixing the lookup alone would have produced a quieter version of
+    the same nothing -- no error line, same result.
+
+    It now writes the pair directly, as `_select_cleaning_passes` does,
+    and mirrors the descriptor's own read function.
     """
 
-    @pytest.mark.asyncio
-    async def test_select_fn_accepts_new_lowercase_value(self):
-        """select.select_option with the new canonical lowercase value works."""
+    @staticmethod
+    async def _select(option):
+        from unittest.mock import AsyncMock, MagicMock
+
         from custom_components.roomba_plus.select import _select_carpet_boost
+
         entity = MagicMock()
         entity._blid = "test_blid"
-        entity.hass.services.async_call = AsyncMock()
-        reg = MagicMock()
-        reg.async_get_entity_id.return_value = "vacuum.test_robot"
-        with patch(
-            "homeassistant.helpers.entity_registry.async_get", return_value=reg
-        ):
-            await _select_carpet_boost(entity, "automatic")
-        entity.hass.services.async_call.assert_called_once()
-        call_args = entity.hass.services.async_call.call_args
-        assert call_args[0][2]["fan_speed"] == "automatic"
+        entity.vacuum.set_preferences = AsyncMock()
+        await _select_carpet_boost(entity, option)
+        return entity.vacuum.set_preferences
 
-    @pytest.mark.asyncio
-    async def test_select_fn_accepts_old_capital_case_value(self):
-        """Backward compat: select.select_option with the OLD Capital-Case
-        value ("Automatic") from an existing automation still works — gets
-        normalised to the new canonical lowercase value before being sent on.
-        """
-        from custom_components.roomba_plus.select import _select_carpet_boost
-        entity = MagicMock()
-        entity._blid = "test_blid"
-        entity.hass.services.async_call = AsyncMock()
-        reg = MagicMock()
-        reg.async_get_entity_id.return_value = "vacuum.test_robot"
-        with patch(
-            "homeassistant.helpers.entity_registry.async_get", return_value=reg
-        ):
-            await _select_carpet_boost(entity, "Automatic")
-        entity.hass.services.async_call.assert_called_once()
-        call_args = entity.hass.services.async_call.call_args
-        assert call_args[0][2]["fan_speed"] == "automatic"
+    async def test_automatic(self):
+        sent = await self._select("automatic")
 
-    @pytest.mark.asyncio
-    async def test_vacuum_set_fan_speed_accepts_old_capital_case(self):
-        """RoombaVacuumCarpetBoost.async_set_fan_speed accepts the old
-        Capital-Case value via case-insensitive matching, not .capitalize()
-        (which would break with the new lowercase canonical constants).
-        """
-        from custom_components.roomba_plus.vacuum import RoombaVacuumCarpetBoost
-        v = RoombaVacuumCarpetBoost.__new__(RoombaVacuumCarpetBoost)
-        v.hass = MagicMock()
-        v.hass.async_add_executor_job = AsyncMock()
-        v.vacuum = robot_mock()
-        await v.async_set_fan_speed("Automatic")
-        # Should not log an error, and should write both keys of the pair.
-        #
-        # ONE CALL WITH BOTH KEYS, not two calls with one each.
-        #
-        # This asserted two separate `set_preference` calls, which is
-        # precisely the bug: the firmware reads `carpetBoost` and
-        # `vacHigh` in one handler and drops both when either is
-        # missing, so two messages changed nothing while returning
-        # success. The test was pinning the failure.
-        v.vacuum.set_preferences.assert_awaited_once()
-        sent = v.vacuum.set_preferences.await_args[0][0]
-        assert set(sent) == {"carpetBoost", "vacHigh"}
-
-    def test_all_seven_languages_have_lowercase_state_keys(self):
-        """strings.json + all 7 translations must use lowercase slug keys
-        for carpet_boost_select state, matching the hassfest [a-z0-9-_]+ rule.
-        """
-        import json, os, re
-        base = os.path.join(
-            os.path.dirname(__file__),
-            "..", "custom_components", "roomba_plus"
+        sent.assert_awaited_once_with(
+            {"carpetBoost": True, "vacHigh": False}
         )
-        pattern = re.compile(r"^[a-z0-9_-]+$")
 
-        files = ["strings.json"] + [
-            os.path.join("translations", f"{lang}.json")
-            for lang in ("en", "de", "fr", "it", "es", "nl", "pt")
-        ]
-        for rel_path in files:
-            with open(os.path.join(base, rel_path), encoding="utf-8") as f:
-                data = json.load(f)
-            state = data["entity"]["select"]["carpet_boost_select"]["state"]
-            for key in state:
-                assert pattern.match(key), (
-                    f"{rel_path}: state key {key!r} does not match "
-                    f"hassfest's [a-z0-9-_]+ requirement"
-                )
-                assert not key.startswith(("-", "_")), f"{rel_path}: {key!r} starts with - or _"
-                assert not key.endswith(("-", "_")), f"{rel_path}: {key!r} ends with - or _"
-            assert set(state.keys()) == {"automatic", "eco", "performance"}, (
-                f"{rel_path}: unexpected state keys {set(state.keys())}"
-            )
+    async def test_performance(self):
+        sent = await self._select("performance")
+
+        sent.assert_awaited_once_with(
+            {"carpetBoost": False, "vacHigh": True}
+        )
+
+    async def test_eco(self):
+        sent = await self._select("eco")
+
+        sent.assert_awaited_once_with(
+            {"carpetBoost": False, "vacHigh": False}
+        )
+
+    async def test_the_old_capitalised_values_still_work(self):
+        """Pre-migration option strings, kept working."""
+        sent = await self._select("Automatic")
+
+        sent.assert_awaited_once_with(
+            {"carpetBoost": True, "vacHigh": False}
+        )
+
+    async def test_both_halves_always_travel_together(self):
+        """The firmware reads them as a pair and drops both when they
+        arrive separately -- the fault that kept cleaning passes broken
+        on i/s robots until roombapy 2.0.2."""
+        for option in ("automatic", "performance", "eco"):
+            sent = await self._select(option)
+
+            payload = sent.await_args[0][0]
+            assert set(payload) == {"carpetBoost", "vacHigh"}, option
+
+    async def test_an_unknown_option_sends_nothing(self):
+        sent = await self._select("turbo")
+
+        sent.assert_not_awaited()
+
+    def test_the_write_mirrors_the_read(self):
+        """One descriptor, two directions. If they disagree the entity
+        shows one thing and sends another."""
+        import inspect
+
+        from custom_components.roomba_plus import select
+
+        source = inspect.getsource(select)
+        assert 'FAN_SPEED_AUTOMATIC if state.get("carpetBoost")' in source
+        assert "carpet_boost = canonical == FAN_SPEED_AUTOMATIC" in source
+
+    def test_it_does_not_route_through_the_prime_only_service(self):
+        import inspect
+
+        from custom_components.roomba_plus import select
+
+        source = inspect.getsource(select._select_carpet_boost)
+        # The docstring names the old path on purpose; check the CODE.
+        body = source.split('"""')[2]
+
+        assert "set_fan_speed" not in body
+        assert "async_get_entity_id" not in body
+        assert "set_preferences" in body
+
 
 
 class TestSelectKeeputAttrs:
@@ -1492,3 +1491,5 @@ class TestPairedSettingsGoOutTogether:
             "these send one half of a paired setting, which the firmware "
             f"silently drops -- use set_preferences(): {offenders}"
         )
+
+

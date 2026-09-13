@@ -24,6 +24,7 @@ from unittest.mock import patch
 from custom_components.roomba_plus.models import MapCapability
 from custom_components.roomba_plus.umf_aligner import UmfAligner
 import asyncio
+import inspect
 from unittest.mock import call
 import tests.conftest
 from custom_components.roomba_plus.callbacks import make_mission_callback
@@ -637,7 +638,9 @@ class TestCoverageMapSignal:
         """_async_send_coverage_signal must be an async function."""
         import asyncio
         from custom_components.roomba_plus.image import _async_send_coverage_signal
-        assert asyncio.iscoroutinefunction(_async_send_coverage_signal)
+        # `inspect`, not `asyncio`: the asyncio spelling is deprecated
+        # and goes away in Python 3.16.
+        assert inspect.iscoroutinefunction(_async_send_coverage_signal)
 
 
 class TestTerminalMissionImageRefresh:

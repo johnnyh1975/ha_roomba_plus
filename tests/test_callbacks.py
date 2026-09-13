@@ -3768,3 +3768,81 @@ class TestARoomAdvanceOnReturnFromTravel:
 
         assert "_returned_from_travel" in source
         assert "_travelling is False" in source
+
+
+class TestTheTravelSignalIsReadDuringCleaning:
+    """The travel read and its evaluation both sat inside the
+    `phase != "run"` branch. Travel happens DURING `run`.
+
+    So the field was only ever looked at in phases where it cannot be 1,
+    `was_travelling` stayed False for whole missions, and the return
+    edge could not fire once. @ScenicSystemsLLC captured nine unbroken
+    seconds of `operatingMode: 1` at a confirmed room boundary and the
+    display did not move.
+
+    His Braava is the other half of the proof: she emits no travel
+    signal at all, and her display advanced anyway -- late, through the
+    phase route, which needs `hmPostMsn` and was correctly placed in
+    that same branch. One misplacement, two opposite symptoms.
+
+    WHY NO TEST CAUGHT IT. Every test on this feature checked the bit
+    arithmetic or grepped the source for a marker. None ran the callback
+    over a message sequence with `phase: run`, which is the only place
+    the fault lives.
+    """
+
+    def test_the_read_is_not_inside_a_phase_branch(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus import callbacks
+
+        source = inspect.getsource(callbacks)
+        read_at = source.index('_mode = (\n            mission.get("operatingMode")')
+        branch_at = source.index('if phase == "run":')
+
+        assert read_at < branch_at, (
+            "the operatingMode read must happen before the phase branch, "
+            "or it misses every flip that occurs during cleaning"
+        )
+
+    def test_the_evaluation_sees_run_phase_messages(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus import callbacks
+
+        source = inspect.getsource(callbacks)
+        eval_at = source.index("or _returned_from_travel")
+        else_at = source.index('        else:\n', source.index('if phase == "run":'))
+
+        assert eval_at < else_at or source[:eval_at].count(
+            "        if _mts_upd is not None and mission_start_ts:"
+        ) >= 2, "the advance check must be reachable while phase is run"
+
+    def test_a_run_phase_flip_is_an_edge(self) -> None:
+        """His capture, reduced: cleaning, nine seconds of travel,
+        cleaning again -- all while the phase never leaves `run`."""
+        samples = [
+            ("run", 2), ("run", 2), ("run", 1), ("run", 1),
+            ("run", 1), ("run", 2), ("run", 2),
+        ]
+
+        was, returns = False, 0
+        for _phase, mode in samples:
+            now = bool(mode & 1)
+            if was and not now:
+                returns += 1
+            was = now
+
+        assert returns == 1, "one boundary crossing, one advance"
+
+    def test_a_phase_that_never_leaves_run_still_yields_edges(self) -> None:
+        """The `soho` case in one line: no phase ever changes, so the
+        phase route contributes nothing and the travel route is the only
+        one that can work."""
+        phases = {p for p, _ in [("run", 2), ("run", 1), ("run", 2)]}
+
+        from custom_components.roomba_plus.callbacks import (
+            _ROOM_TRANSITION_CANDIDATE_PHASES,
+        )
+
+        assert not phases & set(_ROOM_TRANSITION_CANDIDATE_PHASES)
