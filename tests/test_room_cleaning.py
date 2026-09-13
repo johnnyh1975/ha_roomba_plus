@@ -3113,3 +3113,97 @@ class TestTheMapAndItsVersionTravelTogether:
                     f"{method.__qualname__} takes the active map's version "
                     f"without checking the map matches"
                 )
+
+
+class TestAFailedCommandIsNotASourceOfTruth:
+    """`_resolve_pmapv_id` preferred `lastCommand.user_pmapv_id`, on the
+    reasoning that it is "the version the robot last accepted".
+
+    THE ROBOT ACCEPTS A START IT THEN REFUSES TO ACT ON. It records the
+    command, sets `error: 224` -- Smart Map localization failed -- and
+    stays on the dock. So a wrong version, once sent, is written into
+    `lastCommand` BY THE ROBOT and read back here as authoritative.
+
+    That is a feedback loop, and it is why 4.2.2 changed nothing for
+    @Thonno. 4.2.2 stopped producing the mismatched map/version pairing;
+    by then his robot was holding it, and every retry read it back out
+    of `lastCommand` and sent it again.
+
+    His `user_pmapv_id` was byte-identical across four diagnostics
+    spanning three releases -- the giveaway nobody read as one.
+    """
+
+    @staticmethod
+    def _resolve(state, pmap_id):
+        from custom_components.roomba_plus.room_cleaning import (
+            _resolve_pmapv_id,
+        )
+
+        return _resolve_pmapv_id(state, pmap_id)
+
+    #: His shape: the command recorded, and the error it produced.
+    HIS_STATE = {
+        "lastCommand": {
+            "pmap_id": "oGwE49YGTeWffssbEVx65g",
+            "user_pmapv_id": "260807T140942",
+        },
+        "cleanMissionStatus": {"error": 224, "phase": "charge"},
+        "pmaps": [{"oGwE49YGTeWffssbEVx65g": "260901T093000"}],
+    }
+
+    def test_his_retry_no_longer_reuses_the_failed_version(self) -> None:
+        resolved = self._resolve(self.HIS_STATE, "oGwE49YGTeWffssbEVx65g")
+
+        assert resolved != "260807T140942", (
+            "the version that produced error 224 must not be sent again"
+        )
+        assert resolved == "260901T093000"
+
+    def test_a_successful_command_is_still_preferred(self) -> None:
+        """`lastCommand` is the better source when it worked -- that was
+        never in doubt and must not be lost."""
+        state = {
+            **self.HIS_STATE,
+            "cleanMissionStatus": {"error": 0, "phase": "run"},
+        }
+
+        assert self._resolve(state, "oGwE49YGTeWffssbEVx65g") == (
+            "260807T140942"
+        )
+
+    def test_another_error_does_not_discard_it(self) -> None:
+        """Only a localisation failure implicates the version. A full
+        bin says nothing about it."""
+        state = {
+            **self.HIS_STATE,
+            "cleanMissionStatus": {"error": 15, "phase": "stop"},
+        }
+
+        assert self._resolve(state, "oGwE49YGTeWffssbEVx65g") == (
+            "260807T140942"
+        )
+
+    def test_a_different_map_still_falls_through(self) -> None:
+        """The pre-existing rule: a last command naming another map was
+        never a source for this one."""
+        state = {
+            **self.HIS_STATE,
+            "cleanMissionStatus": {"error": 0},
+            "pmaps": [{"tM_GAKM5SmyBhqotQtQrtw": "260807T140942"}],
+        }
+
+        assert self._resolve(state, "tM_GAKM5SmyBhqotQtQrtw") == (
+            "260807T140942"
+        )
+
+    def test_nothing_to_fall_back_to_returns_none(self) -> None:
+        state = {
+            "lastCommand": {
+                "pmap_id": "oGwE49YGTeWffssbEVx65g",
+                "user_pmapv_id": "260807T140942",
+            },
+            "cleanMissionStatus": {"error": 224},
+            "pmaps": [],
+        }
+
+        assert self._resolve(state, "oGwE49YGTeWffssbEVx65g") is None

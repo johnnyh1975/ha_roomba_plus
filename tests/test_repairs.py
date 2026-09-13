@@ -2953,3 +2953,85 @@ class TestDecodeNotReady:
         for junk in ("68", None, 1.5, True):
             assert self._decode(junk) is None
 
+
+
+class TestTheSharedLibraryConflictIsAnnounced:
+    """Home Assistant installs integration dependencies into ONE shared
+    environment. Roomba+ requires `roombapy` 2.x; the built-in `roomba`
+    integration expects the 1.x API. Only one copy gets installed, so
+    one of the two stops loading:
+
+        ImportError: cannot import name 'Roomba' from 'roombapy'
+
+    Nothing connected that stack trace to having two integrations for
+    the same robots. @Thonno found it and mentioned it almost as an
+    aside, unsure whether it mattered.
+
+    NEITHER INTEGRATION CAN FIX IT -- it is a property of the platform,
+    and resolving it properly means the built-in one moving to 2.x,
+    which is not ours to do. Saying so turns a stack trace into a
+    sentence.
+    """
+
+    def test_the_check_exists_and_is_called_at_setup(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus import __init__ as init
+        from custom_components.roomba_plus import repairs
+
+        assert hasattr(repairs, "async_check_core_roomba_conflict")
+        assert "async_check_core_roomba_conflict" in inspect.getsource(init)
+
+    def test_it_looks_for_the_built_in_domain(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus.repairs import (
+            async_check_core_roomba_conflict,
+        )
+
+        source = inspect.getsource(async_check_core_roomba_conflict)
+
+        assert 'entry.domain == "roomba"' in source
+
+    def test_it_clears_itself_when_the_other_one_goes(self) -> None:
+        """A warning that outlives its cause trains people to ignore
+        warnings."""
+        import inspect
+
+        from custom_components.roomba_plus.repairs import (
+            async_check_core_roomba_conflict,
+        )
+
+        source = inspect.getsource(async_check_core_roomba_conflict)
+
+        assert "async_delete_issue" in source
+
+    def test_it_is_not_offered_as_fixable(self) -> None:
+        """Both answers are legitimate -- somebody running only older
+        robots may well prefer the built-in one. Offering a one-click
+        fix would be choosing for them."""
+        import inspect
+
+        from custom_components.roomba_plus.repairs import (
+            async_check_core_roomba_conflict,
+        )
+
+        source = inspect.getsource(async_check_core_roomba_conflict)
+
+        assert "is_fixable=False" in source
+
+    def test_every_language_has_the_text(self) -> None:
+        import json
+        import pathlib
+
+        for path in pathlib.Path(
+            "custom_components/roomba_plus/translations"
+        ).glob("*.json"):
+            issues = json.loads(path.read_text(encoding="utf-8")).get(
+                "issues", {}
+            )
+            entry = issues.get("core_roomba_conflict")
+
+            assert entry, path.name
+            assert entry.get("title"), path.name
+            assert len(entry.get("description", "")) > 100, path.name

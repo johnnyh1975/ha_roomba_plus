@@ -3811,7 +3811,7 @@ class TestTheTravelSignalIsReadDuringCleaning:
         from custom_components.roomba_plus import callbacks
 
         source = inspect.getsource(callbacks)
-        eval_at = source.index("or _returned_from_travel")
+        eval_at = source.index("or (_returned_from_travel and cleaned_in_room)")
         else_at = source.index('        else:\n', source.index('if phase == "run":'))
 
         assert eval_at < else_at or source[:eval_at].count(
@@ -3941,3 +3941,102 @@ class TestTheRoomFloorAgainstARealMission:
         first = self._advances(0)[0]
 
         assert first[2] is True, "this is what the floor exists to stop"
+
+
+class TestArrivingIsNotLeaving:
+    """@Thonno watched an app-started three-room mission and the display
+    ran one room ahead the whole way: it read "Corridor" while the robot
+    was cleaning the Bathroom, then "Living Room" when it reached the
+    Corridor.
+
+    THE FIRST DRIVE OF A MISSION GOES DOCK -> FIRST ROOM. Ending it means
+    ARRIVING, not leaving, and there is no room behind it to advance away
+    from.
+
+    This had a one-minute floor on time spent in the room, which is the
+    wrong quantity -- that clock includes the drive itself.
+    @AlakazipLabs' dock departure ran 12 seconds and was blocked;
+    @Thonno's ran longer and was not. The floor worked once by accident.
+
+    A drive that ends is a boundary only if the robot WORKED in the room
+    behind it. Bits 1 and 2 are vacuuming and mopping, set only when the
+    robot is actually doing the job.
+    """
+
+    @staticmethod
+    def _advances(timeline):
+        """The rule as the callback applies it."""
+        was_travelling, cleaned_here, out = False, False, []
+        for mode, label in timeline:
+            travelling = bool(mode & 1)
+            if was_travelling and not travelling:
+                out.append((label, cleaned_here))
+                if cleaned_here:
+                    cleaned_here = False
+            if mode & 6:
+                cleaned_here = True
+            was_travelling = travelling
+        return out
+
+    #: His mission: dock, then three rooms in the commanded order.
+    THONNO = [
+        (1, "arriving at Bathroom"),
+        (2, "cleaning Bathroom"),
+        (1, "driving to Corridor"),
+        (2, "cleaning Corridor"),
+        (1, "driving to Living Room"),
+        (2, "cleaning Living Room"),
+    ]
+
+    def test_arriving_at_the_first_room_does_not_advance(self) -> None:
+        first = self._advances(self.THONNO)[0]
+
+        # The edge fires when cleaning RESUMES, i.e. on arrival.
+        assert first[0] == "cleaning Bathroom"
+        assert first[1] is False, (
+            "the display must stay on the Bathroom until it is cleaned"
+        )
+
+    def test_the_real_boundaries_do(self) -> None:
+        advanced = [label for label, ok in self._advances(self.THONNO) if ok]
+
+        assert advanced == ["cleaning Corridor", "cleaning Living Room"]
+
+    def test_a_long_drive_to_the_first_room_is_still_not_a_boundary(
+        self,
+    ) -> None:
+        """The case the old floor let through: the same sequence says
+        nothing about how long the drive took, and neither does this."""
+        assert self._advances(self.THONNO)[0][1] is False
+
+    def test_mopping_counts_as_working_too(self) -> None:
+        """Bit 2. A Braava never sets bit 1, and its rooms must still
+        advance."""
+        mopping = [
+            (1, "arriving"), (4, "mopping room 1"),
+            (1, "driving"), (4, "mopping room 2"),
+        ]
+
+        advanced = [label for label, ok in self._advances(mopping) if ok]
+
+        assert advanced == ["mopping room 2"]
+
+    def test_the_flag_resets_so_the_next_room_starts_clean(self) -> None:
+        """Otherwise one cleaned room would authorise every later
+        advance, including one straight off a reposition."""
+        out = self._advances(
+            [(1, "arriving"), (2, "cleaning"), (1, "drive"), (1, "still"),
+             (2, "brief"), (1, "reposition"), (2, "back")]
+        )
+
+        assert [ok for _l, ok in out] == [False, True, True]
+
+    def test_the_callback_requires_both(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus import callbacks
+
+        source = inspect.getsource(callbacks)
+
+        assert "_returned_from_travel and cleaned_in_room" in source
+        assert "cleaned_in_room = False" in source

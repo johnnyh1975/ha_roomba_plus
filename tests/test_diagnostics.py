@@ -1404,3 +1404,53 @@ class TestTheDownloadAnswersTheQuestionsItIsAskedFor:
 
         assert "reads it" in source or "reads it\n" in source
         assert "soho" in source
+
+
+class TestTheMapVersionsAreVisible:
+    """A start command pairs a map id with THAT map's version id, and
+    pairing one map with another's version makes the robot refuse to
+    localise -- error 224, docked, no mission started.
+
+    The dump listed which maps exist and nothing about their versions.
+    Diagnosing @Thonno's two-map i7+ therefore meant inferring the
+    pairing from `lastCommand`, and it took two wrong guesses before the
+    real cause surfaced: his robot was holding a bad pairing we had sent
+    it once, and handing it back on every retry.
+
+    With the versions in the dump that comparison is a glance.
+    """
+
+    @staticmethod
+    def _section(pmaps):
+        return {
+            str(next(iter(p))): str(p[next(iter(p))])
+            for p in pmaps
+            if isinstance(p, dict) and p
+        }
+
+    def test_each_map_shows_its_own_version(self) -> None:
+        """His two maps, with the version that distinguishes them."""
+        section = self._section(
+            [
+                {"oGwE49YGTeWffssbEVx65g": "260901T093000"},
+                {"tM_GAKM5SmyBhqotQtQrtw": "260807T140942"},
+            ]
+        )
+
+        assert section["oGwE49YGTeWffssbEVx65g"] != section[
+            "tM_GAKM5SmyBhqotQtQrtw"
+        ]
+
+    def test_the_dump_carries_it(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus import diagnostics
+
+        source = inspect.getsource(diagnostics)
+
+        assert '"pmap_versions"' in source
+
+    def test_malformed_entries_do_not_break_the_dump(self) -> None:
+        """A diagnostics download that raises is worth less than one
+        missing a field."""
+        assert self._section([{}, None, "nonsense", {"a": "1"}]) == {"a": "1"}

@@ -2601,3 +2601,130 @@ class TestCleanZoneDoesNotAcceptRoomNames:
         source = inspect.getsource(services.async_handle_clean_zone)
 
         assert source.index("_zone_only") < source.index("names_to_ids = {")
+
+
+class TestAListThatArrivedAsText:
+    """`room_name: '{{ room_list }}'` renders the template to text, and a
+    list rendered to text is its Python repr:
+
+        ["['Master Closet', 'Hallway', 'Great Room']"]
+
+    One element, and no robot has a room by that name.
+
+    @mnsnyds reported this three times across as many releases, each
+    time correctly saying the rooms exist. His own error message proved
+    it and neither of us read it: the message joins its list with
+    `', '.join(...)`, so the brackets and quotes he could see were
+    INSIDE a single string. All three "unknown" rooms were in the
+    "known rooms" list printed beside them.
+
+    THE TEMPLATE IS NOT WRONG. Quoting a template in YAML is how they
+    are written, and most survive as native types. This one does not.
+    """
+
+    @staticmethod
+    def _unwrap(names):
+        from custom_components.roomba_plus.services import (
+            _unwrap_stringified_list,
+        )
+
+        return _unwrap_stringified_list(names)
+
+    def test_his_exact_input(self) -> None:
+        assert self._unwrap(
+            ["['Master Closet', 'Hallway', 'Great Room']"]
+        ) == ["Master Closet", "Hallway", "Great Room"]
+
+    def test_double_quoted_too(self) -> None:
+        assert self._unwrap(['["Hallway", "Kitchen"]']) == [
+            "Hallway", "Kitchen"
+        ]
+
+    def test_a_normal_list_is_untouched(self) -> None:
+        for names in (["Hallway"], ["Hallway", "Kitchen"], []):
+            assert self._unwrap(names) == names
+
+    def test_a_room_actually_called_that_survives(self) -> None:
+        """Somebody's room really is named `[Attic]`. Parsing it away
+        would break a working setup to fix a broken one."""
+        assert self._unwrap(["[Attic]"]) == ["[Attic]"]
+
+    def test_a_bracketed_list_of_non_strings_is_untouched(self) -> None:
+        """Room names are strings. A list of numbers is something else,
+        and guessing at it would be worse than passing it through."""
+        assert self._unwrap(["[1, 2, 3]"]) == ["[1, 2, 3]"]
+
+    def test_unparseable_brackets_are_untouched(self) -> None:
+        assert self._unwrap(["[not, python]"]) == ["[not, python]"]
+
+    def test_an_empty_rendered_list_becomes_no_rooms(self) -> None:
+        """`'{{ room_list }}'` with an empty helper. Zero rooms is the
+        honest reading, and the caller already refuses that."""
+        assert self._unwrap(["[]"]) == []
+
+    def test_several_entries_are_never_reinterpreted(self) -> None:
+        """Only a single entry can be a whole list that lost its type."""
+        names = ["['a', 'b']", "Hallway"]
+
+        assert self._unwrap(names) == names
+
+    def test_both_services_unwrap_at_the_entry_point(self) -> None:
+        """Rooms and zones take names the same way, so they take the
+        same handling -- and doing it where the data arrives means one
+        place rather than one per consumer."""
+        import inspect
+
+        from custom_components.roomba_plus import services
+
+        for handler in (
+            services.async_handle_clean_room,
+            services.async_handle_clean_zone,
+        ):
+            source = inspect.getsource(handler)
+            assert "_unwrap_stringified_list" in source, handler.__name__
+
+
+class TestRunFavoriteIsNotPrimeOnly:
+    """`run_favorite` carried "V4/Prime only" in its docstring for
+    several releases while its Classic branch sat twenty lines below,
+    and `docs/FEATURES.md` described the service without qualification.
+
+    A stale restriction is worse than no comment: it sends the next
+    reader looking for a feature that already exists, and it tells a
+    Classic user the service is not for them.
+    """
+
+    def test_the_handler_has_a_classic_branch(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus import services
+
+        source = inspect.getsource(services.async_handle_run_favorite)
+
+        assert "async_run_classic_favorite" in source
+
+    def test_the_docstring_no_longer_claims_otherwise(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus import services
+
+        doc = inspect.getdoc(services.async_handle_run_favorite) or ""
+
+        assert "Prime only" not in doc
+        assert "either generation" in doc
+
+    def test_no_module_still_says_prime_only_about_favourites(self) -> None:
+        """The vacuum attribute carried the same claim, and there it was
+        describing a real gap rather than a fact -- Classic favourites
+        exist, that attribute just does not read them."""
+        import pathlib
+        import re
+
+        for path in pathlib.Path("custom_components/roomba_plus").glob("*.py"):
+            text = path.read_text(encoding="utf-8")
+            for line in text.splitlines():
+                if "favorite" not in line.lower():
+                    continue
+                assert not re.search(
+                    r"Prime only\s*--\s*Classic has no", line
+                ), f"{path.name}: {line.strip()[:70]}"

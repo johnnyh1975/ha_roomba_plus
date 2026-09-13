@@ -2940,3 +2940,81 @@ class TestClassicSuctionSendsBooleans:
 
         sent.assert_not_awaited()
 
+
+
+class TestClassicRobotsGetTheFavouritesAttribute:
+    """The `favorites` attribute read only Prime's list, and the comment
+    beside it said Classic "has no equivalent concept".
+
+    IT HAS. The cloud coordinator fetches them from `/user/favorites`,
+    `async_run_classic_favorite()` runs them, and they already appear as
+    buttons -- @ScenicSystemsLLC's Braava reports eight of them.
+
+    So on Classic the buttons worked while automations that iterate,
+    templates that list, and the map-card menu got nothing. The comment
+    made that read as a hardware fact rather than a gap.
+    """
+
+    @staticmethod
+    def _attribute(raw, blid="BLID1"):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.vacuum import IRobotVacuum
+
+        entity = IRobotVacuum.__new__(IRobotVacuum)
+        entry = MagicMock()
+        entry.runtime_data.cloud_coordinator.data = {"favorites": raw}
+        entry.runtime_data.blid = blid
+        entity._config_entry = entry
+        return entity._classic_favorites_attribute()
+
+    def test_it_returns_id_and_name(self) -> None:
+        out = self._attribute(
+            [{"favorite_id": "7", "name": "Mop Upstairs",
+              "commanddefs": [{"robot_id": "BLID1"}]}]
+        )
+
+        assert out == [{"id": "7", "name": "Mop Upstairs"}]
+
+    def test_the_shape_matches_the_prime_attribute(self) -> None:
+        """A template written for one generation has to work on the
+        other, which is the whole point of exposing it here."""
+        out = self._attribute(
+            [{"favorite_id": "7", "name": "Kitchen",
+              "commanddefs": [{"robot_id": "BLID1"}]}]
+        )
+
+        assert set(out[0]) == {"id", "name"}
+
+    def test_another_robots_favourite_is_left_out(self) -> None:
+        """`/user/favorites` returns the whole household. Running one
+        robot's favourite on another is the fault the buttons already
+        guard against."""
+        out = self._attribute(
+            [{"favorite_id": "9", "name": "Other",
+              "commanddefs": [{"robot_id": "SOMEONE_ELSE"}]}]
+        )
+
+        assert out == []
+
+    def test_hidden_favourites_are_left_out(self) -> None:
+        out = self._attribute(
+            [{"favorite_id": "3", "name": "Internal", "hidden": True,
+              "commanddefs": [{"robot_id": "BLID1"}]}]
+        )
+
+        assert out == []
+
+    def test_nothing_cached_is_not_an_error(self) -> None:
+        for empty in ([], None):
+            assert self._attribute(empty) == []
+
+    def test_an_entry_without_an_id_is_skipped(self) -> None:
+        """An id is what an automation keys on; a nameless entry is
+        usable, an id-less one is not."""
+        out = self._attribute(
+            [{"name": "No id", "commanddefs": [{"robot_id": "BLID1"}]},
+             {"favorite_id": "4", "commanddefs": [{"robot_id": "BLID1"}]}]
+        )
+
+        assert out == [{"id": "4", "name": ""}]
