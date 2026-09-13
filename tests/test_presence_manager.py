@@ -12,6 +12,8 @@ from __future__ import annotations
 import asyncio
 import datetime
 import pytest
+
+from tests.conftest import robot_mock
 import sys
 import types
 from custom_components.roomba_plus.presence_manager import PresenceManager
@@ -122,6 +124,7 @@ class _FakeHass:
 
 class _FakeRoomba:
     def __init__(self, sched_hold=False, phase="charge"):
+        self.preference_calls: list[tuple[str, object]] = []
         self.master_state = {
             "state": {
                 "reported": {
@@ -131,7 +134,16 @@ class _FakeRoomba:
             }
         }
 
-    def set_preference(self, key, value):
+    async def set_preference(self, key, value):
+        # ASYNC SINCE roombapy 2.x. A fake that stays synchronous fails
+        # on the await rather than on what the test is checking.
+        #
+        # RECORDS ITS CALLS, because the assertions used to count
+        # `hass._executor_calls` -- the transport, not the effect. With
+        # the call going straight to the client there is no executor to
+        # count, and asking the robot what it was told is the better
+        # question anyway.
+        self.preference_calls.append((key, value))
         self.master_state["state"]["reported"][key] = value
 
 
@@ -195,7 +207,8 @@ def _utcnow() -> datetime_v260_learning:
 
 def _make_hass() -> MagicMock:
     hass = MagicMock()
-    hass.async_create_task = MagicMock()
+    # `hass.async_create_task` is left to hass_mock(): it records
+    # calls AND closes the coroutine; a bare MagicMock drops it.
     return hass
 
 
@@ -286,10 +299,8 @@ class TestHandleAllAway:
             sched_hold=True,
         )
         await manager._away_delay(0)
-        # Should have called set_preference via executor
-        assert len(hass._executor_calls) == 1
-        fn, args = hass._executor_calls[0]
-        assert args == ("schedHold", False)
+        # Should have set the preference on the robot
+        assert manager._entry.runtime_data.roomba.preference_calls == [("schedHold", False)]
 
     @pytest.mark.asyncio
     async def test_fires_event_in_always_ask_mode(self):
@@ -324,8 +335,8 @@ class TestHandleAllAway:
             await task
         except asyncio.CancelledError:
             pass
-        # No executor calls since cancelled
-        assert len(hass._executor_calls) == 0
+        # Nothing was written, since the task was cancelled
+        assert manager._entry.runtime_data.roomba.preference_calls == []
 
 
 class TestHandleSomeoneHome:
@@ -344,8 +355,8 @@ class TestHandleSomeoneHome:
         fake_task = _FakeTask(None)
         manager._away_task = fake_task
         await manager._handle_someone_home()
-        # No executor calls — we only cancelled the task
-        assert len(hass._executor_calls) == 0
+        # Nothing was written — we only cancelled the task
+        assert manager._entry.runtime_data.roomba.preference_calls == []
 
     @pytest.mark.asyncio
     async def test_sets_sched_hold_true_when_unfrozen(self):
@@ -358,9 +369,7 @@ class TestHandleSomeoneHome:
         manager._managed_hold = False
         manager._did_unfreeze = True
         await manager._handle_someone_home()
-        assert len(hass._executor_calls) == 1
-        _, args = hass._executor_calls[0]
-        assert args == ("schedHold", True)
+        assert manager._entry.runtime_data.roomba.preference_calls == [("schedHold", True)]
 
     @pytest.mark.asyncio
     async def test_does_not_refreeze_when_pm_did_not_unfreeze(self):
@@ -372,7 +381,7 @@ class TestHandleSomeoneHome:
         # _did_unfreeze is False (default) — PM never performed an unfreeze
         await manager._handle_someone_home()
         # Should NOT call set_preference
-        assert len(hass._executor_calls) == 0
+        assert manager._entry.runtime_data.roomba.preference_calls == []
 
     @pytest.mark.asyncio
     async def test_fires_person_detected_event_during_clean(self):
@@ -414,7 +423,7 @@ class TestSchedHoldNotSupported:
             "schedHold", None
         )
         await manager._set_sched_hold(False)
-        assert len(hass._executor_calls) == 0
+        assert manager._entry.runtime_data.roomba.preference_calls == []
 
 
 class TestRecordCleanEvent:
@@ -556,7 +565,7 @@ class TestRoombaOptimalCleanWindow:
 
     def _make_sensor(self, pm=None):
         from custom_components.roomba_plus.sensor import RoombaOptimalCleanWindow
-        roomba = MagicMock()
+        roomba = robot_mock()
         roomba.master_state = {"state": {"reported": {}}}
         entry = MagicMock()
         entry.runtime_data.presence_manager = pm

@@ -35,31 +35,36 @@ jobs:
       - name: Set up Python 3.12
         uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: "3.13"
           cache: "pip"
 
-      # mypy needs the same environment as the test suite: it resolves
-      # Home Assistant's own types, and a bare install would report
-      # hundreds of missing-import errors instead of real ones.
+      # pycares IS PINNED, and only on this combination.
       #
-      # Pinned to 2025.1.4 via requirements-test-frozen.txt, NOT the
-      # newer-HA combination the test suite also runs against. The
-      # `type: ignore` comments that bridge the two HA APIs are required
-      # by one version and redundant on the other, so mypy cannot be
-      # satisfied by both at once and `warn_unused_ignores` is worth
-      # keeping. This is the same reasoning recorded in validate.yml.
-      - name: Install test dependencies
+      # Home Assistant 2025.5.2 requires aiodns==3.4.0, which declares
+      # `pycares>=4.0.0` with no upper bound. pycares 5.0.0 removed
+      # `ares_query_a_result`, which aiodns 3.4.0 names in its own type
+      # annotations at class-definition time -- so a fresh install picks
+      # the newest pycares and `import aiohttp` raises AttributeError
+      # before a single test is collected.
+      #
+      # The 2026.8 job is unaffected: its newer HA pins an aiodns that
+      # allows pycares 5. So this is not a general pin, it belongs to
+      # the minimum-version job.
+      #
+      # This is also the thing requirements-test-frozen.txt was doing
+      # that its own comments never claimed: it froze TRANSITIVE
+      # dependencies. Removing it in 4.2 was right about the HA version
+      # it pinned and wrong about what else it held still.
+      - name: Install Home Assistant 2025.5 and test tooling
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-test-frozen.txt
-          pip install mypy
+          pip install "pytest-homeassistant-custom-component==0.13.245" \
+                      "pycares==4.11.0" \
+                      aiohttp pillow
 
-      # --no-deps: phahc 0.13.205 hard-pins paho-mqtt==1.6.1 while
-      # roombapy-prime requires >=2.0. Nothing here constructs a real
-      # paho client, so the older one is never exercised.
-      - name: Install roombapy-prime (--no-deps)
+      - name: Install roombapy and roombapy-prime
         run: |
-          pip install --no-deps --no-cache-dir "roombapy-prime==0.3.4"
+          pip install "roombapy==2.0.2" "roombapy-prime[map]==0.3.4"
 
       # mypy.ini runs --strict with no disabled error codes. The two
       # per-module exemptions are for Home Assistant itself and are

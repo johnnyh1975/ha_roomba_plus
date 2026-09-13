@@ -85,6 +85,62 @@ class TestTheQualityScaleFileIsTrue:
             f"reports: {result.stdout.strip().splitlines()[-1:]}"
         )
 
+    def test_async_dependency_is_only_claimed_when_the_library_is_async(self):
+        """It said `done` once with the comment "roombapy is async-capable
+        via paho-MQTT thread", which is what the rule exists to exclude.
+        It was corrected to `todo` against a count, and back to `done`
+        against another one — so the claim is checked the same way it was
+        broken, rather than trusted.
+
+        Two things have to hold. The pinned library must actually define
+        coroutines, and this integration must not be putting them back in
+        a thread: a fully async dependency driven through
+        `async_add_executor_job()` is the same failure wearing a
+        different pin.
+        """
+        import inspect
+        import pathlib
+
+        text = pathlib.Path(
+            "custom_components/roomba_plus/quality_scale.yaml"
+        ).read_text()
+        block = text[text.find("  async-dependency:"):]
+        end = block.find("\n  #")
+        block = block[:end] if end > 0 else block
+
+        if "status: todo" in block:
+            return  # honest either way
+
+        from roombapy import RoombaClient
+
+        coroutines = sorted(
+            name for name in dir(RoombaClient)
+            if not name.startswith("_")
+            and inspect.iscoroutinefunction(getattr(RoombaClient, name, None))
+        )
+
+        assert {"connect", "disconnect", "send_command", "set_preference"} <= set(
+            coroutines
+        ), (
+            "quality_scale.yaml claims async-dependency is done, but the "
+            f"pinned roombapy exposes these coroutines: {coroutines}"
+        )
+
+        # AND WE MUST BE AWAITING THEM. The guard script is the real
+        # check; this asserts that it is passing, so the scale cannot
+        # claim `done` while a command is being run in a worker thread.
+        import subprocess
+        import sys
+
+        result = subprocess.run(
+            [sys.executable, "scripts/check_no_executor_coroutines.py"],
+            capture_output=True, text=True,
+        )
+        assert result.returncode == 0, (
+            "quality_scale.yaml claims async-dependency is done, but a "
+            f"roombapy coroutine is still run in an executor:\n{result.stdout}"
+        )
+
 
 class TestTheManifestKeysAreOrderedAsHassfestWants:
     """`domain`, `name`, then alphabetical.

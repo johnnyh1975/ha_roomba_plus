@@ -36,6 +36,35 @@ select = ["F"]
 # Auto mode resolves them. It also makes the explicit `asyncio` markers
 # throughout the suite redundant rather than wrong.
 asyncio_mode = "auto"
+
+# SET EXPLICITLY, because pytest-asyncio warns once per run that its
+# default will change and that leaving it unset is deprecated. "function"
+# is the current default, so this pins today's behaviour rather than
+# choosing anything new -- the point is that the next release cannot
+# change it silently.
+asyncio_default_fixture_loop_scope = "function"
+
+# WARNINGS ARE ERRORS, for the two kinds this suite had.
+#
+# It ran with 41 warnings for a long time, 31 of them "coroutine ... was
+# never awaited". None turned out to be a real bug -- every unawaited
+# call in the integration itself is correctly inside async_create_task --
+# but that is only knowable after chasing all of them.
+#
+# The point of the gate is what happens next: a warning that is always
+# there is one nobody reads, and a REAL missing await looks exactly the
+# same. Production code that drops a coroutine reaches a robot with a
+# command that silently does nothing, which is the failure mode this
+# project has already shipped once, in 4.1.0.
+#
+# Scoped to these two rather than `error` for everything: a
+# DeprecationWarning from Home Assistant or a dependency is not this
+# project's to fix, and would block the suite on somebody else's
+# release schedule.
+filterwarnings = [
+    "error::RuntimeWarning",
+    "error::pytest.PytestUnraisableExceptionWarning",
+]
 markers = [
     # ASSERTS ON SOMETHING NOT FIELD-CONFIRMED.
     #

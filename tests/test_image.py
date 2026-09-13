@@ -13,6 +13,8 @@ import sys
 import datetime
 import collections
 import pytest
+
+from tests.conftest import robot_mock, hass_mock, entry_mock
 from unittest.mock import MagicMock
 from custom_components.roomba_plus.entity import IRobotEntity
 from unittest.mock import AsyncMock
@@ -41,9 +43,9 @@ def _make_entity(cell_count: int = 5, stuck_count: int = 2):
     gs._cells = {(i, 0): 0.5 for i in range(cell_count)}
     gs._stuck = {(0, 0): {"count": stuck_count, "times": []}}
 
-    roomba = MagicMock()
+    roomba = robot_mock()
     roomba.master_state = {"state": {"reported": {}}}
-    config_entry = MagicMock()
+    config_entry = entry_mock()
     config_entry.runtime_data = MagicMock()
     config_entry.entry_id = "test_entry"
 
@@ -123,7 +125,7 @@ def _msg(phase: str, nstuck: int = 0, sqft: int = 100) -> dict:
 
 def _make_callback_env():
     """Return (hass, entry, recorded_missions) for make_mission_callback tests."""
-    hass = MagicMock()
+    hass = hass_mock()
     hass.loop = asyncio.get_event_loop()
     hass.is_running = True
 
@@ -141,7 +143,7 @@ def _make_callback_env():
     runtime_data.zone_store = None
     runtime_data.map_capability = MagicMock()
 
-    entry = MagicMock()
+    entry = entry_mock()
     entry.runtime_data = runtime_data
     entry.entry_id = "test_entry"
     entry.data = {"blid": "TESTBLID"}
@@ -650,12 +652,12 @@ class TestTerminalMissionImageRefresh:
         )
         from homeassistant.util import dt as dt_util
 
-        entry = MagicMock()
+        entry = entry_mock()
         entry.entry_id = "test_entry"
         entry.runtime_data = MagicMock()
         entry.runtime_data.grid_store = GridStore()
         entry.runtime_data.umf_aligner = None
-        hass = MagicMock()
+        hass = hass_mock()
         hass.loop = MagicMock()
         before = datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc)
         listeners: dict[str, list[Any]] = {}
@@ -766,13 +768,13 @@ class TestTerminalMissionImageRefresh:
             _SIGNAL_COVERAGE_UPDATED,
         )
 
-        entry = MagicMock()
+        entry = entry_mock()
         entry.entry_id = "test_entry"
         entry.runtime_data = MagicMock()
         gs = GridStore()
         entry.runtime_data.grid_store = gs
         entry.runtime_data.umf_aligner = None
-        hass = MagicMock()
+        hass = hass_mock()
         hass.loop = MagicMock()
         before = datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc)
         listeners: dict[str, list[Any]] = {}
@@ -897,7 +899,7 @@ def _make_map_entity():
     """
     from custom_components.roomba_plus.image import RoombaMapImage
 
-    roomba = MagicMock()
+    roomba = robot_mock()
     roomba.master_state = {"state": {"reported": {}}}
 
     entity = RoombaMapImage.__new__(RoombaMapImage)
@@ -949,7 +951,7 @@ def _make_map_entity():
     entity._mission_checkpoint_mssn_strt_tm = 0
     entity._pending_checkpoint = None
     entity.vacuum_state = {}
-    entity.hass = MagicMock()
+    entity.hass = hass_mock()
     entity.schedule_update_ha_state = MagicMock()
     entity._handle_mission_end = MagicMock()
 
@@ -1300,7 +1302,7 @@ class TestMissionCheckpointV282:
         from custom_components.roomba_plus.image import RoombaMapImage
 
         entity = RoombaMapImage.__new__(RoombaMapImage)
-        entity.hass = MagicMock()
+        entity.hass = hass_mock()
         entity._config_entry = MagicMock()
         entity._renderer = MagicMock()
         entity._zone_store = None
@@ -1311,8 +1313,9 @@ class TestMissionCheckpointV282:
         entity._mission_start_ts = "2026-06-18T09:00:00+00:00"
 
         with patch(
-            "custom_components.roomba_plus.image.asyncio.run_coroutine_threadsafe"
-        ) as mock_run:
+                "custom_components.roomba_plus.image.asyncio.run_coroutine_threadsafe",
+                side_effect=lambda coro, *a, **k: coro.close(),
+            ) as mock_run:
             entity._handle_mission_end(ending_phase="")
 
         scheduled_coros = [c.args[0] for c in mock_run.call_args_list]
@@ -1337,7 +1340,7 @@ class TestMissionCheckpointV282:
         assert gs.last_processed_nmssn == 0
 
         entity = RoombaMapImage.__new__(RoombaMapImage)
-        entity.hass = MagicMock()
+        entity.hass = hass_mock()
         entity.hass.loop = MagicMock()
         entity._config_entry = MagicMock()
         entity._config_entry.entry_id = "test_entry"
@@ -1353,8 +1356,9 @@ class TestMissionCheckpointV282:
         entity.vacuum_state = {"bbmssn": {"nMssn": 77}}
 
         with patch(
-            "custom_components.roomba_plus.image.asyncio.run_coroutine_threadsafe"
-        ) as mock_run:
+                "custom_components.roomba_plus.image.asyncio.run_coroutine_threadsafe",
+                side_effect=lambda coro, *a, **k: coro.close(),
+            ) as mock_run:
             entity._handle_mission_end(ending_phase="")
 
         for c in mock_run.call_args_list:
@@ -1371,7 +1375,7 @@ class TestMissionCheckpointV282:
         gs = GridStore()
 
         entity = RoombaMapImage.__new__(RoombaMapImage)
-        entity.hass = MagicMock()
+        entity.hass = hass_mock()
         entity.hass.loop = MagicMock()
         entity._config_entry = MagicMock()
         entity._config_entry.entry_id = "test_entry"
@@ -1387,8 +1391,9 @@ class TestMissionCheckpointV282:
         entity.vacuum_state = {}  # no bbmssn at all
 
         with patch(
-            "custom_components.roomba_plus.image.asyncio.run_coroutine_threadsafe"
-        ) as mock_run:
+                "custom_components.roomba_plus.image.asyncio.run_coroutine_threadsafe",
+                side_effect=lambda coro, *a, **k: coro.close(),
+            ) as mock_run:
             entity._handle_mission_end(ending_phase="")  # must not raise
 
         for c in mock_run.call_args_list:
@@ -1495,8 +1500,9 @@ class TestMissionCheckpointV282:
         entity._mission_points = [(0.0, 0.0)]
 
         with patch(
-            "custom_components.roomba_plus.image.asyncio.run_coroutine_threadsafe"
-        ) as mock_run:
+                "custom_components.roomba_plus.image.asyncio.run_coroutine_threadsafe",
+                side_effect=lambda coro, *a, **k: coro.close(),
+            ) as mock_run:
             _feed_map_entity(entity, _stuck_msg(1))
 
         assert mock_run.call_count == 1
@@ -1509,8 +1515,9 @@ class TestMissionCheckpointV282:
         entity._had_cleaning_phase = False
 
         with patch(
-            "custom_components.roomba_plus.image.asyncio.run_coroutine_threadsafe"
-        ) as mock_run:
+                "custom_components.roomba_plus.image.asyncio.run_coroutine_threadsafe",
+                side_effect=lambda coro, *a, **k: coro.close(),
+            ) as mock_run:
             _feed_map_entity(entity, _stuck_msg(1))
 
         assert mock_run.call_count == 0
@@ -1693,7 +1700,10 @@ class TestDockAnchorBuffering:
     def test_stuck_event_enters_buffering(self):
         entity = _make_map_entity()
         entity._had_cleaning_phase = True
-        with patch("custom_components.roomba_plus.image.asyncio.run_coroutine_threadsafe") as mock_run:
+        with patch(
+                "custom_components.roomba_plus.image.asyncio.run_coroutine_threadsafe",
+                side_effect=lambda coro, *a, **k: coro.close(),
+            ) as mock_run:
             _feed_map_entity(entity, _stuck_msg(1))
             mock_run.call_args.args[0].close()
         assert entity._dock_anchor_buffering is True
@@ -1709,7 +1719,10 @@ class TestDockAnchorBuffering:
         _feed_map_entity(entity, _pose_msg(200, 0))
         assert entity._mission_points == [(0.0, 1000.0), (0.0, 2000.0)]
 
-        with patch("custom_components.roomba_plus.image.asyncio.run_coroutine_threadsafe") as mock_run:
+        with patch(
+                "custom_components.roomba_plus.image.asyncio.run_coroutine_threadsafe",
+                side_effect=lambda coro, *a, **k: coro.close(),
+            ) as mock_run:
             _feed_map_entity(entity, _stuck_msg(1))
             mock_run.call_args.args[0].close()
 
@@ -1736,7 +1749,10 @@ class TestDockAnchorBuffering:
         exact distinction is what surfaced the underlying issue)."""
         entity = _make_map_entity()
         entity._had_cleaning_phase = True
-        with patch("custom_components.roomba_plus.image.asyncio.run_coroutine_threadsafe") as mock_run:
+        with patch(
+                "custom_components.roomba_plus.image.asyncio.run_coroutine_threadsafe",
+                side_effect=lambda coro, *a, **k: coro.close(),
+            ) as mock_run:
             _feed_map_entity(entity, _stuck_msg(1))
             mock_run.call_args.args[0].close()
 
@@ -2032,7 +2048,14 @@ class TestHandleDockContactConfirmed:
         entity._last_dock_anchor_index = 0
         entity._dock_anchor_buffering = False
 
-        with patch("custom_components.roomba_plus.image.asyncio.run_coroutine_threadsafe"):
+        # CLOSES THE COROUTINE. A bare patch swallows the call but the
+        # coroutine argument was already built, and dropping it is
+        # reported as "never awaited" in whichever later test happens
+        # to trigger collection.
+        with patch(
+            "custom_components.roomba_plus.image.asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, *a, **k: coro.close(),
+        ):
             entity._handle_dock_contact_confirmed()
 
         geometry_store.record_drift.assert_called_once_with(-150.0, 0.0)
@@ -2143,7 +2166,10 @@ class TestDockAnchorSmartRobotExclusion:
         entity = _make_map_entity()
         entity._map_capability = MapCapability.SMART
         entity._had_cleaning_phase = True
-        with patch("custom_components.roomba_plus.image.asyncio.run_coroutine_threadsafe") as mock_run:
+        with patch(
+                "custom_components.roomba_plus.image.asyncio.run_coroutine_threadsafe",
+                side_effect=lambda coro, *a, **k: coro.close(),
+            ) as mock_run:
             _feed_map_entity(entity, _stuck_msg(1))
             mock_run.call_args.args[0].close()
         assert entity._dock_anchor_buffering is False
@@ -2181,7 +2207,10 @@ class TestDockAnchorSmartRobotExclusion:
         entity = _make_map_entity()
         assert entity._map_capability == MapCapability.EPHEMERAL
         entity._had_cleaning_phase = True
-        with patch("custom_components.roomba_plus.image.asyncio.run_coroutine_threadsafe") as mock_run:
+        with patch(
+                "custom_components.roomba_plus.image.asyncio.run_coroutine_threadsafe",
+                side_effect=lambda coro, *a, **k: coro.close(),
+            ) as mock_run:
             _feed_map_entity(entity, _stuck_msg(1))
             mock_run.call_args.args[0].close()
         assert entity._dock_anchor_buffering is True
@@ -2205,7 +2234,10 @@ class TestCheckpointSavedAtDockContactResolution:
         entity._last_dock_anchor_index = 0
         entity._dock_anchor_buffering = False
 
-        with patch("custom_components.roomba_plus.image.asyncio.run_coroutine_threadsafe") as mock_run:
+        with patch(
+                "custom_components.roomba_plus.image.asyncio.run_coroutine_threadsafe",
+                side_effect=lambda coro, *a, **k: coro.close(),
+            ) as mock_run:
             entity._handle_dock_contact_confirmed()
 
         checkpoint_calls = [
@@ -2225,7 +2257,10 @@ class TestCheckpointSavedAtDockContactResolution:
         entity._last_dock_anchor_index = 0
         entity._dock_anchor_buffering = False
 
-        with patch("custom_components.roomba_plus.image.asyncio.run_coroutine_threadsafe") as mock_run:
+        with patch(
+                "custom_components.roomba_plus.image.asyncio.run_coroutine_threadsafe",
+                side_effect=lambda coro, *a, **k: coro.close(),
+            ) as mock_run:
             entity._handle_dock_contact_confirmed()
 
         checkpoint_calls = [
@@ -2356,7 +2391,7 @@ class TestPrimeMapImageWatchRetry:
         entity = object.__new__(PrimeMapImage)
         entity._png_bytes = None
         entity._blid = "TESTBLID"
-        entity.hass = MagicMock()
+        entity.hass = hass_mock()
         entity._prime_robot = prime_robot or MagicMock()
         entity._config_entry = config_entry or MagicMock()
         return entity
@@ -2447,7 +2482,7 @@ class TestPrimeMapImageBackgroundTask:
         entity._config_entry.async_create_background_task.side_effect = (
             lambda hass, coro, name, **kw: coro.close()
         )
-        entity.hass = MagicMock()
+        entity.hass = hass_mock()
         entity.access_tokens = None
 
         with patch.object(IRobotEntity, "async_added_to_hass", new=AsyncMock()), patch.object(
@@ -2546,7 +2581,7 @@ class TestPrimeMapSurvivesRestart:
         from custom_components.roomba_plus.image import PrimeMapImage
 
         entity = object.__new__(PrimeMapImage)
-        entity.hass = MagicMock()
+        entity.hass = hass_mock()
         entity._png_bytes = None
         entity._map_stored_at = None
         entity._map_store = None
@@ -2725,7 +2760,7 @@ class TestPrimeMapFlushOnRemoval:
         entity._map_stored_at = None
         entity._map_store = MagicMock(async_save=AsyncMock()) if has_store else None
         entity._config_entry = MagicMock(entry_id="e1")
-        entity.hass = MagicMock()
+        entity.hass = hass_mock()
         return entity
 
     @pytest.mark.asyncio

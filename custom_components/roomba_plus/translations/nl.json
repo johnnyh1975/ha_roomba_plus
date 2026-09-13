@@ -161,8 +161,6 @@
       "settings": {
         "title": "Verbindingsinstellingen",
         "data": {
-          "continuous": "Doorlopende verbinding",
-          "delay": "Herverbindingsvertraging (seconden)",
           "map_enabled": "Live kaart inschakelen",
           "map_size_px": "Kaartgrootte (pixels)",
           "map_scale_mm_per_px": "Schaal (mm/pixel)",
@@ -178,8 +176,6 @@
           "region_sensors": "Aparte sensor per kamer en zone"
         },
         "data_description": {
-          "continuous": "Een permanente MQTT-verbinding met de robot behouden. Aanbevolen.",
-          "delay": "Seconden wachten tussen herverbindingspogingen.",
           "map_enabled": "De live reinigingskaart inschakelen voor robots met positiebepaling (Roomba 900, i, s, j, Braava m).",
           "map_size_px": "Kaartcanvasgrootte in pixels (400–1200). Standaard: 600.",
           "map_scale_mm_per_px": "Millimeter per pixel (5–30). Standaard 10 = 6 m × 6 m bij 600 px."

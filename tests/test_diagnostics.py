@@ -13,12 +13,14 @@ from unittest.mock import MagicMock
 from unittest.mock import patch
 import pytest
 
+from tests.conftest import robot_mock
+
 
 def _make_roomba(reported: dict) -> MagicMock:
     """Minimal roomba mock whose master_state returns the given reported dict."""
-    roomba = MagicMock()
+    roomba = robot_mock()
     roomba.master_state = {"state": {"reported": reported}}
-    roomba.roomba_connected = True
+    roomba.connected = True
     roomba.current_state = "Charging"
     roomba.client_error = None
     roomba.continuous = True
@@ -146,7 +148,7 @@ class TestCloudOnlyDiagnostics:
     async def test_never_touches_data_roomba_at_all(self):
         """The actual crash reproduction: data.roomba is None, and if
         this branch ever reaches the Classic code path below it by
-        mistake, accessing roomba.roomba_connected on None raises
+        mistake, accessing roomba.connected on None raises
         AttributeError immediately."""
         from custom_components.roomba_plus.diagnostics import async_get_config_entry_diagnostics
 

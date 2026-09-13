@@ -393,9 +393,13 @@ class TestDoStartConnectionTypeBranching:
         # This fixture used to set `.start` on the mock -- an attribute
         # `roombapy.Roomba` does not define -- so the test supplied the
         # very thing the production path was missing.
-        entry.runtime_data.roomba.send_command = (
-            lambda cmd: started.append(cmd)
-        )
+        # And async, because roombapy 2.x made it a coroutine. A plain
+        # lambda fails on the await -- which is the same class of
+        # mismatch as the `.start` one above, caught the same way.
+        async def _send(cmd):
+            started.append(cmd)
+
+        entry.runtime_data.roomba.send_command = _send
         bm = BlockingManager(hass, entry)
 
         await bm._do_start(None)

@@ -14,6 +14,8 @@ import sys
 import types
 import pytest
 
+from tests.conftest import robot_mock
+
 
 class _FakeConfigEntry:
     """Minimal config entry stub for migration tests."""
@@ -1684,7 +1686,7 @@ class TestMigrationV24ToV25MatchesRealEntity:
         from unittest.mock import MagicMock
         from custom_components.roomba_plus.device_tracker import RoombaDeviceTracker
 
-        roomba = MagicMock()
+        roomba = robot_mock()
         config_entry = MagicMock()
         blid = "REALBLID123"
         tracker = RoombaDeviceTracker(roomba, blid, config_entry)
@@ -1705,7 +1707,7 @@ class TestMigrationV24ToV25MatchesRealEntity:
         from unittest.mock import MagicMock
         from custom_components.roomba_plus.device_tracker import RoombaDeviceTracker
 
-        roomba = MagicMock()
+        roomba = robot_mock()
         config_entry = MagicMock()
         tracker = RoombaDeviceTracker(roomba, "REALBLID123", config_entry)
         assert tracker.suggested_object_id is None

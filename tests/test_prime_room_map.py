@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from tests.conftest import hass_mock
 
 
 def _geometry(ring):
@@ -270,7 +271,7 @@ class TestTheRoomMapIsRefreshedOnlyWhenItChanges:
         from custom_components.roomba_plus.image import PrimeRoomsImage
 
         entity = object.__new__(PrimeRoomsImage)
-        entity.hass = MagicMock()
+        entity.hass = hass_mock()
         entity._png = b"CACHED"
         entity._rendered_for_map_version = rendered_for
         entity._rendered_map_id = rendered_map
@@ -351,7 +352,7 @@ class TestTheRoomMapIsRefreshedOnlyWhenItChanges:
 
         from custom_components.roomba_plus.image import PrimeRoomsImage
         entity = object.__new__(PrimeRoomsImage)
-        entity.hass = MagicMock()
+        entity.hass = hass_mock()
         entity._polygons = {"room": [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0)]}
         entity._names = {"room": "Kitchen"}
         entity._preferences = {"room": {"profile": "normal"}}
@@ -376,47 +377,19 @@ class TestTheRoomMapIsRefreshedOnlyWhenItChanges:
         assert entity._polygons == {"room": [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0)]}
 
 
-class TestRoomsWithoutNames:
-    """Two real captures disagree about whether rooms_metadata carries a
-    `name`.
-
-    One account has it for every room -- "Salon", "Bureau", "Couloir".
-    Another has none at all, same endpoint, same firmware family. So the
-    name is optional in practice regardless of what the model suggests.
-
-    A room without a name still has an outline worth drawing, so it is
-    kept with an empty name and the caller supplies a "Room <id>" label.
-    Skipping it would leave a hole in the floor plan."""
-
-    @pytest.mark.asyncio
-    async def test_a_room_without_a_name_is_kept(self):
-        from custom_components.roomba_plus.prime_room_map import (
-            async_build_prime_room_polygons,
-        )
-
-        room = _room("15", "", [(0.0, 0.0), (3.0, 0.0), (3.0, 3.0), (0.0, 3.0)])
-        polygons, names, _prefs = await async_build_prime_room_polygons(
-            _entry([room]), "MAP-1"
-        )
-
-        assert "15" in polygons
-        assert names["15"] == ""
-
-    @pytest.mark.asyncio
-    async def test_named_and_unnamed_rooms_coexist(self):
-        """The realistic case if a user names some rooms and not others."""
-        from custom_components.roomba_plus.prime_room_map import (
-            async_build_prime_room_polygons,
-        )
-
-        square = [(0.0, 0.0), (2.0, 0.0), (2.0, 2.0), (0.0, 2.0)]
-        polygons, names, _prefs = await async_build_prime_room_polygons(
-            _entry([_room("10", "Salon", square), _room("15", "", square)]),
-            "MAP-1",
-        )
-
-        assert set(polygons) == {"10", "15"}
-        assert names == {"10": "Salon", "15": ""}
+# ── A class stood here and never ran ─────────────────────────────────
+#
+# `TestRoomsWithoutNames`, shadowed by a second class of the same name
+# below: Python keeps the later definition, so these tests were never
+# collected. Found by a collision check after a merge introduced one of
+# its own.
+#
+# DELETED RATHER THAN REPAIRED. It asserted that an unnamed room yields
+# `names["15"] == ""`. The code has returned `"Room 15"` for some time,
+# and the class that shadowed it asserts exactly that, on the same two
+# captures. Keeping both would mean two tests disagreeing about one
+# behaviour; keeping the older one would mean changing an expectation
+# nobody has held since it stopped running.
 
 
 class TestRoomsWithoutNames:
@@ -972,7 +945,7 @@ class TestTheTrailIsClearedPerMission:
         )
 
         coordinator = object.__new__(PrimeStatusCoordinator)
-        coordinator.hass = MagicMock()
+        coordinator.hass = hass_mock()
         coordinator._trail_mission_id = previous
         entry = MagicMock()
         entry.entry_id = "e1"
@@ -1941,7 +1914,7 @@ class TestTheTrailClearsOnANewMissionNumber:
 
         coordinator = object.__new__(PrimeStatusCoordinator)
         coordinator._trail_mission_id = None
-        coordinator.hass = MagicMock()
+        coordinator.hass = hass_mock()
         entry = MagicMock()
         entry.entry_id = "E"
         entry.runtime_data = SimpleNamespace(
@@ -2064,7 +2037,7 @@ class TestTheDockIsLearnedWhileCharging:
 
         coordinator = object.__new__(PrimeStatusCoordinator)
         coordinator._trail_mission_id = "m1"
-        coordinator.hass = MagicMock()
+        coordinator.hass = hass_mock()
         entry = MagicMock()
         entry.entry_id = "E"
         entry.runtime_data = SimpleNamespace(

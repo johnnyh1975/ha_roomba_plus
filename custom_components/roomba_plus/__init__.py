@@ -17,11 +17,10 @@ import asyncio
 import contextlib
 import dataclasses
 from datetime import timedelta
-from functools import partial
 import logging
 from typing import Any, Final
 
-from roombapy import Roomba, RoombaConnectionError, RoombaFactory
+from roombapy import RoombaClient, RoombaConnectionError
 
 from homeassistant import exceptions
 from homeassistant.const import (
@@ -288,8 +287,33 @@ class _SetupContext:
     mission_timer_store: MissionTimerStore | None = None
 
 
+
+def _warm_tls_context() -> None:
+    """Populate roombapy's cached TLS context, off the event loop.
+
+    Called before the first `RoombaClient(...)`. `generate_tls_context()`
+    is `@cache`d in the library, so this fills the cache once and every
+    later construction is free -- which is what makes constructing the
+    client in the loop safe rather than merely quiet.
+
+    Failing here is not fatal: the constructor would then build the
+    context itself and Home Assistant would log the blocking call again.
+    That is a warning, not a broken robot, and raising during setup for
+    it would be the worse outcome.
+    """
+    try:
+        from roombapy.tls import generate_tls_context  # noqa: PLC0415
+
+        generate_tls_context()
+    except Exception:  # noqa: BLE001
+        _LOGGER.debug(
+            "roomba_plus: could not pre-build the TLS context; the client "
+            "will build it on construction",
+            exc_info=True,
+        )
+
 async def _phase_connect(ctx: _SetupContext) -> bool:
-    """Phase 1 — Migrate options, create Roomba, connect, register stop listener.
+    """Phase 1 — Migrate options, create the client, connect, register stop listener.
 
     Returns False when connection fails without raising.
     Raises ConfigEntryNotReady on persistent connectivity issues.
@@ -323,15 +347,56 @@ async def _phase_connect(ctx: _SetupContext) -> bool:
             sorted(_zone_data_keys - _discovered),
         )
 
-    roomba = await hass.async_add_executor_job(
-        partial(
-            RoombaFactory.create_roomba,
-            address=config_entry.data[CONF_HOST],
-            blid=config_entry.data[CONF_BLID],
-            password=config_entry.data[CONF_PASSWORD],
-            continuous=config_entry.options[CONF_CONTINUOUS],
-            delay=config_entry.options[CONF_DELAY],
+    # THE CONSTRUCTOR DOES DO I/O, contrary to what this comment said
+    # when the executor call was removed in 4.2. `RoombaClient.__init__`
+    # builds a TLS context, and `ssl.SSLContext.load_default_certs()`
+    # reads the system trust store from disk. Home Assistant caught it
+    # and said so:
+    #
+    #     Detected blocking call to load_default_certs ... inside the
+    #     event loop by custom integration 'roomba_plus'
+    #
+    # roombapy's `generate_tls_context()` is `@cache`d, so the cost is
+    # paid once per process -- but that once was landing in the loop, on
+    # every fresh start. Warming the cache in the executor first leaves
+    # the constructor with nothing left to read.
+    await hass.async_add_executor_job(_warm_tls_context)
+
+    # Constructed directly after that: roombapy 2.x dropped
+    # `RoombaFactory`, and with the context cached this is pure
+    # attribute assignment.
+    #
+    # `continuous` AND `delay` ARE GONE from the library. 2.x keeps one
+    # supervised connection and reconnects on its own -- the behaviour
+    # `continuous: true` used to select, which is what the option's own
+    # description already recommended. There is no polling mode left to
+    # ask for, so passing the option would mean passing something
+    # nothing reads.
+    #
+    # The option keys stay in the config entry rather than being
+    # migrated away: a stored key that nothing reads is harmless, and
+    # removing them would mean a migration whose only effect is to
+    # delete two values. What they must NOT do is keep appearing in the
+    # options flow as though they still decided something -- that is
+    # handled where the flow is built.
+    # SAID ONCE, TO THE PEOPLE IT ACTUALLY AFFECTS. The default was
+    # always `true`, so this only fires for someone who deliberately
+    # turned the persistent connection OFF -- and whose robot now keeps
+    # one anyway. That is a silent behaviour change on a setting they
+    # chose, which is worth a line in their log even though the new
+    # behaviour is the one the option's own description recommended.
+    if config_entry.options.get(CONF_CONTINUOUS) is False:
+        _LOGGER.info(
+            "Roomba+: this entry had the persistent connection turned off. "
+            "roombapy 2.x has no polling mode -- the connection is now "
+            "always kept open and reconnects on its own, and the option "
+            "has been removed from the settings form"
         )
+
+    roomba = RoombaClient(
+        config_entry.data[CONF_HOST],
+        config_entry.data[CONF_BLID],
+        config_entry.data[CONF_PASSWORD],
     )
 
     try:
@@ -1719,7 +1784,7 @@ def _async_clear_repair_issues(
 async def async_unload_entry(
     hass: HomeAssistant, config_entry: RoombaConfigEntry
 ) -> bool:
-    """Unload a config entry and disconnect from the Roomba.
+    """Unload a config entry and disconnect from the robot.
 
     NEW (V4/Prime): CLOUD_ONLY entries take a short, separate path --
     no local platforms list gating on map_capability, no mission-timer/
@@ -1874,7 +1939,11 @@ async def _async_reload_on_options_change(
     so reusing it needs no new machinery -- only a bigger tracked-key
     set. Renamed from _CONNECTION_KEYS to _RELOAD_TRIGGER_KEYS to
     reflect that this set is no longer only about the connection."""
-    _RELOAD_TRIGGER_KEYS = {CONF_CONTINUOUS, CONF_DELAY, CONF_ENABLE_SCHEDULE_CALENDAR}
+    # CONF_CONTINUOUS and CONF_DELAY were tracked here until 4.2, when
+    # roombapy 2.x stopped having either. Reloading an integration
+    # because a value nothing reads has changed is work for no effect --
+    # and the option is no longer offered, so the value cannot change.
+    _RELOAD_TRIGGER_KEYS = {CONF_ENABLE_SCHEDULE_CALENDAR}
 
     def _get(source: Mapping[str, Any], key: str) -> Any:
         # CONF_ENABLE_SCHEDULE_CALENDAR needs its default applied on BOTH
@@ -1905,15 +1974,15 @@ async def _async_reload_on_options_change(
 # ── Connection helpers ────────────────────────────────────────────────────────
 
 async def async_connect_or_timeout(
-    hass: HomeAssistant, roomba: Roomba
+    hass: HomeAssistant, roomba: RoombaClient
 ) -> dict[str, Any]:
     """Connect to the vacuum and wait for first state report."""
     try:
         name: str | None = None
         async with asyncio.timeout(16):
-            _LOGGER.debug("Connecting to Roomba")
-            await hass.async_add_executor_job(roomba.connect)
-            while not roomba.roomba_connected or name is None:
+            _LOGGER.debug("Connecting to the robot")
+            await roomba.connect()
+            while not roomba.connected or name is None:
                 name = roomba_reported_state(roomba).get("name")
                 if name:
                     break
@@ -1937,18 +2006,18 @@ async def async_connect_or_timeout(
 
 
 async def async_disconnect_or_timeout(
-    hass: HomeAssistant, roomba: Roomba
+    hass: HomeAssistant, roomba: RoombaClient
 ) -> None:
     """Disconnect from the vacuum with a 3 s safety timeout."""
-    _LOGGER.debug("Disconnecting from Roomba")
+    _LOGGER.debug("Disconnecting from the robot")
     with contextlib.suppress(TimeoutError):
         async with asyncio.timeout(3):
-            await hass.async_add_executor_job(roomba.disconnect)
+            await roomba.disconnect()
 
 
 # ── State helpers (used across all platforms) ─────────────────────────────────
 
-def roomba_reported_state(roomba: Roomba | None) -> dict[str, Any]:
+def roomba_reported_state(roomba: RoombaClient | None) -> dict[str, Any]:
     """Return the 'reported' sub-dict from master_state.
 
     Uses ``or {}`` rather than a dict default so that an explicit JSON null
@@ -1972,7 +2041,7 @@ def roomba_reported_state(roomba: Roomba | None) -> dict[str, Any]:
 # ── Exceptions ────────────────────────────────────────────────────────────────
 
 class CannotConnect(exceptions.HomeAssistantError):
-    """Raised when a connection to the Roomba cannot be established."""
+    """Raised when a connection to the robot cannot be established."""
 
 
 async def async_remove_config_entry_device(

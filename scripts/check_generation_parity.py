@@ -87,14 +87,21 @@ DELIBERATE: dict[str, dict[str, str]] = {
         ),
     },
     "vacuum.py::async_start": {
-        "async_add_executor_job": (
-            "Classic's roombapy is synchronous and needs the executor; "
-            "roombapy-prime is async throughout"
+        "send_command": (
+            "Classic speaks roombapy; Prime speaks roombapy-prime, whose "
+            "verb is send_simple_command. Two libraries, not a gap. Was "
+            "recorded as an async_add_executor_job difference until 4.2 "
+            "made roombapy async -- the executor disappeared and the call "
+            "underneath it became visible for the first time"
         ),
     },
     "vacuum.py::async_return_to_base": {
-        "async_add_executor_job": (
-            "Classic's roombapy is synchronous and needs the executor"
+        "send_command": (
+            "Classic speaks roombapy; Prime speaks roombapy-prime, whose "
+            "verb is send_simple_command. Two libraries, not a gap. Was "
+            "recorded as an async_add_executor_job difference until 4.2 "
+            "made roombapy async -- the executor disappeared and the call "
+            "underneath it became visible for the first time"
         ),
         "async_pause": (
             "Classic needs an explicit pause before docking; the Prime "
@@ -104,8 +111,12 @@ DELIBERATE: dict[str, dict[str, str]] = {
         "sleep": "part of the Classic retry loop",
     },
     "vacuum.py::_async_send_verb": {
-        "async_add_executor_job": (
-            "Classic's roombapy is synchronous and needs the executor"
+        "send_command": (
+            "Classic speaks roombapy; Prime speaks roombapy-prime, whose "
+            "verb is send_simple_command. Two libraries, not a gap. Was "
+            "recorded as an async_add_executor_job difference until 4.2 "
+            "made roombapy async -- the executor disappeared and the call "
+            "underneath it became visible for the first time"
         ),
     },
     "vacuum.py::_prime_cleaning_mode": {
@@ -171,7 +182,10 @@ DELIBERATE: dict[str, dict[str, str]] = {
         ),
     },
     "blocking_manager.py::_do_start": {
-        "async_add_executor_job": "Classic roombapy is synchronous",
+        "send_command": (
+            "Classic speaks roombapy; Prime speaks roombapy-prime, whose "
+            "verb is send_simple_command. Two libraries, not a gap"
+        ),
         "async_call": "Classic-only service dispatch",
         "async_get": "Classic entity registry lookup",
         "async_get_entity_id": (

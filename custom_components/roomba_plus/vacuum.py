@@ -677,7 +677,9 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
             and self._config_entry.runtime_data.cloud_coordinator is not None
         ):
             _live = self._config_entry.runtime_data
-            _live_region_map = region_names_across_maps(_live.cloud_coordinator)
+            _live_region_map = region_names_across_maps(
+                _live.cloud_coordinator
+            )
             # Try cleanMissionStatus.cmd.regions first, fall back to lastCommand.regions
             _cmd_regions = (
                 (
@@ -912,13 +914,9 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
             await _send_confirmed(self._prime_robot, "start")
             return
         if self.activity == VacuumActivity.PAUSED:
-            await self.hass.async_add_executor_job(
-                self.vacuum.send_command, "resume"
-            )
+            await self.vacuum.send_command("resume")
         else:
-            await self.hass.async_add_executor_job(
-                self.vacuum.send_command, "start"
-            )
+            await self.vacuum.send_command("start")
 
     def _prime_cycle_is_idle(self) -> bool:
         """True when the robot reports no active cleaning cycle.
@@ -1063,7 +1061,7 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         if self._connection_type is ConnectionType.CLOUD_ONLY:
             await _send_confirmed(self._prime_robot, verb)
             return
-        await self.hass.async_add_executor_job(self.vacuum.send_command, verb)
+        await self.vacuum.send_command(verb)
 
     async def async_stop(self, **kwargs: Any) -> None:
         """Stop the vacuum cleaner."""
@@ -1209,11 +1207,9 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
                 await asyncio.sleep(1)
             else:
                 # Pause not confirmed — stop first for a clean state transition
-                await self.hass.async_add_executor_job(
-                    self.vacuum.send_command, "stop"
-                )
+                await self.vacuum.send_command("stop")
                 await asyncio.sleep(1)
-        await self.hass.async_add_executor_job(self.vacuum.send_command, "dock")
+        await self.vacuum.send_command("dock")
 
     async def async_locate(self, **kwargs: Any) -> None:
         """Play a sound to locate the robot.
@@ -1281,13 +1277,9 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
 
         if command == "start" and isinstance(params, dict) and "regions" in params:
             region_cmd = self._build_region_command(params)
-            await self.hass.async_add_executor_job(
-                self.vacuum.send_command, "start", region_cmd
-            )
+            await self.vacuum.send_command("start", region_cmd)
         else:
-            await self.hass.async_add_executor_job(
-                self.vacuum.send_command, command, params or {}
-            )
+            await self.vacuum.send_command(command, params or {})
 
     def _build_region_command(self, params: dict[str, Any]) -> dict[str, Any]:
         """Build the region-cleaning payload for send_command.
@@ -1560,12 +1552,13 @@ class RoombaVacuumCarpetBoost(RoombaVacuum):
         else:  # Eco
             carpet_boost, high_perf = False, False
 
-        # set_preference sends a delta command; these cannot be batched
-        await self.hass.async_add_executor_job(
-            self.vacuum.set_preference, "carpetBoost", str(carpet_boost)
-        )
-        await self.hass.async_add_executor_job(
-            self.vacuum.set_preference, "vacHigh", str(high_perf)
+        # ONE MESSAGE, BOTH KEYS -- see the note in select.py. The
+        # comment that stood here said these "cannot be batched", which
+        # had it exactly backwards: sent separately the firmware drops
+        # both, because one handler reads the pair and needs each of
+        # them present.
+        await self.vacuum.set_preferences(
+            {"carpetBoost": str(carpet_boost), "vacHigh": str(high_perf)}
         )
 
 
@@ -1640,14 +1633,8 @@ class BraavaJet(IRobotVacuum):
         }
         overlap = overlap_map[behaviour]
 
-        await self.hass.async_add_executor_job(
-            self.vacuum.set_preference, "rankOverlap", overlap
-        )
-        await self.hass.async_add_executor_job(
-            self.vacuum.set_preference,
-            "padWetness",
-            {"disposable": spray, "reusable": spray},
-        )
+        await self.vacuum.set_preference("rankOverlap", overlap)
+        await self.vacuum.set_preference("padWetness", {"disposable": spray, "reusable": spray})
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:

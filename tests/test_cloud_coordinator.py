@@ -13,6 +13,8 @@ import sys
 import os
 import types
 import pytest
+
+from tests.conftest import robot_mock, hass_mock, entry_mock
 from custom_components.roomba_plus.cloud_coordinator import IrobotCloudCoordinator
 from custom_components.roomba_plus.models import RoombaData
 from custom_components.roomba_plus.models import MapCapability
@@ -116,11 +118,13 @@ def _records(pairs: list[tuple[float, float]]) -> list[dict]:
 
 def _make_manager(options: dict | None = None) -> DirtThresholdManager:
     """Build a DirtThresholdManager with minimal mocking."""
-    hass = MagicMock()
-    entry = MagicMock()
+    hass = hass_mock()
+    entry = entry_mock()
     entry.options = options if options is not None else {CONF_DEMAND_CLEANING_ENABLED: True}
     entry.entry_id = "test_entry"
     entry.runtime_data = MagicMock()
+    # The client is awaited since roombapy 2.x.
+    entry.runtime_data.roomba = robot_mock()
     entry.runtime_data.roomba_reported_state.return_value = {
         "cleanMissionStatus": {"cycle": "none"}
     }
@@ -132,9 +136,9 @@ def _make_manager(options: dict | None = None) -> DirtThresholdManager:
 
 def _make_coordinator_v250_coordinator() -> IrobotCloudCoordinator:
     """Build a coordinator with minimal mocks, patching the aiohttp session."""
-    hass = MagicMock()
+    hass = hass_mock()
     hass.config.country = "US"
-    entry = MagicMock()
+    entry = entry_mock()
     with patch(
         "custom_components.roomba_plus.cloud_coordinator.async_get_clientsession",
         return_value=MagicMock(),
@@ -782,9 +786,12 @@ class TestAsyncEvaluate:
         }
 
         with patch.object(mgr, 'async_save', new_callable=AsyncMock):
-            with patch.object(mgr._hass, 'async_add_executor_job', new_callable=AsyncMock) as mock_job:
-                await mgr.async_evaluate(coord, "test_entry")
-            mock_job.assert_called_once()
+            await mgr.async_evaluate(coord, "test_entry")
+
+        # ASKS THE ROBOT, not the executor: the command goes straight to
+        # `send_command` since roombapy 2.x, so an executor that is never
+        # used would report "called 0 times" for a working trigger.
+        mgr._entry.runtime_data.roomba.send_command.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_last_trigger_time_set_after_trigger(self):
@@ -824,10 +831,10 @@ class TestF11WiringInInit:
         """async_evaluate is scheduled via async_create_task after merge."""
         from unittest.mock import AsyncMock, MagicMock, call, patch
 
-        hass = MagicMock()
-        hass.async_create_task = MagicMock()
-
-        config_entry = MagicMock()
+        hass = hass_mock()
+        # `hass.async_create_task` is left to hass_mock(): it records
+        # calls AND closes the coroutine; a bare MagicMock drops it.
+        config_entry = entry_mock()
         config_entry.entry_id = "test_entry"
 
         ms = MagicMock()
@@ -1154,7 +1161,7 @@ class TestCleanRoomPmapSelection:
             ATTR_ROOM_NAME, ATTR_ORDERED, CONF_SMART_ZONE_DATA,
         )
         call = MagicMock()
-        call.hass = MagicMock()
+        call.hass = hass_mock()
         call.data = {
             "entity_id": [entity_id],
             ATTR_ROOM_NAME: room_name,
@@ -1186,7 +1193,7 @@ class TestCleanRoomPmapSelection:
         }
         data.roomba.master_state = {}
 
-        config_entry = MagicMock()
+        config_entry = entry_mock()
         config_entry.runtime_data = data
         config_entry.options = {
             CONF_SMART_ZONE_DATA: {
@@ -1211,7 +1218,7 @@ class TestCleanRoomPmapSelection:
         pmap_active = "pmap_ACTIVE_current"
         pmap_stale  = "pmap_STALE_old_floor"
 
-        hass = MagicMock()
+        hass = hass_mock()
         call = MagicMock()
         call.hass = hass
         call.data = {
@@ -1238,7 +1245,7 @@ class TestCleanRoomPmapSelection:
             "twoPass": False,
         }
 
-        config_entry = MagicMock()
+        config_entry = entry_mock()
         config_entry.runtime_data = data
         config_entry.options = {
             CONF_SMART_ZONE_DATA: {
@@ -1253,11 +1260,18 @@ class TestCleanRoomPmapSelection:
         hass.config_entries.async_get_entry.return_value = config_entry
         hass.async_add_executor_job = AsyncMock()
 
-        # Capture the pmap_id sent to the robot
+        # Capture the pmap_id sent to the robot.
+        #
+        # CAPTURED AT THE CLIENT since roombapy 2.x: the command no
+        # longer travels through the executor, so a side_effect there
+        # would never fire and the assertion below would compare against
+        # an empty dict.
         sent_params = {}
-        async def capture_send(fn, cmd, params):
+
+        async def capture_send(cmd, params):
             sent_params.update(params)
-        hass.async_add_executor_job.side_effect = capture_send
+
+        config_entry.runtime_data.roomba.send_command = capture_send
 
         import homeassistant.helpers.entity_registry as er_mod
         with patch.object(er_mod, "async_get", return_value=ent_reg):
@@ -1277,7 +1291,7 @@ class TestCleanRoomPmapSelection:
 
         pmap_cloud = "pmap_from_cloud"
 
-        hass = MagicMock()
+        hass = hass_mock()
         call = MagicMock()
         call.hass = hass
         call.data = {
@@ -1301,7 +1315,7 @@ class TestCleanRoomPmapSelection:
             "twoPass": False,
         }
 
-        config_entry = MagicMock()
+        config_entry = entry_mock()
         config_entry.runtime_data = data
         config_entry.options = {
             CONF_SMART_ZONE_DATA: {
@@ -1316,10 +1330,13 @@ class TestCleanRoomPmapSelection:
         hass.config_entries.async_get_entry.return_value = config_entry
         hass.async_add_executor_job = AsyncMock()
 
+        # At the client, not the executor -- see the note above.
         sent_params = {}
-        async def capture_send(fn, cmd, params):
+
+        async def capture_send(cmd, params):
             sent_params.update(params)
-        hass.async_add_executor_job.side_effect = capture_send
+
+        config_entry.runtime_data.roomba.send_command = capture_send
 
         import homeassistant.helpers.entity_registry as er_mod
         with patch.object(er_mod, "async_get", return_value=ent_reg):
@@ -1423,7 +1440,7 @@ class TestCleanRoomCloudPmapvFirst:
         cloud_pmapv = "260614T103750"   # stable cloud version (app used this)
         live_pmapv  = "260614T175302"   # live state.pmaps (in-flux, causes 224)
 
-        hass = MagicMock()
+        hass = hass_mock()
         call = MagicMock()
         call.hass = hass
         call.data = {
@@ -1433,6 +1450,7 @@ class TestCleanRoomCloudPmapvFirst:
         }
 
         data = MagicMock()
+        data.roomba = robot_mock()   # awaited since roombapy 2.x
         data.map_capability = MapCapability.SMART
         data.has_cloud = True
         data.cloud_coordinator.active_pmap_id = pmap_id
@@ -1450,7 +1468,7 @@ class TestCleanRoomCloudPmapvFirst:
             "twoPass": False,
         }
 
-        config_entry = MagicMock()
+        config_entry = entry_mock()
         config_entry.runtime_data = data
         config_entry.options = {
             CONF_SMART_ZONE_DATA: {
@@ -1465,10 +1483,15 @@ class TestCleanRoomCloudPmapvFirst:
         hass.config_entries.async_get_entry.return_value = config_entry
         hass.async_add_executor_job = AsyncMock()
 
+        # At the client, not the executor -- see the note above. Assigned
+        # AFTER `data.roomba = robot_mock()`, or the factory's own
+        # AsyncMock would replace this and `sent` would stay empty.
         sent = {}
-        async def capture(fn, cmd, params):
+
+        async def capture(cmd, params):
             sent.update(params)
-        hass.async_add_executor_job.side_effect = capture
+
+        data.roomba.send_command = capture
 
         import homeassistant.helpers.entity_registry as er_mod
         with patch.object(er_mod, "async_get", return_value=ent_reg):

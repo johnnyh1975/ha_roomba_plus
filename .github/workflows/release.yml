@@ -107,24 +107,36 @@ jobs:
       - name: Set up Python 3.12
         uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: "3.13"
           cache: "pip"
-          cache-dependency-path: requirements-test-frozen.txt
 
-      - name: Install test dependencies
+      # pycares IS PINNED, and only on this combination.
+      #
+      # Home Assistant 2025.5.2 requires aiodns==3.4.0, which declares
+      # `pycares>=4.0.0` with no upper bound. pycares 5.0.0 removed
+      # `ares_query_a_result`, which aiodns 3.4.0 names in its own type
+      # annotations at class-definition time -- so a fresh install picks
+      # the newest pycares and `import aiohttp` raises AttributeError
+      # before a single test is collected.
+      #
+      # The 2026.8 job is unaffected: its newer HA pins an aiodns that
+      # allows pycares 5. So this is not a general pin, it belongs to
+      # the minimum-version job.
+      #
+      # This is also the thing requirements-test-frozen.txt was doing
+      # that its own comments never claimed: it froze TRANSITIVE
+      # dependencies. Removing it in 4.2 was right about the HA version
+      # it pinned and wrong about what else it held still.
+      - name: Install Home Assistant 2025.5 and test tooling
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-test-frozen.txt
+          pip install "pytest-homeassistant-custom-component==0.13.245" \
+                      "pycares==4.11.0" \
+                      aiohttp pillow
 
-      # NEW (this session): see the identical comment in validate.yml and the
-      # comment next to roombapy in requirements-test-frozen.txt for the full
-      # reasoning -- roombapy-prime's paho-mqtt>=2.0 requirement is
-      # unsatisfiable alongside pytest-homeassistant-custom-component's
-      # hard paho-mqtt==1.6.1 pin, verified safe to bypass with --no-deps
-      # since PrimeMqttClient is mocked throughout this project's tests.
-      - name: Install roombapy-prime (--no-deps, see comment above)
+      - name: Install roombapy and roombapy-prime
         run: |
-          pip install --no-deps --no-cache-dir "roombapy-prime==0.3.4"
+          pip install "roombapy==2.0.2" "roombapy-prime[map]==0.3.4"
 
       - name: Run full test suite (release gate — must pass before packaging)
         run: |
@@ -208,7 +220,6 @@ jobs:
           cp hacs.json /tmp/full-package/
           cp README.md /tmp/full-package/
           cp pyproject.toml /tmp/full-package/
-          cp requirements-test-frozen.txt /tmp/full-package/
           if [ "${{ steps.notes.outputs.found }}" = "true" ]; then
             cp "${{ steps.notes.outputs.path }}" "/tmp/full-package/RELEASE_NOTES_${{ steps.version.outputs.tag }}.md"
           fi

@@ -1350,6 +1350,9 @@ def _region_maps_for(runtime_data: Any) -> tuple[dict[str, str], dict[str, str] 
         # Sixth instance of this shape: a better-populated source
         # appeared later and the places reading the older one were never
         # revisited. See `scripts/check_prime_sources.py`.
+        # Rooms AND zones, across every map: `region_names_across_maps()`
+        # merges `regions_by_pmap` (which now carries both) on top of the
+        # active map's own two lists.
         region_map = region_names_across_maps(runtime_data.cloud_coordinator)
     # PRIME HAS NO CLOUD COORDINATOR AT ALL. `prime_room_names` is flat
     # and holds rooms and zones together, so a Prime robot's template

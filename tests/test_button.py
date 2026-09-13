@@ -8,6 +8,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from tests.conftest import robot_mock
+
 from custom_components.roomba_plus.button import FavoriteButton, ZoneCleanButton
 from custom_components.roomba_plus.room_seg_store import RoomSegStore, SegRoom
 
@@ -20,7 +22,7 @@ def _make_button(room_seg_store):
     entity._config_entry = config_entry
     entity.hass = MagicMock()
     entity.hass.async_add_executor_job = AsyncMock()
-    entity.vacuum = MagicMock()
+    entity.vacuum = robot_mock()
 
     # No selection made in tests below -- entity_registry lookup returns
     # nothing, so async_press falls back to the first confirmed room.
@@ -37,7 +39,7 @@ class TestZoneCleanButtonNoRooms:
         with caplog.at_level("WARNING"):
             await entity.async_press()
         assert "no rooms available" in caplog.text.lower()
-        entity.hass.async_add_executor_job.assert_not_called()
+        entity.vacuum.send_command.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_empty_room_seg_store_logs_warning_and_returns(self, caplog):
@@ -46,7 +48,7 @@ class TestZoneCleanButtonNoRooms:
         with caplog.at_level("WARNING"):
             await entity.async_press()
         assert "no rooms available" in caplog.text.lower()
-        entity.hass.async_add_executor_job.assert_not_called()
+        entity.vacuum.send_command.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_no_confirmed_rooms_logs_warning_and_returns(self, caplog):
@@ -56,7 +58,7 @@ class TestZoneCleanButtonNoRooms:
         with caplog.at_level("WARNING"):
             await entity.async_press()
         assert "no confirmed rooms" in caplog.text.lower()
-        entity.hass.async_add_executor_job.assert_not_called()
+        entity.vacuum.send_command.assert_not_awaited()
 
 
 class TestZoneCleanButtonStartsClean:
@@ -78,8 +80,7 @@ class TestZoneCleanButtonStartsClean:
 
         await entity.async_press()
 
-        entity.hass.async_add_executor_job.assert_called_once_with(
-            entity.vacuum.send_command, "start"
+        entity.vacuum.send_command.assert_called_once_with("start"
         )
 
     @pytest.mark.asyncio
@@ -97,7 +98,7 @@ class TestZoneCleanButtonStartsClean:
 
         # Should not raise even with no selected-zone state available.
         await entity.async_press()
-        entity.hass.async_add_executor_job.assert_called_once()
+        entity.vacuum.send_command.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_logs_room_bbox_not_zone_attribute_names(self, monkeypatch, caplog):
@@ -305,7 +306,7 @@ def _make_config_entry(has_cloud: bool = False, favorites=None, pmaps=None):
 
 
 def _make_roomba():
-    r = MagicMock()
+    r = robot_mock()
     r.master_state = {"state": {"reported": {}}}
     return r
 
@@ -369,11 +370,13 @@ class TestFavoriteButton:
 
         await btn.async_press()
 
-        btn.hass.async_add_executor_job.assert_called_once()
-        args = btn.hass.async_add_executor_job.call_args[0]
-        # args[0] is the bound method, args[1] is command, args[2] is params
-        assert args[1] == "start"
-        assert args[2]["pmap_id"] == "map1"
+        # ASKS THE ROBOT: the command goes straight to `send_command`
+        # since roombapy 2.x, so there is no executor call to inspect
+        # and no bound method in position zero any more.
+        btn.vacuum.send_command.assert_awaited_once()
+        command, params = btn.vacuum.send_command.await_args[0]
+        assert command == "start"
+        assert params["pmap_id"] == "map1"
 
     @pytest.mark.asyncio
     async def test_press_no_commanddefs_logs_warning(self):
@@ -422,8 +425,8 @@ class TestFavoriteButton:
             await btn.async_press()
 
         mock_log.warning.assert_called_once()
-        args = btn.hass.async_add_executor_job.call_args[0]
-        assert args[2]["regions"] == [{"region_id": "1"}]
+        _command, params = btn.vacuum.send_command.await_args[0]
+        assert params["regions"] == [{"region_id": "1"}]
 
     @pytest.mark.asyncio
     async def test_press_single_entry_commanddefs_no_warning(self):
@@ -458,7 +461,7 @@ class TestFavoriteButton:
 
         await btn.async_press()
 
-        params = btn.hass.async_add_executor_job.call_args[0][2]
+        params = btn.vacuum.send_command.await_args[0][1]
         assert "command" not in params
         assert params["pmap_id"] == "p1"
         assert params["ordered"] == 1

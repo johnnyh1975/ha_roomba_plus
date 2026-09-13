@@ -18,6 +18,8 @@ from datetime import timedelta
 from unittest.mock import MagicMock
 from unittest.mock import patch
 import pytest
+
+from tests.conftest import robot_mock
 from custom_components.roomba_plus.mission_archive import MissionArchive
 import asyncio
 from unittest.mock import AsyncMock
@@ -1985,7 +1987,7 @@ class TestRoombaReportedStateNullSafety:
     def _call(self, master_state):
         from unittest.mock import MagicMock
         from custom_components.roomba_plus import roomba_reported_state
-        roomba = MagicMock()
+        roomba = robot_mock()
         roomba.master_state = master_state
         return roomba_reported_state(roomba)
 

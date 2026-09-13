@@ -40,7 +40,7 @@ rules:
       no longer exists in the current tree — corrected v3.4.2.
   dependency-transparency:
     status: done
-    comment: roombapy==1.9.1 pinned in manifest.requirements.
+    comment: roombapy==2.0.1 pinned in manifest.requirements.
   docs-actions:
     status: done
     comment: >
@@ -214,17 +214,26 @@ rules:
 
   # ── Platinum ─────────────────────────────────────────────────────────────
   async-dependency:
-    status: todo
+    status: done
     comment: >
-      NOT MET, and this said `done` with the comment "roombapy is
-      async-capable via paho-MQTT thread". A sync library driven from a
-      thread is not an async dependency -- that is what the rule exists
-      to exclude.
+      MET AS OF 4.2, and measured the same way it was failed.
 
-      Measured rather than argued: the pinned `roombapy==1.9.1` defines
-      **61 functions and zero `async def`**. The Prime side is genuinely
-      async (aiohttp throughout), so this fails on the Classic half
-      only.
+      This once said `done` with the comment "roombapy is async-capable
+      via paho-MQTT thread". A sync library driven from a thread is not
+      an async dependency -- that is what the rule exists to exclude --
+      so it was corrected to `todo` against a count: the pinned
+      `roombapy==1.9.1` defined **61 functions and zero `async def`**.
+
+      The pin is now `roombapy==2.0.1`, which defines **18 `async def`**
+      including `connect`, `disconnect`, `send_command` and
+      `set_preference`, and uses aiomqtt rather than a paho thread. All
+      46 call sites that wrapped those in
+      `hass.async_add_executor_job()` are awaited directly, and
+      `scripts/check_no_executor_coroutines.py` fails the build if one
+      goes back.
+
+      The Prime side was always async (aiohttp throughout). Both halves
+      now are.
 
       The same file records the same mistake one rule up: strict-typing
       said `done` before anyone had run mypy, and the first run reported

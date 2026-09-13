@@ -13,9 +13,10 @@ robot would have broken every entity's setup, not just one.
 """
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from custom_components.roomba_plus.entity import IRobotEntity
+from types import SimpleNamespace
 
 
 def _make_roomba(reported: dict) -> MagicMock:

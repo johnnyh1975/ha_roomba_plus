@@ -350,9 +350,7 @@ class RoombaScheduleCalendar(IRobotEntity, CalendarEntity):
         roomba = self._config_entry.runtime_data.roomba
         if roomba is None:
             raise ServiceValidationError("Not connected to the robot.")
-        await self.hass.async_add_executor_job(
-            roomba.set_preference, key, schedule
-        )
+        await roomba.set_preference(key, schedule)
 
     def _with_entry(
         self, key: str, current: Any, *, weekday: int, hour: int, minute: int

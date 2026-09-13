@@ -12,12 +12,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from tests.conftest import robot_mock, hass_mock
+
 
 def _make_tracker(map_capability_value: str = "smart"):
     """Build a minimal RoombaDeviceTracker with stubbed vacuum/entry state."""
     from custom_components.roomba_plus.device_tracker import RoombaDeviceTracker
 
-    roomba = MagicMock()
+    roomba = robot_mock()
     roomba.master_state = {"state": {"reported": {}}}
 
     entry = MagicMock()
@@ -28,7 +30,7 @@ def _make_tracker(map_capability_value: str = "smart"):
     tracker._blid = "TESTBLID"
     tracker.vacuum_state = {}
     tracker._config_entry = entry
-    tracker.hass = MagicMock()
+    tracker.hass = hass_mock()
     tracker.hass.config.language = "de"
     return tracker, roomba, entry
 
@@ -323,7 +325,7 @@ class TestPrimeReadsItsPhaseFromTheShadow:
         coordinator = SimpleNamespace(
             data={"ro-currentstate": {"cleanMissionStatus": {"phase": phase}}}
         )
-        tracker.hass = MagicMock()
+        tracker.hass = hass_mock()
         tracker.hass.config.language = 'en'
         tracker._config_entry = MagicMock()
         tracker._config_entry.runtime_data = SimpleNamespace(
@@ -364,7 +366,7 @@ class TestTheRoomNameCacheRefillsWhenEmpty:
 
         tracker = RoombaDeviceTracker.__new__(RoombaDeviceTracker)
         tracker._prime_rooms = dict(cached)
-        tracker.hass = MagicMock()
+        tracker.hass = hass_mock()
         tracker.async_write_ha_state = MagicMock()
         return tracker
 
@@ -413,8 +415,7 @@ class TestZonesReachTheTrackerCache:
         entry = MagicMock()
         entry.runtime_data.prime_room_names = zone_names
         tracker._config_entry = entry
-        tracker.hass = MagicMock()
-
+        tracker.hass = hass_mock()
         backend = MagicMock()
         backend.available_rooms = AsyncMock(return_value=dict(rooms))
         return tracker, backend, patch
@@ -716,7 +717,7 @@ class TestTheDockWorkingIsNotTheRobotCleaning:
         tracker = RoombaDeviceTracker.__new__(RoombaDeviceTracker)
         tracker.vacuum = None
         tracker._prime_rooms = {}
-        tracker.hass = MagicMock()
+        tracker.hass = hass_mock()
         tracker.hass.config.language = "en"
         tracker._config_entry = MagicMock()
         tracker._config_entry.runtime_data = SimpleNamespace(
@@ -771,7 +772,7 @@ class TestTheTrackerListensWhereItReads:
 
         tracker = RoombaDeviceTracker.__new__(RoombaDeviceTracker)
         tracker._prime_rooms = {}
-        tracker.hass = MagicMock()
+        tracker.hass = hass_mock()
         tracker.async_on_remove = MagicMock()
         tracker._config_entry = MagicMock()
         tracker._config_entry.runtime_data = SimpleNamespace(

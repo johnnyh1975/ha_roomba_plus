@@ -11,6 +11,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+from tests.conftest import robot_mock
+
 from custom_components.roomba_plus.button import pick_zone_selection
 
 
@@ -127,7 +129,7 @@ class TestFavouritesReachAnyMap:
         coordinator.data = {"favorites": favorites}
         return SimpleNamespace(
             runtime_data=SimpleNamespace(
-                roomba=MagicMock(),
+                roomba=robot_mock(),
                 cloud_coordinator=coordinator,
                 blid="BLID123",
             )
@@ -155,7 +157,7 @@ class TestFavouritesReachAnyMap:
 
         assert await async_run_classic_favorite(hass, entry, "abc") is True
 
-        _fn, command, params = hass.async_add_executor_job.await_args.args
+        command, params = entry.runtime_data.roomba.send_command.await_args.args
         assert command == "start"
         assert params["pmap_id"] == "second-floor", (
             "the favourite's own map must travel with the command -- that is "
@@ -178,7 +180,7 @@ class TestFavouritesReachAnyMap:
         ])
 
         assert await async_run_classic_favorite(hass, entry, "abc") is False
-        hass.async_add_executor_job.assert_not_awaited()
+        entry.runtime_data.roomba.send_command.assert_not_awaited()
 
     async def test_an_unknown_id_sends_nothing(self) -> None:
         from custom_components.roomba_plus.button import async_run_classic_favorite
@@ -243,6 +245,47 @@ class TestZonesGoOutAsZones:
 
         assert backend._type_by_region.get("99", "rid") == "rid"
 
+
+class TestThePrimeZoneSelectorLoadsItsList:
+    """It shipped in 4.1.0 permanently unavailable (@chairstacker).
+
+    The list was loaded in `async_update()`. `IRobotEntity` sets
+    `_attr_should_poll = False`, so Home Assistant never calls it: the
+    segment dict stayed empty, `available` returned False, and the
+    companion button had nothing to act on. Both entities existed and
+    neither worked.
+
+    Loading in `async_added_to_hass()` is what `PrimeMapSelect` next
+    door already did, for the same reason -- the list comes from the
+    cloud, so nothing pushes it.
+    """
+
+    def test_the_list_is_loaded_when_the_entity_is_added(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus.select_prime import PrimeZoneSelect
+
+        assert hasattr(PrimeZoneSelect, "async_added_to_hass"), (
+            "nothing loads the segment list"
+        )
+        source = inspect.getsource(PrimeZoneSelect.async_added_to_hass)
+        assert "_async_load_segments" in source
+
+    def test_it_does_not_rely_on_polling(self) -> None:
+        """The specific trap: an `async_update()` that never runs."""
+        import inspect
+
+        from custom_components.roomba_plus.entity import IRobotEntity
+        from custom_components.roomba_plus.select_prime import PrimeZoneSelect
+
+        # Read from the source: `_attr_should_poll` resolves to a
+        # property object on the class, so comparing it to False checks
+        # the descriptor rather than the value.
+        assert "_attr_should_poll = False" in inspect.getsource(IRobotEntity)
+        assert not hasattr(PrimeZoneSelect, "async_update"), (
+            "polling is off for these entities, so async_update() is never "
+            "called -- load in async_added_to_hass() instead"
+        )
 
 
 class TestRoomNamesResolveAcrossMaps:
@@ -320,7 +363,6 @@ class TestRoomNamesResolveAcrossMaps:
             f"region_names_across_maps(), and will read the active map only: "
             f"{offenders}"
         )
-
 
 
 class TestZonesAcrossEveryMap:

@@ -10,6 +10,8 @@ from __future__ import annotations
 
 
 import pytest
+
+from tests.conftest import robot_mock
 import tests.conftest
 from custom_components.roomba_plus.select import CloudSmartZoneSelect, resolve_zone_name
 import sys
@@ -25,7 +27,7 @@ import asyncio
 def _mission_sensor(cycle="none", phase=""):
     """Build a minimal RoombaMissionActive with stubbed vacuum state."""
     from custom_components.roomba_plus.binary_sensor import RoombaMissionActive
-    roomba = MagicMock()
+    roomba = robot_mock()
     roomba.master_state = {"state": {"reported": {
         "cleanMissionStatus": {"cycle": cycle, "phase": phase}
     }}}
@@ -42,7 +44,7 @@ def _boost_entity(carpet_boost=None, vac_high=None):
         state["carpetBoost"] = carpet_boost
     if vac_high is not None:
         state["vacHigh"] = vac_high
-    roomba = MagicMock()
+    roomba = robot_mock()
     roomba.master_state = {"state": {"reported": state}}
     s = CarpetBoostSelect.__new__(CarpetBoostSelect)
     s.entity_description = _CARPET_BOOST_DESC   # F-RB-6: set descriptor (bypassed __init__)
@@ -421,10 +423,20 @@ class TestCarpetBoostSlugMigration:
         v = RoombaVacuumCarpetBoost.__new__(RoombaVacuumCarpetBoost)
         v.hass = MagicMock()
         v.hass.async_add_executor_job = AsyncMock()
-        v.vacuum = MagicMock()
+        v.vacuum = robot_mock()
         await v.async_set_fan_speed("Automatic")
-        # Should not log an error and should call set_preference twice
-        assert v.hass.async_add_executor_job.call_count == 2
+        # Should not log an error, and should write both keys of the pair.
+        #
+        # ONE CALL WITH BOTH KEYS, not two calls with one each.
+        #
+        # This asserted two separate `set_preference` calls, which is
+        # precisely the bug: the firmware reads `carpetBoost` and
+        # `vacHigh` in one handler and drops both when either is
+        # missing, so two messages changed nothing while returning
+        # success. The test was pinning the failure.
+        v.vacuum.set_preferences.assert_awaited_once()
+        sent = v.vacuum.set_preferences.await_args[0][0]
+        assert set(sent) == {"carpetBoost", "vacHigh"}
 
     def test_all_seven_languages_have_lowercase_state_keys(self):
         """strings.json + all 7 translations must use lowercase slug keys
@@ -1298,7 +1310,9 @@ class TestSelectSetupEntryRouting:
 # ── CloudHistorySensor test helpers ──────────────────────────────────────────
 
 
-def _make_history(sqft: int = 0, hr: int = 0, mn: int = 0, n_mssn: int = 0) -> dict:
+# The four helpers below shadowed identically named ones further up,
+# which differ in body. Suffixed so both sets are reachable.
+def _make_history_v2(sqft: int = 0, hr: int = 0, mn: int = 0, n_mssn: int = 0) -> dict:
     """Build a fake coordinator.data["mission_history"] dict for CloudHistorySensor tests."""
     return {
         "runtimeStats": {"sqft": sqft, "hr": hr, "min": mn},
@@ -1306,12 +1320,12 @@ def _make_history(sqft: int = 0, hr: int = 0, mn: int = 0, n_mssn: int = 0) -> d
     }
 
 
-def _make_history_list(**kwargs) -> list:
-    """Wrap _make_history in a list — simulates the raw API response before normalisation."""
-    return [_make_history(**kwargs)]
+def _make_history_list_v2(**kwargs) -> list:
+    """Wrap _make_history_v2 in a list — simulates the raw API response before normalisation."""
+    return [_make_history_v2(**kwargs)]
 
 
-def _make_history_sensor(key: str, history: dict | None = None, *, success: bool = True):
+def _make_history_sensor_v2(key: str, history: dict | None = None, *, success: bool = True):
     """Return a CloudHistorySensor instance wired to a fake coordinator."""
     from custom_components.roomba_plus.sensor import CLOUD_HISTORY_SENSORS, CloudHistorySensor
     desc = next(d for d in CLOUD_HISTORY_SENSORS if d.key == key)
@@ -1326,7 +1340,7 @@ def _make_history_sensor(key: str, history: dict | None = None, *, success: bool
     return sensor
 
 
-def _make_history_coordinator(history: dict):
+def _make_history_coordinator_v2(history: dict):
     """Return a fake coordinator whose data contains mission_history."""
     coordinator = MagicMock()
     coordinator.last_update_success = True
@@ -1410,4 +1424,71 @@ class TestAFunctionScopedImportUsedInBothBranches:
             f"imported inside one branch and used in another: "
             f"{sorted(set(problems))} -- UnboundLocalError on the path "
             f"that skips the import"
+        )
+
+
+class TestPairedSettingsGoOutTogether:
+    """Two settings the firmware reads as one, sent as one message.
+
+    `noAutoPasses`+`twoPass` and `carpetBoost`+`vacHigh` each resolve to
+    a single three-state value inside one firmware handler. That handler
+    looks up both members and takes an early exit if either is absent,
+    so a delta carrying half a pair does nothing -- no error, no echo,
+    nothing on the wire at all.
+
+    Three independent lines of evidence: the handler itself in two
+    firmware families (lewis `ctv_common_get_num_passes_flags`, ruby
+    `ctv_common_get_pass_preference`); a wire measurement on an i3 where
+    single keys were dropped and the pair echoed in 0.65 s; and
+    dorita980, which has never sent these any other way and offers no
+    single-key setter for them.
+
+    Both controls shipped sending single keys, so cleaning passes and
+    suction did nothing on lewis, ruby and daredevil. `set_preferences()`
+    was contributed to roombapy for this and is in 2.0.2.
+    """
+
+    def test_cleaning_passes_sends_one_message(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus import select as select_mod
+
+        source = inspect.getsource(select_mod)
+
+        assert 'set_preferences(' in source
+        assert 'set_preference("noAutoPasses"' not in source
+        assert 'set_preference("twoPass"' not in source
+
+    def test_suction_sends_one_message(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus import vacuum as vacuum_mod
+
+        source = inspect.getsource(vacuum_mod)
+
+        assert 'set_preference("carpetBoost"' not in source
+        assert 'set_preference("vacHigh"' not in source
+
+    def test_no_pair_member_is_ever_sent_alone(self) -> None:
+        """The guard. Either half on its own is a silent no-op, and a
+        future edit adding one back would look perfectly reasonable."""
+        import pathlib
+        import re
+
+        paired = ("noAutoPasses", "twoPass", "carpetBoost", "vacHigh")
+        offenders: list[str] = []
+        component = (
+            pathlib.Path(__file__).parent.parent
+            / "custom_components"
+            / "roomba_plus"
+        )
+        for path in sorted(component.glob("*.py")):
+            text = path.read_text(encoding="utf-8")
+            for key in paired:
+                if re.search(rf'set_preference\(\s*["\']{key}["\']', text):
+                    offenders.append(f"{path.name}: {key}")
+
+        assert not offenders, (
+            "these send one half of a paired setting, which the firmware "
+            f"silently drops -- use set_preferences(): {offenders}"
         )

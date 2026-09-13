@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from tests.conftest import hass_mock
 
 
 def _entry(**kwargs):
@@ -641,7 +642,7 @@ class TestPartsRefreshOnMissionEnd:
         from custom_components.roomba_plus.prime_coordinator import PrimeCoordinator
 
         coordinator = object.__new__(PrimeCoordinator)
-        coordinator.hass = MagicMock()
+        coordinator.hass = hass_mock()
         coordinator.blid = "BLID"
         entry = MagicMock()
         parts = MagicMock(async_request_refresh=AsyncMock())

@@ -387,9 +387,7 @@ class PresenceManager:
                 "PresenceManager: schedHold not in robot state — cannot write"
             )
             return
-        await self._hass.async_add_executor_job(
-            roomba.set_preference, "schedHold", value
-        )
+        await roomba.set_preference("schedHold", value)
         _LOGGER.info("PresenceManager: schedHold set to %s", value)
 
     # ── Public API ────────────────────────────────────────────────────────────

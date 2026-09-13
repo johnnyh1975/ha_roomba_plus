@@ -10,6 +10,8 @@ from __future__ import annotations
 
 
 import pytest
+
+from tests.conftest import robot_mock, hass_mock, entry_mock
 from custom_components.roomba_plus.maintenance_store import MaintenanceStore
 import datetime
 from custom_components.roomba_plus.sensor import RoombaSensorDescription
@@ -59,7 +61,7 @@ class _FakeEntity:
 
 
 def _make_entry(mission_store=None, maintenance_store=None):
-    entry = MagicMock()
+    entry = entry_mock()
     data = MagicMock()
     data.mission_store = mission_store or MissionStore()
     data.maintenance_store = maintenance_store or MaintenanceStore()
@@ -76,13 +78,12 @@ def _make_entry(mission_store=None, maintenance_store=None):
 
 
 def _make_hass():
-    hass = MagicMock()
-    def _close_coro(*args, **kwargs):
-        import asyncio as _asyncio
-        for a in args:
-            if _asyncio.iscoroutine(a):
-                a.close()
-    hass.async_create_task = _close_coro
+    # `hass_mock()` already closes coroutines handed to
+    # `async_create_task`. A local copy of that logic used to sit here
+    # and overwrote the shared one with a plain function -- which works
+    # for the closing, but loses `call_args`, and left this file's other
+    # coroutines leaking because it only covered `async_create_task`.
+    hass = hass_mock()
     hass.loop = None
     return hass
 
@@ -117,6 +118,11 @@ def _entity(battery_stats: dict = None, vacuum_state: dict = None,
     """
     from unittest.mock import MagicMock as _MM
     e = MagicMock()
+    # `hass` and the config entry both launch background work from this
+    # entity -- the store save goes through one or the other depending
+    # on the path taken.
+    e.hass = hass_mock()
+    e._config_entry = entry_mock()
     e.battery_stats = battery_stats or {}
     e.vacuum_state = vacuum_state or {}
     store = MaintenanceStore()
@@ -153,14 +159,14 @@ def _records(n: int = 10, sqft: float = 200, run_m: float = 40,
 
 
 def _make_dtm() -> DirtThresholdManager:
-    hass = MagicMock()
+    hass = hass_mock()
     def _close_coro(*args, **kwargs):
         import asyncio as _asyncio
         for a in args:
             if _asyncio.iscoroutine(a):
                 a.close()
     hass.async_create_task = _close_coro
-    entry = MagicMock()
+    entry = entry_mock()
     entry.options = {}
     return DirtThresholdManager(hass, entry)
 
@@ -223,7 +229,7 @@ def _utcnow() -> datetime_v260_learning:
 
 
 def _make_hass_v260_learning() -> MagicMock:
-    hass = MagicMock()
+    hass = hass_mock()
     def _close_coro(*args, **kwargs):
         import asyncio as _asyncio
         for a in args:
@@ -1212,7 +1218,7 @@ class TestIA74Maint:
         store_mock = MagicMock()
         store_mock.async_save = _save
         store_mock.async_load = _load
-        hass = MagicMock()
+        hass = hass_mock()
         def _close_coro(*args, **kwargs):
             import asyncio as _asyncio
             for a in args:
@@ -1330,9 +1336,9 @@ class TestMaintenanceDueOnMessageRepairCheck:
         from custom_components.roomba_plus.binary_sensor import RoombaMaintenanceDue
         from unittest.mock import MagicMock
 
-        roomba = MagicMock()
+        roomba = robot_mock()
         roomba.master_state = {"state": {"reported": {"bbrun": {"hr": current_hr}}}}
-        entry = MagicMock()
+        entry = entry_mock()
         store = MaintenanceStore()
         store.filter_reset_hr = filter_reset_hr
         store.brush_reset_hr = brush_reset_hr
@@ -1340,7 +1346,7 @@ class TestMaintenanceDueOnMessageRepairCheck:
         entry.options = {}
 
         entity = RoombaMaintenanceDue(roomba, "test_blid", entry)
-        entity.hass = MagicMock()
+        entity.hass = hass_mock()
         entity.schedule_update_ha_state = MagicMock()
         entity._enabled = True  # IRobotEntity checks self.enabled
         return entity
@@ -1411,8 +1417,7 @@ class TestMaintenanceColdStartBaseline:
         store_mock = MagicMock()
         store_mock.async_save = _save
         store_mock.async_load = _load
-        hass = MagicMock()
-
+        hass = hass_mock()
         def _close_coro(*args, **kwargs):
             import asyncio as _asyncio
             for a in args:
@@ -1455,8 +1460,7 @@ class TestMaintenanceColdStartBaseline:
 
         store_mock = MagicMock()
         store_mock.async_load = _load
-        hass = MagicMock()
-
+        hass = hass_mock()
         with patch(
             "custom_components.roomba_plus.maintenance_store.Store",
             return_value=store_mock,
@@ -1571,7 +1575,7 @@ class TestSymmetricLocalResetSlots:
         store_mock = MagicMock()
         store_mock.async_save = _save
         store_mock.async_load = _load
-        hass = MagicMock()
+        hass = hass_mock()
         with patch(
             "custom_components.roomba_plus.maintenance_store.Store",
             return_value=store_mock,

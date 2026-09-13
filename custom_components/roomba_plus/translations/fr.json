@@ -161,8 +161,6 @@
       "settings": {
         "title": "Paramètres de connexion",
         "data": {
-          "continuous": "Connexion continue",
-          "delay": "Délai de reconnexion (secondes)",
           "map_enabled": "Activer la carte en direct",
           "map_size_px": "Taille de la carte (pixels)",
           "map_scale_mm_per_px": "Échelle (mm/pixel)",
@@ -178,8 +176,6 @@
           "region_sensors": "Capteur distinct par pièce et zone"
         },
         "data_description": {
-          "continuous": "Maintenir une connexion MQTT persistante avec le robot. Recommandé.",
-          "delay": "Secondes d'attente entre les tentatives de reconnexion.",
           "map_enabled": "Activer la carte de nettoyage en direct pour les robots avec détection de position (Roomba 900, i, s, j, Braava m).",
           "map_size_px": "Taille du canevas de la carte en pixels (400–1200). Par défaut : 600.",
           "map_scale_mm_per_px": "Millimètres par pixel (5–30). Par défaut 10 = 6 m × 6 m à 600 px."
