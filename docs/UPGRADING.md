@@ -9,6 +9,12 @@ note are listed — most releases need zero action beyond updating.
 
 ---
 
+## v4.2.1 — from v4.2.0
+
+Nothing to do.
+
+---
+
 ## v4.2.0 — from any 4.1.x
 
 Nothing to reconfigure. Every fix from 4.1.1 through 4.1.8 is included,
