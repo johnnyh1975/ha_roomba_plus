@@ -3449,3 +3449,70 @@ class TestMissionPhaseSourcePrime:
         sensor._last_progress = None
 
         assert RoombaMissionProgress.native_value.fget(sensor) is None
+
+
+class TestElapsedTimeSurvivesAQuietRobot:
+    """Run time was accumulated from the gaps between MQTT messages and
+    any gap over 120 seconds was thrown away -- a clamp meant for
+    recharges, pauses and host restarts.
+
+    It cannot tell those apart from a robot that simply has nothing new
+    to say, and during steady cleaning there often is nothing new. Real
+    run time went in the bin and the total lagged the wall clock.
+
+    @Thonno's i7+ showed 0% progress for a whole mission and reports
+    `mssnM: 0`, so the robot's own counter was no help either. Two
+    symptoms, one cause: everything downstream was reading a clock that
+    had stopped.
+    """
+
+    @staticmethod
+    def _store():
+        from custom_components.roomba_plus.mission_timer_store import (
+            MissionTimerStore,
+        )
+
+        return MissionTimerStore.__new__(MissionTimerStore)
+
+    def test_the_phase_decides_not_the_duration(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus.mission_timer_store import (
+            MissionTimerStore,
+        )
+
+        source = inspect.getsource(MissionTimerStore.on_phase_run)
+
+        assert "_last_phase_was_run" in source
+        assert "_RUN_GAP_CAP_SEC" in source
+
+    def test_a_quiet_stretch_still_counts(self) -> None:
+        """Five minutes of silence with `run` on both sides is five
+        minutes of cleaning, not a gap to discard."""
+        from custom_components.roomba_plus.mission_timer_store import (
+            _RUN_GAP_CAP_SEC,
+        )
+
+        assert 300 < _RUN_GAP_CAP_SEC
+
+    def test_but_not_an_overnight_outage(self) -> None:
+        """The phase cannot cover a host that was down for hours and
+        comes back with `run` on both sides."""
+        from custom_components.roomba_plus.mission_timer_store import (
+            _RUN_GAP_CAP_SEC,
+        )
+
+        assert _RUN_GAP_CAP_SEC < 7200
+
+    def test_a_break_in_the_phase_resets_continuity(self) -> None:
+        """Otherwise a recharge would be counted as cleaning the moment
+        the robot resumed."""
+        import inspect
+
+        from custom_components.roomba_plus.mission_timer_store import (
+            MissionTimerStore,
+        )
+
+        source = inspect.getsource(MissionTimerStore.on_phase_other)
+
+        assert "_last_phase_was_run = False" in source

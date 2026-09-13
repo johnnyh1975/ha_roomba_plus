@@ -290,3 +290,91 @@ class TestEveryMenuEntryHasALabel:
         assert not (offered - named), (
             f"menu entries with no label: {sorted(offered - named)}"
         )
+
+
+class TestTheScaleMatchesTheRules:
+    """The manifest claims a tier; `quality_scale.yaml` records rule by
+    rule whether it is earned. Nothing tied the two together, so the
+    claim could drift in either direction -- and this file already
+    carries the scar from one of those: `strict-typing` said `done`
+    before anyone had run mypy, and the first real run reported 565
+    errors and eleven runtime bugs.
+
+    So the tier is checked here against the rule file, and strict-typing
+    has its own check above that runs the type checker rather than
+    reading the word `done`.
+
+    Platinum is claimed only once every rule reads `done` -- and the
+    typing rule has its own separate check above that actually runs the
+    type checker.
+    """
+
+    @staticmethod
+    def _rules():
+        import yaml
+
+        data = yaml.safe_load(
+            open(
+                "custom_components/roomba_plus/quality_scale.yaml",
+                encoding="utf-8",
+            )
+        )
+        return data.get("rules", data)
+
+    @staticmethod
+    def _claimed():
+        import json
+
+        return json.load(
+            open(
+                "custom_components/roomba_plus/manifest.json", encoding="utf-8"
+            )
+        ).get("quality_scale")
+
+    def test_platinum_needs_every_rule_done(self):
+        if self._claimed() != "platinum":
+            return
+
+        unfinished = [
+            name
+            for name, rule in self._rules().items()
+            if (rule.get("status") if isinstance(rule, dict) else rule)
+            not in ("done", "exempt")
+        ]
+
+        assert not unfinished, (
+            "manifest says platinum, but these rules are not done: "
+            + ", ".join(sorted(unfinished))
+        )
+
+    def test_the_three_platinum_rules_are_present_and_done(self):
+        """`strict-typing`, `async-dependency` and `inject-websession`
+        are what separate platinum from gold. A file missing one of them
+        would pass the check above by having nothing to fail."""
+        if self._claimed() != "platinum":
+            return
+
+        rules = self._rules()
+        for name in ("strict-typing", "async-dependency", "inject-websession"):
+            assert name in rules, f"{name} is not recorded at all"
+            rule = rules[name]
+            status = rule.get("status") if isinstance(rule, dict) else rule
+            assert status == "done", f"{name} is {status!r}"
+
+    def test_every_rule_carries_a_reason(self):
+        """A bare status records a decision nobody can check later.
+
+        The bar is a reason, not a length: `integration-owner` is
+        satisfied by "codeowners set in manifest", and padding that out
+        would make the file worse. What this rejects is an empty one.
+        """
+        silent = [
+            name
+            for name, rule in self._rules().items()
+            if isinstance(rule, dict)
+            and not str(rule.get("comment", "")).strip()
+        ]
+
+        assert not silent, "rules claiming a status with no reasoning: " + (
+            ", ".join(sorted(silent))
+        )

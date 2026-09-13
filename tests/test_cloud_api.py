@@ -603,3 +603,75 @@ class TestUpdateFailureSuppression:
         coord._last_success_time = datetime.now(UTC) - timedelta(minutes=2, seconds=1)
         elapsed = datetime.now(UTC) - coord._last_success_time
         assert elapsed >= _MIN_UNAVAILABLE
+
+
+class TestCredentialsNeverReachTheLog:
+    """A debug line printed the whole first robot record from the cloud,
+    which carries that robot's cloud PASSWORD in plaintext.
+
+    Anyone who turned on debug logging to diagnose something unrelated
+    wrote a live credential into their log file -- and into every log
+    they subsequently attached to an issue. @ScenicSystemsLLC found it
+    while debugging room tracking and reported it without pasting the
+    value, which is the right way round.
+
+    LOW SEVERITY, REAL ANYWAY. It needs debug level and access to the
+    log, so it is not remotely exploitable. But logs get attached to
+    issues, and this project asks people to attach them constantly.
+    """
+
+    def test_the_robots_dump_logs_field_names_only(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus import cloud_api
+
+        source = inspect.getsource(cloud_api)
+
+        assert "first_robot=%s" not in source
+        assert "first_robot_fields=%s" in source
+
+    def test_no_log_call_passes_a_whole_robot_record(self) -> None:
+        """The shape to keep out: handing a log call an entire record
+        from the cloud rather than the specific field wanted."""
+        import ast
+        import pathlib
+
+        offenders = []
+        for path in pathlib.Path("custom_components/roomba_plus").glob("*.py"):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if not (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and isinstance(node.func.value, ast.Name)
+                    and node.func.value.id == "_LOGGER"
+                ):
+                    continue
+                for arg in node.args[1:]:
+                    rendered = ast.unparse(arg)
+                    # A bare `.values()` or the login result handed over
+                    # whole -- as opposed to a named field off it.
+                    # `result` alone is too broad -- three unrelated
+                    # call sites use that name for something harmless.
+                    # What this looks for is a cloud record handed over
+                    # whole.
+                    if (
+                        "self.robots.values()" in rendered
+                        or rendered.strip() == "self.login_result"
+                    ):
+                        offenders.append(f"{path.name}:{node.lineno} {rendered}")
+
+        assert not offenders, "whole cloud records reaching the log: " + ", ".join(
+            offenders
+        )
+
+    def test_the_line_still_says_which_fields_came_back(self) -> None:
+        """The point of the line was knowing what the cloud returned.
+        Removing it entirely would have traded a leak for a blind spot."""
+        import inspect
+
+        from custom_components.roomba_plus import cloud_api
+
+        source = inspect.getsource(cloud_api)
+
+        assert "sorted(_first)" in source

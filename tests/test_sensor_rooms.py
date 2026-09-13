@@ -1186,3 +1186,86 @@ class TestAPlanIsNotAnObservation:
         source = inspect.getsource(mission_timer_store)
 
         assert "room_progress_observed = False" in source
+
+
+class TestProgressUsesTheRobotsOwnStartTime:
+    """Mission progress read 0% for a whole mission on @Thonno's i7+.
+
+    Both of its sources were accumulated from MQTT message gaps, and
+    that accumulation discards long gaps. His robot also reports
+    `mssnM: 0`, so its own minute counter gave nothing either.
+
+    `cleanMissionStatus.mssnStrtTm` was there the whole time -- a
+    wall-clock timestamp of when the mission began. Nothing to
+    accumulate, nothing to clamp, no dependence on how talkative the
+    robot is.
+
+    DELIBERATELY WALL TIME, pauses and recharges included: "how far
+    through is this mission" is a question about the clock on the wall.
+    `run_sec` stays what it is, and the room-transition guard keeps
+    using it, because "has this room had enough cleaning" is a
+    different question.
+    """
+
+    @staticmethod
+    def _elapsed(status):
+        from custom_components.roomba_plus.sensor_rooms import (
+            _mission_elapsed_wall_sec,
+        )
+
+        return _mission_elapsed_wall_sec(status)
+
+    def test_it_measures_from_the_reported_start(self) -> None:
+        import time
+
+        elapsed = self._elapsed({"mssnStrtTm": time.time() - 600})
+
+        assert elapsed is not None
+        assert 590 < elapsed < 610
+
+    def test_it_reads_a_running_mission_from_his_shape(self) -> None:
+        """His `cleanMissionStatus`, with the timestamp moved to now:
+        `mssnM: 0` and no accumulated time anywhere, which is exactly
+        the case that used to read 0%."""
+        import time
+
+        elapsed = self._elapsed(
+            {
+                "cycle": "clean",
+                "phase": "run",
+                "mssnM": 0,
+                "operatingMode": 2,
+                "mssnStrtTm": time.time() - 1500,
+            }
+        )
+
+        assert elapsed is not None
+        assert elapsed > 1400, "25 minutes in should not read as nothing"
+
+    def test_a_future_timestamp_is_refused(self) -> None:
+        """Clock skew between robot and host would otherwise show a
+        progress bar running backwards."""
+        import time
+
+        assert self._elapsed({"mssnStrtTm": time.time() + 3600}) is None
+
+    def test_a_stale_timestamp_is_refused(self) -> None:
+        """Longer than any mission means the field was left over, not
+        that the robot has been cleaning since yesterday."""
+        import time
+
+        assert self._elapsed({"mssnStrtTm": time.time() - 200000}) is None
+
+    def test_absence_falls_through(self) -> None:
+        for absent in (None, {}, {"mssnStrtTm": 0}, {"mssnStrtTm": "soon"}):
+            assert self._elapsed(absent) is None, absent
+
+    def test_it_is_preferred_over_the_accumulated_sources(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus import sensor_rooms
+
+        source = inspect.getsource(sensor_rooms)
+        block = source[source.index("_elapsed_wall = _mission_elapsed_wall_sec"):]
+
+        assert "_elapsed_wall if _elapsed_wall is not None" in block[:400]
