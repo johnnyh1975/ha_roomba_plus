@@ -1938,70 +1938,6 @@ class TestStoredZonesSurviveWithoutCloud:
         assert await b.available_rooms() == {}
 
 
-class TestAZoneCarriesItsMap:
-    """@chairstacker: rooms cleaned, zones failed with "this robot has 2
-    maps and is not currently reporting which one it is on".
-
-    `available_rooms()` returns `{p2map_id}/{room_id}`, and
-    `clean_rooms()` splits on that slash to learn which map the command
-    is for. Zone segment ids had no map in them, so there was nothing to
-    split and the two-map branch refused rather than guess. On a
-    one-map robot it would have worked by luck.
-
-    The two readers want the parts in opposite orders, which is the
-    whole difficulty: `clean_rooms()` wants the map first, and
-    `_send_region_command()` looks for `zid_` on what is left after the
-    split. So the id is `zid_<map>/<region>` in the UI and
-    `<map>/zid_<region>` on the way to the robot.
-    """
-
-    @staticmethod
-    def _backend():
-        from custom_components.roomba_plus.room_cleaning import (
-            PrimeRoomCleaning,
-        )
-
-        backend = PrimeRoomCleaning.__new__(PrimeRoomCleaning)
-        backend._data = MagicMock()
-        backend._data.blid = "BLID1"
-        return backend
-
-    async def test_the_map_moves_in_front_of_the_prefix(self) -> None:
-        from unittest.mock import AsyncMock
-
-        backend = self._backend()
-        backend.clean_rooms = AsyncMock()
-
-        await backend.clean_segments(["zid_MAP-A/107"])
-
-        assert backend.clean_rooms.await_args[0][0] == ["MAP-A/zid_107"]
-
-    async def test_a_room_still_loses_only_its_prefix(self) -> None:
-        """The negative control: rooms were never broken and must stay
-        exactly as they were."""
-        from unittest.mock import AsyncMock
-
-        backend = self._backend()
-        backend.clean_rooms = AsyncMock()
-
-        await backend.clean_segments(["rid_MAP-A/12"])
-
-        assert backend.clean_rooms.await_args[0][0] == ["MAP-A/12"]
-
-    async def test_an_unqualified_zone_is_left_alone(self) -> None:
-        """Stored zone data predating this has no map in it. Passing it
-        through unchanged keeps a one-map robot working rather than
-        turning a silent success into a crash."""
-        from unittest.mock import AsyncMock
-
-        backend = self._backend()
-        backend.clean_rooms = AsyncMock()
-
-        await backend.clean_segments(["zid_107"])
-
-        assert backend.clean_rooms.await_args[0][0] == ["zid_107"]
-
-
 class TestEveryRoomWasAlsoOfferedAsAZone:
     """@theChef163's zone "Litter" was missing and every room was
     duplicated. One line caused both.
@@ -2123,9 +2059,16 @@ class TestClassicOffersEveryMapToo:
         backend._config_entry.options = {}
         # The rest of `clean_segments` needs these; the decode half is
         # what these tests are about.
-        backend._roomba = robot_mock()
-        backend._pmap_by_region = {}
+        # On this line the command goes through
+        # `hass.async_add_executor_job`, so the ROBOT stays synchronous
+        # and the executor is what has to be awaitable. In 4.2 the call
+        # is direct and this inverts.
+        from unittest.mock import AsyncMock as _AsyncMock
+
+        backend._roomba = MagicMock()
         backend._hass = MagicMock()
+        backend._hass.async_add_executor_job = _AsyncMock()
+        backend._pmap_by_region = {}
         return backend
 
     _TWO_MAPS = {
@@ -2172,7 +2115,7 @@ class TestClassicOffersEveryMapToo:
 
         await backend.clean_segments(["MAP-B_20"])
 
-        command, params = backend._roomba.send_command.await_args[0]
+        _fn, command, params = backend._hass.async_add_executor_job.await_args[0]
         assert command == "start"
         assert [r["region_id"] for r in params["regions"]] == ["20"]
 
@@ -2190,7 +2133,7 @@ class TestClassicOffersEveryMapToo:
         with pytest.raises(ServiceValidationError):
             await backend.clean_segments(["MAP-A_10", "MAP-B_20"])
 
-        backend._roomba.send_command.assert_not_awaited()
+        backend._hass.async_add_executor_job.assert_not_awaited()
 
     async def test_a_map_id_containing_underscores_survives(self) -> None:
         """Real p2map ids contain underscores. Splitting on the first
@@ -2203,7 +2146,7 @@ class TestClassicOffersEveryMapToo:
 
         await backend.clean_segments(["2Bly_kGURy6OcUVTX7FN3w_19"])
 
-        _command, params = backend._roomba.send_command.await_args[0]
+        _fn, _command, params = backend._hass.async_add_executor_job.await_args[0]
         assert [r["region_id"] for r in params["regions"]] == ["19"]
         assert params["pmap_id"] == "2Bly_kGURy6OcUVTX7FN3w"
 

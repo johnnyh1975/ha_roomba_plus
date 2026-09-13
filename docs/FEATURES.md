@@ -62,9 +62,9 @@ marked in their own headings.
 
 | Control | Type | Notes |
 |---|---|---|
-| Cleaning passes | Select | Auto / One pass / Two passes. Did nothing at all on i/s/j robots before v4.2 — the firmware reads this and the setting below as key pairs, and dropped both halves when they arrived in separate messages, reporting success either way |
+| Cleaning passes | Select | Auto / One pass / Two passes |
 | Cleaning mode | Select | Vacuum / Mop / Vacuum and mop / Vacuum then mop. **Only the modes your robot can actually perform are offered** — a vacuum does not list mopping. Read from the robot's own capabilities; if it has not reported them yet, all four are shown |
-| Carpet boost | Select | Automatic / Eco / Performance (900-series). Same pairing, same silent failure until v4.2 |
+| Carpet boost | Select | Automatic / Eco / Performance (900-series) |
 | Edge cleaning | Switch | |
 | Always finish | Switch | Keep cleaning even when bin is full (i7+/s9+/j7+ with Clean Base) |
 | Schedule hold | Switch | Freeze schedule without deleting it (i/s/j/Braava) |

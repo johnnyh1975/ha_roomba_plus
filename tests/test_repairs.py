@@ -2950,4 +2950,3 @@ class TestDecodeNotReady:
     def test_a_non_integer_is_rejected(self):
         for junk in ("68", None, 1.5, True):
             assert self._decode(junk) is None
-

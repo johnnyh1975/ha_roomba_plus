@@ -113,24 +113,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      # THE MINIMUM WE ACTUALLY CLAIM, which this job did not test until
-      # 4.2. It ran HA 2025.1.4 on Python 3.12 from a pinned set, while
-      # manifest and hacs.json both say 2025.5.0 -- a combination no user
-      # can have, since HA 2025.5 requires Python >= 3.13.2.
-      #
-      # roombapy 2.x forced the issue rather than creating it: it needs
-      # aiomqtt, aiomqtt imports `paho.mqtt.enums.CallbackAPIVersion` at
-      # module level, and the newest phahc that runs on 3.12 (0.13.205)
-      # pins paho-mqtt==1.6.1, which has no such module. No version of
-      # anything satisfies both.
-      #
-      # phahc 0.13.245 brings HA 2025.5.2 and pins paho-mqtt==2.1.0, so
-      # the paho conflict that needed a --no-deps workaround for
-      # roombapy-prime simply does not exist here. The pinned dependency
-      # set that documented it (requirements-test-frozen.txt) is gone
-      # with it: it existed to freeze HA 2025.1.4, a version this
-      # integration has not supported since its minimum became 2025.5.
-      - name: Set up Python 3.13
+      - name: Set up Python 3.12
         uses: actions/setup-python@v6
         with:
           python-version: "3.13"

@@ -2373,7 +2373,6 @@ def _resolve_pmapv_id(state: dict[str, Any], pmap_id: str) -> str | None:
     return None
 
 
-
 def region_names_across_maps(
     cloud_coordinator: Any, prefer_pmap_id: str | None = None
 ) -> dict[str, str]:

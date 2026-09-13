@@ -692,11 +692,11 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
             )
             if _cmd_regions and _live_region_map:
                 from .mission_store import MissionStore as _MS
-                # A NEW NAME FOR THE NARROWED LIST. `extract_rid()`
-                # returns `str | None`, and reassigning the same name
-                # after filtering does not tell a type checker that the
-                # Nones are gone -- the stronger return type on
-                # `region_names_across_maps()` is what surfaced it.
+                # ONE COMPREHENSION, so the type narrows. Assigning the
+                # filtered list back over a `list[str | None]` leaves it
+                # `list[str | None]` as far as mypy is concerned, and
+                # `_live_region_map.get(rid, rid)` then takes an
+                # argument the dict does not accept.
                 _rids: list[str] = [
                     rid
                     for rid in (_MS.extract_rid(r) for r in _cmd_regions)
@@ -1173,6 +1173,7 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         would swallow a recall, which is worse than an unwanted
         evacuation. Documented rather than guarded, and the entity
         description says so too.
+
 
         NEW (V4/Prime): sends "dock" directly, skipping the pause-then-
         wait dance above entirely -- self.activity isn't reliable for

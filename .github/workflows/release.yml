@@ -104,7 +104,7 @@ jobs:
       # (no --ignore flags) as validate.yml's test job, kept deliberately
       # consistent: the PR gate and the release gate should never silently
       # test different things.
-      - name: Set up Python 3.13
+      - name: Set up Python 3.12
         uses: actions/setup-python@v6
         with:
           python-version: "3.13"

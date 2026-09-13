@@ -1,7 +1,7 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Default-blue.svg)](https://github.com/hacs/default)
-[![Version](https://img.shields.io/badge/Version-4.2.0b7-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-4.1.8-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2025.5%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Gold-gold.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
@@ -21,9 +21,8 @@ Roomba+ is a Gold-quality Home Assistant custom integration for iRobot Roomba an
 
 | Your robot | Install | Why |
 |---|---|---|
-| **Any supported robot** | **v4.1.4** (stable) — the default in HACS | One line for both generations. No beta channel needed any more. |
-| **Roomba Max · Combo/Plus 400-series** and other newer cloud robots | **v4.1.4** | Earlier stable lines **cannot connect to your robot at all** |
-| Willing to test a beta | **v4.2.0b7** — needs *Show beta versions* in HACS | The async rewrite: the Classic library became async, and every command path moved with it. Behaviour should be identical; that is what the beta is for |
+| **Any supported robot** | **v4.1.8** (stable) — the default in HACS | One line for both generations. No beta channel needed any more. |
+| **Roomba Max · Combo/Plus 400-series** and other newer cloud robots | **v4.1.8** | Earlier stable lines **cannot connect to your robot at all** |
 | Not sure | Check your model number against the [supported hardware](#supported-hardware--capability-matrix) table below | |
 
 > ⚠️ If HACS shows you only `main` and downloading it hangs, see
@@ -41,7 +40,7 @@ Roomba+ is a Gold-quality Home Assistant custom integration for iRobot Roomba an
 - **Full automation support** — replace `vacuum.start` with `smart_start`: it waits if a blocking sensor fires (a door contact, a baby monitor), skips rooms that aren't actually dirty, and can pause and resume around your presence — all from automations you already have, no new workarounds needed.
 - **Comprehensive monitoring** — 100+ entities covering maintenance life, wear rates, 365-entry mission history, performance trends, and error detail with recommended actions.
 - **Self-calibrating** — maintenance thresholds, navigation health, battery degradation, and per-room cleaning rhythms all adapt to your robot's own usage history rather than fixed thresholds or manual configuration.
-- **Gold quality scale**, and every Platinum rule met as of v4.2 — the last one, `async-dependency`, closed when the Classic library became async. 6,270+ tests, 8 languages, full config entry migration chain, CI/CD.
+- **Gold quality scale** — 6,240+ tests, 8 languages, full config entry migration chain, CI/CD.
 
 > 📊 **[Full feature comparison with HA Core and roomba_rest980 →](docs/COMPARISON.md)**
 

@@ -449,6 +449,70 @@ class TestZonesAcrossEveryMap:
         }
 
 
+class TestAZoneCarriesItsMap:
+    """@chairstacker: rooms cleaned, zones failed with "this robot has 2
+    maps and is not currently reporting which one it is on".
+
+    `available_rooms()` returns `{p2map_id}/{room_id}`, and
+    `clean_rooms()` splits on that slash to learn which map the command
+    is for. Zone segment ids had no map in them, so there was nothing to
+    split and the two-map branch refused rather than guess. On a
+    one-map robot it would have worked by luck.
+
+    The two readers want the parts in opposite orders, which is the
+    whole difficulty: `clean_rooms()` wants the map first, and
+    `_send_region_command()` looks for `zid_` on what is left after the
+    split. So the id is `zid_<map>/<region>` in the UI and
+    `<map>/zid_<region>` on the way to the robot.
+    """
+
+    @staticmethod
+    def _backend():
+        from custom_components.roomba_plus.room_cleaning import (
+            PrimeRoomCleaning,
+        )
+
+        backend = PrimeRoomCleaning.__new__(PrimeRoomCleaning)
+        backend._data = MagicMock()
+        backend._data.blid = "BLID1"
+        return backend
+
+    async def test_the_map_moves_in_front_of_the_prefix(self) -> None:
+        from unittest.mock import AsyncMock
+
+        backend = self._backend()
+        backend.clean_rooms = AsyncMock()
+
+        await backend.clean_segments(["zid_MAP-A/107"])
+
+        assert backend.clean_rooms.await_args[0][0] == ["MAP-A/zid_107"]
+
+    async def test_a_room_still_loses_only_its_prefix(self) -> None:
+        """The negative control: rooms were never broken and must stay
+        exactly as they were."""
+        from unittest.mock import AsyncMock
+
+        backend = self._backend()
+        backend.clean_rooms = AsyncMock()
+
+        await backend.clean_segments(["rid_MAP-A/12"])
+
+        assert backend.clean_rooms.await_args[0][0] == ["MAP-A/12"]
+
+    async def test_an_unqualified_zone_is_left_alone(self) -> None:
+        """Stored zone data predating this has no map in it. Passing it
+        through unchanged keeps a one-map robot working rather than
+        turning a silent success into a crash."""
+        from unittest.mock import AsyncMock
+
+        backend = self._backend()
+        backend.clean_rooms = AsyncMock()
+
+        await backend.clean_segments(["zid_107"])
+
+        assert backend.clean_rooms.await_args[0][0] == ["zid_107"]
+
+
 class TestAShortListDoesNotLookComplete:
     """@chairstacker: 18 entries in the selector, 17 in the area-mapping
     dialog, and nothing in the log about the difference.

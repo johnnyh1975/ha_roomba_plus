@@ -842,7 +842,6 @@ def make_mission_callback(
         # (stale/re-delivered MQTT state), not a genuine resume — treat it
         # as inert enrichment instead of re-opening the mission.
         _candidate_mission_start_ts = mission.get("mssnStrtTm") or 0
-
         # A CLEANING CYCLE, NOT JUST A CLEANING PHASE.
         #
         # `phase` alone opens a mission for things that are not one. A

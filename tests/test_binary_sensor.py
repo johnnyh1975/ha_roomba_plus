@@ -1141,12 +1141,11 @@ def _make_maintenance_due(
 ):
     """Build a real RoombaMaintenanceDue wired to the given MaintenanceStore."""
     from custom_components.roomba_plus.binary_sensor import RoombaMaintenanceDue
-    roomba = robot_mock()
-    # A CLEAN BASE BY DEFAULT, because most of these tests are about the
-    # four-role list and a robot without one has only three parts. The
-    # dock shape is what `has_clean_base()` looks for; pass
-    # `clean_base=False` for a 900-series (@liblit's R980020 reported a
-    # bag due on a plain dock, which is the bug that made this explicit).
+    roomba = MagicMock()
+    # A Clean Base by default: most of these tests are about the
+    # four-role list, and a robot without one has only three parts.
+    # `clean_base=False` gives a 900-series (@liblit's R980020 reported a
+    # bag due on a plain dock).
     state: dict = {"bbrun": {"hr": hr}}
     if clean_base:
         state["dock"] = {"fwVer": "1.2.3"}
