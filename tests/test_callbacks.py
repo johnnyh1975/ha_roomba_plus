@@ -4040,3 +4040,107 @@ class TestArrivingIsNotLeaving:
 
         assert "_returned_from_travel and cleaned_in_room" in source
         assert "cleaned_in_room = False" in source
+
+
+class TestTheWholeHouseFallbackIsLastResort:
+    """The order matters: a real per-room figure, however rough, before
+    a whole-house average that was never a per-room figure at all."""
+
+    def test_the_lower_bound_is_tried_first(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus import callbacks
+
+        source = inspect.getsource(callbacks)
+        lower = source.index("shortest_plausible_room_seconds")
+        house = source.index("mission_duration_mean")
+
+        assert lower < house, (
+            "the whole-house average must only run when no per-room "
+            "figure could be found"
+        )
+
+    def test_the_house_average_still_exists_as_a_last_resort(self) -> None:
+        """Classic robots with no cloud estimates at all still need
+        something, and removing it outright would refuse every advance
+        on those."""
+        import inspect
+
+        from custom_components.roomba_plus import callbacks
+
+        assert "mission_duration_mean" in inspect.getsource(callbacks)
+
+    def test_what_it_is_is_named_in_the_log(self) -> None:
+        """It is a whole-house figure divided by the rooms in this
+        mission. Nothing said so, and a 10.7-hour number read as a
+        per-room estimate is why one tester's display never moved."""
+        import inspect
+
+        from custom_components.roomba_plus import callbacks
+
+        assert "WHOLE-HOUSE figure" in inspect.getsource(callbacks)
+
+
+class TestAMissingEstimateCannotBlockAnObservation:
+    """The estimate check sat above the travel branch, so a robot with
+    no cloud estimates had every travel-based advance refused -- on the
+    strength of a missing forecast, while holding a positive
+    observation: the robot cleaned this room and then drove away.
+
+    This file kept relearning the same rule. Three separate blockers,
+    all estimates, all overriding something already observed:
+
+      - no estimate at all -> refuse
+      - a poisoned estimate (a 10.7-hour whole-house average) -> refuse
+      - a travel-duration floor of 6 s -> refuse a real 3.8 s crossing
+
+    An estimate may refine a decision. It must never be the only reason
+    to refuse one.
+    """
+
+    def test_the_travel_branch_comes_first(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus.callbacks import (
+            _room_transition_confidence_ok,
+        )
+
+        source = inspect.getsource(_room_transition_confidence_ok)
+        travel = source.index("if from_travel:")
+        estimate = source.index("expected = mts.expected_room_sec")
+
+        assert travel < estimate
+
+    def test_the_phase_route_still_requires_one(self) -> None:
+        """A `charge` mid-room and a `charge` at a boundary look
+        identical; only timing separates them."""
+        import inspect
+
+        from custom_components.roomba_plus.callbacks import (
+            _room_transition_confidence_ok,
+        )
+
+        source = inspect.getsource(_room_transition_confidence_ok)
+        after = source[source.index("expected = mts.expected_room_sec"):]
+
+        assert "return False" in after
+
+    def test_the_travel_floor_is_the_only_thing_it_checks(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus.callbacks import (
+            _room_transition_confidence_ok,
+        )
+
+        source = inspect.getsource(_room_transition_confidence_ok)
+        branch = source[source.index("if from_travel:"):]
+        branch = branch[:branch.index("expected = mts.expected_room_sec")]
+        code = "\n".join(
+            line for line in branch.splitlines()
+            if not line.strip().startswith("#")
+        )
+
+        assert "_ROOM_TRANSITION_MIN_SECONDS" in code
+        assert "expected_room_sec" not in code, (
+            "the travel branch must not consult an estimate"
+        )

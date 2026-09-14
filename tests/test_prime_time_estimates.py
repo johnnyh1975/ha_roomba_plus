@@ -235,3 +235,199 @@ class TestTheScheduleSModeSelectsTheEstimate:
 
     def test_without_a_mode_any_estimate_will_do(self):
         assert self._end(None) in (600, 3120)
+
+
+class TestTheGateGetsALowerBoundNotAForecast:
+    """Two consumers read the same estimates and need opposite things.
+
+    A DISPLAYED figure -- a progress percentage, minutes remaining --
+    built on an unconfident estimate looks exactly as authoritative as
+    one built on a good estimate. `_compute_room_time_estimates()`
+    returns None there on purpose, and a test above pins that.
+
+    A GATE needs the opposite. "Has enough time passed in this room"
+    has a useful answer even from a poor estimate, and refusing to
+    answer means refusing the advance.
+
+    @ScenicSystemsLLC's run fell down the second hole: with no confident
+    estimate, the check fell back to a whole-house mission average
+    divided by the rooms in that mission -- 10.7 hours, so 5.3 hours per
+    room, a threshold his 17-minute mission could never cross.
+
+    EACH REGION HOLDS ONE ESTIMATE PER SET OF CLEANING PARAMETERS. In
+    Auto pass mode the robot picks a set mid-mission from the dirt it
+    finds, so none can be chosen in advance. Averaging them is wrong --
+    the vendor's own sample gives eighteen minutes under one set and
+    thirty-four under another. The shortest is the point past which
+    "enough time" can be true at all.
+    """
+
+    @staticmethod
+    def _lower_bound(by_region, planned, rooms=None):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.sensor_rooms import (
+            shortest_plausible_room_seconds,
+        )
+
+        entry = MagicMock()
+        entry.runtime_data.prime_time_estimates = SimpleNamespace(
+            by_region=by_region
+        )
+        entry.runtime_data.prime_schedule_coordinator = SimpleNamespace(
+            room_names=rooms if rooms is not None else {"14": "Kitchen"}
+        )
+        return shortest_plausible_room_seconds(entry, planned)
+
+    @staticmethod
+    def _est(seconds, confident=True):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(seconds=seconds, is_confident=confident)
+
+    def test_the_shortest_of_several_parameter_sets_wins(self) -> None:
+        """The vendor's own eighteen-versus-thirty-four sample."""
+        out = self._lower_bound(
+            {"14": [self._est(34 * 60), self._est(18 * 60)]}, ["Kitchen"]
+        )
+
+        assert out == [18 * 60]
+
+    def test_an_unconfident_estimate_still_counts_here(self) -> None:
+        """This is the whole difference from the displayed path."""
+        out = self._lower_bound(
+            {"14": [self._est(900, confident=False)]}, ["Kitchen"]
+        )
+
+        assert out == [900]
+
+    def test_a_room_with_no_estimate_yields_none(self) -> None:
+        assert self._lower_bound({"14": []}, ["Kitchen"]) == [None]
+
+    def test_an_unknown_room_yields_none(self) -> None:
+        assert self._lower_bound({"14": [self._est(900)]}, ["Cellar"]) == [None]
+
+    def test_a_region_id_matches_directly(self) -> None:
+        """Ids are the primary key; names are the fallback."""
+        assert self._lower_bound({"14": [self._est(900)]}, ["14"]) == [900]
+
+    def test_no_estimates_at_all_is_not_an_error(self) -> None:
+        for empty in ({}, None):
+            assert self._lower_bound(empty, ["Kitchen"]) == [None]
+
+    def test_it_beats_the_whole_house_average_it_replaces(self) -> None:
+        """His numbers: 640.4 min across the house, two rooms in the
+        mission. The old path demanded 160 minutes in a room before it
+        would accept a change."""
+        old_per_room_threshold = (640.4 * 60 / 2) * 0.5
+        new_per_room_threshold = 3184 * 0.5
+
+        assert new_per_room_threshold < old_per_room_threshold / 5
+
+
+class TestRememberedEstimatesSurviveTheCloudGoingQuiet:
+    """The time-estimates response is fetched once at setup and held in
+    memory. @ScenicSystemsLLC had `GOOD_CONFIDENCE` figures for his
+    rooms in the morning and none by the evening -- same robot, same
+    rooms, same day. The morning's numbers were used and discarded.
+
+    KEYED BY ROOM **AND** PARAMETER SET. The cloud holds one estimate
+    per set of cleaning parameters and they differ by up to a factor of
+    two for the same room. A cache keyed by room alone would hand back
+    the two-pass figure for a one-pass mission and nothing would say so.
+    """
+
+    @staticmethod
+    def _entry(by_region, cache=None):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        entry = MagicMock()
+        entry.runtime_data.prime_time_estimates = SimpleNamespace(
+            by_region=by_region
+        )
+        entry.runtime_data.robot_profile_store = SimpleNamespace(
+            room_estimate_cache=cache if cache is not None else {}
+        )
+        return entry
+
+    @staticmethod
+    def _est(seconds, params, confident=True):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            seconds=seconds, is_confident=confident, params=params
+        )
+
+    def test_a_confident_estimate_is_remembered(self) -> None:
+        from custom_components.roomba_plus.sensor_rooms import (
+            remember_confident_estimates,
+        )
+
+        entry = self._entry({"14": [self._est(1080, {"twoPass": False})]})
+
+        assert remember_confident_estimates(entry) == 1
+        assert entry.runtime_data.robot_profile_store.room_estimate_cache
+
+    def test_the_two_parameter_sets_are_kept_apart(self) -> None:
+        """The eighteen-versus-thirty-four case. One slot each."""
+        from custom_components.roomba_plus.sensor_rooms import (
+            remember_confident_estimates,
+        )
+
+        entry = self._entry(
+            {
+                "14": [
+                    self._est(18 * 60, {"twoPass": False}),
+                    self._est(34 * 60, {"twoPass": True}),
+                ]
+            }
+        )
+        remember_confident_estimates(entry)
+        cache = entry.runtime_data.robot_profile_store.room_estimate_cache
+
+        assert len(cache) == 2
+        assert sorted(cache.values()) == [18 * 60, 34 * 60]
+
+    def test_an_unconfident_estimate_is_not_remembered(self) -> None:
+        """Caching a figure the cloud does not trust would make it
+        permanent."""
+        from custom_components.roomba_plus.sensor_rooms import (
+            remember_confident_estimates,
+        )
+
+        entry = self._entry(
+            {"14": [self._est(900, {"twoPass": False}, confident=False)]}
+        )
+
+        assert remember_confident_estimates(entry) == 0
+
+    def test_reading_back_gives_the_shortest_remembered_set(self) -> None:
+        """Auto pass mode cannot say which set applies, and a gate wants
+        the point past which 'enough time' can be true at all."""
+        from custom_components.roomba_plus.sensor_rooms import (
+            cached_room_seconds,
+        )
+
+        entry = self._entry({}, cache={"14|twoPass=False": 1080.0,
+                                       "14|twoPass=True": 2040.0})
+
+        assert cached_room_seconds(entry, "14") == 1080.0
+
+    def test_another_room_is_not_matched_by_prefix(self) -> None:
+        """Region "1" must not collide with region "14"."""
+        from custom_components.roomba_plus.sensor_rooms import (
+            cached_room_seconds,
+        )
+
+        entry = self._entry({}, cache={"14|twoPass=False": 1080.0})
+
+        assert cached_room_seconds(entry, "1") is None
+
+    def test_an_empty_cache_is_not_an_error(self) -> None:
+        from custom_components.roomba_plus.sensor_rooms import (
+            cached_room_seconds,
+        )
+
+        assert cached_room_seconds(self._entry({}), "14") is None

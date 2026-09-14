@@ -1051,6 +1051,15 @@ class TestPrimeMapConsistency:
 class TestRoomIdsAreQualifiedByTheirMap:
     """Room ids are per-map, so two floors both have a room "1".
 
+    THE ROBOT REPORTS NO MAP IN THESE. That is deliberate: they are
+    about ids staying distinguishable and payloads carrying the right
+    map, not about which rooms get offered. A robot that reports no
+    location falls back to offering every map, which is the pre-existing
+    behaviour and the case these were written against.
+
+    Which rooms are OFFERED when the robot does report a location is
+    covered separately, below.
+
     Returning bare ids meant "Kitchen" downstairs and "Bedroom"
     upstairs could both resolve to "1", and cleaning targeted whichever
     map the robot happened to be on. Picking Kitchen while the robot
@@ -1098,7 +1107,7 @@ class TestRoomIdsAreQualifiedByTheirMap:
     @pytest.mark.asyncio
     async def test_colliding_ids_stay_distinguishable(self):
         """THE bug. Both rooms are id "1" on their own map."""
-        backend, _robot = self._backend(self._TWO_FLOORS, self._MAPS, current="M2")
+        backend, _robot = self._backend(self._TWO_FLOORS, self._MAPS, current=None)
 
         rooms = await backend.available_rooms()
 
@@ -1106,10 +1115,18 @@ class TestRoomIdsAreQualifiedByTheirMap:
 
     @pytest.mark.asyncio
     async def test_the_map_comes_from_the_room_not_from_the_robot(self):
-        """Choosing a downstairs room while the robot is upstairs must
-        clean downstairs. The id says which map; where the robot stands
-        does not enter into it."""
-        backend, robot = self._backend(self._TWO_FLOORS, self._MAPS, current="M2")
+        """The command carries the ROOM's map, never the robot's.
+
+        That invariant is unchanged. What changed around it: a room is
+        only OFFERED when the robot is on its map, because a robot
+        cannot localise against a map it is not standing on -- it
+        accepts the start, fails, and sits on the dock with error 224
+        (@Thonno, three times, robot never moved).
+
+        So the robot's location decides WHICH rooms appear. Once one
+        does, its own map goes in the payload.
+        """
+        backend, robot = self._backend(self._TWO_FLOORS, self._MAPS, current=None)
 
         rooms = await backend.available_rooms()
         await backend.clean_rooms([rooms["Kitchen"]])
@@ -1124,7 +1141,7 @@ class TestRoomIdsAreQualifiedByTheirMap:
         silently dropping the rest would be worse than saying so."""
         from homeassistant.exceptions import HomeAssistantError
 
-        backend, _robot = self._backend(self._TWO_FLOORS, self._MAPS, current="M1")
+        backend, _robot = self._backend(self._TWO_FLOORS, self._MAPS, current=None)
 
         rooms = await backend.available_rooms()
 
@@ -2408,13 +2425,26 @@ class TestTheRobotSaysWhichRegionsAreZones:
             self._entry("100", "Litter", "zid"),
         ]
 
-    async def test_a_zone_is_not_offered_as_a_room(self) -> None:
+    async def test_a_zone_is_offered_but_never_as_a_room_id(self) -> None:
+        """The fault was the missing TYPE, not the zone being offered.
+
+        His "Litter" went out as a room id, the robot found no such
+        room, and the mission ended after 71 seconds having cleaned
+        nothing. Excluding zones fixed the symptom; carrying the `zid_`
+        prefix fixes the cause -- `_send_region_command()` types
+        anything with that prefix as `RegionType.ZID`.
+
+        So the zone is reachable by name now, and still cannot be sent
+        as a room.
+        """
         backend = self._backend(self._his_map())
 
         rooms = await backend.available_rooms()
 
-        assert "Litter" not in rooms
-        assert set(rooms) == {"Dining Room", "Kitchen", "Laundry"}
+        assert set(rooms) == {"Dining Room", "Kitchen", "Laundry", "Litter"}
+        assert rooms["Litter"].split("/", 1)[1].startswith("zid_")
+        for name in ("Dining Room", "Kitchen", "Laundry"):
+            assert not rooms[name].split("/", 1)[1].startswith("zid_"), name
 
     async def test_the_zone_is_recorded_rather_than_dropped(self) -> None:
         """It still has to reach the user -- under the zone prefix, so
@@ -2444,7 +2474,9 @@ class TestTheRobotSaysWhichRegionsAreZones:
 
         rooms = await backend.available_rooms()
 
-        assert rooms == {}
+        # Recognised as a zone whichever form it arrives in: offered by
+        # name, and carrying the prefix that types it on the wire.
+        assert rooms["Litter"].endswith("/zid_100")
         assert backend._zone_region_ids == {"100"}
 
 
@@ -2723,8 +2755,14 @@ class TestTheNameFallbackDoesNotUndoTheZoneFix:
         )
         return backend
 
-    async def test_a_known_zone_is_not_offered_as_a_room(self) -> None:
-        """His layout: 100 is the zone "Litter", 10-19 are rooms."""
+    async def test_a_known_zone_carries_the_zone_prefix(self) -> None:
+        """His layout: 100 is the zone "Litter", 10-19 are rooms.
+
+        The cache has no region types, so `discovered_zone_ids` is the
+        only thing that can tell them apart on this path. It still has
+        to, because an untyped zone id is what made his mission finish
+        in 71 seconds having cleaned nothing.
+        """
         backend = self._backend(
             {"100": "Litter", "10": "Dining Room", "14": "Kitchen"},
             zone_ids=["100"],
@@ -2732,8 +2770,9 @@ class TestTheNameFallbackDoesNotUndoTheZoneFix:
 
         rooms = await backend.available_rooms()
 
-        assert "Litter" not in rooms
-        assert sorted(rooms) == ["Dining Room", "Kitchen"]
+        assert sorted(rooms) == ["Dining Room", "Kitchen", "Litter"]
+        assert rooms["Litter"].endswith("/zid_100")
+        assert rooms["Kitchen"].endswith("/14")
 
     async def test_the_rooms_still_come_through(self) -> None:
         backend = self._backend({"15": "Guest Bath", "18": "Dining Room"})
@@ -3207,3 +3246,230 @@ class TestAFailedCommandIsNotASourceOfTruth:
         }
 
         assert self._resolve(state, "oGwE49YGTeWffssbEVx65g") is None
+
+
+class TestAZoneIsCleanableByName:
+    """`clean_room` refused a zone name as "unknown", and the zone/room
+    split is ours rather than the user's -- @mrsnyds has nine named
+    regions and eight the service would accept.
+
+    THE OLD EXCLUSION WAS A SYMPTOM FIX. @theChef163's zone went out as
+    a ROOM id, untyped; the robot found no such room and finished in 71
+    seconds having cleaned nothing. The fault was the missing type.
+
+    Classic never had this problem: it keeps zones in the list and
+    records the type in `_type_by_region`. Prime carries the type in the
+    id instead, as a `zid_` prefix, which `_send_region_command()` reads
+    to set `RegionType.ZID`.
+
+    So the chain is: `available_rooms()` offers `MAP/zid_100`,
+    `clean_rooms()` splits at the first `/` and passes `zid_100` on, and
+    the send path types it. The same shape `clean_segments()` already
+    built, so the two routes now agree.
+    """
+
+    @staticmethod
+    def _backend(entries):
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, MagicMock
+
+        from custom_components.roomba_plus.room_cleaning import (
+            PrimeRoomCleaning,
+        )
+
+        backend = PrimeRoomCleaning.__new__(PrimeRoomCleaning)
+        backend._data = MagicMock()
+        backend._data.blid = "BLID1"
+        entry = MagicMock()
+        entry.runtime_data.prime_room_names = {}
+        entry.options = {}
+        backend._config_entry = entry
+        backend._all_map_ids = AsyncMock(return_value=["MAP-A"])
+        backend._current_map_id = AsyncMock(return_value="MAP-A")
+        backend._map_metadata = AsyncMock(
+            return_value=SimpleNamespace(rooms_metadata=entries)
+        )
+        return backend
+
+    @staticmethod
+    def _region(room_id, name, region_type):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            room_id=room_id, name=name, region_type=region_type
+        )
+
+    HIS_MAP = None
+
+    def _his_map(self):
+        return [
+            self._region("10", "Dining Room", "rid"),
+            self._region("14", "Kitchen", "rid"),
+            self._region("100", "Litter", "zid"),
+        ]
+
+    async def test_the_zone_resolves_by_name(self) -> None:
+        rooms = await self._backend(self._his_map()).available_rooms()
+
+        assert "Litter" in rooms
+
+    async def test_and_reaches_the_robot_typed_as_a_zone(self) -> None:
+        """The end of the chain: what `_send_region_command` receives
+        must start with the prefix it checks."""
+        from custom_components.roomba_plus.room_cleaning import ZID_PREFIX
+
+        rooms = await self._backend(self._his_map()).available_rooms()
+        _map, region = rooms["Litter"].split("/", 1)
+
+        assert region.startswith(ZID_PREFIX)
+
+    async def test_rooms_are_untouched(self) -> None:
+        """A room must never acquire the prefix -- that would be
+        @theChef163's fault in reverse."""
+        from custom_components.roomba_plus.room_cleaning import ZID_PREFIX
+
+        rooms = await self._backend(self._his_map()).available_rooms()
+
+        for name in ("Dining Room", "Kitchen"):
+            assert not rooms[name].split("/", 1)[1].startswith(ZID_PREFIX)
+
+    async def test_the_id_matches_what_the_button_path_builds(self) -> None:
+        """Both routes have to agree, or a zone cleans from the selector
+        and not from the service."""
+        rooms = await self._backend(self._his_map()).available_rooms()
+
+        assert rooms["Litter"] == "MAP-A/zid_100"
+
+
+class TestOnlyTheMapTheRobotCanReach:
+    """A robot can only clean the map it is standing on. Offering rooms
+    from the others offers commands that cannot succeed: the robot
+    accepts the start, fails to localise, and sits on the dock with
+    error 224.
+
+    @Thonno hit that three releases running, each time with the robot on
+    its own dock having moved nowhere. His second map is his father's
+    house, where the robot used to live -- he will never clean it from
+    Home Assistant, and said so.
+
+    NOT `active_pmap_id`. That means "most recently updated", not "where
+    the robot is". @ScenicSystemsLLC checked it directly on a two-map
+    Braava: two missions against the Second Floor map, fresh reads after
+    each, and the active map stayed "master bathroom" throughout.
+    Running a mission does not bump that timestamp.
+
+    The order is: an explicit choice where a map selector exists, then
+    what the robot says it is on, then what it last said, then every map
+    when it has never said anything -- the pre-existing behaviour, kept
+    so a robot that never reports a location is no worse off.
+    """
+
+    @staticmethod
+    async def _offer(maps, *, on_map=None, chosen=None):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from custom_components.roomba_plus.room_cleaning import _maps_to_offer
+
+        backend = MagicMock()
+        backend.where_the_robot_is = AsyncMock(
+            return_value=(on_map, on_map is not None)
+        )
+        backend._config_entry.runtime_data.prime_selected_map_id = chosen
+        return await _maps_to_offer(backend, maps)
+
+    async def test_one_map_is_always_offered(self) -> None:
+        """Most robots. The rule must not cost them anything."""
+        assert await self._offer(["M1"]) == ["M1"]
+        assert await self._offer(["M1"], on_map=None) == ["M1"]
+
+    async def test_the_robots_own_map_wins(self) -> None:
+        assert await self._offer(["M1", "M2"], on_map="M2") == ["M2"]
+
+    async def test_the_other_map_is_not_offered(self) -> None:
+        """@Thonno's father's house."""
+        assert "M1" not in await self._offer(["M1", "M2"], on_map="M2")
+
+    async def test_an_explicit_choice_outranks_the_robot(self) -> None:
+        """@ScenicSystemsLLC's purpose-trained map: the robot is in the
+        same home either way, and the user knows which map they mean."""
+        offered = await self._offer(["M1", "M2"], on_map="M2", chosen="M1")
+
+        assert offered == ["M1"]
+
+    async def test_a_choice_naming_a_vanished_map_is_ignored(self) -> None:
+        """Stored options outlive the maps they name -- one tester's
+        zone data still points at a map his robot no longer has."""
+        offered = await self._offer(["M1", "M2"], on_map="M2", chosen="GONE")
+
+        assert offered == ["M2"]
+
+    async def test_saying_nothing_falls_back_to_everything(self) -> None:
+        """The pre-existing behaviour. A robot that never reports a
+        location must not lose access to its rooms as well."""
+        assert await self._offer(["M1", "M2"]) == ["M1", "M2"]
+
+
+class TestEveryOfferingMethodNarrows:
+    """Four methods offer names to the user: `available_rooms()` and
+    `get_segments()`, on each generation. All four must narrow to the
+    map the robot can reach, or the flat-list problem survives in
+    whichever one was missed.
+
+    IT WAS MISSED ONCE ALREADY. The first pass narrowed the room lists
+    and left zones alone -- and zones were what @chairstacker was
+    picking from when he was refused. `get_segments()` inherits the
+    room narrowing through `available_rooms()`, but adds zones from
+    their own source, so inheriting was not enough.
+
+    Resolution methods deliberately do NOT narrow: `_region_to_map()`,
+    `_named_regions_across_maps()` and `clean_segments()` translate ids
+    that already exist rather than offering new ones, and an id from
+    another map must still resolve.
+    """
+
+    OFFERING = ("available_rooms", "get_segments")
+
+    def test_both_generations_narrow_both_methods(self) -> None:
+        import ast
+        import inspect
+
+        from custom_components.roomba_plus import room_cleaning
+
+        tree = ast.parse(inspect.getsource(room_cleaning))
+        checked = 0
+        for cls in [n for n in tree.body if isinstance(n, ast.ClassDef)]:
+            if cls.name == "RoomCleaningBackend":
+                continue  # abstract, no body to narrow
+            for member in cls.body:
+                if not isinstance(
+                    member, (ast.FunctionDef, ast.AsyncFunctionDef)
+                ):
+                    continue
+                if member.name not in self.OFFERING:
+                    continue
+                checked += 1
+                assert "_maps_to_offer" in ast.unparse(member), (
+                    f"{cls.name}.{member.name} offers names without "
+                    f"narrowing to the reachable map"
+                )
+
+        assert checked == 4, f"expected 4 offering methods, found {checked}"
+
+    def test_narrowing_fails_open(self) -> None:
+        """A backend that cannot say which maps exist must keep offering
+        what it always offered. Narrowing to nothing would turn an
+        unanswerable question into an empty room list."""
+        import inspect
+
+        from custom_components.roomba_plus.room_cleaning import (
+            ClassicRoomCleaning,
+            PrimeRoomCleaning,
+        )
+
+        for method in (
+            PrimeRoomCleaning.get_segments,
+            ClassicRoomCleaning.get_segments,
+        ):
+            source = inspect.getsource(method)
+            assert "_offerable_maps: list[str] | None = None" in source
+            assert "contextlib.suppress(Exception)" in source

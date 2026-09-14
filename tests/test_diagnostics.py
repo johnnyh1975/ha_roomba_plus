@@ -1199,7 +1199,12 @@ class TestNavigationTelemetryIsExported:
 
         result = await _run_diag({"mssnNavStats": nav})
 
-        assert result["nav_telemetry"] == nav
+        # Raw fields carried through, plus provenance: the same field
+        # read as live telemetry mid-mission is what made one tester
+        # report the robot idle while it was cleaning.
+        for key, value in nav.items():
+            assert result["nav_telemetry"][key] == value
+        assert "belongs_to_running_mission" in result["nav_telemetry"]
 
     @pytest.mark.asyncio
     async def test_an_unknown_field_is_not_dropped(self):

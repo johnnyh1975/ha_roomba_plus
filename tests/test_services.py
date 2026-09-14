@@ -2728,3 +2728,100 @@ class TestRunFavoriteIsNotPrimeOnly:
                 assert not re.search(
                     r"Prime only\s*--\s*Classic has no", line
                 ), f"{path.name}: {line.strip()[:70]}"
+
+
+class TestRoomsAndZonesTakeTheSameOptions:
+    """`clean_room` offered `two_pass`; `clean_zone` offered
+    `smart_scrub` and `pad_wetness`. One field, `cleaning_mode`, was
+    common to both -- and only after it had been repaired.
+
+    @theChef613 asked the obvious question after hitting two of the
+    gaps: why not all of them on both?
+
+    THERE WAS NEVER A TECHNICAL REASON. Both services reach the robot
+    through `clean_rooms()`, which takes every one of these. The split
+    came from the two being extended at different times with nobody
+    comparing them afterwards -- the same shape as the `cleaning_mode`
+    gap, and as `two_pass` missing from a schema before that.
+
+    A field is only useful when all three agree: documented in
+    services.yaml so the UI offers it, accepted by the schema so Home
+    Assistant does not refuse the call, and read by the handler so it
+    reaches the robot. Each of those three has been the broken one at
+    least once.
+    """
+
+    SHARED = ("cleaning_mode", "two_pass", "smart_scrub", "pad_wetness")
+
+    @staticmethod
+    def _documented():
+        import pathlib
+
+        import yaml
+
+        data = yaml.safe_load(
+            pathlib.Path(
+                "custom_components/roomba_plus/services.yaml"
+            ).read_text(encoding="utf-8")
+        )
+        return (
+            set(data["clean_room"]["fields"]),
+            set(data["clean_zone"]["fields"]),
+        )
+
+    def test_both_services_document_every_shared_option(self) -> None:
+        room, zone = self._documented()
+
+        for field in self.SHARED:
+            assert field in room, f"clean_room is missing {field}"
+            assert field in zone, f"clean_zone is missing {field}"
+
+    def test_the_descriptions_are_the_same_text(self) -> None:
+        """A field that means the same thing must not be explained two
+        different ways -- that is how they drift apart again."""
+        import pathlib
+
+        import yaml
+
+        data = yaml.safe_load(
+            pathlib.Path(
+                "custom_components/roomba_plus/services.yaml"
+            ).read_text(encoding="utf-8")
+        )
+        room = data["clean_room"]["fields"]
+        zone = data["clean_zone"]["fields"]
+
+        for field in ("two_pass", "smart_scrub", "pad_wetness"):
+            assert room[field] == zone[field], field
+
+    def test_both_schemas_accept_every_shared_option(self) -> None:
+        """Documented but not accepted is the worst of the three: the UI
+        offers the field and Home Assistant refuses the call before any
+        of our code runs."""
+        import inspect
+
+        from custom_components.roomba_plus import services
+
+        source = inspect.getsource(services)
+        for constant in (
+            "ATTR_CLEANING_MODE", "ATTR_TWO_PASS",
+            "ATTR_SMART_SCRUB", "ATTR_RUN_PAD_WETNESS",
+        ):
+            assert source.count(f"vol.Optional({constant})") >= 2, constant
+
+    def test_both_handlers_pass_them_to_the_backend(self) -> None:
+        """Accepted but ignored is the quiet one: no error, no effect."""
+        import inspect
+
+        from custom_components.roomba_plus import services
+
+        # The room path delegates to a shared helper; the zone path
+        # builds its call in place. Both ends are checked where the call
+        # is actually made.
+        for fn in (
+            services._async_clean_rooms_via_backend,
+            services.async_handle_clean_zone,
+        ):
+            source = inspect.getsource(fn)
+            for kwarg in ("smart_scrub=", "pad_wetness=", "two_pass="):
+                assert kwarg in source, f"{fn.__name__}: {kwarg}"

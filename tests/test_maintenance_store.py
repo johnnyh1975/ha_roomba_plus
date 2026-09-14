@@ -1768,3 +1768,178 @@ class TestPartsTheRobotDoesNotHave:
 
         assert len(gated) == 1
         assert CONSUMABLE_ROLES[next(iter(gated))].slot == "clean_base_bag"
+
+
+class TestTheSeedReachesEveryRole:
+    """`maintenance_due` reported a healthy side brush as 2102 hours
+    overdue on a 980 with 2252 hours on it (@azrael-129).
+
+    THE NUMBER WAS THE ROBOT'S WHOLE LIFETIME. With the baseline never
+    set, `current_hr - reset_hr` is the age of the robot, and the
+    "overdue" figure is a function of install time rather than wear.
+
+    Three gaps stacked, and none of them alone was visible:
+
+      - cold-start seeding covered `filter` and `brush` and stopped
+      - no reset service exists for `side_brush` or `clean_base_bag`
+      - the reset button is only built when iRobot's cloud serves the
+        part, which on this account it does not
+
+    So there was no way to clear it from inside Home Assistant at all.
+
+    THE REASON RECORDED FOR THE OMISSION WAS FALSE: "no CONF_*_HOURS
+    default exists to seed against". Both defaults exist and
+    `threshold_hours()` already falls back to them.
+
+    WHY NO TEST CAUGHT IT: every fixture either serves cloud parts, so
+    hydration writes the baseline, or uses a robot young enough that a
+    missing baseline is invisible. The failure needs lifetime > 150 h
+    AND no cloud parts AND no reset history -- a robot in service for
+    months on an incomplete account, which is the common real install.
+    """
+
+    @staticmethod
+    def _store():
+        from custom_components.roomba_plus.maintenance_store import (
+            MaintenanceStore,
+        )
+
+        return MaintenanceStore()
+
+    def test_all_four_roles_have_a_seeded_flag(self) -> None:
+        store = self._store()
+
+        for slot in ("filter", "brush", "side_brush", "clean_base_bag"):
+            assert hasattr(store, f"{slot}_baseline_seeded"), slot
+            assert hasattr(store, f"{slot}_reset_hr"), slot
+
+    def test_the_setup_seeds_the_two_that_were_skipped(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus import __init__ as init
+
+        source = inspect.getsource(init)
+
+        assert '"side_brush", "clean_base_bag"' in source
+
+    def test_the_false_reason_is_gone(self) -> None:
+        """It justified the omission with a premise that was not true,
+        and the next reader would have believed it."""
+        import inspect
+
+        from custom_components.roomba_plus import maintenance_store
+
+        source = inspect.getsource(maintenance_store)
+
+        assert "no CONF_*_HOURS default exists to seed against" not in source
+
+    def test_the_default_it_denied_does_exist(self) -> None:
+        from custom_components.roomba_plus.const import (
+            DEFAULT_SIDE_BRUSH_HOURS,
+        )
+
+        assert DEFAULT_SIDE_BRUSH_HOURS == 150
+
+    def test_hydration_overwrites_a_seed(self) -> None:
+        """The seed is a local fallback and must yield to cloud truth --
+        the whole safety argument for seeding at all."""
+        import inspect
+
+        from custom_components.roomba_plus.maintenance_store import (
+            MaintenanceStore,
+        )
+
+        source = inspect.getsource(MaintenanceStore.hydrate_from_cloud_parts)
+
+        assert 'setattr(self, f"{slot}_reset_hr", reset_hr)' in source
+
+
+class TestSeedingSurvivesASlowMqttStart:
+    """Seeding ran once, at setup, reading the robot's reported state
+    directly. On a cold boot MQTT has often delivered nothing yet, so
+    `bbrun.hr` is 0 and **all four** roles are skipped.
+
+    And setup was the only place that seeded. A host whose MQTT is
+    reliably slower than its startup therefore never seeded at all,
+    while the same install seeded everything on a config-entry reload.
+
+    @azrael-129 found this while reporting the side brush and called it
+    the smaller half of his report. It is the larger one: the side-brush
+    gap needed an account with no cloud parts, this one reaches filter
+    and main brush too, on any robot.
+    """
+
+    def test_the_seed_runs_on_mission_messages(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus import callbacks
+
+        source = inspect.getsource(callbacks)
+
+        assert "_seed_maintenance_baselines(entry, reported)" in source
+
+    def test_it_covers_all_four_roles(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus.callbacks import (
+            _seed_maintenance_baselines,
+        )
+
+        source = inspect.getsource(_seed_maintenance_baselines)
+
+        for slot in ("filter", "brush", "side_brush", "clean_base_bag"):
+            assert f'"{slot}"' in source, slot
+
+    def test_it_falls_back_to_the_cached_state(self) -> None:
+        """MQTT messages are deltas: one carrying `cleanMissionStatus`
+        need not carry `bbrun`. Reading the message alone would make the
+        seed depend on which fields happened to travel together."""
+        import inspect
+
+        from custom_components.roomba_plus.callbacks import (
+            _seed_maintenance_baselines,
+        )
+
+        source = inspect.getsource(_seed_maintenance_baselines)
+
+        assert '_merged_top_level(entry, reported, "bbrun")' in source
+
+    def test_zero_hours_seeds_nothing(self) -> None:
+        """The original fault: seeding against hours that have not
+        arrived would write a baseline of 0, which is the bug rather
+        than the fix."""
+        import inspect
+
+        from custom_components.roomba_plus.callbacks import (
+            _seed_maintenance_baselines,
+        )
+
+        source = inspect.getsource(_seed_maintenance_baselines)
+
+        assert "if current_hr <= 0:" in source
+
+    def test_an_already_seeded_role_is_left_alone(self) -> None:
+        """This runs on every mission message; it must not re-seed a
+        baseline the user or the cloud has already set."""
+        import inspect
+
+        from custom_components.roomba_plus.callbacks import (
+            _seed_maintenance_baselines,
+        )
+
+        source = inspect.getsource(_seed_maintenance_baselines)
+
+        assert '_baseline_seeded", True)' in source
+        assert '_reset_history", None)' in source
+
+    def test_the_save_is_scheduled_not_awaited(self) -> None:
+        """It runs on the MQTT thread, where awaiting is not an option."""
+        import inspect
+
+        from custom_components.roomba_plus.callbacks import (
+            _seed_maintenance_baselines,
+        )
+
+        source = inspect.getsource(_seed_maintenance_baselines)
+
+        assert "async_create_task" in source
