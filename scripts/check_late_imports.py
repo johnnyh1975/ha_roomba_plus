@@ -27,7 +27,6 @@ different reason", and prints the ones that need one.
 from __future__ import annotations
 
 import ast
-from collections import defaultdict
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -39,6 +38,23 @@ PACKAGE = ROOT / "custom_components" / "roomba_plus"
 #: a circular import", because this script has established that they do
 #: not.
 NON_CYCLE_REASONS: dict[str, str] = {
+    "__init__ -> sensor_rooms": (
+        "INDIRECT CYCLE. `sensor_rooms` imports `entity`, which imports "
+        "the package -- so a module-level import here fails with 57 "
+        "collection errors. Same shape as callbacks -> sensor_rooms "
+        "below: the direct-import test cannot see it."
+    ),
+    "callbacks -> sensor_rooms": (
+        "A REAL CYCLE THIS CHECK CANNOT SEE. `sensor_rooms` does not "
+        "import `callbacks` directly, so the direct-import test below "
+        "clears it -- but it imports the package, which imports "
+        "`callbacks`. Moving this to module level produced 63 collection "
+        "errors: `cannot import name 'roomba_reported_state' from "
+        "partially initialized module`. "
+        "Worth knowing when reading this file's own output: 'the "
+        "imported module does not import back' means DIRECTLY, and an "
+        "indirect cycle looks exactly like a lazy import with no reason."
+    ),
     "image -> map_renderer": (
         "pulls in PIL through the renderer. Deferred so a Home Assistant "
         "instance with the map disabled does not pay for it at startup"

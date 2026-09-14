@@ -9,6 +9,17 @@ note are listed — most releases need zero action beyond updating.
 
 ---
 
+## v4.2.4 — from v4.2.3
+
+Nothing to do.
+
+**If the live room display never moved for you**, this is the release
+that addresses it. It now follows the robot's own report that it
+finished a room and drove away, rather than waiting for a time estimate
+to agree.
+
+---
+
 ## v4.2.3 — from v4.2.2
 
 Nothing to do.

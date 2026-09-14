@@ -51,8 +51,15 @@ ACCEPTED: dict[tuple[str, str], str] = {
     ("wrong-floor warning", "Prime.clean_segments"):
         "delegates to Prime.clean_rooms, which carries it",
     ("zone prefix", "Classic.clean_rooms"):
-        "Classic segments carry their map in the id; the prefix is "
-        "split in clean_segments before this is reached",
+        "CARRIES ZONES A DIFFERENT WAY, not 'cannot carry zones'. "
+        "Classic records the type in `_type_by_region` when building "
+        "the room list and reads it back when building the payload, so "
+        "its ids stay bare and the prefix never appears. Prime puts the "
+        "type IN the id instead. Both end up sending `zid`; only the "
+        "mechanism differs. "
+        "Reading this absence as a missing capability cost a night: it "
+        "led to a proposed rewrite of the Classic send path to add "
+        "something it already did.",
     ("map-updating guard", "Prime.clean_segments"):
         "delegates to Prime.clean_rooms, which carries it",
     ("map-updating guard", "Classic.clean_segments"):
