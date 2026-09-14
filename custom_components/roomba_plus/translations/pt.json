@@ -1819,7 +1819,7 @@
       "fields": {
         "room_name": {
           "name": "Nome da divisão",
-          "description": "Nome ou lista de nomes de divisões a limpar. Devem corresponder às etiquetas atribuídas nas opções do Roomba+. Executa primeiro uma limpeza por divisão a partir da app iRobot se ainda não aparecerem divisões."
+          "description": "Um nome de divisão, uma lista, ou vários separados por vírgulas. São os nomes que deu às divisões na aplicação iRobot. Se ainda não aparecer nenhum, execute uma limpeza dirigida a partir dessa aplicação."
         },
         "ordered": {
           "name": "Sequência ordenada",
@@ -2003,6 +2003,9 @@
     },
     "no_room_cleaning": {
       "message": "Este robô não suporta limpeza por divisões."
+    },
+    "room_name_is_a_zone": {
+      "message": "{names} é uma zona e não uma divisão neste robô. Use roomba_plus.clean_zone com o mesmo nome."
     }
   },
   "selector": {

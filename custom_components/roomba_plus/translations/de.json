@@ -1819,7 +1819,7 @@
       "fields": {
         "room_name": {
           "name": "Raumname",
-          "description": "Raumname oder Liste von Raumnamen. Muss mit den in den Roomba+-Optionen vergebenen Bezeichnungen übereinstimmen. Falls noch keine Räume vorhanden: zuerst eine raumbasierte Reinigung über die iRobot-App starten."
+          "description": "Ein Raumname, eine Liste davon, oder mehrere durch Kommas getrennt. Die Namen sind die, die Sie Ihren Räumen in der iRobot-App gegeben haben. Erscheint noch keiner, starten Sie einmal eine raumgezielte Reinigung aus dieser App."
         },
         "ordered": {
           "name": "Geordnete Reihenfolge",
@@ -2003,6 +2003,9 @@
     },
     "no_room_cleaning": {
       "message": "Dieser Roboter unterstützt keine Raumreinigung."
+    },
+    "room_name_is_a_zone": {
+      "message": "{names} ist auf diesem Roboter eine Zone und kein Raum. Verwenden Sie roomba_plus.clean_zone mit demselben Namen."
     }
   },
   "selector": {

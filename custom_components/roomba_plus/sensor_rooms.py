@@ -261,6 +261,182 @@ def _prime_room_time_estimates(
     return out
 
 
+def _estimate_cache_key(region_id: str, params: dict[str, Any] | None) -> str:
+    """One cache slot per room AND parameter set.
+
+    The cloud holds a separate estimate for each set of cleaning
+    parameters, and they differ by up to a factor of two for the same
+    room. Keyed by room alone, a cached value would be handed back for
+    the wrong pass count without anything saying so.
+    """
+    items = sorted((str(k), str(v)) for k, v in (params or {}).items())
+    return f"{region_id}|" + ",".join(f"{k}={v}" for k, v in items)
+
+
+def remember_confident_estimates(config_entry: Any) -> int:
+    """Store every confident estimate the cloud currently offers.
+
+    WHY KEEP THEM AT ALL: the response is fetched once at setup and held
+    in memory. @ScenicSystemsLLC had `GOOD_CONFIDENCE` estimates for his
+    rooms in the morning and none by the evening, on the same robot and
+    the same rooms -- the figures were used and discarded.
+
+    Returns how many were stored, for the caller to log.
+    """
+    estimates = getattr(config_entry.runtime_data, "prime_time_estimates", None)
+    by_region = getattr(estimates, "by_region", None)
+    profile = getattr(config_entry.runtime_data, "robot_profile_store", None)
+    if not isinstance(by_region, dict) or profile is None:
+        return 0
+
+    cache = getattr(profile, "room_estimate_cache", None)
+    if cache is None:
+        return 0
+
+    stored = 0
+    for region_id, candidates in by_region.items():
+        for est in candidates or []:
+            seconds = getattr(est, "seconds", None)
+            if not getattr(est, "is_confident", False) or not seconds:
+                continue
+            cache[_estimate_cache_key(str(region_id), getattr(est, "params", None))] = (
+                float(seconds)
+            )
+            stored += 1
+    return stored
+
+
+def cached_room_seconds(config_entry: Any, region_id: str) -> float | None:
+    """The shortest remembered estimate for a room, across parameter sets.
+
+    Same reasoning as `shortest_plausible_room_seconds()`: this feeds a
+    gate, and a gate wants the point past which "enough time" can be
+    true at all. Which parameter set the robot will choose is not known
+    in Auto mode, so the shortest remembered one is the honest floor.
+    """
+    profile = getattr(config_entry.runtime_data, "robot_profile_store", None)
+    cache = getattr(profile, "room_estimate_cache", None) or {}
+    prefix = f"{region_id}|"
+    seconds = [v for k, v in cache.items() if k.startswith(prefix) and v > 0]
+    return min(seconds) if seconds else None
+
+
+def shortest_plausible_room_seconds(
+    config_entry: Any, planned_order: list[str]
+) -> list[float | None]:
+    """Lower-bound per-room seconds, for a GATE and nothing else.
+
+    `_compute_room_time_estimates()` deliberately returns None where the
+    cloud is not confident: a progress percentage or a remaining-minutes
+    figure built on a poor estimate looks exactly as authoritative as
+    one built on a good estimate, and that is worse than showing
+    nothing.
+
+    A GATE WANTS THE OPPOSITE. The room-advance check asks "has enough
+    time passed in this room", and the answer it needs is a floor, not a
+    forecast. Refusing to answer means refusing the advance -- which is
+    how @ScenicSystemsLLC's display sat on the first room for a whole
+    mission.
+
+    So this reads the same data with a different question. Each region
+    carries one estimate PER SET OF CLEANING PARAMETERS, and in Auto
+    pass mode the robot picks a set during the mission from the dirt it
+    finds -- nothing can choose in advance, and averaging is wrong
+    (eighteen minutes under one set, thirty-four under another in the
+    vendor's own sample). The SHORTEST is the point past which "enough
+    time" can be true at all.
+
+    Confidence is not required here. An unconfident lower bound still
+    beats a whole-house mission average divided by the rooms in this
+    mission, which is what this replaces -- 10.7 hours on one robot,
+    which no elapsed time could ever exceed.
+    """
+    estimates = getattr(config_entry.runtime_data, "prime_time_estimates", None)
+    by_region = getattr(estimates, "by_region", None)
+    if not isinstance(by_region, dict) or not by_region:
+        return [None] * len(planned_order)
+
+    coordinator = getattr(
+        config_entry.runtime_data, "prime_schedule_coordinator", None
+    )
+    room_names = getattr(coordinator, "room_names", None) or {}
+    by_name = {
+        str(name).lower(): str(rid)
+        for rid, name in room_names.items()
+        if name
+    }
+
+    out: list[float | None] = []
+    for room_name in planned_order:
+        key = str(room_name)
+        rid = key if key in by_region else by_name.get(key.lower())
+        seconds = [
+            float(e.seconds)
+            for e in (by_region.get(rid) or [] if rid else [])
+            if getattr(e, "seconds", None) is not None
+        ]
+        if seconds:
+            out.append(min(seconds))
+            continue
+        # NOTHING LIVE -- FALL BACK TO WHAT THE CLOUD SAID LAST TIME.
+        #
+        # The estimates are fetched once at setup and held in memory, so
+        # a robot that had them this morning can have none this evening
+        # (@ScenicSystemsLLC, same rooms, same day). A remembered figure
+        # for the right room beats a whole-house average every time.
+        out.append(cached_room_seconds(config_entry, rid) if rid else None)
+    return out
+
+
+def why_no_room_estimates(config_entry: Any) -> str:
+    """Which of the two reasons applies, named rather than listed.
+
+    The log said "Auto pass mode OR insufficient cloud confidence" and
+    left the reader to guess. They are different problems with different
+    answers: Auto means no estimate CAN be chosen, because the robot has
+    not decided which pass count it will use; low confidence means the
+    estimate exists and the cloud does not trust it yet.
+
+    @ScenicSystemsLLC's mission fell into one of them and his log cannot
+    say which, so neither could I -- and a cache of past estimates only
+    helps one of the two cases.
+
+    THE TWO GENERATIONS REACH IT DIFFERENTLY. Classic reads the pass
+    mode out of `lastCommand`, Prime out of the estimate's own
+    confidence flag, so the answer has to be worked out per generation
+    rather than shared.
+    """
+    cc = getattr(config_entry.runtime_data, "cloud_coordinator", None)
+
+    if cc is not None:
+        data = config_entry.runtime_data
+        reported = (
+            data.roomba.master_state.get("state", {}).get("reported", {})
+            if getattr(data, "roomba", None) is not None else {}
+        )
+        last_regions = [
+            r for r in ((reported.get("lastCommand") or {}).get("regions") or [])
+            if isinstance(r, dict) and r.get("params")
+        ]
+        if last_regions:
+            if not any(
+                r["params"].get("noAutoPasses") for r in last_regions
+            ):
+                return "auto pass mode (no per-room estimate exists)"
+            return "no confident estimate for these rooms yet"
+        return "the last command carried no regions to read a pass mode from"
+
+    estimates = getattr(
+        config_entry.runtime_data, "prime_time_estimates", None
+    )
+    by_region = getattr(estimates, "by_region", None)
+    if not isinstance(by_region, dict):
+        return "no time-estimates response cached for this robot"
+    if not by_region:
+        return "the time-estimates response was empty"
+    return "no confident estimate for these rooms yet"
+
+
 def _compute_room_time_estimates(
     config_entry: Any, planned_order: list[str]
 ) -> list[int | None]:

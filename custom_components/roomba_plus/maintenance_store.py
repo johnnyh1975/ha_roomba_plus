@@ -100,10 +100,23 @@ class MaintenanceStore:
     filter_baseline_seeded: bool = False
     brush_baseline_seeded: bool = False
 
-    # side_brush/clean_base_bag mirror the filter/brush slots above —
-    # cloud-only roles, so reset_hr/reset_at are only ever written by
-    # hydrate_from_cloud_parts() or their own reset button/service, never
-    # auto-seeded (no CONF_*_HOURS default exists to seed against).
+    # side_brush/clean_base_bag mirror the filter/brush slots above.
+    #
+    # THESE USED TO BE CALLED "cloud-only roles ... never auto-seeded (no
+    # CONF_*_HOURS default exists to seed against)". The parenthetical
+    # was false: DEFAULT_SIDE_BRUSH_HOURS (150) and the bag's default
+    # (30) both exist and `threshold_hours()` already falls back to
+    # them.
+    #
+    # On an account that does not serve parts, the hydration leg never
+    # fires, so the baseline stayed 0 forever and `maintenance_due`
+    # reported the robot's whole lifetime as overdue -- with no reset
+    # service for these two roles and a reset button that is only built
+    # when the cloud serves the part, there was no way out from inside
+    # Home Assistant (@azrael-129, a 980 at 2252 h).
+    #
+    # They are seeded at cold start now, like filter and brush, and the
+    # seed yields to cloud truth on the first successful hydration.
     side_brush_reset_hr: int = 0
     side_brush_reset_at: str | None = None
     side_brush_reset_history: list[int] = field(default_factory=list)

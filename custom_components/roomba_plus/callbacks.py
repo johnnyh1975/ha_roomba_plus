@@ -131,7 +131,6 @@ _ROOM_TRANSITION_MIN_SECONDS: float = 60.0
 #: repositioning within it, not as a second boundary.
 #: A drive shorter than this is repositioning within a room, not a
 #: boundary crossing. Set under the shortest confirmed crossing.
-_TRAVEL_MIN_SECONDS: float = 6.0
 
 
 def _room_transition_confidence_ok(
@@ -187,6 +186,29 @@ def _room_transition_confidence_ok(
         )
         return False
 
+    # THE TRAVEL ROUTE NEEDS NO ESTIMATE, so it must not be refused for
+    # the want of one.
+    #
+    # This check sat ABOVE the travel branch, so a robot with no cloud
+    # estimates at all had every travel-based advance refused -- on the
+    # strength of a missing forecast, while holding a positive
+    # observation that the robot had cleaned this room and then driven
+    # away.
+    #
+    # That is the rule this file keeps relearning: an estimate may
+    # refine a decision, never be the sole reason to refuse one. It cost
+    # a stuck display three times over -- a missing estimate, a poisoned
+    # one, and a travel-duration floor, each blocking something an
+    # observation had already answered.
+    #
+    # The phase route still needs it: a `charge` mid-room and a `charge`
+    # at a room boundary look identical, and only timing tells them
+    # apart.
+    if from_travel:
+        return bool(
+            mts.time_in_current_room_sec >= _ROOM_TRANSITION_MIN_SECONDS
+        )
+
     expected = mts.expected_room_sec
     if expected is None or expected <= 0:
         _LOGGER.debug(
@@ -221,9 +243,6 @@ def _room_transition_confidence_ok(
     #
     # The minute is judgement, not measurement. It is the first thing to
     # revisit if rooms start advancing too eagerly.
-    if from_travel:
-        return bool(elapsed >= _ROOM_TRANSITION_MIN_SECONDS)
-
     _ok = elapsed >= expected * _ROOM_TRANSITION_MIN_ELAPSED_RATIO
     if not _ok:
         _LOGGER.debug(
@@ -750,6 +769,56 @@ def make_mqtt_stamp_callback(entry: RoombaConfigEntry) -> Any:
     return _on_any_message
 
 
+def _seed_maintenance_baselines(
+    entry: RoombaConfigEntry, reported: dict[str, Any]
+) -> None:
+    """Give each consumable a starting point once the hours are known.
+
+    Without one, `current_hr - reset_hr` is the age of the ROBOT, and
+    `maintenance_due` reports a healthy part as overdue by the whole
+    lifetime -- 2102 hours on a 980 with 2252 on it (@azrael-129).
+
+    Idempotent and cheap: every role short-circuits once seeded, so the
+    steady-state cost is four attribute reads per message. The save is
+    scheduled, not awaited, because this runs on the MQTT thread.
+    """
+    data = getattr(entry, "runtime_data", None)
+    store = getattr(data, "maintenance_store", None)
+    hass = getattr(entry, "hass", None)
+    if store is None:
+        return
+
+    _bbrun = _merged_top_level(entry, reported, "bbrun")
+    _runtime = _merged_top_level(entry, reported, "runtimeStats")
+    current_hr = int(_bbrun.get("hr") or _runtime.get("hr") or 0)
+    if current_hr <= 0:
+        return
+
+    seeded_now: list[str] = []
+    for slot in ("filter", "brush", "side_brush", "clean_base_bag"):
+        if getattr(store, f"{slot}_baseline_seeded", True):
+            continue
+        if getattr(store, f"{slot}_reset_history", None):
+            continue
+        setattr(store, f"{slot}_reset_hr", current_hr)
+        setattr(store, f"{slot}_baseline_seeded", True)
+        seeded_now.append(slot)
+
+    if not seeded_now:
+        return
+
+    _LOGGER.debug(
+        "MaintenanceStore: seeded %s at %dh, on the first message "
+        "carrying runtime hours (setup ran before MQTT had any)",
+        ", ".join(seeded_now), current_hr,
+    )
+    if hass is not None:
+        hass.async_create_task(
+            store.async_save(hass, entry.entry_id),
+            eager_start=False,
+        )
+
+
 def make_mission_callback(
     hass: Any,
     entry: RoombaConfigEntry,
@@ -840,6 +909,23 @@ def make_mission_callback(
         reported = json_data.get("state", {}).get("reported", {})
         if "cleanMissionStatus" not in reported:
             return
+
+        # MAINTENANCE BASELINES, SEEDED WHEN THE HOURS FIRST ARRIVE.
+        #
+        # Seeding used to happen once, during setup, reading the
+        # robot's reported state directly. On a cold boot MQTT has
+        # often not delivered anything yet, so `bbrun.hr` is 0 and ALL
+        # FOUR roles are skipped -- and since setup was the only place
+        # that seeded, a host whose MQTT is reliably slower than its
+        # startup never seeded at all. @azrael-129 found it while
+        # reporting the side brush and named it the smaller half; it is
+        # the larger one, because it reaches filter and main brush too.
+        #
+        # Here instead: every mission message, with `_merged_top_level`
+        # falling back to the cached state for a delta that does not
+        # carry `bbrun`. The conditions are unchanged, so a store seeded
+        # at setup is untouched and cloud hydration still wins.
+        _seed_maintenance_baselines(entry, reported)
 
         # v3.2.1 — MQTT-watchdog stamping MOVED to make_mqtt_stamp_callback,
         # registered in __init__.py BEFORE async_forward_entry_setups.  It
@@ -1233,10 +1319,24 @@ def make_mission_callback(
                         done_rids.add(rid)
             confirmed = all(rid in done_rids for rid in planned_rids)
             if confirmed:
+                # SAY WHAT THIS CHECKS. The wording here claimed the
+                # index "cannot advance into the last room by design".
+                # It can, and does: `advance_room()` refuses to move
+                # OUT of the last room, not INTO it.
+                #
+                # @ScenicSystemsLLC quoted this line back as a
+                # structural limit while diagnosing a display that never
+                # advanced, and it sent him -- and then me -- looking at
+                # the wrong thing. His actual blocker was a travel
+                # duration gate that threw away the only real crossing
+                # of the mission.
+                #
+                # A wrong sentence in a debug line is expensive with
+                # testers who read their logs carefully. It travels.
                 _LOGGER.debug(
                     "MissionStore: cloud finEvents confirm all %d planned "
-                    "room(s) done — overriding current_room_idx, which "
-                    "cannot advance into the last room by design",
+                    "room(s) done — marking the mission complete "
+                    "regardless of where current_room_idx stopped",
                     len(planned_rids),
                 )
             return confirmed
@@ -1538,15 +1638,31 @@ def make_mission_callback(
                 if travel_started_at is not None
                 else None
             )
-            _returned_from_travel = (
-                _drive_sec is not None and _drive_sec >= _TRAVEL_MIN_SECONDS
-            )
+            # DURATION SAYS NOTHING. THE FIELD SETTLED IT TWICE.
+            #
+            # This required a drive to last 6 seconds before it counted
+            # as a room boundary, to keep repositioning inside one room
+            # from advancing the display. It gets both cases backwards:
+            #
+            #   @ScenicSystemsLLC, Guest Bathroom -> Hallway, watched in
+            #   person: the real crossing took 3.8 s and was thrown away
+            #   as "too short". The drive off the dock, which is NOT a
+            #   room change, took 17.7 s and was accepted. One mission,
+            #   both decisions wrong, in opposite directions.
+            #
+            #   @AlakazipLabs, three-room mission: drives of 12 s, 69 s
+            #   and 11.3 minutes, the long one most likely the robot
+            #   re-finding itself on a cold map.
+            #
+            # Nothing separates a boundary from a reposition by how long
+            # the drive took. What does is whether the robot WORKED in
+            # the room behind it -- see `cleaned_in_room` below, which
+            # answers both of their missions correctly.
+            _returned_from_travel = _drive_sec is not None
             _LOGGER.debug(
-                "AUTO-ADVANCE-ROOM: travel ended after %ss (floor %ss) -> %s",
+                "AUTO-ADVANCE-ROOM: travel ended after %ss -> boundary "
+                "candidate (confirmed only if the robot cleaned here)",
                 round(_drive_sec, 1) if _drive_sec is not None else "?",
-                _TRAVEL_MIN_SECONDS,
-                "counts as a room boundary" if _returned_from_travel
-                else "too short, treated as repositioning",
             )
             travel_started_at = None
         elif _travelling is True and not was_travelling:
@@ -1652,6 +1768,52 @@ def make_mission_callback(
                             if _known_secs:
                                 _total_est = sum(_known_secs)
                             else:
+                                # THE SHORTEST PLAUSIBLE PER-ROOM TIME,
+                                # before falling back to a whole-house
+                                # figure.
+                                #
+                                # The cloud holds one estimate per SET
+                                # OF CLEANING PARAMETERS for each room.
+                                # In Auto pass mode the robot picks a
+                                # set during the mission, so none can be
+                                # chosen in advance and the lookup above
+                                # yields nothing -- correct for a
+                                # displayed percentage, fatal for a gate.
+                                #
+                                # For "has enough time passed in this
+                                # room", the shortest of those estimates
+                                # is the point past which the answer can
+                                # be yes at all. It is a real per-room
+                                # figure from the robot's own cloud.
+                                #
+                                # WHAT IT REPLACES: a whole-house
+                                # mission average divided by the rooms
+                                # in THIS mission. On
+                                # @ScenicSystemsLLC's two-room run that
+                                # was 10.7 hours, giving 5.3 hours per
+                                # room -- a threshold no 17-minute
+                                # mission could ever cross.
+                                from .sensor_rooms import (  # noqa: PLC0415
+                                    shortest_plausible_room_seconds,
+                                )
+
+                                _floor_secs = [
+                                    s for s in shortest_plausible_room_seconds(
+                                        entry, [str(x) for x in _names]
+                                    ) if s and s > 0
+                                ]
+                                if _floor_secs:
+                                    _total_est = sum(_floor_secs)
+                                    _LOGGER.debug(
+                                        "AUTO-ADVANCE-ROOM: no confident "
+                                        "per-room estimate — using the "
+                                        "shortest plausible cloud estimate "
+                                        "for %d of %d room(s), "
+                                        "total_estimated_sec=%.0f",
+                                        len(_floor_secs), len(_names),
+                                        _total_est,
+                                    )
+                            if _total_est is None:
                                 # v2.9.0 (A) — CONFIRMED ROOT CAUSE: every
                                 # planned room using Auto pass mode (no
                                 # per-room estimate exists by firmware design)
@@ -1687,13 +1849,41 @@ def make_mission_callback(
                                     else None
                                 )
                                 if _total_est:
+                                    # NAME THE REASON, do not list both.
+                                    #
+                                    # This said "Auto pass mode OR
+                                    # insufficient cloud confidence" and
+                                    # left the reader to pick. They are
+                                    # different problems: Auto means no
+                                    # estimate CAN be chosen yet, low
+                                    # confidence means one exists and is
+                                    # not trusted. A cache of past
+                                    # estimates would help the second
+                                    # and do nothing for the first.
+                                    #
+                                    # @ScenicSystemsLLC's mission hit one
+                                    # of them and the log could not say
+                                    # which, so the next step could not
+                                    # be chosen either.
+                                    # LATE ON PURPOSE: `sensor_rooms`
+                                    # reaches back into the package,
+                                    # so importing it at module level
+                                    # is a genuine circular import --
+                                    # confirmed by 63 collection
+                                    # errors when it was tried.
+                                    from .sensor_rooms import (  # noqa: PLC0415
+                                        why_no_room_estimates,
+                                    )
+
                                     _LOGGER.debug(
                                         "AUTO-ADVANCE-ROOM: no per-room "
-                                        "estimates available (Auto pass mode "
-                                        "or insufficient cloud confidence) — "
-                                        "falling back to robot_profile_store"
+                                        "estimates — %s. Falling back to "
+                                        "robot_profile_store"
                                         ".mission_duration_mean=%.1fmin "
-                                        "(total_estimated_sec=%s)",
+                                        "(total_estimated_sec=%s), which is a "
+                                        "WHOLE-HOUSE figure divided by the "
+                                        "rooms in THIS mission",
+                                        why_no_room_estimates(entry),
                                         _mean_min, _total_est,
                                     )
                         except Exception:  # noqa: BLE001

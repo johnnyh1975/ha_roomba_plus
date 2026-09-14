@@ -60,6 +60,28 @@ clean_room:
       required: false
       selector:
         boolean:
+    smart_scrub:
+      name: Smart scrub
+      description: >-
+        Extra scrubbing motion for this run only. Classic mopping robots
+        only; leave empty to keep whatever the robot would have done.
+      selector:
+        boolean:
+    pad_wetness:
+      name: Pad wetness
+      description: >-
+        How wet the pad is for this run only. Leave empty to keep the
+        Pad wetness settings on the device — a value here overrides them
+        for this run and nothing else. Classic mopping robots only.
+      selector:
+        select:
+          options:
+            - label: Light
+              value: "1"
+            - label: Standard
+              value: "2"
+            - label: Hard
+              value: "3"
     room_passes:
       name: Rooms with individual pass settings
       description: >
@@ -674,6 +696,16 @@ clean_zone:
               value: "2"
             - label: Hard
               value: "3"
+    two_pass:
+      name: Two-pass cleaning
+      description: >
+        When true, the robot makes two cleaning passes over each room.
+        When omitted (default), the robot's current two-pass setting is
+        inherited. Overrides the global setting for this job only. Ignored
+        for any room that specifies its own two_pass via room_passes.
+      required: false
+      selector:
+        boolean:
     zone_id:
       name: Zone ID
       description: >

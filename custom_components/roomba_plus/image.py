@@ -674,8 +674,30 @@ class PrimeMapImage(IRobotEntity, ImageEntity):
                 # day.
                 point = getattr(sample, "point", None)
                 if point is None:
+                    # SAY IT ONCE, rather than only in a counter.
+                    #
+                    # Some robots never publish a position at all --
+                    # `cap.pose: 2` with `position: null` and
+                    # `point_count: 0` after months of missions, on both
+                    # firmware families. For those the map image simply
+                    # never changes, and the debug log said NOTHING
+                    # about it: @ScenicSystemsLLC watched a 17-minute
+                    # mission with the image entity frozen and called it
+                    # "not just unfixed, unexplained", because nothing
+                    # in the log referenced that entity at all.
+                    #
+                    # Silence reads as a bug. A line saying the robot
+                    # sent no position reads as an answer.
+                    _skipped = stats.get("trail_skipped_no_point", 0)
+                    if _skipped == 0:
+                        _LOGGER.debug(
+                            "Live map: this robot published no position "
+                            "with its status — the map image cannot "
+                            "advance. Robots reporting cap.pose=2 do "
+                            "not publish one at all",
+                        )
                     stats["trail_skipped_no_point"] = (
-                        stats.get("trail_skipped_no_point", 0) + 1
+                        _skipped + 1
                     )
                     continue
                 try:

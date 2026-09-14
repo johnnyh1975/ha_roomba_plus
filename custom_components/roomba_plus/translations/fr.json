@@ -1819,7 +1819,7 @@
       "fields": {
         "room_name": {
           "name": "Nom de la pièce",
-          "description": "Nom de pièce ou liste de noms de pièces à nettoyer. Doit correspondre aux étiquettes assignées dans les options Roomba+. Lancez d'abord un nettoyage ciblé par pièce via l'application iRobot si aucune pièce n'apparaît encore."
+          "description": "Un nom de pièce, une liste, ou plusieurs séparés par des virgules. Ce sont les noms que vous avez donnés à vos pièces dans l'application iRobot. Si aucun n'apparaît, lancez une fois un nettoyage ciblé depuis cette application."
         },
         "ordered": {
           "name": "Séquence ordonnée",
@@ -2003,6 +2003,9 @@
     },
     "no_room_cleaning": {
       "message": "Ce robot ne gère pas le nettoyage par pièce."
+    },
+    "room_name_is_a_zone": {
+      "message": "{names} est une zone et non une pièce sur ce robot. Utilisez roomba_plus.clean_zone avec le même nom."
     }
   },
   "selector": {

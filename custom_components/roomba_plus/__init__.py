@@ -617,6 +617,43 @@ async def _phase_data(ctx: _SetupContext) -> None:
             "load (no prior reset history, robot already has runtime)",
             _current_hr,
         )
+    # SIDE BRUSH AND BAG TOO, and the reason they were left out was
+    # wrong.
+    #
+    # The store called these "cloud-only roles ... never auto-seeded (no
+    # CONF_*_HOURS default exists to seed against)". Both defaults do
+    # exist -- 150 h and 30 h -- and `threshold_hours()` already uses
+    # them as the local fallback. The comment justified the omission
+    # with a premise that was not true.
+    #
+    # WHAT IT COST: on a robot whose account does not serve parts, the
+    # hydration leg never fires, so the baseline stays 0 for the life of
+    # the install and `maintenance_due` reports the robot's ENTIRE
+    # lifetime as overdue -- 2102 h on a 980 with 2252 h and a side
+    # brush in good order (@azrael-129). There is no way out from inside
+    # Home Assistant: no reset service for these two roles, and the
+    # reset button is only created when the cloud serves the part.
+    #
+    # SAFE AGAINST THE CLOUD. `hydrate_from_cloud_parts()` writes
+    # `reset_hr` from `count_used` unconditionally whenever the cloud
+    # answers, so a local seed yields to cloud truth the moment there is
+    # any -- exactly what filter and brush already rely on. It appends
+    # nothing to `*_reset_history`, so the learned-lifespan median is
+    # untouched.
+    for _slot in ("side_brush", "clean_base_bag"):
+        if (
+            _current_hr > 0
+            and not getattr(maintenance_store, f"{_slot}_baseline_seeded")
+            and not getattr(maintenance_store, f"{_slot}_reset_history")
+        ):
+            setattr(maintenance_store, f"{_slot}_reset_hr", _current_hr)
+            setattr(maintenance_store, f"{_slot}_baseline_seeded", True)
+            _seeded_this_load = True
+            _LOGGER.debug(
+                "Roomba+ MaintenanceStore: seeded %s_reset_hr=%dh on first "
+                "load (no prior reset history, robot already has runtime)",
+                _slot, _current_hr,
+            )
     if _seeded_this_load:
         await maintenance_store.async_save(hass, config_entry.entry_id)
 
@@ -1287,6 +1324,22 @@ async def _async_fetch_prime_time_estimates(config_entry: RoombaConfigEntry) -> 
         raw = await robot.get_time_estimates()
         record_success("time estimates")
         config_entry.runtime_data.prime_time_estimates = TimeEstimates.from_json(raw)
+
+        # REMEMBER THEM. This response is fetched once and held in
+        # memory; nothing survived a restart or a day where the cloud
+        # returned less than it had before.
+        # LATE: `sensor_rooms` imports `entity`, which imports the
+        # package -- a module-level import here is a genuine cycle.
+        from .sensor_rooms import (  # noqa: PLC0415
+            remember_confident_estimates,
+        )
+
+        _stored = remember_confident_estimates(config_entry)
+        if _stored:
+            _LOGGER.debug(
+                "Prime time estimates: remembered %d confident estimate(s) "
+                "for use when the cloud offers none", _stored,
+            )
     except Exception:  # noqa: BLE001
         record_failure("time estimates", "reading per-room estimates")
         _LOGGER.debug(

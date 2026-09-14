@@ -1819,7 +1819,7 @@
       "fields": {
         "room_name": {
           "name": "Nome stanza",
-          "description": "Nome stanza o elenco di nomi da pulire. Devono corrispondere alle etichette assegnate nelle opzioni Roomba+. Prima avvia una pulizia per stanza dall'app iRobot se non compare ancora nessuna stanza."
+          "description": "Il nome di una stanza, un elenco, o più nomi separati da virgole. Sono i nomi che hai dato alle stanze nell'app iRobot. Se non ne compare nessuno, avvia una pulizia mirata da quell'app."
         },
         "ordered": {
           "name": "Sequenza ordinata",
@@ -2003,6 +2003,9 @@
     },
     "no_room_cleaning": {
       "message": "Questo robot non supporta la pulizia per stanze."
+    },
+    "room_name_is_a_zone": {
+      "message": "{names} è una zona e non una stanza su questo robot. Usa roomba_plus.clean_zone con lo stesso nome."
     }
   },
   "selector": {

@@ -180,6 +180,52 @@ def _region_params(
     return params_cls(**fields)
 
 
+async def _maps_to_offer(backend: Any, all_map_ids: list[str]) -> list[str]:
+    """The maps whose rooms may be offered, most specific first.
+
+    A ROBOT CAN ONLY CLEAN THE MAP IT IS STANDING ON. Offering rooms
+    from the others offers commands that cannot succeed: the robot
+    accepts the start, fails to localise, and sits on the dock with
+    error 224. @Thonno hit that three times running, each time with the
+    robot on its own dock having moved nowhere -- his second map is his
+    father's house, where the robot used to live.
+
+    WHY NOT `active_pmap_id`: it means "most recently updated", not
+    "where the robot is". @ScenicSystemsLLC checked it directly on a
+    two-map Braava -- two missions run against the Second Floor map,
+    fresh reads after each, and the active map stayed "master bathroom"
+    throughout. Running a mission does not bump that timestamp, so
+    choosing by it is choosing by something unrelated.
+
+    The order:
+
+      1. an explicit choice, where the robot has a map selector
+      2. what the robot says it is on right now
+      3. the last thing it said, when it is currently silent
+      4. every map, when it has never said anything -- the pre-existing
+         behaviour, kept so a robot that never reports a location is no
+         worse off than before
+
+    One map makes all of this moot, which is most robots.
+    """
+    if len(all_map_ids) <= 1:
+        return all_map_ids
+
+    chosen = getattr(
+        getattr(backend, "_config_entry", None), "runtime_data", None
+    )
+    chosen_id = getattr(chosen, "prime_selected_map_id", None)
+    if chosen_id and chosen_id in all_map_ids:
+        return [chosen_id]
+
+    with contextlib.suppress(Exception):
+        on_map, _is_live = await backend.where_the_robot_is()
+        if on_map and on_map in all_map_ids:
+            return [on_map]
+
+    return all_map_ids
+
+
 class RoomCleaningBackend(ABC):
     """What a service needs in order to clean named rooms."""
 
@@ -601,7 +647,15 @@ class PrimeRoomCleaning(RoomCleaningBackend):
         zone_ids: set[str] = set()
 
         seen_map_ids: list[str] = []
-        for p2map_id in await self._all_map_ids():
+        # ONLY THE MAP THE ROBOT CAN ACTUALLY CLEAN.
+        #
+        # `_region_to_map()` and `_named_regions_across_maps()` above
+        # still walk every map -- they RESOLVE ids that already exist.
+        # This method OFFERS names, and offering one from a map the
+        # robot is not on offers a command that cannot succeed.
+        for p2map_id in await _maps_to_offer(
+            self, await self._all_map_ids()
+        ):
             seen_map_ids.append(p2map_id)
             try:
                 map_data = await self._map_metadata(p2map_id)
@@ -654,11 +708,33 @@ class PrimeRoomCleaning(RoomCleaningBackend):
                 #
                 # Absence still means room: not every capture carries
                 # the field, and rooms outnumber zones by far.
+                # A ZONE IS A PLACE WITH A NAME, AND IT IS CLEANABLE.
+                #
+                # This used to `continue` here, so a zone name resolved
+                # to nothing and `clean_room` called it unknown.
+                # @mrsnyds has nine named regions and eight the service
+                # would accept.
+                #
+                # THE EXCLUSION WAS A SYMPTOM FIX. @theChef163's zone
+                # went out as a ROOM id -- untyped -- and the robot
+                # found no such room, reported success after 71 seconds
+                # and cleaned nothing. The fault was the missing type,
+                # not the zone being offered. Classic solves it that
+                # way already: it keeps zones in the list and records
+                # the type in `_type_by_region`.
+                #
+                # THE PREFIX IS WHAT TYPES IT. `_send_region_command()`
+                # sets `RegionType.ZID` for any id starting with
+                # `zid_`, and `clean_rooms()` splits a qualified id at
+                # the first `/` and passes the rest through -- so
+                # `MAP/zid_100` arrives as `zid_100` and is typed
+                # correctly. That is the same shape `clean_segments()`
+                # already builds, so both routes now agree.
                 _rt = getattr(room, "region_type", None)
                 _rt = getattr(_rt, "value", _rt)
-                if _rt and str(_rt).lower() == "zid":
+                _is_zone = bool(_rt) and str(_rt).lower() == "zid"
+                if _is_zone:
                     zone_ids.add(str(room.room_id))
-                    continue
                 # LOCAL NAME, not a rewritten object. `replace()` needs
                 # a dataclass and this loop also sees plain namespaces
                 # from tests and from other readers.
@@ -673,7 +749,7 @@ class PrimeRoomCleaning(RoomCleaningBackend):
                             "target them separately.",
                             room_name, self._data.blid,
                         )
-                        rooms[room_name] = f"{p2map_id}/{room.room_id}"
+                        rooms[room_name] = f"{p2map_id}/{ZID_PREFIX if _is_zone else ''}{room.room_id}"
                         from_current.add(room_name)
                     else:
                         _LOGGER.warning(
@@ -684,7 +760,7 @@ class PrimeRoomCleaning(RoomCleaningBackend):
                         )
                     continue
 
-                rooms[room_name] = f"{p2map_id}/{room.room_id}"
+                rooms[room_name] = f"{p2map_id}/{ZID_PREFIX if _is_zone else ''}{room.room_id}"
                 if is_current:
                     from_current.add(room_name)
 
@@ -745,7 +821,20 @@ class PrimeRoomCleaning(RoomCleaningBackend):
                 "prime_room_names",
                 None,
             )
-            if len(seen_map_ids) == 1 and isinstance(_names, dict):
+            # HOW MANY MAPS THE ROBOT HAS, not how many we chose to
+            # offer from.
+            #
+            # `prime_room_names` is merged across every map and carries
+            # no map of its own, so on a two-map robot a cached name
+            # cannot be attributed to a floor -- refusing is the honest
+            # answer, and a test pins it.
+            #
+            # Narrowing the OFFER to the robot's current map made this
+            # read as a one-map robot and hand back all nine merged
+            # names under that map's id. Two different questions that
+            # happened to share a variable.
+            _map_count = len(await self._all_map_ids())
+            if _map_count == 1 and isinstance(_names, dict):
                 only_map = seen_map_ids[0]
                 # ZONES STAY OUT, EVEN HERE.
                 #
@@ -766,10 +855,18 @@ class PrimeRoomCleaning(RoomCleaningBackend):
                     ).get("discovered_zone_ids", ())
                 } | {str(z) for z in zone_ids}
 
+                # SAME RULE AS ABOVE: a zone is offered, and carries
+                # the prefix that types it. The cache has no region
+                # types in it, so `discovered_zone_ids` is the only
+                # thing that can tell them apart here.
                 rooms = {
-                    str(name): f"{only_map}/{region_id}"
+                    str(name): (
+                        f"{only_map}/{ZID_PREFIX}{region_id}"
+                        if str(region_id) in _known_zones
+                        else f"{only_map}/{region_id}"
+                    )
                     for region_id, name in _names.items()
-                    if region_id and name and str(region_id) not in _known_zones
+                    if region_id and name
                 }
                 if rooms:
                     _LOGGER.debug(
@@ -1036,10 +1133,36 @@ class PrimeRoomCleaning(RoomCleaningBackend):
         # id, so the zone half of the area-mapping dialog came out in an
         # order that looks random next to an alphabetical room list
         # (@chairstacker).
+        # NOT NARROWABLE IS NOT THE SAME AS EMPTY. A backend that
+        # cannot answer which maps exist must keep offering what it
+        # always offered, rather than silently offering nothing.
+        _offerable_maps: list[str] | None = None
+        with contextlib.suppress(Exception):
+            _offerable_maps = await _maps_to_offer(
+                self, await self._all_map_ids()
+            )
         for region_id, region_name in sorted(
             names.items(), key=lambda item: str(item[1]).casefold()
         ):
             if str(region_id) in rooms_by_id or not region_name:
+                continue
+            # ZONES FOLLOW THE SAME RULE AS ROOMS.
+            #
+            # `available_rooms()` narrows to the map the robot can
+            # reach and this list inherits that for ROOMS -- but zones
+            # are added here from their own source and were not
+            # narrowed. So a two-map robot still saw zones from the
+            # other map in the dropdown, which is the list
+            # @chairstacker picked "Foyer Zone" from before being
+            # refused.
+            _zone_map_check = getattr(self, "_region_map_ids", {}).get(
+                str(region_id)
+            )
+            if (
+                _offerable_maps is not None
+                and _zone_map_check
+                and _zone_map_check not in _offerable_maps
+            ):
                 continue
             # MAP-QUALIFIED, like the room ids above. `available_rooms()`
             # returns `{p2map_id}/{room_id}` and clean_rooms() splits on
@@ -1671,8 +1794,24 @@ class ClassicRoomCleaning(RoomCleaningBackend):
             # rooms are already in `entries` by now -- so a duplicate
             # name still resolves to the active map, exactly as before.
             # What changes is only the case that used to have no answer.
+            # ONLY MAPS THE ROBOT COULD ACTUALLY BE ON.
+            #
+            # These are the NON-active maps, added so a stored area
+            # mapping keeps working when the cloud's idea of "active"
+            # moves. That fixed a real silent failure -- and it also
+            # started offering rooms from maps the robot cannot reach.
+            #
+            # @Thonno's second map is his father's house, where the
+            # robot used to live. Selecting a room from it produced
+            # error 224 three releases running, with the robot on its
+            # own dock having moved nowhere.
+            _offerable = await _maps_to_offer(
+                self, list((coordinator.regions_by_pmap or {}))
+            )
             for pmap_id, names in (coordinator.regions_by_pmap or {}).items():
                 if pmap_id == coordinator.active_pmap_id:
+                    continue
+                if pmap_id not in _offerable:
                     continue
                 entries += [
                     (str(rid), name, str(pmap_id))
@@ -2012,7 +2151,19 @@ class ClassicRoomCleaning(RoomCleaningBackend):
         )
         seen_names: set[str] = set()
         segments: list[Any] = []
+        # SAME RULE AS THE ROOM LIST. This offers rooms and zones from
+        # every map the cloud knows; a robot can only clean the one it
+        # is standing on, and the rest produce error 224.
+        #
+        # Fails open: a backend that cannot say which maps exist keeps
+        # offering what it always offered.
+        _offerable_maps: list[str] | None = None
+        with contextlib.suppress(Exception):
+            _offerable_maps = await _maps_to_offer(self, list(by_map))
+
         for pmap_id in [active_pmap_id, *(m for m in by_map if m != active_pmap_id)]:
+            if _offerable_maps is not None and pmap_id not in _offerable_maps:
+                continue
             for region_id, region_name in (by_map.get(pmap_id) or {}).items():
                 if not region_id or region_name in seen_names:
                     continue

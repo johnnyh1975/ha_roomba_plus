@@ -314,7 +314,9 @@ async def _async_warn_if_swallowed(
     )
 
 
-def _unwrap_stringified_list(names: list[str]) -> list[str]:
+def _unwrap_stringified_list(
+    names: list[str], known: set[str] | None = None
+) -> list[str]:
     """A list that arrived as its own printed form, restored.
 
     `room_name: '{{ room_list }}'` in an automation renders the template
@@ -340,9 +342,32 @@ def _unwrap_stringified_list(names: list[str]) -> list[str]:
     """
     import ast as _ast  # noqa: PLC0415
 
+    known = known or set()
+
     if len(names) != 1:
         return names
     only = names[0].strip()
+
+    # A COMMA-SEPARATED STRING IS WHAT PEOPLE TYPE.
+    #
+    # The field is one text box labelled "Room name or list of room
+    # names", so "Kitchen,Great Room" is a reasonable thing to put in
+    # it, and @mrsnyds asked for exactly this after finding that it
+    # failed while the same rooms as a YAML list worked.
+    #
+    # WHOLE STRING FIRST. A room may legitimately have a comma in its
+    # name, and splitting one of those would break a setup that works
+    # to help one that does not. Only split when the whole thing is not
+    # a room and the parts are.
+    if "," in only and only not in known:
+        parts = [part.strip() for part in only.split(",")]
+        if all(parts) and all(part in known for part in parts):
+            _LOGGER.debug(
+                "clean_room: room_name was comma-separated, split into "
+                "%d name(s)", len(parts),
+            )
+            return parts
+
     if not (only.startswith("[") and only.endswith("]")):
         return names
     try:
@@ -400,6 +425,8 @@ async def _async_clean_rooms_via_backend(
             translation_key="no_rooms_configured",
         )
 
+    # The comma case needs the room list, which only exists here.
+    room_names = _unwrap_stringified_list(room_names, set(available))
     room_ids, unknown = match_room_names(available, room_names)
     if not room_ids and not unknown:
         # An empty request: room_passes=[] satisfies the "exactly one
@@ -412,6 +439,32 @@ async def _async_clean_rooms_via_backend(
             translation_key="no_rooms_resolved",
         )
     if unknown:
+        # IS IT A ZONE? "Unknown room" is the wrong answer for a name
+        # the robot knows perfectly well, just not as a room.
+        #
+        # @mrsnyds has nine named areas and eight of them clean; the
+        # ninth failed on its own and read as though it did not exist.
+        # A user-drawn zone is deliberately kept out of `clean_room`,
+        # because sending one as a room makes the robot find nothing and
+        # report success -- but saying so is a great deal more use than
+        # calling it unknown.
+        _zones: set[str] = set()
+        with contextlib.suppress(Exception):
+            _zones = {
+                str(seg.name)
+                for seg in await backend.get_segments()
+                if getattr(seg, "group", "") == "Zone"
+            }
+        _as_zone = [name for name in unknown if name in _zones]
+        if _as_zone:
+            raise ServiceValidationError(
+                f"{', '.join(_as_zone)} is a zone rather than a room on "
+                f"{entity_id}, so `clean_room` cannot address it. Use "
+                f"`roomba_plus.clean_zone` with the same name.",
+                translation_domain=DOMAIN,
+                translation_key="room_name_is_a_zone",
+            )
+
         raise ServiceValidationError(
             f"Unknown room(s) for {entity_id}: {', '.join(unknown)}. "
             f"Known rooms: {', '.join(sorted(available))}.",
@@ -459,11 +512,29 @@ async def _async_clean_rooms_via_backend(
         "clean_room: %s → rooms=%s (via %s)",
         entity_id, room_ids, type(backend).__name__,
     )
+    # SAME OPTIONS FOR ROOMS AND ZONES.
+    #
+    # `clean_room` offered `two_pass` and `ordered`; `clean_zone`
+    # offered `smart_scrub` and `pad_wetness`. One field, `cleaning_mode`,
+    # was common -- and only after it was repaired. @theChef613 asked
+    # the obvious question: why not all of them on both?
+    #
+    # There was never a technical reason. Both services reach the robot
+    # through `clean_rooms()`, which takes every one of these. The split
+    # came from the two services being extended at different times and
+    # nobody comparing them afterwards -- the same shape as the
+    # `cleaning_mode` gap, and as `two_pass` before that.
+    _scrub = call.data.get(ATTR_SMART_SCRUB)
+    _wetness_raw = call.data.get(ATTR_RUN_PAD_WETNESS)
+    _wetness = int(_wetness_raw) if _wetness_raw not in (None, "") else None
+
     await backend.clean_rooms(
         room_ids, ordered=ordered, two_pass=two_pass,
         # A single value applied to every room -- _per_room() spreads a
         # one-element list across the whole call.
         operating_mode=[caller_mode] if caller_mode is not None else None,
+        smart_scrub=[_scrub] if _scrub is not None else None,
+        pad_wetness=[_wetness] if _wetness is not None else None,
     )
 
     # Fire and forget: the service returns now, and this reports later
@@ -658,6 +729,7 @@ async def async_handle_clean_zone(call: ServiceCall) -> None:
         _wetness_raw = call.data.get(ATTR_RUN_PAD_WETNESS)
         wetness = int(_wetness_raw) if _wetness_raw not in (None, "") else None
 
+        _two_pass_raw = call.data.get(ATTR_TWO_PASS)
         await backend.clean_rooms(
             prefixed,
             # One value spread across every requested zone, same as
@@ -665,6 +737,9 @@ async def async_handle_clean_zone(call: ServiceCall) -> None:
             operating_mode=[caller_mode] if caller_mode is not None else None,
             smart_scrub=[scrub] if scrub is not None else None,
             pad_wetness=[wetness] if wetness is not None else None,
+            two_pass=(
+                [bool(_two_pass_raw)] if _two_pass_raw is not None else None
+            ),
         )
 
 
@@ -1664,9 +1739,24 @@ def async_register_services(hass: HomeAssistant) -> None:
                 # CLEAN-ROOM-PER-ROOM-PASSES (v2.9.0): room_name is now optional
                 # at the schema level — the handler enforces "exactly one of
                 # room_name / rooms" so the error message can be specific.
+                # THE LIST BRANCH FIRST, and the order is the whole
+                # bug.
+                #
+                # `cv.string` special-cases a template result: it takes
+                # the rendered TEXT rather than the value. `vol.Any`
+                # tries its branches in order, so with `cv.string`
+                # first, `room_name: '{{ room_list }}'` arrived as the
+                # string "['Kitchen','Great Room']" -- brackets, quotes
+                # and all -- while a hand-typed YAML list arrived as a
+                # list and worked.
+                #
+                # That is exactly the split @mrsnyds mapped out: typed
+                # list works, template list fails, and the trace shows
+                # a list either way because the trace renders the
+                # template result, not what the schema made of it.
                 vol.Optional(ATTR_ROOM_NAME): vol.Any(
-                    cv.string,
                     vol.All(cv.ensure_list, [cv.string]),
+                    cv.string,
                 ),
                 # Bugfix (found while implementing CLEAN-ROOM-PER-ROOM-PASSES):
                 # two_pass was read by the handler and documented in
@@ -1683,6 +1773,8 @@ def async_register_services(hass: HomeAssistant) -> None:
                 # not allowed" (@utkjmitch). The handler has read it all
                 # along -- only the schema was missing.
                 vol.Optional(ATTR_CLEANING_MODE): cv.string,
+                vol.Optional(ATTR_SMART_SCRUB): cv.boolean,
+                vol.Optional(ATTR_RUN_PAD_WETNESS): vol.Coerce(int),
                 vol.Optional(ATTR_ORDERED, default=True): cv.boolean,
                 # CLEAN-ROOM-PER-ROOM-PASSES (v2.9.0): individual pass count
                 # per room within the same sequence, e.g.
@@ -1726,6 +1818,27 @@ def async_register_services(hass: HomeAssistant) -> None:
                 # the error can name which was missing or doubled.
                 vol.Optional("zone_name"): vol.All(cv.ensure_list, [cv.string]),
                 vol.Optional("zone_id"): vol.All(cv.ensure_list, [cv.string]),
+                # DOCUMENTED, IMPLEMENTED, AND REJECTED AT THE DOOR.
+                #
+                # All three are described in `services.yaml` under
+                # `clean_zone`, so the UI offers them, and the handler
+                # below already passes every one of them through to
+                # `clean_rooms()`. Only this schema did not list them,
+                # so Home Assistant refused the call before any of that
+                # code ran: "not a valid option at 'cleaning_mode'. Got
+                # None" (@theChef613), while the identical field worked
+                # on `clean_room`.
+                #
+                # THE SAME FAULT AS `two_pass` ONE SERVICE UP, which is
+                # recorded in this file as read by the handler and
+                # documented in services.yaml but missing from the
+                # schema entirely. Nobody checked the other fields
+                # afterwards. `scripts/check_service_schemas.py` now
+                # does.
+                vol.Optional(ATTR_CLEANING_MODE): cv.string,
+                vol.Optional(ATTR_SMART_SCRUB): cv.boolean,
+                vol.Optional(ATTR_RUN_PAD_WETNESS): vol.Coerce(int),
+                vol.Optional(ATTR_TWO_PASS): cv.boolean,
             }),
         )
         _LOGGER.debug("Registered %s.%s action", DOMAIN, SERVICE_CLEAN_ZONE)

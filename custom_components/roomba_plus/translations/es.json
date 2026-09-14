@@ -1819,7 +1819,7 @@
       "fields": {
         "room_name": {
           "name": "Nombre de habitación",
-          "description": "Nombre o lista de nombres de habitaciones a limpiar. Deben coincidir con las etiquetas asignadas en las opciones de Roomba+. Ejecuta primero una limpieza por habitación desde la app iRobot si no aparece ninguna habitación."
+          "description": "Un nombre de habitación, una lista, o varios separados por comas. Son los nombres que dio a sus habitaciones en la aplicación iRobot. Si no aparece ninguno, ejecute una limpieza por habitación desde esa aplicación."
         },
         "ordered": {
           "name": "Secuencia ordenada",
@@ -2003,6 +2003,9 @@
     },
     "no_room_cleaning": {
       "message": "Este robot no admite limpieza por habitaciones."
+    },
+    "room_name_is_a_zone": {
+      "message": "{names} es una zona y no una habitación en este robot. Use roomba_plus.clean_zone con el mismo nombre."
     }
   },
   "selector": {

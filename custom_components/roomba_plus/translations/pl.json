@@ -1819,7 +1819,7 @@
       "fields": {
         "room_name": {
           "name": "Nazwa pomieszczenia",
-          "description": "Nazwa pomieszczenia lub lista nazw pomieszczeń do sprzątania. Musi odpowiadać etykietom przypisanym w opcjach Roomba+. Najpierw uruchom sprzątanie ukierunkowane na pomieszczenie w aplikacji iRobot, jeśli żadne pomieszczenia jeszcze nie są widoczne."
+          "description": "Nazwa pokoju, lista nazw albo kilka oddzielonych przecinkami. To nazwy nadane pokojom w aplikacji iRobot. Jeśli żadna się nie pojawia, uruchom raz sprzątanie pokoju z tej aplikacji."
         },
         "ordered": {
           "name": "Kolejność sekwencji",
@@ -2003,6 +2003,9 @@
     },
     "no_room_cleaning": {
       "message": "Ten robot nie obsługuje sprzątania pokoi."
+    },
+    "room_name_is_a_zone": {
+      "message": "{names} to strefa, a nie pokój na tym robocie. Użyj roomba_plus.clean_zone z tą samą nazwą."
     }
   },
   "selector": {

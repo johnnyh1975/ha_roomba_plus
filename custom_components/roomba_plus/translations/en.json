@@ -1819,7 +1819,7 @@
       "fields": {
         "room_name": {
           "name": "Room name",
-          "description": "Room name or list of room names to clean. Must match the labels you assigned in Roomba+ options. Run a room-targeted clean via the iRobot app first if no rooms appear yet."
+          "description": "One room name, a list of them, or several separated by commas. The names are the ones you gave your rooms in the iRobot app. If none are offered yet, run a room-targeted clean from that app once."
         },
         "ordered": {
           "name": "Ordered sequence",
@@ -2003,6 +2003,9 @@
     },
     "no_room_cleaning": {
       "message": "This robot has no room cleaning support."
+    },
+    "room_name_is_a_zone": {
+      "message": "{names} is a zone rather than a room on this robot. Use roomba_plus.clean_zone with the same name."
     }
   },
   "selector": {

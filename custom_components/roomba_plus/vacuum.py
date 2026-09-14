@@ -793,6 +793,28 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
                 if _rooms:
                     self._last_resolved_rooms = _rooms
                     self._last_resolved_coverage = _coverage
+                # LAGS THE INTERNAL RECORD BY ONE MQTT MESSAGE.
+                #
+                # This is computed while HA writes the entity's state,
+                # and nothing triggers a write when the mission record
+                # is stored. So between `MissionStore: recorded ...
+                # zones=[A, B]` and the next status message, the
+                # attribute still shows what it showed before.
+                #
+                # @ScenicSystemsLLC caught exactly that: the record read
+                # `zones=['Guest Bathroom', 'Hallway']` and the
+                # attribute, checked seconds later, still showed one
+                # room. Stale, not wrong -- the next message corrects
+                # it, and on a robot that has just docked those are
+                # sparse.
+                #
+                # NOT FIXED HERE ON PURPOSE. Closing it means giving
+                # this entity a dispatcher subscription, which it does
+                # not have at all today: a signal constant, a send site
+                # in the mission callback, a subscribe in
+                # `async_added_to_hass` and an unsubscribe. That is new
+                # infrastructure for a bounded, self-correcting lag, and
+                # it deserves its own change rather than a late edit.
                 attrs["last_cleaned_rooms"] = _rooms
                 attrs["room_coverage"]      = _coverage
             elif (

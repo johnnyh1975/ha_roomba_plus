@@ -557,6 +557,49 @@ def _prime_shadow_dump(data: Any) -> dict[str, Any]:
     }
 
 
+def _room_tracking_summary(data: Any) -> dict[str, Any] | str:
+    """What the room-advance logic is actually working with.
+
+    NOT PRIME-ONLY. The two fields that existed were reported inside the
+    Prime branch, so a Classic robot's dump carried `stores: null` and
+    said nothing at all about room tracking -- @Thonno sent a dump from
+    the middle of a mission and none of the four values that decide a
+    room advance were in it.
+
+    Each of these has cost a diagnosis:
+
+      - `planned_rooms` / `current_room_idx`: whether the display is
+        wrong or simply has nowhere to go
+      - `expected_room_sec`: the estimate the confidence check compares
+        against -- a whole-house average leaked in here as 19211 s per
+        room on a two-room mission
+      - `time_in_current_room_sec`: measured from accumulated message
+        gaps, and it can silently stop growing
+      - `room_progress_observed`: true only once an advance has really
+        happened, which separates "never moved" from "moved wrongly"
+    """
+    store = getattr(data, "mission_timer_store", None)
+    if store is None:
+        return "not created"
+    return {
+        "mission_id": getattr(store, "mission_id", None),
+        "planned_rooms": getattr(store, "planned_rooms", None),
+        "current_room_idx": getattr(store, "current_room_idx", None),
+        "current_room": getattr(store, "current_room", None),
+        "room_progress_observed": getattr(
+            store, "room_progress_observed", None
+        ),
+        "expected_room_sec": getattr(store, "expected_room_sec", None),
+        "time_in_current_room_sec": getattr(
+            store, "time_in_current_room_sec", None
+        ),
+        # Zero on a robot that has run is the signal that phase
+        # transitions are not reaching the store.
+        "elapsed_run_min": getattr(store, "elapsed_run_min", None),
+        "run_sec": getattr(store, "run_sec", None),
+    }
+
+
 def _prime_store_summary(data: Any) -> dict[str, Any]:
     """Whether each Prime-relevant store exists and holds anything.
 
@@ -1139,6 +1182,29 @@ async def _build_diagnostics(
                         getattr(data, "prime_room_names", None) or {}
                     )
                 ),
+                # WHICH REGIONS THE MAP ITSELF CALLS ZONES.
+                #
+                # `discovered_zone_ids` below is what the CONFIG ENTRY
+                # has recorded. The map's own `region_type` is a
+                # separate thing, and it is what `available_rooms()`
+                # filters on -- a region marked as a zone there is not
+                # offered as a room, correctly, but nothing said so.
+                #
+                # @mrsnyds has nine named regions and eight usable
+                # rooms; `clean_room` refuses "Guest Room" while
+                # accepting the other eight, and from the outside that
+                # reads as a bug rather than as a zone.
+                # NOT READABLE FROM HERE, and worth saying so rather
+                # than reading a phantom.
+                #
+                # The room-cleaning backend is built per call by
+                # `async_get_room_cleaning_backend()` and never stored
+                # on runtime data, so `_zone_region_ids` -- which is
+                # what would settle whether "Guest Room" is a zone --
+                # does not exist to be dumped. An earlier attempt to
+                # read it here would have returned None forever, which
+                # is exactly the shape the runtime-data guard catches.
+                "zones_per_map_metadata": "not stored on runtime data",
                 "discovered_zone_ids": sorted(
                     str(z) for z in (
                         (getattr(config_entry, "options", None) or {}).get(
@@ -1455,6 +1521,13 @@ async def _build_diagnostics(
 
     # ── Room subsystem (ROOM-SEG Stage 6 — RoomSegStore, not ZoneStore) ─────────
     room_diag: dict[str, Any] = {"available": data.room_seg_store is not None}
+    # WHAT THE ROOM-ADVANCE LOGIC SEES, on both generations.
+    #
+    # These lived inside the Prime branch, so a Classic dump said
+    # nothing about room tracking at all -- @Thonno sent one from the
+    # middle of a mission and not one of the values that decide an
+    # advance was in it.
+    room_diag["tracking"] = _room_tracking_summary(data)
     if data.room_seg_store is not None:
         room_diag.update(data.room_seg_store.diagnostic_info(
             grid_cell_count=(
@@ -1626,7 +1699,15 @@ async def _build_diagnostics(
         # Emitted verbatim rather than key-by-key: the 980 is a
         # different platform from the i-series, and picking keys in
         # advance would decide the question this exists to answer.
-        "nav_telemetry": state.get("mssnNavStats") or {},
+        # THE SECOND ONE. `mssn_nav_stats` was corrected to carry its
+        # provenance; this copy was missed and still handed the raw
+        # field over under a name that implies live telemetry.
+        #
+        # @Thonno read it as live twice, across two releases: "still
+        # reporting the previous mission (1016) while the actual running
+        # mission is 1017". Correct observation, and the label was what
+        # made it look wrong.
+        "nav_telemetry": _nav_stats_with_provenance(state) or {},
 
         # DOCK IDENTITY. The i-series OTA carries dock firmware for 14
         # hardware/variant combinations named `dock_hw{N}_var{M}`, and

@@ -1819,7 +1819,7 @@
       "fields": {
         "room_name": {
           "name": "Kamernaam",
-          "description": "Kamernaam of lijst met kamernamen om schoon te maken. Moeten overeenkomen met de labels die je hebt toegewezen in Roomba+-opties. Voer eerst een kamergerichte schoonmaak uit via de iRobot-app als er nog geen kamers worden weergegeven."
+          "description": "Eén kamernaam, een lijst, of meerdere gescheiden door komma's. Het zijn de namen die u uw kamers in de iRobot-app hebt gegeven. Verschijnt er nog geen, start dan één keer een kamergerichte reiniging vanuit die app."
         },
         "ordered": {
           "name": "Vaste volgorde",
@@ -2003,6 +2003,9 @@
     },
     "no_room_cleaning": {
       "message": "Deze robot ondersteunt geen kamerreiniging."
+    },
+    "room_name_is_a_zone": {
+      "message": "{names} is op deze robot een zone en geen kamer. Gebruik roomba_plus.clean_zone met dezelfde naam."
     }
   },
   "selector": {
