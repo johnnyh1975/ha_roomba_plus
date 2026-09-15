@@ -38,6 +38,15 @@ PACKAGE = ROOT / "custom_components" / "roomba_plus"
 #: a circular import", because this script has established that they do
 #: not.
 NON_CYCLE_REASONS: dict[str, str] = {
+    "button -> services": (
+        "A REAL CYCLE, both ways. `button` reaches into `services` for "
+        "the maintenance-reset event and the cloud push; `services` "
+        "reaches back into `button` for `async_run_classic_favorite`. "
+        "Both are late for the same reason. "
+        "Surfaced when a new reset button added a second occurrence -- "
+        "the existing one had been here without a reason for a while, "
+        "which is what this table exists to stop."
+    ),
     "__init__ -> sensor_rooms": (
         "INDIRECT CYCLE. `sensor_rooms` imports `entity`, which imports "
         "the package -- so a module-level import here fails with 57 "

@@ -99,13 +99,13 @@ marked in their own headings.
 | `roomba_plus.clean_zone` | SMART | Clean one or more zones on demand, by name or numeric id. Said PRIME until v4.1.0 — which described where it was first wired, not what the robots can do |
 | `roomba_plus.run_favorite` | Cloud | Run a saved iRobot favourite by its id. A favourite carries its own map, so it reaches a room on a map the robot is not currently using |
 | `vacuum.clean_area` | SMART + cloud + HA 2026.3+ | Clean by HA area — see [Room cleaning setup](#room-cleaning-setup--ha-areas-vacuumclean_area-ha-20263) |
-| `roomba_plus.reset_filter` | All | Record filter replacement |
-| `roomba_plus.reset_brush` | All | Record brush / pad replacement |
-| `roomba_plus.reset_battery` | All | Record battery replacement |
-| `roomba_plus.reset_wheel_cleaning` | All | Record wheel module cleaning (v2.7+) |
-| `roomba_plus.reset_contact_cleaning` | All | Record charging contact cleaning (v2.7+) |
-| `roomba_plus.reset_bin_cleaning` | All | Record bin cleaning (v2.7+) |
-| `roomba_plus.reset_robot_profile` | All | Wipe learned calibration data (v2.7+) |
+
+> **Maintenance resets are buttons, not actions.** These were listed here
+> as actions through v4.2.4 and none of them was ever registered, so
+> calling one returned "service not found". They are buttons on the
+> device page, and four of them (pad, wheels, contacts, bin) gained one
+> in v4.2.5 — before that there was no way to record those at all.
+
 | `roomba_plus.clean_sequence` | All | Start robot B when robot A finishes |
 | `roomba_plus.advance_room` | SMART + cloud | Manually advance mission progress to the next room when it gets stuck on a completed one (v2.8.0) |
 | `roomba_plus.clean_overdue_rooms` | SMART + cloud | Clean every room currently overdue (configured or learned rhythm), travel-optimized route from the dock (v3.3.0) |
@@ -164,7 +164,7 @@ data:
   two_pass: true  # optional — overrides the robot's current setting for this job
 ```
 
-**Individual pass count per room (v2.9.0+):** use `room_passes` instead of `room_name` when different rooms in the same sequence need different two-pass settings:
+**Individual settings per room (v2.9.0+, extended in v4.2.5):** use `room_passes` instead of `room_name` when rooms in the same sequence need different treatment. Each room can carry its own `two_pass`, `cleaning_mode`, `smart_scrub` and `pad_wetness`:
 
 ```yaml
 action: roomba_plus.clean_room
@@ -174,9 +174,14 @@ data:
   room_passes:
     - name: Kitchen
       two_pass: true
-    - name: Hallway   # no two_pass — falls back to the global two_pass field, then the robot's current setting
+    - name: Bathroom
+      cleaning_mode: mop
+      pad_wetness: 3
+    - name: Hallway   # nothing of its own — falls back to the call-level field, then the robot's current setting
   ordered: true
 ```
+
+Before v4.2.5 only `two_pass` could be set per room, although the code underneath had always accepted all four.
 
 `room_name` and `room_passes` are mutually exclusive — provide one or the other, not both.
 
@@ -481,8 +486,7 @@ the `*_days_until_due` sensors something real to extrapolate from. Your own conf
 building the self-calibrating history from there; a hydrated baseline is not counted as a
 replacement event and does not skew the learned interval.
 
-**Resets go both ways.** Pressing a reset button or calling `roomba_plus.reset_filter` /
-`reset_brush` now also records the replacement with iRobot, so the app and Home Assistant agree
+**Resets go both ways.** Pressing a reset button now also records the replacement with iRobot, so the app and Home Assistant agree
 about a part you just changed. This is best-effort: the local reset is saved first, and a cloud
 failure is logged without failing the action. The edge brush and bag have their own reset buttons,
 which write to the cloud counter directly since they have no local slot.
@@ -521,15 +525,15 @@ Two states are worth knowing about:
 
 #### Replacement tracking
 
-| Sensor | Button / Action | Robots |
+| Sensor | Button | Robots |
 |---|---|---|
-| `filter_last_replaced` | `reset_filter` | All |
-| `brush_last_replaced` | `reset_brush` | Vacuums |
-| `pad_last_replaced` | `reset_pad` | Braava |
-| `battery_last_replaced` | `reset_battery` | All |
-| `wheel_last_cleaned` | `reset_wheel_cleaning` | All (v2.7+) |
-| `contact_last_cleaned` | `reset_contact_cleaning` | All (v2.7+) |
-| `bin_last_cleaned` | `reset_bin_cleaning` | All (v2.7+) |
+| `filter_last_replaced` | Filter replaced | All |
+| `brush_last_replaced` | Brush replaced | Vacuums |
+| `pad_last_replaced` | Mop pad replaced | Braava |
+| `battery_last_replaced` | Battery replaced | All |
+| `wheel_last_cleaned` | Wheels cleaned | All (v2.7+) |
+| `contact_last_cleaned` | Charging contacts cleaned | All (v2.7+) |
+| `bin_last_cleaned` | Bin cleaned | All (v2.7+) |
 
 **Calendar-based inspect tracking (v2.7+):** wheel module, charging contacts, and bin are cleaned on a calendar cadence rather than hours-of-use. Three new timestamp sensors and services track when each was last cleaned so you can build reminders from them.
 

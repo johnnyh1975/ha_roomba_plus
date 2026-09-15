@@ -84,8 +84,12 @@ def _named_schemas(tree: ast.Module) -> dict[str, ast.expr]:
     `_CLEAN_SEQUENCE_SCHEMA`; without following those, they look like
     services whose schema accepts nothing at all.
     """
+    # ANYWHERE, not just at module level. `_RESET_SCHEMA` is assigned
+    # inside the registration function, so a module-level scan finds
+    # nothing and reports the three services that share it as having an
+    # unreadable schema.
     out: dict[str, ast.expr] = {}
-    for node in tree.body:
+    for node in ast.walk(tree):
         if isinstance(node, ast.Assign) and len(node.targets) == 1:
             target = node.targets[0]
             if isinstance(target, ast.Name) and node.value is not None:
@@ -144,6 +148,30 @@ def _registrations(
 ) -> dict[str, set[str] | None]:
     """{service name: accepted field names, or None when unreadable}."""
     out: dict[str, set[str] | None] = {}
+    # REGISTERED IN A LOOP OVER TUPLES. The schedule services are
+    # written as `for name, handler, schema in ((SERVICE_X, h, S), ...)`,
+    # so the register call names a loop variable and nothing about the
+    # Call node says which service it is. Reading the tuples gives the
+    # pairing directly.
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.For) or not isinstance(node.iter, ast.Tuple):
+            continue
+        if not (
+            isinstance(node.target, ast.Tuple)
+            and len(node.target.elts) >= 2
+        ):
+            continue
+        for entry in node.iter.elts:
+            if not isinstance(entry, ast.Tuple) or len(entry.elts) < 2:
+                continue
+            first, last = entry.elts[0], entry.elts[-1]
+            name = (
+                first.value if isinstance(first, ast.Constant)
+                else constants.get(getattr(first, "id", ""))
+            )
+            if isinstance(name, str):
+                out[name] = _schema_field_names(last, constants, named)
+
     for node in ast.walk(tree):
         if not (
             isinstance(node, ast.Call)

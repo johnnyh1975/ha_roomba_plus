@@ -9,6 +9,29 @@ note are listed — most releases need zero action beyond updating.
 
 ---
 
+## v4.2.5 — from v4.2.4
+
+Nothing to do.
+
+**If your robot has more than one map**, zones now follow the robot the
+way rooms already did in 4.2.4. Picking a map explicitly in the Map
+entity applies to both.
+
+**Four new buttons** appear on every robot: mop pad replaced, wheels
+cleaned, charging contacts cleaned, bin cleaned. These were documented
+as actions in earlier versions and never actually existed, so any
+automation calling `roomba_plus.reset_pad`, `reset_wheel_cleaning`,
+`reset_contact_cleaning` or `reset_bin_cleaning` has been failing with
+"service not found" — press the button or call `button.press` instead.
+The same applies to `reset_filter`, `reset_brush` and `reset_battery`,
+whose buttons already existed.
+
+**`room_passes` takes more per room.** Alongside `two_pass`, each entry
+now accepts `cleaning_mode`, `smart_scrub` and `pad_wetness`. Existing
+`room_passes` blocks keep working unchanged.
+
+---
+
 ## v4.2.4 — from v4.2.3
 
 Nothing to do.

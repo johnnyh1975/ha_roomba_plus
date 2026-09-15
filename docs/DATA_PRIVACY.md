@@ -87,6 +87,11 @@ this project.
 irobot_username · irobot_password · password · blid
 ```
 
+Any key whose name contains `password`, `passwd`, `secret`, `token`,
+`apikey`, `privatekey`, `credential` or `passphrase` is replaced at every
+depth of the file, whatever the section. A field added by a future
+firmware is covered by the same rule rather than needing to be listed.
+
 Your BLID is also replaced wherever it appears inside nested values, not only
 where it is a key — including inside topic strings and URLs.
 
@@ -98,6 +103,9 @@ where it is a key — including inside topic strings and URLs.
 - **Map geometry** — room outlines and sizes, which is a floor plan
 - **Mission history** — when the robot ran, for how long, and where
 - **Capability flags and firmware versions** — identifies the model, not you
+- **Commands Roomba+ sent** (v4.2.5+) — the last dozen, with their time,
+  the rooms or zones named, and whether each reached the broker. This is
+  what makes "it did nothing and reported no error" diagnosable at all
 
 If any of that matters to you, edit the file before sending it, or send the
 part that is relevant. **A partial download is more useful than none**, and

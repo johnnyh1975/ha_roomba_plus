@@ -204,6 +204,31 @@ On lewis-firmware robots (i7+/s9+), the robot occasionally reports a brief non-c
 
 ---
 
+### The robot accepts a room clean, then sits on the dock
+
+The log shows the command was accepted and no mission started, with
+`error=224` — a localisation failure. The robot could not work out where
+it was on the map it was asked to clean.
+
+**If you have more than one map**, that is the usual cause: a robot can
+only clean the map it is standing on. Since v4.2.4 the room list follows
+the robot rather than merging every map, and v4.2.5 does the same for
+zones, so the rooms you are offered should be reachable ones.
+
+On a cloud-connected robot you also have a **Map** entity. Leave it on
+"follow robot" unless you deliberately want a different map — picking
+one explicitly overrides what the robot reports.
+
+**If you have one map**, 224 means the robot genuinely could not
+localise: it may have been moved while docked, or the map may need
+re-learning in the iRobot app.
+
+### Rooms from another floor appear in the list
+
+Fixed in v4.2.4 for rooms and v4.2.5 for zones. Before those, every map
+the robot knew was merged into one flat list, so rooms from a map the
+robot was not on could be selected — and produced the 224 above.
+
 ## Mission sensors on Prime robots
 
 **`clean_streak` or `area_cleaned_today` only updates after a reload**

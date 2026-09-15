@@ -295,6 +295,12 @@ _DIFFERENCE_IS_EXPECTED: tuple[str, ...] = (
     # it. A diagnostics builder exists to report each generation
     # differently -- that IS the difference.
     "_build_diagnostics",
+    # THE CLOUD-ONLY BRANCH DELEGATES RATHER THAN SENDING. It calls
+    # `roomba_plus.clean_room`, which records the outgoing command at
+    # its own send site; the direct branches send and record here.
+    # Recording in both would count one command twice and make the
+    # record less trustworthy than no record at all.
+    "_do_start",
 )
 
 
