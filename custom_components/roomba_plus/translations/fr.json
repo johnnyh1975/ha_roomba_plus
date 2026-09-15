@@ -152,11 +152,11 @@
       },
       "zones": {
         "title": "Nommer les pièces détectées",
-        "description": "{zone_count} nouvelle(s) zone(s) détectée(s). Attribuez des noms pour pouvoir les nettoyer individuellement :"
+        "description": "{robot} : {zone_count} zone(s) sans nom (ID : {zone_ids}). Saisissez une par ligne sous la forme `id=Nom`. Si vous ne savez pas laquelle est laquelle, ouvrez la carte du robot dans l'application iRobot — les zones y sont dessinées avec leurs numéros."
       },
       "smart_zones": {
         "title": "Nommer les zones Smart Map",
-        "description": "{zone_count} zone(s) sans nom (IDs : {zone_ids}). Attribuez des noms pour pouvoir les nettoyer individuellement :"
+        "description": "{robot} : {zone_count} zone(s) sans nom (ID : {zone_ids}). Saisissez une par ligne sous la forme `id=Nom`. Si vous ne savez pas laquelle est laquelle, ouvrez la carte du robot dans l'application iRobot — les zones y sont dessinées avec leurs numéros."
       },
       "settings": {
         "title": "Paramètres de connexion",
@@ -1469,6 +1469,18 @@
       },
       "prime_clean_zone": {
         "name": "Nettoyer la pièce choisie"
+      },
+      "reset_pad": {
+        "name": "Serpillière remplacée"
+      },
+      "reset_wheel_cleaning": {
+        "name": "Roues nettoyées"
+      },
+      "reset_contact_cleaning": {
+        "name": "Contacts de charge nettoyés"
+      },
+      "reset_bin_cleaning": {
+        "name": "Bac nettoyé"
       }
     },
     "switch": {
@@ -1752,7 +1764,7 @@
     },
     "observed_zones_detected": {
       "title": "Obstacles détectés par le robot dans la carte cloud",
-      "description": "Votre carte cloud iRobot contient {zone_count} zone(s) d'obstacles détectés par le robot. Effectuez quelques missions de nettoyage pour que Roomba+ puisse les confirmer localement."
+      "description": "{robot} : {zone_count} zone(s) sans nom (ID : {zone_ids}). Saisissez une par ligne sous la forme `id=Nom`. Si vous ne savez pas laquelle est laquelle, ouvrez la carte du robot dans l'application iRobot — les zones y sont dessinées avec leurs numéros."
     },
     "dock_contact_health": {
       "title": "Problème détecté sur les contacts de la base",

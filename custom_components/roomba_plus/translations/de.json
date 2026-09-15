@@ -152,11 +152,11 @@
       },
       "zones": {
         "title": "Erkannte Räume benennen",
-        "description": "{zone_count} neue Bereiche wurden erkannt. Bitte vergib Namen damit du Bereiche gezielt reinigen kannst:"
+        "description": "{robot}: {zone_count} Zone(n) haben noch keinen Namen (IDs: {zone_ids}). Geben Sie eine pro Zeile als `id=Name` ein. Wenn Sie nicht wissen, welche Zone welche ist, öffnen Sie die Karte des Roboters in der iRobot-App – dort sind die Zonen mit ihren Nummern eingezeichnet."
       },
       "smart_zones": {
         "title": "Smart-Map-Zonen benennen",
-        "description": "{zone_count} Zone(n) haben noch keinen Namen (IDs: {zone_ids}). Bitte Namen vergeben:"
+        "description": "{robot}: {zone_count} Zone(n) haben noch keinen Namen (IDs: {zone_ids}). Geben Sie eine pro Zeile als `id=Name` ein. Wenn Sie nicht wissen, welche Zone welche ist, öffnen Sie die Karte des Roboters in der iRobot-App – dort sind die Zonen mit ihren Nummern eingezeichnet."
       },
       "settings": {
         "title": "Verbindungseinstellungen",
@@ -1469,6 +1469,18 @@
       },
       "prime_clean_zone": {
         "name": "Gewählten Raum reinigen"
+      },
+      "reset_pad": {
+        "name": "Wischtuch gewechselt"
+      },
+      "reset_wheel_cleaning": {
+        "name": "Räder gereinigt"
+      },
+      "reset_contact_cleaning": {
+        "name": "Ladekontakte gereinigt"
+      },
+      "reset_bin_cleaning": {
+        "name": "Behälter gereinigt"
       }
     },
     "switch": {
@@ -1752,7 +1764,7 @@
     },
     "observed_zones_detected": {
       "title": "Roboter-erkannte Hindernisse in der Cloud-Karte",
-      "description": "Ihre iRobot-Cloud-Karte enthält {zone_count} roboter-erkannte Hinderniszone(n). Führen Sie einige Reinigungsmissionen durch, damit Roomba+ diese lokal bestätigen kann."
+      "description": "{robot}: {zone_count} Zone(n) haben noch keinen Namen (IDs: {zone_ids}). Geben Sie eine pro Zeile als `id=Name` ein. Wenn Sie nicht wissen, welche Zone welche ist, öffnen Sie die Karte des Roboters in der iRobot-App – dort sind die Zonen mit ihren Nummern eingezeichnet."
     },
     "dock_contact_health": {
       "title": "Problem mit Dock-Kontaktgesundheit erkannt",

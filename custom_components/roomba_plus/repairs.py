@@ -16,6 +16,7 @@ import logging
 import time
 from typing import Any
 
+from homeassistant.helpers import selector
 import voluptuous as vol
 
 from homeassistant import data_entry_flow
@@ -278,8 +279,22 @@ class SmartZoneNamingRepairFlow(RepairsFlow):
         # for backwards compatibility, but the canonical pre-fill is newlines.
         default_text = "\n".join(f"{rid}=" for rid in unlabelled)
 
+        # A MULTILINE FIELD, so the pre-fill survives being shown.
+        #
+        # A plain `str` renders as a one-line input, which collapses the
+        # newlines this pre-fill is built from: three ids arrive as
+        # "20=21=23=" on one line. The parser was taught to accept
+        # commas as a workaround, but the box still shows something the
+        # instructions above it call invalid, and the user is left to
+        # guess (@liblit).
         schema = vol.Schema(
-            {vol.Required("zones", default=default_text): str}
+            {
+                vol.Required("zones", default=default_text): (
+                    selector.TextSelector(
+                        selector.TextSelectorConfig(multiline=True)
+                    )
+                )
+            }
         )
         return self.async_show_form(
             step_id="init",  # MUST be "init" — HA repair frontend requirement
@@ -288,6 +303,13 @@ class SmartZoneNamingRepairFlow(RepairsFlow):
             description_placeholders={
                 "zone_count": str(len(unlabelled)),
                 "zone_ids": ", ".join(unlabelled),
+                # WHICH ROBOT. The issue is raised per config entry and
+                # the flow has known which one all along -- the dialog
+                # just never said. With two robots there was no way to
+                # tell from the notice which one it meant (@liblit).
+                "robot": (
+                    getattr(self._config_entry, "title", None) or "this robot"
+                ),
             },
         )
 

@@ -85,55 +85,15 @@ clean_room:
     room_passes:
       name: Rooms with individual pass settings
       description: >
-        Alternative to room_name — a list of rooms to clean in sequence,
-        each with its own optional two-pass setting. Rooms without an
-        explicit two_pass fall back to the global two_pass field, then to
+        Alternative to room_name — a list of rooms to clean in sequence, each with
+        its own optional two_pass, cleaning_mode, smart_scrub and pad_wetness. A
+        room that omits one falls back to the matching field on the call, then to
         the robot's current setting. Example:
-        [{name: Kitchen, two_pass: true}, {name: Hallway}]
+        [{name: Kitchen, two_pass: true}, {name: Bathroom, cleaning_mode: mop}]
       required: false
       example: '[{"name": "Kitchen", "two_pass": true}, {"name": "Hallway"}]'
       selector:
         object:
-
-reset_filter:
-  name: Reset filter
-  description: >
-    Record the current time as the filter replacement date and restart the
-    remaining-life counter. Use after physically replacing the filter.
-  target:
-    entity:
-      integration: roomba_plus
-      domain: vacuum
-
-reset_brush:
-  name: Reset brushes
-  description: >
-    Record the current time as the brush replacement date and restart the
-    remaining-life counter. Use after physically replacing the brush roll.
-  target:
-    entity:
-      integration: roomba_plus
-      domain: vacuum
-
-reset_battery:
-  name: Reset battery
-  description: >
-    Record the current time as the battery replacement date.
-    Use after physically replacing the battery pack.
-  target:
-    entity:
-      integration: roomba_plus
-      domain: vacuum
-
-reset_pad:
-  name: Reset cleaning pad
-  description: >
-    Record the current time as the pad replacement date (Braava mops only).
-    Use after replacing the reusable or disposable cleaning pad.
-  target:
-    entity:
-      integration: roomba_plus
-      domain: vacuum
 
 smart_start:
   name: Smart start
@@ -206,36 +166,6 @@ clean_sequence:
           max: 60
           step: 1
           unit_of_measurement: min
-
-reset_wheel_cleaning:
-  name: Reset wheel cleaning
-  description: >
-    Record the current time as the wheel module last-cleaned date.
-    Use after cleaning the wheel module and front caster.
-  target:
-    entity:
-      integration: roomba_plus
-      domain: vacuum
-
-reset_contact_cleaning:
-  name: Reset contact cleaning
-  description: >
-    Record the current time as the charging contacts last-cleaned date.
-    Use after cleaning the dock and robot charging contacts.
-  target:
-    entity:
-      integration: roomba_plus
-      domain: vacuum
-
-reset_bin_cleaning:
-  name: Reset bin cleaning
-  description: >
-    Record the current time as the bin last-cleaned date.
-    Use after washing or wiping out the dust bin.
-  target:
-    entity:
-      integration: roomba_plus
-      domain: vacuum
 
 reset_robot_profile:
   name: Reset robot profile

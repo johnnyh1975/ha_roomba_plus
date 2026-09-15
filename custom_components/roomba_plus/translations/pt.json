@@ -152,11 +152,11 @@
       },
       "zones": {
         "title": "Nomear divisões detetadas",
-        "description": "{zone_count} nova(s) área(s) detetada(s). Atribui nomes para as limpar individualmente:"
+        "description": "{robot}: {zone_count} zona(s) sem nome (IDs: {zone_ids}). Introduza uma por linha como `id=Nome`. Se não souber qual é qual, abra o mapa do robô na aplicação iRobot — as zonas estão desenhadas com os seus números."
       },
       "smart_zones": {
         "title": "Nomear zonas Smart Map",
-        "description": "{zone_count} zona(s) sem nome (IDs: {zone_ids}). Atribui nomes para as limpar individualmente:"
+        "description": "{robot}: {zone_count} zona(s) sem nome (IDs: {zone_ids}). Introduza uma por linha como `id=Nome`. Se não souber qual é qual, abra o mapa do robô na aplicação iRobot — as zonas estão desenhadas com os seus números."
       },
       "settings": {
         "title": "Definições de ligação",
@@ -1469,6 +1469,18 @@
       },
       "prime_clean_zone": {
         "name": "Limpar a divisão escolhida"
+      },
+      "reset_pad": {
+        "name": "Mopa substituída"
+      },
+      "reset_wheel_cleaning": {
+        "name": "Rodas limpas"
+      },
+      "reset_contact_cleaning": {
+        "name": "Contactos de carga limpos"
+      },
+      "reset_bin_cleaning": {
+        "name": "Depósito limpo"
       }
     },
     "switch": {
@@ -1752,7 +1764,7 @@
     },
     "observed_zones_detected": {
       "title": "Obstáculos detetados pelo robô no mapa cloud",
-      "description": "O seu mapa cloud iRobot contém {zone_count} zona(s) de obstáculos detetados pelo robô. Execute algumas missões de limpeza para que o Roomba+ possa confirmá-los localmente."
+      "description": "{robot}: {zone_count} zona(s) sem nome (IDs: {zone_ids}). Introduza uma por linha como `id=Nome`. Se não souber qual é qual, abra o mapa do robô na aplicação iRobot — as zonas estão desenhadas com os seus números."
     },
     "dock_contact_health": {
       "title": "Detetado um problema nos contactos da base",

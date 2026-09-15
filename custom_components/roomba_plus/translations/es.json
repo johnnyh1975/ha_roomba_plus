@@ -152,11 +152,11 @@
       },
       "zones": {
         "title": "Nombrar habitaciones detectadas",
-        "description": "{zone_count} área(s) nueva(s) detectada(s). Asigna nombres para limpiarlas individualmente:"
+        "description": "{robot}: {zone_count} zona(s) sin nombre (ID: {zone_ids}). Introduzca una por línea como `id=Nombre`. Si no sabe cuál es cuál, abra el mapa del robot en la aplicación iRobot: las zonas aparecen dibujadas con sus números."
       },
       "smart_zones": {
         "title": "Nombrar zonas Smart Map",
-        "description": "{zone_count} zona(s) sin nombre (IDs: {zone_ids}). Asigna nombres para limpiarlas individualmente:"
+        "description": "{robot}: {zone_count} zona(s) sin nombre (ID: {zone_ids}). Introduzca una por línea como `id=Nombre`. Si no sabe cuál es cuál, abra el mapa del robot en la aplicación iRobot: las zonas aparecen dibujadas con sus números."
       },
       "settings": {
         "title": "Configuración de conexión",
@@ -1469,6 +1469,18 @@
       },
       "prime_clean_zone": {
         "name": "Limpiar la habitación seleccionada"
+      },
+      "reset_pad": {
+        "name": "Mopa reemplazada"
+      },
+      "reset_wheel_cleaning": {
+        "name": "Ruedas limpiadas"
+      },
+      "reset_contact_cleaning": {
+        "name": "Contactos de carga limpiados"
+      },
+      "reset_bin_cleaning": {
+        "name": "Depósito limpiado"
       }
     },
     "switch": {
@@ -1752,7 +1764,7 @@
     },
     "observed_zones_detected": {
       "title": "Obstáculos detectados por el robot en el mapa en la nube",
-      "description": "Su mapa en la nube de iRobot contiene {zone_count} zona(s) de obstáculos detectados por el robot. Realice algunas misiónes de limpieza para que Roomba+ pueda confirmarlos localmente."
+      "description": "{robot}: {zone_count} zona(s) sin nombre (ID: {zone_ids}). Introduzca una por línea como `id=Nombre`. Si no sabe cuál es cuál, abra el mapa del robot en la aplicación iRobot: las zonas aparecen dibujadas con sus números."
     },
     "dock_contact_health": {
       "title": "Se ha detectado un problema en los contactos de la base",

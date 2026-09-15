@@ -321,6 +321,14 @@ async def async_setup_entry(
         FilterResetButton(roomba, blid, config_entry),
         BrushResetButton(roomba, blid, config_entry),
         BatteryResetButton(roomba, blid, config_entry),
+        # FOUR THAT HAD NO WAY IN AT ALL. The store has always been able
+        # to reset these, and `services.yaml` advertised a service for
+        # each -- none of which was ever registered. So the documented
+        # route returned "service not found" and there was no button.
+        PadResetButton(roomba, blid, config_entry),
+        WheelCleaningResetButton(roomba, blid, config_entry),
+        ContactCleaningResetButton(roomba, blid, config_entry),
+        BinCleaningResetButton(roomba, blid, config_entry),
         *_cloud_part_reset_buttons(roomba, blid, config_entry),
     ])
 
@@ -504,6 +512,93 @@ class BrushResetButton(_MaintenanceResetButton):
             await _async_push_part_reset_to_cloud(
                 self._config_entry, self._config_entry.runtime_data, "brush"
             )
+
+
+class PadResetButton(_MaintenanceResetButton):
+    """Button: mark the mop pad as replaced.
+
+    THE STORE COULD ALWAYS DO THIS AND NOTHING COULD REACH IT.
+    `MaintenanceStore.reset_pad()` has existed all along, and
+    `services.yaml` advertised a `reset_pad` service -- which was never
+    registered. So a documented way to reset the pad returned "service
+    not found", and there was no button either.
+
+    Found by a build check comparing the documented services against the
+    ones actually registered: seven were advertised and none existed.
+    """
+
+    _attr_translation_key = "reset_pad"
+
+    def __init__(self, roomba: Any, blid: str, config_entry: RoombaConfigEntry) -> None:
+        super().__init__(roomba, blid, config_entry)
+        self._attr_unique_id = f"{self.robot_unique_id}_reset_pad"
+
+    async def async_press(self) -> None:
+        hr = self._current_hr()
+        _LOGGER.info("PadResetButton: reset at %dh", hr)
+        store = self._maintenance_store()
+        if store:
+            store.reset_pad(hr)
+            await self._save()
+            from .services import _fire_maintenance_reset_event  # noqa: PLC0415
+
+            _fire_maintenance_reset_event(
+                self.hass, self._config_entry, "pad", hr
+            )
+
+
+class _CleaningTaskResetButton(_MaintenanceResetButton):
+    """Button: record that a cleaning task was carried out just now.
+
+    Wheels, charging contacts and the bin are cleaned rather than
+    replaced, so the store records a wall-clock timestamp instead of a
+    runtime-hours baseline -- no `current_hr` involved.
+
+    All three were documented as services and none was registered.
+    """
+
+    _task: str = ""
+
+    async def async_press(self) -> None:
+        store = self._maintenance_store()
+        if store is None:
+            return
+        getattr(store, f"reset_{self._task}_cleaning")()
+        _LOGGER.info("%s: recorded", type(self).__name__)
+        await self._save()
+
+
+class WheelCleaningResetButton(_CleaningTaskResetButton):
+    """Button: wheel modules cleaned."""
+
+    _attr_translation_key = "reset_wheel_cleaning"
+    _task = "wheel"
+
+    def __init__(self, roomba: Any, blid: str, config_entry: RoombaConfigEntry) -> None:
+        super().__init__(roomba, blid, config_entry)
+        self._attr_unique_id = f"{self.robot_unique_id}_reset_wheel_cleaning"
+
+
+class ContactCleaningResetButton(_CleaningTaskResetButton):
+    """Button: charging contacts cleaned."""
+
+    _attr_translation_key = "reset_contact_cleaning"
+    _task = "contact"
+
+    def __init__(self, roomba: Any, blid: str, config_entry: RoombaConfigEntry) -> None:
+        super().__init__(roomba, blid, config_entry)
+        self._attr_unique_id = f"{self.robot_unique_id}_reset_contact_cleaning"
+
+
+class BinCleaningResetButton(_CleaningTaskResetButton):
+    """Button: bin cleaned."""
+
+    _attr_translation_key = "reset_bin_cleaning"
+    _task = "bin"
+
+    def __init__(self, roomba: Any, blid: str, config_entry: RoombaConfigEntry) -> None:
+        super().__init__(roomba, blid, config_entry)
+        self._attr_unique_id = f"{self.robot_unique_id}_reset_bin_cleaning"
 
 
 class _CloudPartResetButton(_MaintenanceResetButton):

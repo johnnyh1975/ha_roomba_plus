@@ -597,6 +597,24 @@ async def async_build_prime_floor_plan(
         existing.update(names_for_others)
         runtime.prime_room_names = existing
 
+        # AND THE MAP THEY CAME FROM.
+        #
+        # We are inside a build for ONE map and have its id as an
+        # argument, so every name added here belongs to it. Writing only
+        # the name left a cached zone with no floor -- which is why
+        # @chairstacker's zones could not be narrowed to the map he
+        # picked, and why the robot refuses them with "not currently
+        # reporting which map it is on".
+        #
+        # `setdefault` rather than overwrite: the OTHER name source,
+        # `_named_regions_across_maps()`, reads region names per map
+        # from the cloud and is the more direct evidence. This fills the
+        # gaps it leaves.
+        _map_ids = dict(getattr(runtime, "prime_room_map_ids", None) or {})
+        for _region_id in names_for_others:
+            _map_ids.setdefault(str(_region_id), p2map_id)
+        runtime.prime_room_map_ids = _map_ids
+
         # TELL ANYONE WAITING. Region names are filled HERE, during a
         # map build -- not by the status coordinator. Entities built
         # from them had no way to learn they had arrived, so the

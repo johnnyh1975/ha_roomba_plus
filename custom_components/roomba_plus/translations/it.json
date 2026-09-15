@@ -152,11 +152,11 @@
       },
       "zones": {
         "title": "Nomina le stanze rilevate",
-        "description": "{zone_count} nuova/e area/e rilevata/e. Assegna i nomi per pulirle singolarmente:"
+        "description": "{robot}: {zone_count} zona/e senza nome (ID: {zone_ids}). Inserisci una per riga come `id=Nome`. Se non sai quale sia quale, apri la mappa del robot nell'app iRobot: le zone sono disegnate con i loro numeri."
       },
       "smart_zones": {
         "title": "Nomina le zone Smart Map",
-        "description": "{zone_count} zona/e senza nome (ID: {zone_ids}). Assegna i nomi per pulirle singolarmente:"
+        "description": "{robot}: {zone_count} zona/e senza nome (ID: {zone_ids}). Inserisci una per riga come `id=Nome`. Se non sai quale sia quale, apri la mappa del robot nell'app iRobot: le zone sono disegnate con i loro numeri."
       },
       "settings": {
         "title": "Impostazioni di connessione",
@@ -1469,6 +1469,18 @@
       },
       "prime_clean_zone": {
         "name": "Pulisci la stanza selezionata"
+      },
+      "reset_pad": {
+        "name": "Panno sostituito"
+      },
+      "reset_wheel_cleaning": {
+        "name": "Ruote pulite"
+      },
+      "reset_contact_cleaning": {
+        "name": "Contatti di ricarica puliti"
+      },
+      "reset_bin_cleaning": {
+        "name": "Contenitore pulito"
       }
     },
     "switch": {
@@ -1752,7 +1764,7 @@
     },
     "observed_zones_detected": {
       "title": "Ostacoli rilevati dal robot nella mappa cloud",
-      "description": "La mappa cloud iRobot contiene {zone_count} zona/e di ostacoli rilevati dal robot. Esegui alcune missioni di pulizia affinché Roomba+ possa confermarli localmente."
+      "description": "{robot}: {zone_count} zona/e senza nome (ID: {zone_ids}). Inserisci una per riga come `id=Nome`. Se non sai quale sia quale, apri la mappa del robot nell'app iRobot: le zone sono disegnate con i loro numeri."
     },
     "dock_contact_health": {
       "title": "Rilevato problema ai contatti della base",

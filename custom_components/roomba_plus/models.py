@@ -140,7 +140,43 @@ class RoombaData:
     #: {room_id: name} from the map bundle, which knows names the
     #: schedule coordinator does not. Filled whenever a floor plan is
     #: built, and read by the calendar to fill gaps in its own summaries.
+    #: The last few commands WE sent, newest last.
+    #:
+    #: THE QUESTION NOBODY COULD ANSWER. Three testers in one week
+    #: reported a command that produced nothing, and each time the first
+    #: thing to establish was "did it go out, and with what?" -- and
+    #: each time nothing here could say. The robot keeps `lastCommand`,
+    #: but only for commands it RECEIVED, which is precisely what was in
+    #: doubt.
+    #:
+    #: So this is our side of the wire: when, what, and what the publish
+    #: returned. Short on purpose -- a ring of the last few, not a log.
+    #: It answers "was it sent" in one line of a diagnostics download
+    #: instead of five competing theories.
+    #:
+    #: A TRUE RESULT MEANS PUBLISHED, NOT EXECUTED. The library is
+    #: explicit that a correct, broker-confirmed command can still do
+    #: nothing -- one robot ignored `start`, `stop`, `dock` and `find`
+    #: for 61 hours. This narrows the question; it does not settle it.
+    sent_commands: list[dict[str, Any]] = field(default_factory=list)
+
     prime_room_names: dict[str, str] = field(default_factory=dict)
+
+    #: {region_id: p2map_id} for whatever is in `prime_room_names`.
+    #:
+    #: THE NAME SURVIVED AND ITS MAP DID NOT. The floor-plan build takes
+    #: `p2map_id` as an argument and writes the names it finds -- rooms
+    #: and zones alike -- into a flat id->name dict, dropping the map on
+    #: the way. So a cached zone has a name and no floor.
+    #:
+    #: That is why @chairstacker's zones could not be narrowed to the map
+    #: he selected, and why `clean_rooms()` refuses them with "not
+    #: currently reporting which map it is on": both need the map, and
+    #: only the OTHER name source records it.
+    #:
+    #: Written beside the names, from the same call, so the two cannot
+    #: drift apart.
+    prime_room_map_ids: dict[str, str] = field(default_factory=dict)
 
     #: The last map the robot said it was standing on.
     #:

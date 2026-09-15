@@ -30,6 +30,7 @@ except ImportError:  # pragma: no cover
     Event = object  # type: ignore[assignment,misc]
 from homeassistant.util import dt as dt_util
 
+from .command_record import record_command
 from .const import (
     CONF_BLOCKING_BEHAVIOR,
     CONF_BLOCKING_SENSORS,
@@ -332,9 +333,15 @@ class BlockingManager:
         elif data.prime_robot is not None:
             # Branch on the value rather than on `connection_type`: the
             # two agree, and only one of them narrows.
-            await data.prime_robot.send_simple_command("start")
+            _ok = await data.prime_robot.send_simple_command("start")
+            record_command(self._entry, "start", {"command": "start"}, ok=bool(_ok))
         elif data.roomba is not None:
+            # BOTH GENERATIONS RECORD. Classic's `send_command` returns
+            # nothing to check, so `ok` stays None -- "sent, result
+            # unknown" rather than a claim either way. The record still
+            # answers the question that matters: was one issued at all.
             await data.roomba.send_command("start")
+            record_command(self._entry, "start", {"command": "start"})
         _LOGGER.info("BlockingManager: start issued")
 
     # ── Cleanup ───────────────────────────────────────────────────────────────

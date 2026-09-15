@@ -530,6 +530,18 @@
       },
       "prime_clean_zone": {
         "default": "mdi:broom"
+      },
+      "reset_pad": {
+        "default": "mdi:water-outline"
+      },
+      "reset_wheel_cleaning": {
+        "default": "mdi:tire"
+      },
+      "reset_contact_cleaning": {
+        "default": "mdi:connection"
+      },
+      "reset_bin_cleaning": {
+        "default": "mdi:delete-outline"
       }
     },
     "select": {

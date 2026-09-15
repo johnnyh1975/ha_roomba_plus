@@ -152,11 +152,11 @@
       },
       "zones": {
         "title": "Gevonden kamers een naam geven",
-        "description": "{zone_count} nieuw(e) gebied(en) gevonden. Geef ze een naam zodat je ze afzonderlijk kunt schoonmaken:"
+        "description": "{robot}: {zone_count} zone(s) hebben nog geen naam (ID's: {zone_ids}). Voer er één per regel in als `id=Naam`. Weet u niet welke zone welke is, open dan de kaart van de robot in de iRobot-app — de zones staan daar met hun nummers getekend."
       },
       "smart_zones": {
         "title": "Smart Map-zones een naam geven",
-        "description": "{zone_count} zone(s) hebben nog geen naam (ID's: {zone_ids}). Geef ze een naam zodat je ze afzonderlijk kunt schoonmaken:"
+        "description": "{robot}: {zone_count} zone(s) hebben nog geen naam (ID's: {zone_ids}). Voer er één per regel in als `id=Naam`. Weet u niet welke zone welke is, open dan de kaart van de robot in de iRobot-app — de zones staan daar met hun nummers getekend."
       },
       "settings": {
         "title": "Verbindingsinstellingen",
@@ -1469,6 +1469,18 @@
       },
       "prime_clean_zone": {
         "name": "Gekozen kamer schoonmaken"
+      },
+      "reset_pad": {
+        "name": "Dweil vervangen"
+      },
+      "reset_wheel_cleaning": {
+        "name": "Wielen gereinigd"
+      },
+      "reset_contact_cleaning": {
+        "name": "Laadcontacten gereinigd"
+      },
+      "reset_bin_cleaning": {
+        "name": "Stofbak gereinigd"
       }
     },
     "switch": {
@@ -1752,7 +1764,7 @@
     },
     "observed_zones_detected": {
       "title": "Door robot gedetecteerde obstakels in cloudkaart",
-      "description": "Uw iRobot-cloudkaart bevat {zone_count} door de robot gedetecteerde obstakelzone(s). Voer enkele schoonmaakmissies uit zodat Roomba+ deze lokaal kan bevestigen."
+      "description": "{robot}: {zone_count} zone(s) hebben nog geen naam (ID's: {zone_ids}). Voer er één per regel in als `id=Naam`. Weet u niet welke zone welke is, open dan de kaart van de robot in de iRobot-app — de zones staan daar met hun nummers getekend."
     },
     "dock_contact_health": {
       "title": "Probleem met dockcontacten gedetecteerd",

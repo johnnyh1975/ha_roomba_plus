@@ -35,6 +35,15 @@ def _cloud_diag(data: Any) -> dict[str, Any]:
         return {"enabled": False}
     result: dict[str, Any] = {
         "enabled": True,
+        # WHAT THIS DOES AND DOES NOT MEAN. This is a PUSH
+        # coordinator (update_interval=None), so it is never
+        # polled: the flag records that the last time data was
+        # set it went well, and then stays put. A robot that has
+        # sent nothing for hours still reports True here, and
+        # correctly so. `push_freshness` above answers the other
+        # question -- how long since anything arrived -- and it
+        # is the one to read when a robot looks healthy but is
+        # not responding.
         "last_update_success": cc.last_update_success,
         "last_exception": str(cc.last_exception) if cc.last_exception else None,
     }
@@ -463,6 +472,144 @@ async def _prime_schedule_summary(data: Any) -> Any:
         "raw_count": raw_count,
         "parser_disagrees": raw_count != len(summary),
         "schedules": summary,
+    }
+
+
+def _decoded_error(code: Any) -> dict[str, Any]:
+    """An error code with its label, or a plain zero.
+
+    The local dump decodes this from the MQTT client. Cloud-only had the
+    same number sitting in `cleanMissionStatus` and reported it raw --
+    so a reporter had to look up what 224 means, which is the kind of
+    step that turns a five-minute answer into a round trip.
+    """
+    if not code:
+        return {"error_code": 0, "error_message": None}
+    return {
+        "error_code": code,
+        "error_message": ERROR_CODE_LABELS.get(code, "unknown error code"),
+    }
+
+
+def _state_from_shadows(data: Any) -> dict[str, Any]:
+    """A reported-state-shaped dict, assembled from the named shadows.
+
+    THE CLOUD-ONLY DUMP WAS NOT MISSING DATA, IT WAS MISSING A
+    TRANSLATION. Every field the local sections read lives in the
+    shadows this robot already publishes, just split across documents:
+
+        ro-currentstate  batPct, bin, dock, tankPresent, runtimeStats,
+                         cleanMissionStatus, p2maps
+        ro-stats         bbchg, bbchg3, bbmssn, bbsys
+        ro-configinfo    hwPartsRev
+        classic          cap, sku
+
+    Merged, that is the same shape a locally connected robot reports --
+    so the sections written against `state` work unchanged.
+
+    WHY THIS EXISTS AT ALL: the previous attempt to close the gap used
+    "does the helper need only runtime data" as the test. That is a
+    question about function signatures, not about what the robot can
+    tell us, and it left every state-derived section local-only while
+    the state sat in the dump three keys away.
+
+    Later documents win on a key collision, and nothing here is
+    invented: absent stays absent.
+    """
+    coordinator = getattr(data, "prime_status_coordinator", None)
+    shadows = getattr(coordinator, "data", None)
+    if not isinstance(shadows, dict):
+        return {}
+
+    merged: dict[str, Any] = {}
+    for name in ("classic", "ro-configinfo", "ro-stats", "ro-currentstate"):
+        document = shadows.get(name)
+        if isinstance(document, dict):
+            merged.update(document)
+    # CREDENTIALS OUT, BY NAME AND BY SHAPE.
+    #
+    # `ro-configinfo` carries `passwordHash`, and merging documents is
+    # exactly how something like that reaches a place nobody reviewed.
+    # The existing redaction covers the dump's own top level; this dict
+    # is built here and would not pass through it.
+    #
+    # A password in a debug line already cost this project a release
+    # (@ScenicSystemsLLC found it), so the sweep is by substring rather
+    # than an exact list: a field added upstream tomorrow is caught too.
+    for key in list(merged):
+        low = key.lower()
+        if any(
+            mark in low
+            for mark in ("password", "passwd", "secret", "token", "svcendpoints")
+        ):
+            merged.pop(key, None)
+    return merged
+
+
+def _sent_commands(data: Any) -> list[dict[str, Any]] | str:
+    """The commands WE sent, newest last.
+
+    THE QUESTION EVERY SILENT-FAILURE REPORT STARTS WITH. Three testers
+    in one week reported a command that produced nothing, and each time
+    the first thing to establish was whether it went out and with what.
+    The robot's `lastCommand` records only what it RECEIVED -- which is
+    exactly what was in doubt.
+
+    `ok` is whether the publish succeeded. False proves the robot never
+    saw it; True does not prove it acted, because a broker-confirmed
+    command can still be ignored.
+    """
+    log = getattr(data, "sent_commands", None)
+    if not log:
+        return "nothing sent since startup"
+    return list(log)
+
+
+def _shadow_map_picture(data: Any) -> dict[str, Any] | str:
+    """Last command and per-map versions, for a cloud-only robot.
+
+    The local branch summarises these from the reported MQTT state. A
+    cloud-only dump took an early return long before that and carried
+    none of it -- no last command, no map ids, no versions.
+
+    THE DATA WAS NEVER MISSING. The same fields sit in the named
+    shadows, which that dump already includes, just raw and unsummarised
+    across nine documents. Two testers in a row hit problems that turn
+    on exactly these fields, and both times what they sent could not
+    answer: one needed to know which map a command named, the other
+    whether a command had been issued at all.
+    """
+    coordinator = getattr(data, "prime_status_coordinator", None)
+    shadows = getattr(coordinator, "data", None)
+    if not isinstance(shadows, dict):
+        return "no named shadows cached"
+
+    current = (shadows.get("ro-currentstate") or {})
+    software = (shadows.get("rw-software") or {})
+    last = software.get("lastCommand") or current.get("lastCommand") or {}
+    pmaps = current.get("p2maps") or current.get("pmaps") or []
+
+    return {
+        # Ids and timestamps only -- no credentials live in these.
+        "last_command": {
+            k: v for k, v in last.items()
+            if k in ("command", "initiator", "time", "pmap_id",
+                     "p2map_id", "user_pmapv_id", "ordered")
+        } if isinstance(last, dict) else None,
+        "last_command_regions": [
+            r.get("region_id") if isinstance(r, dict) else r
+            for r in (last.get("regions") or [])
+        ] if isinstance(last, dict) else None,
+        "map_count": len(pmaps) if isinstance(pmaps, list) else None,
+        # PRIME NAMES ITS FIELDS; Classic maps id to version directly.
+        # Copying the Classic shape here produced `{"p2map_id": "..."}`
+        # -- the key name as a key -- which testing against a real dump
+        # caught immediately and reading the code would not have.
+        "pmap_versions": {
+            str(m.get("p2map_id")): str(m.get("p2mapv_id"))
+            for m in pmaps
+            if isinstance(m, dict) and m.get("p2map_id")
+        } if isinstance(pmaps, list) else None,
     }
 
 
@@ -1110,6 +1257,8 @@ async def _build_diagnostics(
     # code below.
     if data.connection_type is ConnectionType.CLOUD_ONLY:
         status_coordinator = data.prime_status_coordinator
+        # Once, not once per section that needs it.
+        _shadow_state = _state_from_shadows(data)
         mission_coordinator = data.prime_coordinator
         return {
             "integration": DOMAIN,
@@ -1173,6 +1322,95 @@ async def _build_diagnostics(
             # resolve, whether the room names are cached, and whether
             # the two agree. `clean_room` fails when the first is empty
             # and the second is not.
+            # OUR SIDE OF THE WIRE, and the robot's.
+            "sent_commands": _sent_commands(data),
+            # THESE NEED NOTHING BUT RUNTIME DATA, so their absence here
+            # was an oversight rather than a limitation. Both were added
+            # to answer questions that came from cloud-only robots in
+            # the first place -- @Thonno's room tracking and
+            # @theChef613's zone names -- and neither could see them.
+            "position_chain": _position_chain(data),
+            # THE STATE-DERIVED SECTIONS, from the shadows. Same
+            # helpers the local dump uses, same shape of input --
+            # the only thing that was ever local-only is where the
+            # state came from.
+            "nav_telemetry": _nav_stats_with_provenance(
+                _shadow_state
+            ) or {},
+            "withheld_features": _withheld_features(
+                config_entry, _shadow_state
+            ),
+            "mission": {
+                k: v for k, v in (
+                    (_shadow_state.get("cleanMissionStatus") or {})
+                ).items()
+                if k in ("phase", "cycle", "error", "notReady",
+                         "operatingMode", "nMssn", "mssnM", "mssnStrtTm",
+                         "initiator", "sqft")
+            },
+            "battery": {
+                k: _shadow_state.get(k)
+                for k in ("batPct", "bbchg", "bbchg3")
+            },
+            "lifetime_stats": _shadow_state.get("bbmssn") or {},
+            # THE DECODED ERROR. The local section reads it off the MQTT
+            # client; the same number is in `cleanMissionStatus.error`,
+            # and the label table is shared. A raw code is a lookup the
+            # reporter should not have to do.
+            "error": _decoded_error(
+                (_shadow_state.get("cleanMissionStatus") or {}).get("error")
+            ),
+            "bin": _shadow_state.get("bin") or {},
+            "dock": _shadow_state.get("dock") or {},
+            "tank_present": _shadow_state.get("tankPresent"),
+            # THE DOCK IT IS SITTING ON. Same three fields the local
+            # dump reports, from the same `dock` document -- a Clean
+            # Base that reports a different hardware revision than
+            # expected has explained more than one evacuation fault.
+            "dock_identity": {
+                "hw_rev": (_shadow_state.get("dock") or {}).get("hwRev"),
+                "var_id": (_shadow_state.get("dock") or {}).get("varID"),
+                "part_number": (_shadow_state.get("dock") or {}).get("pn"),
+            },
+            # WHICH MAP TIER THIS ROBOT IS ON. Needs nothing but runtime
+            # data, and decides which half of this integration applies
+            # to a reader's question.
+            "capability": data.map_capability.value,
+            # PURE RUNTIME DATA, and missed because they are built
+            # inline rather than through a helper -- which is exactly
+            # what the both-dumps check looks for, so it did not catch
+            # them. A maintenance question from a cloud-connected robot
+            # had none of this to go on.
+            "learned_maintenance": (
+                {
+                    "learned_filter_hours":
+                        data.maintenance_store.learned_filter_hours,
+                    "learned_brush_hours":
+                        data.maintenance_store.learned_brush_hours,
+                    "filter_reset_history_len":
+                        len(data.maintenance_store.filter_reset_history),
+                    "brush_reset_history_len":
+                        len(data.maintenance_store.brush_reset_history),
+                }
+                if data.maintenance_store is not None else None
+            ),
+            "robot_profile": (
+                {
+                    "name": data.robot_profile.name,
+                    "battery_mah": data.robot_profile.battery_mah,
+                    "battery_chemistry": data.robot_profile.battery_chemistry,
+                    "battery_voltage": data.robot_profile.battery_voltage,
+                }
+                if data.robot_profile is not None else None
+            ),
+            "detected_pad": _shadow_state.get("detectedPad"),
+            "capabilities_raw": {
+                "cap": _shadow_state.get("cap"),
+                "sku": _shadow_state.get("sku"),
+            },
+            "room_tracking": _room_tracking_summary(data),
+            "cloud": _cloud_diag(data),
+            "map_picture": _shadow_map_picture(data),
             "rooms": {
                 "cached_names": len(
                     getattr(data, "prime_room_names", None) or {}
@@ -1490,6 +1728,7 @@ async def _build_diagnostics(
     # ── Map subsystem ──────────────────────────────────────────────────────────
     map_diag: dict[str, Any] = {
         "capability": data.map_capability.value,
+        "sent_commands": _sent_commands(data),
         # THE POSITION CHAIN, END TO END.
         #
         # Every part of resolving "which room is the robot in" was
@@ -1551,6 +1790,18 @@ async def _build_diagnostics(
         # Reporting them as null would suggest they exist and are unset;
         # dropping them says what is true, and an old diagnostic still
         # reads fine because nothing consumes this by position.
+        # WHICH KIND OF ENTRY THIS IS. A cloud-only dump says so; a
+        # local one never did, so working out which branch produced a
+        # file meant inferring it from which sections were present. That
+        # cost real time this week: a missing section was read as a
+        # generation difference when it was a connection-type one.
+        "connection_type": data.connection_type.value,
+        # HOW STALE THIS IS. The cloud-only dump reports it and the
+        # local one did not, although `last_mqtt_message_ts` has been
+        # kept here all along for the staleness watchdog. A robot that
+        # has said nothing for hours looks identical to a healthy one in
+        # every other field.
+        "push_freshness": _push_freshness(data),
         "connection": {
             "connected": roomba.connected,
             "current_state": roomba.current_state,

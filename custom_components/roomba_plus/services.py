@@ -32,6 +32,7 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.storage import Store
 
+from .command_record import record_command
 from .const import (
     PRIME_ERROR_SEVERITY,
     cleaning_modes_for,
@@ -392,6 +393,7 @@ async def _async_clean_rooms_via_backend(
     ordered: bool,
     per_room_two_pass: list[bool | None],
     call: ServiceCall,
+    per_room_extras: dict[str, list[Any]] | None = None,
 ) -> None:
     """Room cleaning through a RoomCleaningBackend.
 
@@ -524,6 +526,22 @@ async def _async_clean_rooms_via_backend(
     # came from the two services being extended at different times and
     # nobody comparing them afterwards -- the same shape as the
     # `cleaning_mode` gap, and as `two_pass` before that.
+    _extras = per_room_extras or {}
+
+    def _per_room_or_global(key: str, fallback: Any) -> list[Any] | None:
+        """Per-room values where given, else the caller-level one.
+
+        Same three-step precedence the pass count already uses: an
+        explicit per-room value wins, then the global field, then None
+        for "leave the robot's own setting alone".
+        """
+        values = _extras.get(key) or []
+        resolved = [
+            values[i] if i < len(values) and values[i] is not None else fallback
+            for i in range(len(room_ids))
+        ]
+        return resolved if any(v is not None for v in resolved) else None
+
     _scrub = call.data.get(ATTR_SMART_SCRUB)
     _wetness_raw = call.data.get(ATTR_RUN_PAD_WETNESS)
     _wetness = int(_wetness_raw) if _wetness_raw not in (None, "") else None
@@ -532,9 +550,9 @@ async def _async_clean_rooms_via_backend(
         room_ids, ordered=ordered, two_pass=two_pass,
         # A single value applied to every room -- _per_room() spreads a
         # one-element list across the whole call.
-        operating_mode=[caller_mode] if caller_mode is not None else None,
-        smart_scrub=[_scrub] if _scrub is not None else None,
-        pad_wetness=[_wetness] if _wetness is not None else None,
+        operating_mode=_per_room_or_global(ATTR_CLEANING_MODE, caller_mode),
+        smart_scrub=_per_room_or_global(ATTR_SMART_SCRUB, _scrub),
+        pad_wetness=_per_room_or_global(ATTR_RUN_PAD_WETNESS, _wetness),
     )
 
     # Fire and forget: the service returns now, and this reports later
@@ -780,6 +798,19 @@ async def async_handle_clean_room(call: ServiceCall) -> None:
         per_room_two_pass: list[bool | None] = [
             r.get(ATTR_TWO_PASS) for r in raw_room_passes
         ]
+        # ALL FOUR SETTINGS PER ROOM, not just the pass count.
+        #
+        # `clean_rooms()` has always taken four parallel lists -- passes,
+        # cleaning mode, smart scrub, pad wetness -- and three of them
+        # were filled with one value spread across every room. The
+        # capability was there and a quarter of it was reachable
+        # (@theChef613, asking for per-area options).
+        per_room_extras: dict[str, list[Any]] = {
+            key: [r.get(key) for r in raw_room_passes]
+            for key in (
+                ATTR_CLEANING_MODE, ATTR_SMART_SCRUB, ATTR_RUN_PAD_WETNESS,
+            )
+        }
     else:
         room_names = (
             [raw_room_name]
@@ -787,6 +818,7 @@ async def async_handle_clean_room(call: ServiceCall) -> None:
             else list(raw_room_name or [])
         )
         per_room_two_pass = [None] * len(room_names)
+        per_room_extras = {}
 
     ordered: bool = call.data[ATTR_ORDERED]
 
@@ -848,7 +880,8 @@ async def async_handle_clean_room(call: ServiceCall) -> None:
         # Recorded there once, the send path needs no room names, and
         # both generations fit an id-based interface.
         await _async_clean_rooms_via_backend(
-            backend, entity_id, room_names, ordered, per_room_two_pass, call
+            backend, entity_id, room_names, ordered, per_room_two_pass, call,
+            per_room_extras,
         )
 
 
@@ -922,7 +955,7 @@ async def async_handle_smart_start(call: ServiceCall) -> None:
             # send_simple_command("start") is the same confirmed-working
             # path the vacuum entity's own start action already uses.
             assert data.prime_robot is not None  # noqa: S101
-            await data.prime_robot.send_simple_command("start")
+            _ok = await data.prime_robot.send_simple_command("start")
         elif data.roomba is not None:
             await data.roomba.send_command("start")
 
@@ -1198,7 +1231,8 @@ async def async_handle_auto_clean_dirty_rooms(call: ServiceCall) -> None:
             # AttributeError instead of falling back to a whole-house
             # clean -- the one case this branch exists for.
             if data.prime_robot is not None:
-                await data.prime_robot.send_simple_command("start")
+                _ok = await data.prime_robot.send_simple_command("start")
+                record_command(config_entry, "start", {"command": "start"}, ok=bool(_ok))
             elif data.roomba is not None:
                 await data.roomba.send_command("start")
             continue
@@ -1782,7 +1816,13 @@ def async_register_services(hass: HomeAssistant) -> None:
                 vol.Optional(ATTR_ROOM_PASSES): vol.All(cv.ensure_list, [
                     vol.Schema({
                         vol.Required("name"): cv.string,
+                        # THE SAME FOUR AS THE CALL-LEVEL FIELDS.
+                        # `clean_rooms()` takes four parallel lists and
+                        # only one was reachable per room.
                         vol.Optional(ATTR_TWO_PASS): cv.boolean,
+                        vol.Optional(ATTR_CLEANING_MODE): cv.string,
+                        vol.Optional(ATTR_SMART_SCRUB): cv.boolean,
+                        vol.Optional(ATTR_RUN_PAD_WETNESS): vol.Coerce(int),
                     })
                 ]),
             }),

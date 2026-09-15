@@ -45,6 +45,7 @@ from typing import TYPE_CHECKING, Any
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 
+from .command_record import record_command
 from .const import (
     CONF_SMART_ZONE_LABELS,
     room_slug,
@@ -1112,6 +1113,27 @@ class PrimeRoomCleaning(RoomCleaningBackend):
             )
             or {}
         )
+
+        # THE MAPS FOR THE CACHED NAMES, from the same place they come
+        # from.
+        #
+        # `_named_regions_across_maps()` above records a map for every
+        # name it finds. The cache did not, so a name that came only
+        # from there had no floor -- and a zone with no floor cannot be
+        # narrowed to the selected map, nor sent to the robot, which
+        # refuses it as "not currently reporting which map it is on".
+        #
+        # `setdefault`: the per-map lookup is the stronger evidence and
+        # keeps precedence.
+        for _rid, _mid in (
+            getattr(
+                getattr(entry, "runtime_data", None),
+                "prime_room_map_ids",
+                None,
+            )
+            or {}
+        ).items():
+            self._region_map_ids.setdefault(str(_rid), str(_mid))
         # THE BARE REGION ID, because that is what `names` is keyed by.
         #
         # `available_rooms()` returns `{p2map_id}/{room_id}`, so a
@@ -1479,7 +1501,21 @@ class PrimeRoomCleaning(RoomCleaningBackend):
                 for i, rid in enumerate(room_ids)
             ],
         )
-        await self._robot.send_routine_command_via_cmd_topic(command)
+        # OUR SIDE OF THE WIRE, recorded. The robot's `lastCommand`
+        # only shows what it RECEIVED, which is the thing in doubt when
+        # a command produces nothing.
+        _ok = await self._robot.send_routine_command_via_cmd_topic(command)
+        record_command(
+            self._config_entry, "start (regions)",
+            {"map_id": p2map_id, "region_ids": room_ids}, ok=bool(_ok),
+        )
+        if _ok is False:
+            _LOGGER.warning(
+                "roomba_plus: the region command for %s was NOT published "
+                "-- the robot never saw it. This is a transport failure, "
+                "not a refusal by the robot",
+                self._data.blid,
+            )
 
         # THE PLAN GETS THE IDS THE ROBOT WILL REPORT.
         #

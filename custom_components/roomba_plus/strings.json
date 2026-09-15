@@ -152,11 +152,11 @@
       },
       "zones": {
         "title": "Name detected rooms",
-        "description": "{zone_count} new area(s) detected. Assign names so you can clean them individually:"
+        "description": "{robot}: {zone_count} zone(s) have no name yet (IDs: {zone_ids}). Enter one per line as `id=Name`. If you cannot tell which zone is which, open the robot's map in the iRobot app — the zones are drawn there with their numbers."
       },
       "smart_zones": {
         "title": "Name Smart Map zones",
-        "description": "{zone_count} zone(s) have no name yet (IDs: {zone_ids}). Assign names so you can clean them individually:"
+        "description": "{robot}: {zone_count} zone(s) have no name yet (IDs: {zone_ids}). Enter one per line as `id=Name`. If you cannot tell which zone is which, open the robot's map in the iRobot app — the zones are drawn there with their numbers."
       },
       "settings": {
         "title": "Connection settings",
@@ -1476,6 +1476,18 @@
       },
       "prime_clean_zone": {
         "name": "Clean selected room"
+      },
+      "reset_pad": {
+        "name": "Mop pad replaced"
+      },
+      "reset_wheel_cleaning": {
+        "name": "Wheels cleaned"
+      },
+      "reset_contact_cleaning": {
+        "name": "Charging contacts cleaned"
+      },
+      "reset_bin_cleaning": {
+        "name": "Bin cleaned"
       }
     },
     "switch": {
@@ -1754,7 +1766,7 @@
     },
     "observed_zones_detected": {
       "title": "Robot-detected obstacles in cloud map",
-      "description": "Your iRobot cloud map contains {zone_count} robot-detected obstacle zone(s). Run a few cleaning missions so Roomba+ can confirm these locally and build a more accurate obstacle map."
+      "description": "{robot}: {zone_count} zone(s) have no name yet (IDs: {zone_ids}). Enter one per line as `id=Name`. If you cannot tell which zone is which, open the robot's map in the iRobot app — the zones are drawn there with their numbers."
     },
     "dock_contact_health": {
       "title": "Dock contact health issue detected",

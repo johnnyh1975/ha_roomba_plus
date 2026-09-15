@@ -152,11 +152,11 @@
       },
       "zones": {
         "title": "Nazwij wykryte pomieszczenia",
-        "description": "Wykryto {zone_count} nowy(-e/-ch) obszar(-y/-ów). Przypisz nazwy, aby móc sprzątać je osobno:"
+        "description": "{robot}: {zone_count} stref(y) nie ma jeszcze nazwy (ID: {zone_ids}). Wpisz po jednej w wierszu jako `id=Nazwa`. Jeśli nie wiesz, która jest która, otwórz mapę robota w aplikacji iRobot — strefy są tam narysowane wraz z numerami."
       },
       "smart_zones": {
         "title": "Nazwij strefy Smart Map",
-        "description": "{zone_count} strefa(-y/-f) nie ma(-ją) jeszcze nazwy (ID: {zone_ids}). Przypisz nazwy, aby móc sprzątać je osobno:"
+        "description": "{robot}: {zone_count} stref(y) nie ma jeszcze nazwy (ID: {zone_ids}). Wpisz po jednej w wierszu jako `id=Nazwa`. Jeśli nie wiesz, która jest która, otwórz mapę robota w aplikacji iRobot — strefy są tam narysowane wraz z numerami."
       },
       "settings": {
         "title": "Ustawienia połączenia",
@@ -1469,6 +1469,18 @@
       },
       "prime_clean_zone": {
         "name": "Posprzątaj wybrany pokój"
+      },
+      "reset_pad": {
+        "name": "Wymieniono nakładkę"
+      },
+      "reset_wheel_cleaning": {
+        "name": "Wyczyszczono koła"
+      },
+      "reset_contact_cleaning": {
+        "name": "Wyczyszczono styki ładowania"
+      },
+      "reset_bin_cleaning": {
+        "name": "Wyczyszczono pojemnik"
       }
     },
     "switch": {
@@ -1752,7 +1764,7 @@
     },
     "observed_zones_detected": {
       "title": "Przeszkody wykryte przez robota w mapie chmury",
-      "description": "Twoja mapa chmury iRobot zawiera {zone_count} strefę(-y/-f) przeszkód wykrytych przez robota. Przeprowadź kilka misji sprzątania, aby Roomba+ mógł potwierdzić je lokalnie i zbudować dokładniejszą mapę przeszkód."
+      "description": "{robot}: {zone_count} stref(y) nie ma jeszcze nazwy (ID: {zone_ids}). Wpisz po jednej w wierszu jako `id=Nazwa`. Jeśli nie wiesz, która jest która, otwórz mapę robota w aplikacji iRobot — strefy są tam narysowane wraz z numerami."
     },
     "dock_contact_health": {
       "title": "Wykryto problem ze stykami stacji dokującej",
