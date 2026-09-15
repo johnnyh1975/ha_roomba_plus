@@ -3035,3 +3035,64 @@ class TestTheSharedLibraryConflictIsAnnounced:
             assert entry, path.name
             assert entry.get("title"), path.name
             assert len(entry.get("description", "")) > 100, path.name
+
+
+class TestTheZoneNamingDialogIsUsable:
+    """@liblit updated, got the notice, and could not act on it:
+
+      - it did not say which of his two robots it meant
+      - it gave no way to tell where the zones are
+      - and the pre-filled box showed `20=21=23=` on one line, which
+        the instructions directly above it call invalid
+
+    THE PRE-FILL WAS ALWAYS BUILT WITH NEWLINES. A plain `str` schema
+    field renders as a one-line input and collapses them. That was known
+    -- the parser had been taught to accept commas as a workaround --
+    but the box still displayed something the dialog called wrong, and
+    the user was left to guess what to type instead.
+    """
+
+    def test_the_field_is_multiline(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus import repairs
+
+        source = inspect.getsource(repairs)
+
+        assert "multiline=True" in source
+
+    def test_the_prefill_still_uses_newlines(self) -> None:
+        """One per line is the canonical format; the field just has to
+        be able to show it."""
+        import inspect
+
+        from custom_components.roomba_plus import repairs
+
+        assert '"\\n".join(f"{rid}=" for rid in unlabelled)' in (
+            inspect.getsource(repairs)
+        )
+
+    def test_the_dialog_names_the_robot(self) -> None:
+        """The issue is raised per config entry, so this was always
+        knowable -- it just was not said."""
+        import inspect
+
+        from custom_components.roomba_plus import repairs
+
+        source = inspect.getsource(repairs)
+
+        assert '"robot"' in source
+
+    def test_every_language_names_it_too(self) -> None:
+        """A placeholder passed and never used would be worse than not
+        passing it."""
+        import json
+        import pathlib
+
+        for path in pathlib.Path(
+            "custom_components/roomba_plus/translations"
+        ).glob("*.json"):
+            text = path.read_text(encoding="utf-8")
+            if "{zone_count}" not in text:
+                continue
+            assert "{robot}" in text, path.name

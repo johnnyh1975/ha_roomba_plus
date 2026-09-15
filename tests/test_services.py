@@ -2825,3 +2825,72 @@ class TestRoomsAndZonesTakeTheSameOptions:
             source = inspect.getsource(fn)
             for kwarg in ("smart_scrub=", "pad_wetness=", "two_pass="):
                 assert kwarg in source, f"{fn.__name__}: {kwarg}"
+
+
+class TestPerRoomOptionsCoverAllFour:
+    """`room_passes` let a caller set the pass count per room and
+    nothing else, while `clean_rooms()` had always taken four parallel
+    lists -- passes, cleaning mode, smart scrub, pad wetness. Three of
+    them were filled with one value spread across every room.
+
+    So a quarter of an existing capability was reachable. @theChef613
+    asked for per-area options after finding three separate gaps of
+    this shape; this is the fourth.
+
+    PRECEDENCE IS UNCHANGED and applies to all four: an explicit
+    per-room value, else the call-level field, else None meaning "leave
+    the robot's own setting alone".
+    """
+
+    def test_the_schema_accepts_all_four_per_room(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus import services
+
+        source = inspect.getsource(services)
+        entry = source[source.index("vol.Optional(ATTR_ROOM_PASSES)"):]
+        entry = entry[:entry.index("]),")]
+
+        for constant in (
+            "ATTR_TWO_PASS", "ATTR_CLEANING_MODE",
+            "ATTR_SMART_SCRUB", "ATTR_RUN_PAD_WETNESS",
+        ):
+            assert constant in entry, constant
+
+    def test_the_documentation_describes_all_four(self) -> None:
+        import pathlib
+
+        import yaml
+
+        data = yaml.safe_load(
+            pathlib.Path(
+                "custom_components/roomba_plus/services.yaml"
+            ).read_text(encoding="utf-8")
+        )
+        text = data["clean_room"]["fields"]["room_passes"]["description"]
+
+        for field in (
+            "two_pass", "cleaning_mode", "smart_scrub", "pad_wetness",
+        ):
+            assert field in text, field
+
+    def test_a_per_room_value_beats_the_call_level_one(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus import services
+
+        source = inspect.getsource(services._async_clean_rooms_via_backend)
+
+        assert "_per_room_or_global" in source
+        assert "values[i] if i < len(values) and values[i] is not None" in source
+
+    def test_no_value_anywhere_leaves_the_robot_alone(self) -> None:
+        """Returning a list of Nones would overwrite the robot's own
+        settings with nothing; returning None leaves them be."""
+        import inspect
+
+        from custom_components.roomba_plus import services
+
+        source = inspect.getsource(services._async_clean_rooms_via_backend)
+
+        assert "if any(v is not None for v in resolved) else None" in source

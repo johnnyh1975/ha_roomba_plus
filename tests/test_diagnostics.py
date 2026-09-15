@@ -1459,3 +1459,455 @@ class TestTheMapVersionsAreVisible:
         """A diagnostics download that raises is worth less than one
         missing a field."""
         assert self._section([{}, None, "nonsense", {"a": "1"}]) == {"a": "1"}
+
+
+class TestWeRecordWhatWeSent:
+    """Three testers in one week reported a command that produced
+    nothing -- no error, no mission, robot on its dock. Every time the
+    first question was "did it go out, and with what?", and every time
+    nothing could answer it.
+
+    The robot keeps `lastCommand`, and it is useful -- but only for
+    commands it RECEIVED. @mrsnyds' robot showed a `dock` from three
+    hours before his attempt, which is equally consistent with "we never
+    sent one", "we sent one and it never arrived", and "it arrived and
+    was ignored". One record, three readings, no way to choose.
+
+    So this is our side of the wire.
+
+    WHAT `ok` MEANS AND DOES NOT. It is the publish result, which every
+    call site used to discard. False proves the robot never saw it.
+    True is not proof it acted -- roombapy-prime records a robot that
+    ignored four verbs for 61 hours with every one broker-confirmed.
+    """
+
+    def test_a_payload_keeps_only_identifying_fields(self) -> None:
+        from custom_components.roomba_plus.command_record import _summarise
+
+        out = _summarise({
+            "command": "start",
+            "pmap_id": "MAP-A",
+            "regions": [{"region_id": "15", "params": {"twoPass": True}}],
+        })
+
+        assert out == {
+            "command": "start", "pmap_id": "MAP-A", "regions": ["15"],
+        }
+
+    def test_an_allow_list_not_a_deny_list(self) -> None:
+        """A deny-list only protects against the fields somebody thought
+        of. A password in a debug line already cost one release here."""
+        from custom_components.roomba_plus.command_record import _summarise
+
+        out = _summarise({
+            "command": "start", "password": "hunter2", "token": "abc",
+        })
+
+        assert out == {"command": "start"}
+
+    def test_it_is_a_ring_not_a_log(self) -> None:
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.command_record import (
+            MAX_ENTRIES,
+            record_command,
+        )
+
+        entry = SimpleNamespace(
+            runtime_data=SimpleNamespace(sent_commands=[])
+        )
+        for i in range(MAX_ENTRIES + 10):
+            record_command(entry, f"cmd{i}", {"command": "start"})
+
+        log = entry.runtime_data.sent_commands
+        assert len(log) == MAX_ENTRIES
+        assert log[-1]["verb"] == f"cmd{MAX_ENTRIES + 9}"
+
+    def test_recording_never_raises(self) -> None:
+        """A diagnostic aid must never be the reason a command fails."""
+        from custom_components.roomba_plus.command_record import (
+            record_command,
+        )
+
+        record_command(None, "start", {"command": "start"})
+        record_command(object(), "start", None)
+
+    def test_both_diagnostics_paths_report_it(self) -> None:
+        """The cloud-only dump needs it most -- it has no `lastCommand`
+        section at all, so a silent failure left nothing on either
+        side."""
+        import inspect
+
+        from custom_components.roomba_plus import diagnostics
+
+        source = inspect.getsource(diagnostics)
+
+        assert source.count('"sent_commands": _sent_commands(data)') == 2
+
+    def test_an_unsent_state_says_so(self) -> None:
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.diagnostics import _sent_commands
+
+        assert _sent_commands(SimpleNamespace(sent_commands=[])) == (
+            "nothing sent since startup"
+        )
+
+
+class TestOurSideOfTheWireIsRecorded:
+    """Three testers in one week reported a command that produced
+    nothing -- no error, no mission, robot on its dock. Each time the
+    first question was whether it went out and with what, and each time
+    nothing could answer.
+
+    The robot keeps `lastCommand`, and it is useful -- but only for
+    commands it RECEIVED, which is precisely what was in doubt.
+    @mrsnyds' robot showed a `dock` from three hours before his attempt:
+    equally consistent with "never sent", "sent and lost" and "arrived
+    and ignored".
+
+    A CLOUD-ONLY DUMP HAD NEITHER SIDE. It takes an early return long
+    before the section that summarises the robot's own record, so it
+    carried no last command, no map ids and no versions -- though the
+    same fields sit raw in the named shadows it already includes.
+    """
+
+    @staticmethod
+    def _picture(shadows):
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.diagnostics import (
+            _shadow_map_picture,
+        )
+
+        return _shadow_map_picture(
+            SimpleNamespace(
+                prime_status_coordinator=SimpleNamespace(data=shadows)
+            )
+        )
+
+    def test_the_prime_map_shape_is_read_correctly(self) -> None:
+        """Prime names its fields; Classic maps id to version directly.
+        Copying the Classic shape produced the key name as a key --
+        caught by running it against a real dump, not by reading it."""
+        out = self._picture({
+            "ro-currentstate": {
+                "p2maps": [
+                    {"p2map_id": "MAP-A", "p2mapv_id": "260914T155917"},
+                ],
+            },
+        })
+
+        assert out["pmap_versions"] == {"MAP-A": "260914T155917"}
+        assert out["map_count"] == 1
+
+    def test_the_last_command_comes_through(self) -> None:
+        out = self._picture({
+            "rw-software": {
+                "lastCommand": {
+                    "command": "dock", "initiator": "localApp",
+                    "time": 1789401703,
+                },
+            },
+        })
+
+        assert out["last_command"]["command"] == "dock"
+
+    def test_region_ids_without_their_params(self) -> None:
+        """The per-region params are long and say nothing about whether
+        the command was sent."""
+        out = self._picture({
+            "rw-software": {
+                "lastCommand": {
+                    "command": "start",
+                    "regions": [{"region_id": "20", "params": {"x": 1}}],
+                },
+            },
+        })
+
+        assert out["last_command_regions"] == ["20"]
+
+    def test_no_shadows_is_not_an_error(self) -> None:
+        assert isinstance(self._picture(None), str)
+
+    def test_the_sent_log_says_so_when_empty(self) -> None:
+        """"Nothing sent" and "we do not record" must not look alike."""
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.diagnostics import _sent_commands
+
+        assert _sent_commands(SimpleNamespace(sent_commands=[])) == (
+            "nothing sent since startup"
+        )
+
+
+class TestBothDumpsGetWhatNeedsNoRobot:
+    """A cloud-only robot takes an early return through a separate dump,
+    and things kept being added to the local one only.
+
+    THE TEST IS WHAT A SECTION NEEDS. A helper that reads the MQTT
+    client genuinely cannot run cloud-only. One that needs nothing but
+    runtime data can, and its absence is an oversight rather than a
+    limitation -- `position_chain` and `room_tracking` were both added
+    to answer questions that came FROM cloud-only robots, and neither
+    appeared in their dumps.
+
+    So: every helper whose only parameter is `data` belongs in both.
+    """
+
+    def test_every_data_only_helper_is_in_both_dumps(self) -> None:
+        import ast
+        import pathlib
+
+        source = pathlib.Path(
+            "custom_components/roomba_plus/diagnostics.py"
+        ).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+
+        data_only = [
+            node.name
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef)
+            and [a.arg for a in node.args.args] == ["data"]
+        ]
+        assert data_only, "parsed no helpers -- the check itself is broken"
+
+        start = source.index(
+            "if data.connection_type is ConnectionType.CLOUD_ONLY:"
+        )
+        end = source.index("\n    if roomba is None:", start)
+        cloud_only = source[start:end]
+
+        missing = [
+            name for name in data_only
+            if f"{name}(data)" not in cloud_only
+        ]
+
+        assert not missing, (
+            "these need nothing but runtime data and are missing from the "
+            f"cloud-only dump: {missing}"
+        )
+
+    def test_inline_runtime_only_sections_are_in_both_too(self) -> None:
+        """The helper check above misses sections built inline.
+
+        `learned_maintenance` and `robot_profile` read nothing but
+        `data.<store>` and were assembled straight into the local dict,
+        so no helper existed for the test to notice. A maintenance
+        question from a cloud-connected robot had none of it to go on.
+
+        The marker here is a section reading a store off runtime data
+        and appearing in only one dump.
+        """
+        import pathlib
+        import re
+
+        source = pathlib.Path(
+            "custom_components/roomba_plus/diagnostics.py"
+        ).read_text(encoding="utf-8")
+        start = source.index(
+            "if data.connection_type is ConnectionType.CLOUD_ONLY:"
+        )
+        end = source.index("\n    if roomba is None:", start)
+        cloud_only, local = source[start:end], source[end:]
+
+        #: Stores a Prime robot genuinely does not have. The
+        #: pose-derived stores serve 900-series room segmentation --
+        #: inferring rooms from accumulated coverage, which a robot with
+        #: a real persistent map never needs. Their absence is stated in
+        #: the local dump itself so a reader does not go looking.
+        ABSENT_FOR_PRIME = {"grid_store", "room_seg_store"}
+
+        stores = set(
+            re.findall(r"data\.(\w+_store|robot_profile)\b", local)
+        ) - ABSENT_FOR_PRIME
+        missing = [
+            store for store in sorted(stores)
+            if f"data.{store}" not in cloud_only
+        ]
+
+        assert not missing, (
+            "runtime-data stores read only by the local dump: "
+            f"{missing}. They need no robot, so a cloud-only robot's "
+            "download should carry them as well."
+        )
+
+
+class TestTheShadowsBecomeAState:
+    """A cloud-only dump was never missing the data, only a translation.
+
+    Every field the local sections read lives in the named shadows the
+    robot already publishes -- `cleanMissionStatus`, `bbchg`, `bbmssn`,
+    `cap`, `sku`, `p2maps` -- just split across four documents. Merged,
+    they are the same shape a locally connected robot reports, so the
+    sections written against a state work unchanged.
+
+    THE EARLIER ATTEMPT USED THE WRONG TEST. "Does this helper need only
+    runtime data" is a question about function signatures, not about
+    what the robot can tell us. It closed three gaps and left every
+    state-derived section local-only, with the state sitting three keys
+    away in the same dump.
+    """
+
+    SHADOWS = {
+        "classic": {"cap": {"pose": 2}, "sku": "q352020"},
+        "ro-configinfo": {"passwordHash": "secret-hash", "hwPartsRev": {}},
+        "ro-stats": {"bbchg": {"nChg": 5}, "bbmssn": {"nMssn": 9}},
+        "ro-currentstate": {
+            "batPct": 100,
+            "cleanMissionStatus": {"phase": "charge", "error": 0},
+            "svcEndpoints": "urls",
+        },
+    }
+
+    @staticmethod
+    def _state(shadows):
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.diagnostics import (
+            _state_from_shadows,
+        )
+
+        return _state_from_shadows(
+            SimpleNamespace(
+                prime_status_coordinator=SimpleNamespace(data=shadows)
+            )
+        )
+
+    def test_the_documents_merge_into_one_state(self) -> None:
+        state = self._state(self.SHADOWS)
+
+        for key in ("cap", "sku", "bbchg", "bbmssn", "batPct",
+                    "cleanMissionStatus"):
+            assert key in state, key
+
+    def test_the_password_hash_does_not_survive_the_merge(self) -> None:
+        """Merging documents is exactly how a credential reaches a place
+        nobody reviewed. This dict is built here and does not pass
+        through the dump's own redaction."""
+        assert "passwordHash" not in self._state(self.SHADOWS)
+
+    def test_the_sweep_is_by_substring_not_by_list(self) -> None:
+        """A field added upstream tomorrow has to be caught too."""
+        state = self._state({
+            "ro-configinfo": {
+                "someNewAuthToken": "x", "userPassword": "y", "keep": 1,
+            },
+        })
+
+        assert state == {"keep": 1}
+
+    def test_service_endpoints_are_dropped(self) -> None:
+        assert "svcEndpoints" not in self._state(self.SHADOWS)
+
+    def test_no_shadows_yields_an_empty_state(self) -> None:
+        """Absent stays absent -- nothing here invents a value."""
+        assert self._state(None) == {}
+
+    def test_it_is_computed_once_per_dump(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus import diagnostics
+
+        source = inspect.getsource(diagnostics)
+
+        assert source.count("_state_from_shadows(data)") == 1
+
+
+class TestTheErrorIsDecodedForBothDumps:
+    """A cloud-only dump reported the error as a bare number, because
+    the decoding lived in the section that reads the MQTT client. The
+    same number sits in `cleanMissionStatus.error`, and the label table
+    is shared.
+
+    224 is the one that matters: "Smart Map localization failed", which
+    one tester hit three releases running. A reporter should not have to
+    look that up, and neither should the person reading their dump.
+    """
+
+    @staticmethod
+    def _decode(code):
+        from custom_components.roomba_plus.diagnostics import _decoded_error
+
+        return _decoded_error(code)
+
+    def test_a_known_code_carries_its_label(self) -> None:
+        assert self._decode(224)["error_message"] == (
+            "Smart Map localization failed"
+        )
+
+    def test_no_error_is_not_an_unknown_error(self) -> None:
+        """Zero means "fine". Reporting it as an unrecognised code would
+        send somebody looking for a fault that is not there."""
+        decoded = self._decode(0)
+
+        assert decoded["error_code"] == 0
+        assert decoded["error_message"] is None
+
+    def test_an_unknown_code_says_so_rather_than_vanishing(self) -> None:
+        """A new firmware code must reach the reader as a number with a
+        note, not be dropped for being unrecognised."""
+        decoded = self._decode(9999)
+
+        assert decoded["error_code"] == 9999
+        assert "unknown" in decoded["error_message"]
+
+
+class TestALocalDumpSaysWhatItIsAndHowStaleItIs:
+    """Two things a cloud-only dump reported and a local one did not.
+
+    CONNECTION TYPE. A cloud-only dump names it; a local one did not, so
+    working out which branch produced a file meant inferring it from
+    which sections were present. That cost real time this week -- a
+    missing section was read as a Prime-versus-Classic difference when
+    it was a connection-type one, twice.
+
+    FRESHNESS. `last_mqtt_message_ts` has been kept on the local side
+    all along, for the staleness watchdog, and never reported. A robot
+    that has said nothing for hours looks identical to a healthy one in
+    every other field -- which is exactly the state one tester was in
+    while three explanations were being weighed.
+    """
+
+    def test_the_local_dump_names_its_connection_type(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus import diagnostics
+
+        source = inspect.getsource(diagnostics)
+        local = source[source.index("\n    if roomba is None:"):]
+
+        assert '"connection_type"' in local
+
+    def test_the_local_dump_reports_freshness(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus import diagnostics
+
+        source = inspect.getsource(diagnostics)
+        local = source[source.index("\n    if roomba is None:"):]
+
+        assert "_push_freshness(data)" in local
+
+    def test_freshness_reads_the_timestamp_the_local_side_keeps(
+        self,
+    ) -> None:
+        """The same helper serves both because both keep the same
+        field -- no second implementation to drift."""
+        import inspect
+
+        from custom_components.roomba_plus.diagnostics import _push_freshness
+
+        assert "last_mqtt_message_ts" in inspect.getsource(_push_freshness)
+
+    def test_silence_since_startup_is_said_plainly(self) -> None:
+        """Nothing yet and never are different states, and the one that
+        matters is "the robot ran a mission and we heard nothing"."""
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.diagnostics import _push_freshness
+
+        out = _push_freshness(SimpleNamespace(last_mqtt_message_ts=0.0))
+
+        assert out["last_message_ts"] is None
+        assert "no push message since startup" in out["note"]

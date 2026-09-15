@@ -3473,3 +3473,86 @@ class TestEveryOfferingMethodNarrows:
             source = inspect.getsource(method)
             assert "_offerable_maps: list[str] | None = None" in source
             assert "contextlib.suppress(Exception)" in source
+
+
+class TestACachedNameKeepsItsMap:
+    """A zone can have a name and no floor, and both of
+    @chairstacker's symptoms follow from that.
+
+    TWO SOURCES FILL THE NAME, ONE RECORDS THE MAP.
+    `_named_regions_across_maps()` reads region names per map from the
+    cloud and notes which map each came from. The floor-plan build also
+    produces names -- rooms and zones from the map bundle -- and wrote
+    them into a flat id->name dict, dropping the map it had been handed
+    as an argument.
+
+    So a zone known only from the cache had no map, and:
+
+      - the map narrowing could not place it, so every zone stayed in
+        the list whichever map he selected
+      - and `clean_rooms()` refused it as "not currently reporting which
+        map it is on"
+
+    One discarded value, two symptoms. The information was never
+    missing; it was thrown away one line after being used.
+    """
+
+    def test_the_container_carries_the_mapping(self) -> None:
+        import dataclasses
+
+        from custom_components.roomba_plus.models import RoombaData
+
+        names = {f.name for f in dataclasses.fields(RoombaData)}
+
+        assert "prime_room_names" in names
+        assert "prime_room_map_ids" in names
+
+    def test_the_floor_plan_build_writes_both(self) -> None:
+        """It has `p2map_id` as an argument, so every name it adds
+        belongs to that map. Writing one and not the other is the bug."""
+        import inspect
+
+        from custom_components.roomba_plus import prime_room_map
+
+        source = inspect.getsource(prime_room_map)
+
+        assert "runtime.prime_room_names = existing" in source
+        assert "runtime.prime_room_map_ids = _map_ids" in source
+
+    def test_the_build_does_not_overwrite_a_known_map(self) -> None:
+        """The per-map cloud lookup is the stronger evidence; this fills
+        the gaps it leaves rather than replacing it."""
+        import inspect
+
+        from custom_components.roomba_plus import prime_room_map
+
+        source = inspect.getsource(prime_room_map)
+
+        assert "_map_ids.setdefault(str(_region_id), p2map_id)" in source
+
+    def test_the_backend_merges_it(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus.room_cleaning import (
+            PrimeRoomCleaning,
+        )
+
+        source = inspect.getsource(PrimeRoomCleaning.get_segments)
+
+        assert "prime_room_map_ids" in source
+        assert "self._region_map_ids.setdefault" in source
+
+    def test_the_direct_lookup_keeps_precedence(self) -> None:
+        """`setdefault` on both sides: whichever ran first wins, and the
+        per-map lookup runs first."""
+        import inspect
+
+        from custom_components.roomba_plus.room_cleaning import (
+            PrimeRoomCleaning,
+        )
+
+        source = inspect.getsource(PrimeRoomCleaning.get_segments)
+        direct = source.index("_named_regions_across_maps()")
+        cached = source.index("prime_room_map_ids")
+
+        assert direct < cached
