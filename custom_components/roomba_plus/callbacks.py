@@ -133,6 +133,55 @@ _ROOM_TRANSITION_MIN_SECONDS: float = 60.0
 #: boundary crossing. Set under the shortest confirmed crossing.
 
 
+def _remember_measured_room_time(
+    entry: Any, room: str | None, seconds: float | None
+) -> None:
+    """Keep what a room actually took, so the next mission has a figure.
+
+    STORED IMMEDIATELY, on one observation. The alternative was a
+    confidence rule of our own -- wait for N runs, discard outliers --
+    and the thing it would be compared against is a whole-house average
+    divided by room count. A single real measurement of this room beats
+    that on its first attempt, so waiting only prolongs the bad figure.
+
+    A mission with a stuck robot or a mid-run recharge will record a
+    long time. That is a worse estimate than a good run and a better one
+    than 5.9 hours.
+
+    Keyed the same way the cloud estimates are, so the two share a
+    lookup and a later mission with real cloud data still wins.
+    """
+    if not room or not seconds or seconds <= 0:
+        return
+    try:
+        profile = getattr(
+            getattr(entry, "runtime_data", None), "robot_profile_store", None
+        )
+        if profile is None:
+            return
+        cache = getattr(profile, "room_estimate_cache", None)
+        if cache is None:
+            return
+        # THE SAME KEY THE LOOKUP USES, or the write is unreachable.
+        #
+        # `cached_room_seconds()` searches by the prefix
+        # "<region_id>|", because cloud estimates are stored per
+        # parameter set. A bare room name would sit in the same dict and
+        # never be found -- which is precisely the failure this whole
+        # change exists to repair, so it is worth not repeating.
+        #
+        # "measured" as the parameter part: honest about where it came
+        # from, and distinct from any cloud entry for the same room.
+        cache[f"{room}|measured"] = float(seconds)
+        _LOGGER.debug(
+            "AUTO-ADVANCE-ROOM: measured %s at %.0fs, kept for next time "
+            "(the cloud offers no per-room estimate in auto pass mode)",
+            room, seconds,
+        )
+    except Exception:  # noqa: BLE001
+        return
+
+
 def _room_transition_confidence_ok(
     mission: dict[str, Any],
     mts: Any,
@@ -1668,6 +1717,32 @@ def make_mission_callback(
         elif _travelling is True and not was_travelling:
             travel_started_at = monotonic()
 
+        # THE ROBOT WORKED HERE.
+        #
+        # `cleaned_in_room` is what turns a boundary CANDIDATE into a
+        # confirmed room change: arriving somewhere proves nothing, but
+        # arriving and then working there does.
+        #
+        # IT WAS NEVER SET. The flag was declared, read in the
+        # confirmation condition, and reset -- and assigned True
+        # nowhere in the module, so `_returned_from_travel and
+        # cleaned_in_room` could not become true and the travel route
+        # was unreachable. Every transition fell through to the phase
+        # route instead, which requires an estimate, and on a robot in
+        # auto pass mode no per-room estimate exists at all.
+        #
+        # @ScenicSystemsLLC watched his robot finish the Hallway and
+        # dock while the display still read Guest Bathroom, on the
+        # fourth run of the same two rooms, and read the debug log
+        # closely enough to show the candidate being raised and never
+        # confirmed.
+        #
+        # Not travelling, and running: the robot is doing work, and the
+        # room it is doing it in is the one it travelled to. Both
+        # generations report `phase` and the travel bit the same way.
+        if phase == "run" and _travelling is False:
+            cleaned_in_room = True
+
         if isinstance(_travelling, bool):
             was_travelling = _travelling
 
@@ -2007,8 +2082,40 @@ def make_mission_callback(
                     mission, _mts_upd, from_travel=_returned_from_travel
                 )
             ):
+                # WHAT THE ROOM ACTUALLY TOOK, before advancing.
+                #
+                # We measure this the whole time -- the progress sensor
+                # shows it every 30 seconds -- and then threw it away at
+                # exactly the moment it became a finished figure.
+                #
+                # That left the cloud as the only source of per-room
+                # estimates, and the cloud has two structural reasons to
+                # offer none: auto pass mode (the robot decides passes
+                # at runtime, so there is nothing to estimate) and
+                # insufficient region history. A robot in auto mode
+                # therefore NEVER gets one, and falls back to a
+                # whole-house mean divided by the rooms in this mission
+                # -- 5.9 hours per room on @ScenicSystemsLLC's two-room
+                # run, a threshold no real mission can cross.
+                #
+                # His question was the right one: four real runs of the
+                # same two rooms, and nothing learned. We had the
+                # measurement every time.
+                _measured = getattr(_mts_upd, "time_in_current_room_sec", None)
+                # `planned_rooms` holds NAMES; the estimate cache is
+                # keyed by region id. Resolving here rather than at
+                # write time keeps the resolution next to the data that
+                # knows about it.
+                _finished_room = (
+                    _mts_upd.planned_rooms[_mts_upd.current_room_idx]
+                    if 0 <= _mts_upd.current_room_idx < len(_mts_upd.planned_rooms)
+                    else None
+                )
                 _advanced = _mts_upd.advance_room(hass, entry.entry_id)
                 if _advanced:
+                    _remember_measured_room_time(
+                        entry, _finished_room, _measured
+                    )
                     # The new room has not been cleaned yet.
                     cleaned_in_room = False
                     _LOGGER.info(

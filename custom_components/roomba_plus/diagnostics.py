@@ -1324,6 +1324,15 @@ async def _build_diagnostics(
             # and the second is not.
             # OUR SIDE OF THE WIRE, and the robot's.
             "sent_commands": _sent_commands(data),
+            # WHICH VERSION OF WHICH MAP, as last read from the cloud.
+            #
+            # Read in two places and recorded in neither, so its
+            # absence from a download was taken four times over as the
+            # robot not reporting a map at all. It was only ever this
+            # file not being told.
+            "active_map_versions": dict(
+                getattr(data, "prime_map_versions", None) or {}
+            ) or "not read yet this session",
             # THESE NEED NOTHING BUT RUNTIME DATA, so their absence here
             # was an oversight rather than a limitation. Both were added
             # to answer questions that came from cloud-only robots in
@@ -1729,6 +1738,15 @@ async def _build_diagnostics(
     map_diag: dict[str, Any] = {
         "capability": data.map_capability.value,
         "sent_commands": _sent_commands(data),
+        # WHICH VERSION OF WHICH MAP, as last read from the cloud.
+        #
+        # Read in two places and recorded in neither, so its
+        # absence from a download was taken four times over as the
+        # robot not reporting a map at all. It was only ever this
+        # file not being told.
+        "active_map_versions": dict(
+            getattr(data, "prime_map_versions", None) or {}
+        ) or "not read yet this session",
         # THE POSITION CHAIN, END TO END.
         #
         # Every part of resolving "which room is the robot in" was

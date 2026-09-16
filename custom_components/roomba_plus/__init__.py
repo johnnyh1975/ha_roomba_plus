@@ -48,6 +48,7 @@ from .const import (
     CONF_CONNECTION_TYPE,
     CONF_CONTINUOUS,
     CONF_ENABLE_MAINTENANCE_LIST,
+    CONF_REGION_SENSORS,
     CONF_ENABLE_SCHEDULE_CALENDAR,
     CONF_FLOOR,
     CONF_IROBOT_PASSWORD,
@@ -2005,7 +2006,25 @@ async def _async_reload_on_options_change(
     # roombapy 2.x stopped having either. Reloading an integration
     # because a value nothing reads has changed is work for no effect --
     # and the option is no longer offered, so the value cannot change.
-    _RELOAD_TRIGGER_KEYS = {CONF_ENABLE_SCHEDULE_CALENDAR}
+    # EVERY OPTION THAT DECIDES WHETHER AN ENTITY EXISTS.
+    #
+    # These are read once, when the platform sets up, so changing one
+    # and saving does nothing at all until the integration happens to
+    # reload for some other reason. The user ticks a box and waits.
+    #
+    # @chairstacker enabled "Separate sensor per room and zone" and the
+    # entities never appeared. The option was saved correctly; nothing
+    # asked for them to be built.
+    #
+    # The map options are deliberately NOT here: they are read on every
+    # render, so they take effect on the next frame without a reload.
+    # The test for membership is "read at setup time", not "affects what
+    # the user sees".
+    _RELOAD_TRIGGER_KEYS = {
+        CONF_ENABLE_SCHEDULE_CALENDAR,
+        CONF_REGION_SENSORS,
+        CONF_BLOCKING_SENSORS,
+    }
 
     def _get(source: Mapping[str, Any], key: str) -> Any:
         # CONF_ENABLE_SCHEDULE_CALENDAR needs its default applied on BOTH

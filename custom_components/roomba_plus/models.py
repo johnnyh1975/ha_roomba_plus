@@ -178,6 +178,16 @@ class RoombaData:
     #: drift apart.
     prime_room_map_ids: dict[str, str] = field(default_factory=dict)
 
+    #: {p2map_id: active_p2mapv_id} as last read from the cloud.
+    #:
+    #: READ EVERYWHERE, RECORDED NOWHERE. `get_active_map_versions()` is
+    #: called to build a floor plan and to pick a map, and both used the
+    #: answer as a local variable. So a diagnostics download could not
+    #: show which version of which map the robot was on -- and its
+    #: absence from the file was repeatedly read as the robot not having
+    #: one, which is a different thing entirely.
+    prime_map_versions: dict[str, str] = field(default_factory=dict)
+
     #: The last map the robot said it was standing on.
     #:
     #: NOT `active_pmap_id`, which is the order of the cloud's map

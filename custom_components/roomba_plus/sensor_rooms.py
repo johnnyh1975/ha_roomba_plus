@@ -384,7 +384,22 @@ def shortest_plausible_room_seconds(
         # a robot that had them this morning can have none this evening
         # (@ScenicSystemsLLC, same rooms, same day). A remembered figure
         # for the right room beats a whole-house average every time.
-        out.append(cached_room_seconds(config_entry, rid) if rid else None)
+        # CLOUD FIRST, THEN OUR OWN MEASUREMENT.
+        #
+        # What we measured is keyed by room NAME, because that is all
+        # the mission store carries when a room finishes -- it has no
+        # region ids. The cloud entries are keyed by region id, so both
+        # live in the same dict without colliding.
+        #
+        # Order matters and this is the honest one: a cloud estimate for
+        # this room is a better figure than one run of our own. But a
+        # measurement of THIS room beats the whole-house mean that
+        # follows, which is what a robot in auto pass mode gets today --
+        # 5.9 hours per room on a two-room mission (@ScenicSystemsLLC).
+        _cached = cached_room_seconds(config_entry, rid) if rid else None
+        if _cached is None:
+            _cached = cached_room_seconds(config_entry, str(room_name))
+        out.append(_cached)
     return out
 
 

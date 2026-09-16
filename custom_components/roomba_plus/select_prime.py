@@ -52,6 +52,8 @@ from .const import (
 )
 from .models import ConnectionType
 from .entity import IRobotEntity
+import contextlib
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 from .prime_room_map import SIGNAL_PRIME_ROOM_NAMES
 from .structural_failures import record_failure, record_success
 
@@ -928,6 +930,24 @@ class PrimeMapSelect(IRobotEntity, RestoreEntity, SelectEntity):
         # change on the next request without being told. Writing state
         # here is what moves the select itself.
         self.async_write_ha_state()
+
+        # AND TELL EVERYTHING THAT LISTS ROOMS AND ZONES.
+        #
+        # The zone select's options depend on which map is chosen, and
+        # it learns about changes through SIGNAL_PRIME_ROOM_NAMES --
+        # which only the floor-plan build sent. So after picking a map,
+        # its list stayed on the old one until a build happened to run,
+        # which looked like a long lag or needed a page refresh
+        # (@chairstacker).
+        #
+        # Nothing new is introduced: the signal exists for exactly this,
+        # and the listener was already registered. It was only never
+        # sent from here.
+        with contextlib.suppress(Exception):
+            async_dispatcher_send(
+                self.hass,
+                SIGNAL_PRIME_ROOM_NAMES.format(self._config_entry.entry_id),
+            )
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()

@@ -384,6 +384,29 @@ class PrimeCoordinator(DataUpdateCoordinator[MissionTimelineReport]):
         if previous is None or previous == current_id:
             return
 
+        # AND MOVE THE ROOM DISPLAY, which nothing here used to do.
+        #
+        # Prime reports where it is going more precisely than Classic
+        # does -- a region id in the timeline, against Classic's bare
+        # "am I driving" bit -- and all of it was being spent on firing
+        # an automation event. `advance_room()` had exactly one caller,
+        # in the Classic MQTT callback, so the Prime display could only
+        # move via the phase route, which needs a per-room time
+        # estimate. A robot in auto pass mode never gets one: it decides
+        # its passes at runtime, so there is nothing to estimate ahead
+        # of time, and the fallback is a whole-house average divided by
+        # the mission's room count.
+        #
+        # THE SAME PRINCIPLE AS THE CLASSIC FIX: an observation may be
+        # acted on without a forecast agreeing. Here the observation is
+        # better than Classic's, because it names the room rather than
+        # just reporting motion.
+        #
+        # ONLY WHEN IT MATCHES THE NEXT PLANNED ROOM. Two sources must
+        # not push the index past each other; a timeline report for
+        # anything else is left alone rather than guessed at.
+        self._advance_display_if_next(previous)
+
         self.hass.bus.async_fire(
             EVENT_ROOM_COMPLETED,
             {
@@ -397,6 +420,39 @@ class PrimeCoordinator(DataUpdateCoordinator[MissionTimelineReport]):
                 "mission_id": getattr(report, "mission_id", None),
             },
         )
+
+    def _advance_display_if_next(self, finished_id: str | None) -> None:
+        """Move the room display on, when the robot confirms the move.
+
+        Called with the region the robot has just LEFT. If that is the
+        room the display is currently showing, the robot has moved on
+        and the display should follow.
+
+        Deliberately narrow: anything other than an exact match on the
+        current room is ignored. A mission can revisit, a report can
+        arrive late, and the Classic path may also be advancing on the
+        same entry -- none of which should move the index twice.
+        """
+        try:
+            if not finished_id:
+                return
+            store = getattr(self.entry.runtime_data, "mission_timer_store", None)
+            if store is None or not store.planned_rooms:
+                return
+            index = store.current_room_idx
+            if not 0 <= index < len(store.planned_rooms) - 1:
+                return
+            if self._room_name(finished_id) != store.planned_rooms[index]:
+                return
+            if store.advance_room(self.hass, self.entry.entry_id):
+                _LOGGER.debug(
+                    "AUTO-ADVANCE-ROOM: Prime timeline reports %s finished "
+                    "-- display advanced to %s (no estimate consulted)",
+                    store.planned_rooms[index],
+                    store.planned_rooms[index + 1],
+                )
+        except Exception:  # noqa: BLE001
+            return
 
     def _room_name(self, region_id: str) -> str | None:
         """The display name for a region id, if the cloud knows one."""

@@ -519,7 +519,39 @@ class PrimeRoomCleaning(RoomCleaningBackend):
             return None
         current = coordinator.data.get("ro-currentstate") or {}
         mission = current.get("cleanMissionStatus") or {}
-        return mission.get("p2mapId") or mission.get("p2map_id") or None
+        _live = mission.get("p2mapId") or mission.get("p2map_id")
+        if _live:
+            return str(_live)
+
+        # PARKED IS NOT THE SAME AS UNKNOWN.
+        #
+        # A Prime robot reports its map while it is relocalised. Docked
+        # between missions it reports nothing -- which is exactly when a
+        # user is standing in the UI choosing a room, so "follow the
+        # robot" offered every map and narrowed nothing
+        # (@chairstacker).
+        #
+        # Where it last WORKED is where it is standing, unless somebody
+        # carried it. That is a weaker claim than a live reading and a
+        # much better one than nothing, and the caller already marks
+        # this branch as not-live.
+        #
+        # NOT IF THAT COMMAND FAILED. @Thonno's Classic robot stored our
+        # own rejected commands and handed them back as its location,
+        # which is how a wrong map survived three releases. The same
+        # guard 4.2.2 put on the map VERSION applies here to the map:
+        # a command that ended in a localisation error is evidence of
+        # where the robot is not.
+        if int(mission.get("error") or 0) in (224, 225):
+            return None
+
+        software = coordinator.data.get("rw-software") or {}
+        last = software.get("lastCommand") or {}
+        if isinstance(last, dict):
+            parked = last.get("pmap_id") or last.get("p2map_id")
+            if parked:
+                return str(parked)
+        return None
 
     async def where_the_robot_is(self) -> tuple[str | None, bool]:
         """(map id, whether the robot is saying so right now).
@@ -1447,6 +1479,25 @@ class PrimeRoomCleaning(RoomCleaningBackend):
         how a wire key ends up correct in one place and wrong in the
         other.
         """
+
+        # THE CLEANING MODE SELECT, WHICH PRIME WAS IGNORING.
+        #
+        # `_selected_cleaning_mode()` reads the dropdown, and it had one
+        # reader: Classic's `clean_rooms()`. So a Prime robot showed the
+        # control, accepted a change, and cleaned in whatever mode it
+        # was already in (@chairstacker, whose robot mops).
+        #
+        # Caller first, select second, robot's own setting last -- the
+        # same precedence Classic uses, written here rather than shared
+        # because the two build their payloads differently.
+        #
+        # HERE RATHER THAN IN `clean_rooms()`: this is the single place
+        # every Prime region command passes through, both callers
+        # included, so a path added later inherits it.
+        if not operating_mode:
+            _selected = _selected_cleaning_mode(self._config_entry)
+            if _selected is not None:
+                operating_mode = [_selected]
         from roombapy_prime.models.mission_control import (  # noqa: PLC0415
             CommandParams,
             MissionCommandType,
@@ -1863,7 +1914,28 @@ class ClassicRoomCleaning(RoomCleaningBackend):
             if name in rooms:
                 continue
             rooms[name] = rid
-            self._pmap_by_region[rid] = pmap_id
+            # THE SAME RULE, AND IT WAS NOT.
+            #
+            # `rooms` is keyed by NAME and the first entry wins, which
+            # the comment above establishes. This line is keyed by
+            # REGION ID and plainly assigned, so the LAST entry won --
+            # two opposite precedence rules, one line apart, on the same
+            # loop.
+            #
+            # A region id existing on both maps therefore took its name
+            # from the active map and its map from the other one. The
+            # command then went out with a correct region id, the wrong
+            # map, and that map's version alongside it -- a closed,
+            # consistent, wrong answer, which is why it looked
+            # intermittent: whether it bit depended on which rooms were
+            # picked.
+            #
+            # @Thonno reproduced it deliberately and downloaded the
+            # diagnostics on the spot: the same room worked on
+            # `tM_GAK...` and failed on `oGwE...` with error 224, after
+            # four theories of mine had each been ruled out by one of
+            # his messages.
+            self._pmap_by_region.setdefault(rid, pmap_id)
         return rooms
 
     async def clean_rooms(
@@ -2123,7 +2195,21 @@ class ClassicRoomCleaning(RoomCleaningBackend):
             self._data.blid, room_ids, pmap_id[:12],
             user_pmapv_id[:12] if user_pmapv_id else "none",
         )
+        # OUR SIDE OF THE WIRE, on Classic too.
+        #
+        # The Prime region command records what it sent; these two
+        # did not, so a Classic robot that did nothing left no
+        # record of whether a command went out or with what. That
+        # is the first question every silent-failure report asks.
+        #
+        # `send_command` returns nothing to check, so `ok` stays
+        # None: sent, result unknown -- which is honest rather than
+        # a claim either way.
         await self._roomba.send_command("start", params)
+        record_command(
+            self._config_entry, "start (regions)",
+            params,
+        )
 
 
 
@@ -2428,11 +2514,28 @@ class ClassicRoomCleaning(RoomCleaningBackend):
                 translation_key="no_valid_segments",
             )
 
+        # THE CLEANING MODE SELECT, HERE TOO.
+        #
+        # `clean_rooms()` reads the dropdown; this method sends its
+        # own command and did not, so a zone cleaned in whatever mode
+        # the robot was already in while the control showed something
+        # else.
+        #
+        # Prime had the same gap on every path and it was closed at
+        # its single send point. Classic has no such point -- this
+        # method exists precisely because it does NOT fold into
+        # `clean_rooms()` -- so the fallback is repeated rather than
+        # shared, and a test holds the two together.
+        _mode = _selected_cleaning_mode(self._config_entry)
+        _params: dict[str, Any] = {"noAutoPasses": False, "twoPass": False}
+        if _mode is not None:
+            _params["operatingMode"] = _mode
+
         regions = [
             {
                 "region_id": rid,
                 "type": "rid",
-                "params": {"noAutoPasses": False, "twoPass": False},
+                "params": dict(_params),
             }
             for rid in validated_room_ids
         ] + [
@@ -2440,7 +2543,7 @@ class ClassicRoomCleaning(RoomCleaningBackend):
             {
                 "region_id": zid,
                 "type": "zid",
-                "params": {"noAutoPasses": False, "twoPass": False},
+                "params": dict(_params),
             }
             for zid in bare_zone_ids
         ]
@@ -2490,7 +2593,21 @@ class ClassicRoomCleaning(RoomCleaningBackend):
         }
         if include_pmapv and user_pmapv_id is not None:
             params["user_pmapv_id"] = user_pmapv_id
+        # OUR SIDE OF THE WIRE, on Classic too.
+        #
+        # The Prime region command records what it sent; these two
+        # did not, so a Classic robot that did nothing left no
+        # record of whether a command went out or with what. That
+        # is the first question every silent-failure report asks.
+        #
+        # `send_command` returns nothing to check, so `ok` stays
+        # None: sent, result unknown -- which is honest rather than
+        # a claim either way.
         await self._roomba.send_command("start", params)
+        record_command(
+            self._config_entry, "start (regions)",
+            params,
+        )
         # F-RB-1: best-effort state update after segment clean command.
         # Cloud may not yet have the new state; failure is non-fatal.
         try:

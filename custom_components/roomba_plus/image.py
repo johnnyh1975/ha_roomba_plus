@@ -3769,6 +3769,13 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
             robot = self._config_entry.runtime_data.prime_robot
             versions = await robot.get_active_map_versions() if robot else []
             record_success("map version read")
+            # KEEP WHAT WE JUST READ, so a download can show it.
+            with contextlib.suppress(Exception):
+                self._config_entry.runtime_data.prime_map_versions = {
+                    str(v.get("p2map_id")): str(v.get("active_p2mapv_id") or "")
+                    for v in (versions or [])
+                    if isinstance(v, dict) and v.get("p2map_id")
+                }
             for entry in versions:
                 if entry.get("p2map_id") == p2map_id:
                     version = entry.get("active_p2mapv_id") or ""
@@ -3830,6 +3837,20 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
             return
 
         self._polygons = polygons
+        # AND THE ZONES, which were declared and never filled.
+        #
+        # `_zone_polygons` was initialised to {} and read in three
+        # places -- the bounding box, the outline pass, and the label
+        # pass -- all of which have therefore been working on an empty
+        # dict since they were written. Zones were not drawn at all,
+        # which is the stronger version of "zone names are not visible
+        # on the map" (@chairstacker).
+        #
+        # The data was there the whole time: the floor-plan build parses
+        # `cleanZones` into `zone_polygons`, and nothing collected it.
+        self._zone_polygons = dict(
+            getattr(floor_plan, "zone_polygons", None) or {}
+        )
         self._names = names
         self._preferences = preferences
         self._floor_plan = floor_plan
@@ -4333,16 +4354,33 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         ):
             from .map_renderer import LABEL_FONT  # noqa: PLC0415
 
-            for room_id, ring in self._polygons.items():
-                name = self._names.get(room_id)
-                if not name:
-                    continue
-                cx = sum(x for x, _ in ring) / len(ring)
-                cy = sum(y for _, y in ring) / len(ring)
-                draw.text(
-                    to_px(cx, cy), name, fill=(230, 230, 230),
-                    anchor="mm", font=LABEL_FONT,
-                )
+            # ZONES CARRY NAMES TOO, and were drawn without them.
+            #
+            # The floor plan keeps zones in their own collection,
+            # deliberately: a zone sits INSIDE a room, so the two cannot
+            # share a fill pass without one hiding the other. The label
+            # pass inherited that separation without needing it -- it
+            # walked rooms only, so a zone got an outline and no name,
+            # and a user looking for "Foyer Zone" on the map found a
+            # blue rectangle (@chairstacker, @liblit).
+            #
+            # Dimmer than a room label, because a zone label sits on top
+            # of the room label it overlaps.
+            _labelled = [
+                (self._polygons, (230, 230, 230)),
+                (getattr(self, "_zone_polygons", None) or {}, (150, 195, 230)),
+            ]
+            for _rings, _colour in _labelled:
+                for room_id, ring in _rings.items():
+                    name = self._names.get(room_id)
+                    if not name or not ring:
+                        continue
+                    cx = sum(x for x, _ in ring) / len(ring)
+                    cy = sum(y for _, y in ring) / len(ring)
+                    draw.text(
+                        to_px(cx, cy), name, fill=_colour,
+                        anchor="mm", font=LABEL_FONT,
+                    )
 
         buf = io.BytesIO()
         img.save(buf, format="PNG")

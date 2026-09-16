@@ -549,7 +549,24 @@ class RoombaDeviceTracker(IRobotEntity, TrackerEntity):
         # holds the same names the cleaning services use, so the tracker
         # and clean_room always agree about what a room is called.
         for name, qualified in self._prime_rooms.items():
-            if str(qualified).endswith(f"/{region_id}") or qualified == region_id:
+            # ZONES CARRY A PREFIX IN THEIR ID. A room is
+            # "MAP/15"; a zone is "MAP/zid_101", because the type has to
+            # travel with the id for the command to go out correctly.
+            #
+            # This match only knew the room shape, so every zone fell
+            # through to "Room 101" -- a number the user never sees
+            # anywhere else, for a zone they named themselves
+            # (@chairstacker).
+            _tail = str(qualified).rsplit("/", 1)[-1]
+            if (
+                _tail == str(region_id)
+                # "zid_" written out: it lives in room_cleaning, which
+                # this module can only import late (cycle), and a
+                # late import for one constant in a synchronous
+                # property is worse than the literal.
+                or _tail == f"zid_{region_id}"
+                or qualified == region_id
+            ):
                 return name
 
         # Known region, unknown name -- a room added since the cache was
