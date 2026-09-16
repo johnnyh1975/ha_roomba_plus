@@ -4144,3 +4144,117 @@ class TestAMissingEstimateCannotBlockAnObservation:
         assert "expected_room_sec" not in code, (
             "the travel branch must not consult an estimate"
         )
+
+
+class TestTheRobotLearnsItsOwnRoomTimes:
+    """@ScenicSystemsLLC watched his robot finish the Hallway and dock
+    while the display still read Guest Bathroom -- the fourth run of the
+    same two rooms, and the display never moved once.
+
+    THREE FAULTS IN ONE CHAIN, and 4.2.4 fixed the least important of
+    them.
+
+    1. `cleaned_in_room` was declared, read in the confirmation
+       condition, reset after an advance -- and assigned True NOWHERE.
+       So `_returned_from_travel and cleaned_in_room` could never hold,
+       the travel route was unreachable, and every transition fell
+       through to the phase route.
+
+    2. The phase route requires a per-room estimate, and his robot runs
+       in auto pass mode, where the cloud offers none BY DESIGN -- the
+       robot decides passes at runtime, so there is nothing to estimate.
+       The fallback is a whole-house mean divided by this mission's room
+       count: 5.9 hours per room, a threshold no real mission crosses.
+
+    3. And we measured the real figure the whole time. The progress
+       sensor shows `time_in_current_room_sec` every thirty seconds, and
+       it was discarded at exactly the moment it became final.
+
+    His question was the right one: four real runs, nothing learned.
+    """
+
+    def test_the_flag_is_actually_set_somewhere(self) -> None:
+        """The regression that made 4.2.4's travel-route fix inert."""
+        import ast
+        import inspect
+
+        from custom_components.roomba_plus import callbacks
+
+        tree = ast.parse(inspect.getsource(callbacks))
+        values = [
+            ast.unparse(node.value)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Assign)
+            for target in node.targets
+            if isinstance(target, ast.Name) and target.id == "cleaned_in_room"
+        ]
+
+        assert "True" in values, (
+            "cleaned_in_room is never set True, so a boundary candidate "
+            "can never be confirmed"
+        )
+
+    def test_working_means_running_and_not_travelling(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus import callbacks
+
+        source = inspect.getsource(callbacks)
+
+        assert 'if phase == "run" and _travelling is False:' in source
+
+    def test_a_measured_room_time_is_written_and_found(self) -> None:
+        """The write and the lookup have to agree on the key, or the
+        measurement lands somewhere nobody reads -- which is the same
+        shape of fault as the one above."""
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.callbacks import (
+            _remember_measured_room_time,
+        )
+        from custom_components.roomba_plus.sensor_rooms import (
+            cached_room_seconds,
+        )
+
+        profile = SimpleNamespace(room_estimate_cache={})
+        entry = SimpleNamespace(
+            runtime_data=SimpleNamespace(robot_profile_store=profile)
+        )
+
+        _remember_measured_room_time(entry, "Hallway", 989.8)
+
+        assert cached_room_seconds(entry, "Hallway") == 989.8
+        assert cached_room_seconds(entry, "Kitchen") is None
+
+    def test_nothing_is_stored_for_a_zero_or_missing_time(self) -> None:
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.callbacks import (
+            _remember_measured_room_time,
+        )
+
+        profile = SimpleNamespace(room_estimate_cache={})
+        entry = SimpleNamespace(
+            runtime_data=SimpleNamespace(robot_profile_store=profile)
+        )
+
+        for bad in (None, 0, -5):
+            _remember_measured_room_time(entry, "Hallway", bad)
+        _remember_measured_room_time(entry, None, 100)
+
+        assert profile.room_estimate_cache == {}
+
+    def test_one_observation_is_enough(self) -> None:
+        """Deliberate: the thing it replaces is a whole-house average
+        divided by room count. A single real measurement of this room
+        beats that immediately, so waiting for a confidence threshold
+        only prolongs the bad figure."""
+        import inspect
+
+        from custom_components.roomba_plus.callbacks import (
+            _remember_measured_room_time,
+        )
+
+        source = inspect.getsource(_remember_measured_room_time)
+
+        assert "STORED IMMEDIATELY" in source

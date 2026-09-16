@@ -1911,3 +1911,60 @@ class TestALocalDumpSaysWhatItIsAndHowStaleItIs:
 
         assert out["last_message_ts"] is None
         assert "no push message since startup" in out["note"]
+
+
+class TestTheActiveMapVersionIsRecorded:
+    """`get_active_map_versions()` is called to build a floor plan and
+    to pick a map, and both used the answer as a local variable. It was
+    never stored, so no download could show it.
+
+    THAT ABSENCE WAS MISREAD FOUR TIMES. A missing `active_p2mapv_id`
+    in a download was taken as the robot not reporting which map it is
+    on -- and a whole chain of explanation was built on it, when the
+    robot had almost certainly reported one and this file simply had
+    not been told.
+    """
+
+    def test_the_container_carries_it(self) -> None:
+        import dataclasses
+
+        from custom_components.roomba_plus.models import RoombaData
+
+        names = {f.name for f in dataclasses.fields(RoombaData)}
+
+        assert "prime_map_versions" in names
+
+    def test_the_read_records_what_it_read(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus import image
+
+        source = inspect.getsource(image)
+
+        assert "runtime_data.prime_map_versions = {" in source
+
+    def test_both_dumps_report_it(self) -> None:
+        import pathlib
+
+        source = pathlib.Path(
+            "custom_components/roomba_plus/diagnostics.py"
+        ).read_text(encoding="utf-8")
+        start = source.index(
+            "if data.connection_type is ConnectionType.CLOUD_ONLY:"
+        )
+        end = source.index("\n    if roomba is None:", start)
+
+        assert '"active_map_versions"' in source[start:end]
+        assert '"active_map_versions"' in source[end:]
+
+    def test_never_read_is_distinct_from_no_maps(self) -> None:
+        """An empty dict and "we have not asked yet" mean different
+        things, and conflating them is how this was misread in the
+        first place."""
+        import pathlib
+
+        source = pathlib.Path(
+            "custom_components/roomba_plus/diagnostics.py"
+        ).read_text(encoding="utf-8")
+
+        assert 'or "not read yet this session"' in source

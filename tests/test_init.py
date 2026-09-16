@@ -182,3 +182,44 @@ class TestTheTlsContextIsBuiltOffTheLoop:
 
         assert "except Exception" in source
         assert "raise" not in source
+
+
+class TestSavingAnEntityOptionTakesEffect:
+    """Options that decide whether an entity EXISTS are read once, when
+    the platform sets up. Changing one and saving therefore does nothing
+    until the integration happens to reload for another reason.
+
+    @chairstacker enabled "Separate sensor per room and zone" and the
+    entities never appeared. The option was saved correctly; nothing
+    asked for them to be built.
+
+    The map options are deliberately excluded: they are read on every
+    render and take effect on the next frame. The test for membership is
+    "read at setup time", not "affects what the user sees".
+    """
+
+    def test_entity_creating_options_trigger_a_reload(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus import __init__ as module
+
+        source = inspect.getsource(module._async_reload_on_options_change)
+
+        for option in (
+            "CONF_ENABLE_SCHEDULE_CALENDAR",
+            "CONF_REGION_SENSORS",
+            "CONF_BLOCKING_SENSORS",
+        ):
+            assert option in source, option
+
+    def test_render_time_options_are_not_included(self) -> None:
+        """Reloading an entry to change a map colour would be a heavy
+        answer to a light question."""
+        import inspect
+
+        from custom_components.roomba_plus import __init__ as module
+
+        source = inspect.getsource(module._async_reload_on_options_change)
+
+        for option in ("CONF_MAP_ROOM_LABELS", "CONF_MAP_CLEAN_ZONES"):
+            assert option not in source, option

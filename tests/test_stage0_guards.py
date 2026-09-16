@@ -706,3 +706,159 @@ class TestNoTestIsShadowedByAnother:
             "these names are defined more than once at module level, so the "
             f"earlier definition never runs: {offenders}"
         )
+
+
+class TestTheNeverFilledGuardWorks:
+    """A guard that cannot catch the thing it was written for is worse
+    than no guard, so it is checked against the real cases.
+
+    All four came from users in one day, and all four passed the suite:
+    `cleaned_in_room`, `_zone_polygons`, `prime_map_versions` and
+    `last_known_map_id`.
+    """
+
+    @staticmethod
+    def _scan(source):
+        import ast
+        import importlib.util
+        import pathlib
+
+        spec = importlib.util.spec_from_file_location(
+            "check_never_filled",
+            pathlib.Path("scripts/check_never_filled.py"),
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        cls = next(
+            node for node in ast.walk(ast.parse(source))
+            if isinstance(node, ast.ClassDef)
+        )
+        return module._scan_class(cls)
+
+    def test_it_catches_the_real_case(self) -> None:
+        """`_zone_polygons` as it stood: initialised empty, read by
+        three passes, assigned nowhere."""
+        assert self._scan(
+            "class Image:\n"
+            "    def __init__(self):\n"
+            "        self._zone_polygons: dict = {}\n"
+            "    def draw(self):\n"
+            "        for ring in self._zone_polygons.values():\n"
+            "            pass\n"
+        ) == ["_zone_polygons"]
+
+    def test_a_later_assignment_clears_it(self) -> None:
+        assert self._scan(
+            "class Image:\n"
+            "    def __init__(self):\n"
+            "        self._zone_polygons: dict = {}\n"
+            "    def load(self, plan):\n"
+            "        self._zone_polygons = dict(plan.zones or {})\n"
+        ) == []
+
+    def test_item_assignment_counts_as_filling(self) -> None:
+        """`self._map[key] = value` is how several of these are
+        populated, and calling it unfilled would make the guard noise."""
+        assert self._scan(
+            "class A:\n"
+            "    def __init__(self):\n"
+            "        self._m: dict = {}\n"
+            "    def set(self, k, v):\n"
+            "        self._m[str(k)] = v\n"
+        ) == []
+
+    def test_a_mutating_call_counts_too(self) -> None:
+        assert self._scan(
+            "class B:\n"
+            "    def __init__(self):\n"
+            "        self._m: dict = {}\n"
+            "    def add(self, k, v):\n"
+            "        self._m.setdefault(k, v)\n"
+        ) == []
+
+    def test_the_package_is_clean(self) -> None:
+        import subprocess
+        import sys
+
+        result = subprocess.run(
+            [sys.executable, "scripts/check_never_filled.py"],
+            capture_output=True, text=True, check=False,
+        )
+
+        assert result.returncode == 0, result.stdout
+
+
+class TestTheGuardCoversClosuresToo:
+    """The most damaging of the four was not an attribute at all.
+
+    `cleaned_in_room` was a local in a callback factory, declared
+    `nonlocal` in the inner handler, read in the room-advance condition,
+    and assigned `False` -- and nothing else, anywhere. An
+    attribute-only scan cannot see that, and the first version of this
+    guard claimed the case while missing it entirely.
+
+    THE SCAN IS PER OUTER FUNCTION. Sibling closures share these: one
+    sets a handle, another clears it. Reading each separately sees one
+    value in both and calls a working variable dead -- which the first
+    attempt did, on two real ones.
+    """
+
+    @staticmethod
+    def _scan(source):
+        import ast
+        import importlib.util
+        import pathlib
+
+        spec = importlib.util.spec_from_file_location(
+            "check_never_filled",
+            pathlib.Path("scripts/check_never_filled.py"),
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        found = []
+        for node in ast.parse(source).body:
+            if isinstance(node, ast.FunctionDef):
+                found += module._scan_closure(node)
+        return found
+
+    def test_it_catches_a_flag_only_ever_set_false(self) -> None:
+        assert self._scan(
+            "def factory(entry):\n"
+            "    cleaned_in_room = False\n"
+            "    def handler(msg):\n"
+            "        nonlocal cleaned_in_room\n"
+            "        if returned and cleaned_in_room:\n"
+            "            advance()\n"
+            "            cleaned_in_room = False\n"
+            "    return handler\n"
+        ) == ["cleaned_in_room"]
+
+    def test_a_flag_set_both_ways_is_clean(self) -> None:
+        assert self._scan(
+            "def factory(entry):\n"
+            "    cleaned_in_room = False\n"
+            "    def handler(msg):\n"
+            "        nonlocal cleaned_in_room\n"
+            "        if working:\n"
+            "            cleaned_in_room = True\n"
+            "        if returned and cleaned_in_room:\n"
+            "            cleaned_in_room = False\n"
+            "    return handler\n"
+        ) == []
+
+    def test_siblings_sharing_a_variable_are_not_flagged(self) -> None:
+        """One closure sets the handle, another clears it. Both are
+        needed and neither is dead."""
+        assert self._scan(
+            "def outer(hass):\n"
+            "    handle = None\n"
+            "    def cancel():\n"
+            "        nonlocal handle\n"
+            "        handle = None\n"
+            "    def attempt():\n"
+            "        nonlocal handle\n"
+            "        handle = later(hass, 5, cancel)\n"
+            "    return cancel, attempt\n"
+        ) == []

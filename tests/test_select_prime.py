@@ -1464,3 +1464,51 @@ class TestTheFilterCannotHideWhatTheRobotDoes:
         )
 
         assert cleaning_modes_available(True, None) == cleaning_modes_for(True)
+
+
+class TestChoosingAMapRefreshesWhatDependsOnIt:
+    """The zone select's options depend on which map is chosen, and it
+    learns about changes through `SIGNAL_PRIME_ROOM_NAMES` -- which only
+    the floor-plan build ever sent.
+
+    So after picking a map, the zone list stayed on the old one until a
+    build happened to run, which reads as a long lag or needs a page
+    refresh (@chairstacker).
+
+    FOURTH INSTANCE OF THE SAME SHAPE TODAY: something is set, and
+    nothing asks for what depends on it to be recomputed. The others
+    were the entity options that needed a reload, the region sensors
+    behind them, and the zone polygons that were never collected.
+    """
+
+    def test_the_map_select_sends_the_refresh_signal(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus.select_prime import PrimeMapSelect
+
+        source = inspect.getsource(PrimeMapSelect.async_select_option)
+
+        assert "async_dispatcher_send" in source
+        assert "SIGNAL_PRIME_ROOM_NAMES" in source
+
+    def test_the_zone_select_already_listens_for_it(self) -> None:
+        """Nothing new was introduced -- the signal and the listener both
+        existed, and only the send was missing."""
+        import inspect
+
+        from custom_components.roomba_plus.select_prime import PrimeZoneSelect
+
+        source = inspect.getsource(PrimeZoneSelect)
+
+        assert "SIGNAL_PRIME_ROOM_NAMES" in source
+
+    def test_a_failed_dispatch_does_not_break_the_selection(self) -> None:
+        """Choosing a map must succeed even if nothing is listening --
+        the refresh is a courtesy, not the point of the call."""
+        import inspect
+
+        from custom_components.roomba_plus.select_prime import PrimeMapSelect
+
+        source = inspect.getsource(PrimeMapSelect.async_select_option)
+
+        assert "contextlib.suppress" in source

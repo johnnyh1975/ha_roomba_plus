@@ -3168,3 +3168,60 @@ class TestAnchoringBeforeTheGrid:
         out = _anchored_mission_points(combined, {2}, self._store())
 
         assert out[-len(anchored):] == anchored
+
+
+class TestZonesAreDrawnAndNamed:
+    """`_zone_polygons` was initialised to an empty dict and never
+    filled, while three separate passes read it -- the bounding box, the
+    outline pass, and the label pass. All three had been working on
+    nothing since they were written.
+
+    So zones were not drawn at all, which is the stronger version of
+    "zone names are not visible on the map" (@chairstacker). The data
+    was there the whole time: the floor-plan build parses `cleanZones`
+    into `zone_polygons` and nothing collected it.
+
+    SAME SHAPE AS TWO OTHER FAULTS THIS WEEK: a value declared, read,
+    and never assigned. It is worth checking that a write exists before
+    trusting a read.
+    """
+
+    def test_the_zone_polygons_are_collected(self) -> None:
+        import ast
+        import inspect
+
+        from custom_components.roomba_plus import image
+
+        tree = ast.parse(inspect.getsource(image))
+        assigned = [
+            node for node in ast.walk(tree)
+            if isinstance(node, ast.Assign)
+            for target in node.targets
+            if isinstance(target, ast.Attribute)
+            and target.attr == "_zone_polygons"
+        ]
+
+        assert assigned, (
+            "_zone_polygons is read but never assigned -- every pass "
+            "that uses it works on an empty dict"
+        )
+
+    def test_it_comes_from_the_floor_plan(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus import image
+
+        assert 'getattr(floor_plan, "zone_polygons", None)' in (
+            inspect.getsource(image)
+        )
+
+    def test_zones_get_labels_as_well_as_outlines(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus import image
+
+        source = inspect.getsource(image)
+
+        # The label pass walks both collections, not just rooms.
+        assert "_labelled = [" in source
+        assert "self._polygons, (230, 230, 230)" in source

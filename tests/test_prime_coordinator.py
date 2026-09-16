@@ -911,3 +911,124 @@ class TestTheRoomNameInItsOwnEvent:
 
     def test_an_unknown_id_is_none(self):
         assert self._coordinator({"10": "Kitchen"})._room_name("99") is None
+
+
+class TestPrimeAdvancesFromItsOwnTimeline:
+    """Prime reports where it is going more precisely than Classic does
+    -- a region id in the mission timeline, against Classic's bare "am I
+    driving" bit -- and every bit of that was being spent on firing an
+    automation event.
+
+    `advance_room()` had exactly one caller, in the Classic MQTT
+    callback. So a Prime robot's room display could only move via the
+    phase route, and that route requires a per-room time estimate. A
+    robot in auto pass mode never gets one: it decides its passes while
+    running, so there is nothing to estimate in advance, and the
+    fallback is a whole-house average divided by the mission's room
+    count.
+
+    Same principle as the Classic fix: an observation may be acted on
+    without a forecast agreeing.
+    """
+
+    @staticmethod
+    def _coordinator(planned, index, names):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.prime_coordinator import (
+            PrimeCoordinator,
+        )
+
+        store = MagicMock()
+        store.planned_rooms = planned
+        store.current_room_idx = index
+        store.advance_room.return_value = True
+
+        coordinator = PrimeCoordinator.__new__(PrimeCoordinator)
+        coordinator.hass = MagicMock()
+        coordinator.entry = SimpleNamespace(
+            entry_id="e1",
+            runtime_data=SimpleNamespace(mission_timer_store=store),
+        )
+        coordinator._room_name = lambda rid: names.get(rid)
+        return coordinator, store
+
+    def test_leaving_the_displayed_room_advances_it(self) -> None:
+        coordinator, store = self._coordinator(
+            ["Guest Bathroom", "Hallway"], 0, {"15": "Guest Bathroom"}
+        )
+
+        coordinator._advance_display_if_next("15")
+
+        assert store.advance_room.called
+
+    def test_a_report_for_another_room_is_ignored(self) -> None:
+        """Missions revisit, and reports arrive late. Anything but an
+        exact match on the room being shown is left alone rather than
+        guessed at."""
+        coordinator, store = self._coordinator(
+            ["Guest Bathroom", "Hallway"], 0, {"99": "Kitchen"}
+        )
+
+        coordinator._advance_display_if_next("99")
+
+        assert not store.advance_room.called
+
+    def test_it_does_not_advance_out_of_the_last_room(self) -> None:
+        coordinator, store = self._coordinator(
+            ["Guest Bathroom", "Hallway"], 1, {"14": "Hallway"}
+        )
+
+        coordinator._advance_display_if_next("14")
+
+        assert not store.advance_room.called
+
+    def test_no_region_id_does_nothing(self) -> None:
+        coordinator, store = self._coordinator(["A", "B"], 0, {})
+
+        coordinator._advance_display_if_next(None)
+
+        assert not store.advance_room.called
+
+    def test_no_estimate_is_consulted(self) -> None:
+        """The whole point: this route acts on an observation. If it
+        grew an estimate check it would inherit the fault it exists to
+        route around."""
+        import inspect
+
+        from custom_components.roomba_plus.prime_coordinator import (
+            PrimeCoordinator,
+        )
+
+        # THE CODE, NOT THE COMMENTARY. The docstring explains what this
+        # route avoids, so a plain substring search over the source
+        # matches the explanation and fails on its own reasoning.
+        import ast
+
+        tree = ast.parse(
+            inspect.getsource(PrimeCoordinator._advance_display_if_next).strip()
+        )
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant):
+                node.value = ast.Constant(value="")
+        code = ast.unparse(tree)
+
+        # NAMES READ, not words appearing. The debug line says "no
+        # estimate consulted", so a substring search finds the word in
+        # the message announcing its own absence.
+        read = {
+            node.attr for node in ast.walk(tree)
+            if isinstance(node, ast.Attribute)
+        } | {
+            node.id for node in ast.walk(tree) if isinstance(node, ast.Name)
+        } | {
+            node.func.id for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        }
+
+        for forbidden in (
+            "expected_room_sec", "room_estimate_cache",
+            "_room_transition_confidence_ok", "cached_room_seconds",
+        ):
+            assert forbidden not in read, forbidden

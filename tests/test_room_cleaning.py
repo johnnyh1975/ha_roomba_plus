@@ -3556,3 +3556,265 @@ class TestACachedNameKeepsItsMap:
         cached = source.index("prime_room_map_ids")
 
         assert direct < cached
+
+
+class TestPrimeHonoursTheCleaningModeSelect:
+    """The Cleaning mode dropdown had one reader: Classic's
+    `clean_rooms()`. A Prime robot showed the control, accepted a
+    change, and then cleaned in whatever mode it was already in
+    (@chairstacker, whose robot mops).
+
+    The value was never missing -- `_selected_cleaning_mode()` reads it
+    from the entity state and works the same for both. Only one
+    generation asked.
+    """
+
+    def test_both_generations_consult_the_select(self) -> None:
+        import ast
+        import inspect
+
+        from custom_components.roomba_plus import room_cleaning
+
+        tree = ast.parse(inspect.getsource(room_cleaning))
+        by_class = {
+            cls.name: ast.unparse(cls)
+            for cls in tree.body
+            if isinstance(cls, ast.ClassDef)
+        }
+
+        for generation in ("PrimeRoomCleaning", "ClassicRoomCleaning"):
+            assert "_selected_cleaning_mode" in by_class[generation], (
+                f"{generation} never reads the cleaning mode select"
+            )
+
+    def test_prime_reads_it_at_the_single_send_point(self) -> None:
+        """Every Prime region command goes through
+        `_send_region_command()`, so a path added later inherits the
+        fallback rather than quietly missing it."""
+        import inspect
+
+        from custom_components.roomba_plus.room_cleaning import (
+            PrimeRoomCleaning,
+        )
+
+        source = inspect.getsource(PrimeRoomCleaning._send_region_command)
+
+        assert "_selected_cleaning_mode" in source
+
+    def test_an_explicit_mode_still_wins(self) -> None:
+        """The select is a fallback, not an override: a service call
+        naming a mode must not be second-guessed."""
+        import inspect
+
+        from custom_components.roomba_plus.room_cleaning import (
+            PrimeRoomCleaning,
+        )
+
+        source = inspect.getsource(PrimeRoomCleaning._send_region_command)
+
+        assert "if not operating_mode:" in source
+
+
+class TestAParkedPrimeRobotStillSaysWhereItIs:
+    """A Prime robot reports its map while it is relocalised. Docked
+    between missions it reports nothing -- which is exactly when a user
+    is standing in the interface picking a room.
+
+    So "follow the robot" offered every map and narrowed nothing for a
+    robot sitting on its dock, and the only setting that worked was
+    choosing a map by hand (@chairstacker, who concluded the
+    follow-the-robot option was pointless -- which it was, in the state
+    he was using it).
+
+    WHERE IT LAST WORKED IS WHERE IT IS STANDING, unless somebody
+    carried it. Weaker than a live reading, much better than nothing,
+    and the caller already marks this branch as not-live.
+
+    NOT IF THAT COMMAND FAILED. @Thonno's Classic robot stored our own
+    rejected commands and handed them back as its location, which is how
+    a wrong map survived three releases. The guard 4.2.2 put on the map
+    version applies here to the map itself.
+    """
+
+    @staticmethod
+    def _map_id(shadows):
+        import asyncio
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.room_cleaning import (
+            PrimeRoomCleaning,
+        )
+
+        backend = PrimeRoomCleaning.__new__(PrimeRoomCleaning)
+        backend._data = SimpleNamespace(
+            prime_status_coordinator=SimpleNamespace(data=shadows)
+        )
+        return asyncio.run(backend._current_map_id())
+
+    def test_a_live_reading_wins(self) -> None:
+        assert self._map_id({
+            "ro-currentstate": {"cleanMissionStatus": {"p2mapId": "LIVE"}},
+            "rw-software": {"lastCommand": {"pmap_id": "OLD"}},
+        }) == "LIVE"
+
+    def test_parked_falls_back_to_the_last_command(self) -> None:
+        assert self._map_id({
+            "ro-currentstate": {"cleanMissionStatus": {"error": 0}},
+            "rw-software": {"lastCommand": {"p2map_id": "MAP-A"}},
+        }) == "MAP-A"
+
+    def test_a_localisation_failure_is_not_a_location(self) -> None:
+        """The command that produced 224 is evidence of where the robot
+        is NOT. Handing it back is how the fault repeats itself."""
+        assert self._map_id({
+            "ro-currentstate": {"cleanMissionStatus": {"error": 224}},
+            "rw-software": {"lastCommand": {"p2map_id": "WRONG-MAP"}},
+        }) is None
+
+    def test_nothing_known_stays_nothing(self) -> None:
+        assert self._map_id({"ro-currentstate": {}}) is None
+        assert self._map_id({}) is None
+
+
+class TestNameAndMapUseTheSamePrecedence:
+    """One loop, two dictionaries, opposite rules.
+
+    `rooms` is keyed by NAME and skips an entry whose name is already
+    taken, so the first map processed wins -- the active one. The map
+    assignment one line below is keyed by REGION ID and was plainly
+    assigned, so the LAST entry won -- the non-active one.
+
+    A region id present on both maps therefore took its NAME from the
+    active map and its MAP from the other. The command went out with a
+    correct region id, the wrong map, and that map's version alongside
+    it: a closed, consistent, wrong answer.
+
+    THAT IS WHY IT LOOKED INTERMITTENT. Whether it bit depended on which
+    rooms were picked -- a name unique to the active map was fine, one
+    whose id was reused on the other map was not. @Thonno reproduced it
+    deliberately and captured the diagnostics immediately: the same room
+    worked on one map and failed on the other with error 224, after four
+    theories of mine had each been ruled out by one of his messages.
+    """
+
+    @staticmethod
+    def _resolve(entries):
+        """The loop's shape, as the fix leaves it."""
+        rooms: dict[str, str] = {}
+        pmap_by_region: dict[str, str] = {}
+        for rid, name, pmap_id in entries:
+            if name in rooms:
+                continue
+            rooms[name] = rid
+            pmap_by_region.setdefault(rid, pmap_id)
+        return rooms, pmap_by_region
+
+    #: Region 22 and region 1 exist on both of @Thonno's maps under
+    #: different names. The active map is listed first.
+    ENTRIES = [
+        ("22", "Studio", "tM_GAK"),
+        ("1", "Corridoio", "tM_GAK"),
+        ("22", "Bagno principale", "oGwE"),
+        ("1", "Ingresso", "oGwE"),
+    ]
+
+    def test_a_room_goes_to_the_map_it_was_named_on(self) -> None:
+        rooms, by_region = self._resolve(self.ENTRIES)
+
+        assert by_region[rooms["Studio"]] == "tM_GAK"
+        assert by_region[rooms["Corridoio"]] == "tM_GAK"
+
+    def test_the_code_uses_setdefault_not_assignment(self) -> None:
+        """The distinction is the whole bug: assignment lets the last
+        map overwrite, and the two dictionaries stop agreeing."""
+        import inspect
+
+        from custom_components.roomba_plus.room_cleaning import (
+            ClassicRoomCleaning,
+        )
+
+        source = inspect.getsource(ClassicRoomCleaning.available_rooms)
+
+        assert "self._pmap_by_region.setdefault(rid, pmap_id)" in source
+        assert "self._pmap_by_region[rid] = pmap_id" not in source
+
+    def test_a_region_only_on_the_other_map_still_resolves(self) -> None:
+        """Narrowing the precedence must not lose ids the active map
+        does not have."""
+        rooms, by_region = self._resolve(
+            [*self.ENTRIES, ("19", "Ripostiglio", "oGwE")]
+        )
+
+        assert by_region[rooms["Ripostiglio"]] == "oGwE"
+
+
+class TestClassicRecordsWhatItSendsToo:
+    """The Prime region command records its payload; Classic's two send
+    paths did not. So a Classic robot that accepted a command and did
+    nothing left no record of whether one went out, or with what --
+    which is the first question every silent-failure report asks, and
+    the one that cost four rounds with one tester.
+
+    It also answers the map question directly: the summary carries
+    `pmap_id` and `user_pmapv_id`, so a download after a localisation
+    failure shows which map the command named without needing the robot
+    to be asked.
+    """
+
+    def test_both_classic_sends_record(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus.room_cleaning import (
+            ClassicRoomCleaning,
+        )
+
+        for method in (
+            ClassicRoomCleaning.clean_rooms,
+            ClassicRoomCleaning.clean_segments,
+        ):
+            assert "record_command(" in inspect.getsource(method), (
+                method.__name__
+            )
+
+    def test_the_summary_keeps_map_version_and_regions(self) -> None:
+        from custom_components.roomba_plus.command_record import _summarise
+
+        out = _summarise({
+            "ordered": True,
+            "pmap_id": "MAP-A",
+            "user_pmapv_id": "260807T140942",
+            "regions": [
+                {"region_id": "22", "type": "rid", "params": {"x": 1}},
+                {"region_id": "1", "type": "rid", "params": {}},
+            ],
+        })
+
+        assert out["pmap_id"] == "MAP-A"
+        assert out["user_pmapv_id"] == "260807T140942"
+        assert out["regions"] == ["22", "1"]
+
+    def test_the_per_region_params_are_left_out(self) -> None:
+        """They are long and say nothing about whether the command was
+        sent, which is what the record exists for."""
+        from custom_components.roomba_plus.command_record import _summarise
+
+        out = _summarise({
+            "regions": [{"region_id": "22", "params": {"twoPass": True}}],
+        })
+
+        assert out["regions"] == ["22"]
+
+    def test_classic_claims_nothing_about_the_result(self) -> None:
+        """`send_command` returns nothing to check, so `ok` stays None:
+        sent, result unknown. Recording True would be a claim we cannot
+        support."""
+        import inspect
+
+        from custom_components.roomba_plus.room_cleaning import (
+            ClassicRoomCleaning,
+        )
+
+        source = inspect.getsource(ClassicRoomCleaning.clean_rooms)
+        block = source[source.index("record_command("):]
+
+        assert "ok=" not in block[:200]
