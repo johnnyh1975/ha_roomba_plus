@@ -9,6 +9,17 @@ note are listed — most releases need zero action beyond updating.
 
 ---
 
+## v4.2.6 — from v4.2.5
+
+Nothing to do.
+
+**If your room display never moved past the first room**, that is the
+one this release repairs. The first mission after upgrading also gives
+your robot a real time for each room it finishes, so the second one
+tracks better than the first.
+
+---
+
 ## v4.2.5 — from v4.2.4
 
 Nothing to do.
