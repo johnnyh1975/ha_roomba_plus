@@ -742,10 +742,22 @@ class MissionStore:
         """Room names cleaned in ONE record, completion order.
 
         v3.3.0 ROOM-SCHED foundation fix — the derivation half of
-        latest_cleaned_rooms(), applicable to ANY record: live records
-        never carry a stored `last_cleaned_rooms` field (they carry the
-        cloud-merged `timeline`), so every reader of that field only
-        ever worked for IMPORTED histories. Same bug class as the
+        latest_cleaned_rooms(), applicable to ANY record.
+
+        THAT IS NO LONGER TRUE OF LIVE RECORDS, and the assumption cost
+        a release. It said live records never carry a stored
+        `last_cleaned_rooms` because they carry the cloud-merged
+        `timeline` instead. The timeline is PRIME-ONLY: a Classic record
+        carried neither, so source 1 found nothing every time, source 2
+        was assumed absent, and the vacuum attribute kept whatever it
+        had last resolved — seven rooms of a whole-house run, still
+        listed after two two-room missions (@ScenicSystemsLLC).
+
+        Live records now store the rooms room tracking actually advanced
+        through, under that same key. Source 1 still wins where a
+        timeline exists, because it reports real completions with a
+        status; source 2 is now an observation on Classic rather than
+        only an import. Same bug class as the
         v3.1.1 last_mission_summary fix, one level deeper — this helper
         is the single shared derivation both room_cleaning_history()
         and room_coverage_health() now use.

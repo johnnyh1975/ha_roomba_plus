@@ -546,6 +546,37 @@ def _state_from_shadows(data: Any) -> dict[str, Any]:
     return merged
 
 
+def _active_map_versions(data: Any, state: dict[str, Any] | None = None) -> Any:
+    """{p2map_id: active version}, from whichever source this robot has.
+
+    RECORDED IN A PRIME-ONLY PATH, and that was a mistake worth naming.
+    The field exists so a download shows which version of which map the
+    robot is on -- precisely so nobody reads its absence as the robot
+    not reporting a map, which cost four rounds with one tester.
+
+    It was then written only from `PrimeRoomsImage`, which needs
+    `prime_robot`. On a Classic robot it therefore said "not read yet
+    this session" while the same file carried correct versions three
+    sections away, under `smart_map.pmap_versions`. Contradicting itself
+    is worse than being silent.
+
+    Classic keeps them in the reported state's `pmaps` list, so the
+    fallback reads that rather than inventing a second mechanism.
+    """
+    recorded = getattr(data, "prime_map_versions", None)
+    if recorded:
+        return dict(recorded)
+
+    pmaps = (state or {}).get("pmaps")
+    if isinstance(pmaps, list) and pmaps:
+        return {
+            str(next(iter(entry))): str(entry[next(iter(entry))])
+            for entry in pmaps
+            if isinstance(entry, dict) and entry
+        }
+    return "not read yet this session"
+
+
 def _sent_commands(data: Any) -> list[dict[str, Any]] | str:
     """The commands WE sent, newest last.
 
@@ -1330,9 +1361,7 @@ async def _build_diagnostics(
             # absence from a download was taken four times over as the
             # robot not reporting a map at all. It was only ever this
             # file not being told.
-            "active_map_versions": dict(
-                getattr(data, "prime_map_versions", None) or {}
-            ) or "not read yet this session",
+            "active_map_versions": _active_map_versions(data),
             # THESE NEED NOTHING BUT RUNTIME DATA, so their absence here
             # was an oversight rather than a limitation. Both were added
             # to answer questions that came from cloud-only robots in
@@ -1744,9 +1773,7 @@ async def _build_diagnostics(
         # absence from a download was taken four times over as the
         # robot not reporting a map at all. It was only ever this
         # file not being told.
-        "active_map_versions": dict(
-            getattr(data, "prime_map_versions", None) or {}
-        ) or "not read yet this session",
+        "active_map_versions": _active_map_versions(data, state),
         # THE POSITION CHAIN, END TO END.
         #
         # Every part of resolving "which room is the robot in" was

@@ -220,7 +220,30 @@ def _prime_room_time_estimates(
     """
     estimates = getattr(config_entry.runtime_data, "prime_time_estimates", None)
     if not isinstance(getattr(estimates, "by_region", None), dict):
-        return [None] * len(planned_order)
+        # NO CLOUD ESTIMATES IS THE CASE OUR OWN MEASUREMENTS EXIST FOR.
+        #
+        # This returned early, and the fallback to what we measured
+        # ourselves sat further down -- so the one situation it was
+        # built for never reached it. A robot in auto pass mode gets no
+        # cloud estimate by design, which is exactly when the
+        # measurement matters.
+        #
+        # @ScenicSystemsLLC measured Guest Bathroom three times across
+        # three missions -- 232s, 220s, 197s, each logged as "kept for
+        # next time" -- and every run still began with
+        # `estimates=[None, None]`. He ran the same pairing three times
+        # to rule out a timing fluke.
+        #
+        # SAME SHAPE AS THE FAULT BEFORE IT: a fallback behind a guard
+        # the affected case never passes. That is twice in two releases.
+        # Rounded: the caller's contract is whole seconds, and a
+        # measurement is not precise enough for the fraction to mean
+        # anything.
+        return [
+            int(_seconds) if (_seconds := cached_room_seconds(
+                config_entry, str(room_name))) else None
+            for room_name in planned_order
+        ]
 
     coordinator = getattr(
         config_entry.runtime_data, "prime_schedule_coordinator", None
@@ -354,7 +377,22 @@ def shortest_plausible_room_seconds(
     estimates = getattr(config_entry.runtime_data, "prime_time_estimates", None)
     by_region = getattr(estimates, "by_region", None)
     if not isinstance(by_region, dict) or not by_region:
-        return [None] * len(planned_order)
+        # THE SAME EARLY RETURN AS THE DISPLAY LOOKUP, eighty lines up,
+        # and it hides the same fallback.
+        #
+        # This one feeds the transition GATE rather than the display, so
+        # in auto pass mode the gate fell through to a whole-house mean
+        # while real measurements of these rooms sat in the cache the
+        # tail of this function already reads.
+        #
+        # THIRD TIME FOR THIS SHAPE: a fallback behind a guard the
+        # affected case never passes -- `cleaned_in_room`, the display
+        # estimate, and now the gate estimate. Found by searching for
+        # the pattern rather than by waiting for the next report.
+        return [
+            cached_room_seconds(config_entry, str(room_name))
+            for room_name in planned_order
+        ]
 
     coordinator = getattr(
         config_entry.runtime_data, "prime_schedule_coordinator", None

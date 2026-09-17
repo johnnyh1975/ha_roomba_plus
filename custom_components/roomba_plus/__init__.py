@@ -819,11 +819,39 @@ async def _phase_cloud(ctx: _SetupContext) -> None:
                 config_entry.data[CONF_BLID],
             )
             raise
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            # THE REASON, NOT JUST THE FACT.
+            #
+            # This caught every exception and logged a sentence without
+            # one, so two separate incidents of a failed startup fetch
+            # have now been argued about without anybody knowing what
+            # actually failed. A rate limit, a DNS failure during boot
+            # and a rejected credential all produced the same line.
+            #
+            # @ScenicSystemsLLC lost the room list on all three of his
+            # robots at once and could not start a room clean until he
+            # reloaded each entry by hand. Whether that was the cloud
+            # refusing three near-simultaneous logins or something else
+            # entirely is exactly what this line was throwing away.
+            #
+            # AND "UNTIL RETRY" WAS MISLEADING. The cloud coordinator
+            # polls every 24 hours, so the retry it promised was a day
+            # away -- he rechecked after ten minutes and reasonably
+            # concluded it never retried at all.
             _LOGGER.warning(
-                "Roomba+ cloud: initial fetch failed for %s — "
-                "local operation unaffected, cloud features unavailable until retry",
+                "Roomba+ cloud: initial fetch failed for %s: %s: %s — "
+                "local operation continues, but room and zone features "
+                "need this data and will not work until the next cloud "
+                "poll (up to 24h) or a reload of this entry. Reload it "
+                "from Settings > Devices & Services if you need rooms now",
                 config_entry.data[CONF_BLID],
+                type(exc).__name__,
+                exc,
+            )
+            _LOGGER.debug(
+                "Roomba+ cloud: initial fetch traceback for %s",
+                config_entry.data[CONF_BLID],
+                exc_info=True,
             )
 
     # OutlineStore (EPHEMERAL + map enabled)
@@ -1488,10 +1516,20 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
     parts_coordinator = PrimePartsCoordinator(hass, prime_robot, blid, config_entry)
     try:
         await parts_coordinator.async_config_entry_first_refresh()
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        # THE REASON, as above. A warning that names no cause turns
+        # every future report of it into guesswork -- which is what the
+        # startup room-list fetch next door cost us across two separate
+        # incidents.
         _LOGGER.warning(
-            "roomba_plus: could not fetch consumable parts for %s -- continuing without "
-            "them; the sensors will appear once a later refresh succeeds", blid,
+            "roomba_plus: could not fetch consumable parts for %s: %s: %s "
+            "-- continuing without them; the sensors will appear once a "
+            "later refresh succeeds",
+            blid, type(exc).__name__, exc,
+        )
+        _LOGGER.debug(
+            "roomba_plus: consumable parts traceback for %s", blid,
+            exc_info=True,
         )
 
     # NEW: household_id, needed for get_schedules()/PrimeScheduleCalendar

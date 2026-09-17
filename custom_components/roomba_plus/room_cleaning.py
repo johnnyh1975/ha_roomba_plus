@@ -2213,6 +2213,41 @@ class ClassicRoomCleaning(RoomCleaningBackend):
 
 
 
+    def _segments_from_saved_zone_data(self) -> list[Any]:
+        """Segments built from the config entry's stored zone data.
+
+        Only entries that carry BOTH a name and a `pmap_id` are used:
+        an id with no map cannot be sent, and offering one would put the
+        user back in front of the refusal this fallback exists to avoid.
+        """
+        # Same late import and same failure mode as the main path: on a
+        # Home Assistant without Segment there are no segments to offer,
+        # whatever the source.
+        try:
+            from homeassistant.components.vacuum import Segment  # noqa: PLC0415
+        except ImportError:
+            return []
+
+        saved: dict[str, Any] = self._config_entry.options.get(
+            CONF_SMART_ZONE_DATA, {}
+        ) or {}
+        out: list[Any] = []
+        for rid, meta in saved.items():
+            if not isinstance(meta, dict):
+                continue
+            name = meta.get("name")
+            pmap_id = meta.get("pmap_id")
+            if not name or not pmap_id:
+                continue
+            out.append(Segment(id=f"{pmap_id}/{rid}", name=str(name)))
+        if out:
+            _LOGGER.debug(
+                "async_get_segments: cloud unavailable -- offering %d "
+                "room(s) from saved zone data instead of nothing",
+                len(out),
+            )
+        return out
+
     async def get_segments(self) -> list[Any]:
         """The Classic side of HA's Clean Area segment list.
 
@@ -2238,7 +2273,25 @@ class ClassicRoomCleaning(RoomCleaningBackend):
 
 
         if not self._data.has_cloud or self._data.cloud_coordinator is None:
-            return []
+            # WHAT WE STORED, when the cloud has nothing.
+            #
+            # `available_rooms()` on this same class starts from the
+            # saved zone data and works through a cloud outage. This
+            # method returned nothing, so the same rooms were reachable
+            # by name through the service and absent from the dropdown
+            # at the same moment -- an inconsistency no user could
+            # explain.
+            #
+            # The guard itself is right: a segment id without a map
+            # prefix is the thing that produces "this robot has N maps
+            # and is not reporting which one" when it is sent. But the
+            # saved data carries `pmap_id` per region, so the prefix is
+            # known without the cloud rather than guessed.
+            #
+            # PRECAUTION, NOT A FIX: no reporter has hit this. It is
+            # here because the two methods disagreed, not because
+            # somebody lost a dropdown.
+            return self._segments_from_saved_zone_data()
         active_pmap_id = self._cloud.active_pmap_id
         if not active_pmap_id:
             # Coordinator has not yet fetched pmap data — returning segments with a

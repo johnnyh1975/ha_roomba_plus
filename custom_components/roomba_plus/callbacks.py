@@ -133,6 +133,29 @@ _ROOM_TRANSITION_MIN_SECONDS: float = 60.0
 #: boundary crossing. Set under the shortest confirmed crossing.
 
 
+def _observed_rooms(entry: Any) -> list[str]:
+    """Rooms the tracker actually advanced through this mission.
+
+    `planned_rooms[:current_room_idx + 1]` -- the current room included,
+    because reaching it means the robot worked there; advancing INTO a
+    room is what confirms the previous one finished.
+
+    Empty when nothing was tracked, which the caller treats as "fall
+    back to the requested list" rather than "no rooms were cleaned".
+    """
+    try:
+        store = getattr(
+            getattr(entry, "runtime_data", None), "mission_timer_store", None
+        )
+        planned = list(getattr(store, "planned_rooms", None) or [])
+        if not planned:
+            return []
+        index = int(getattr(store, "current_room_idx", 0) or 0)
+        return planned[: max(0, min(index, len(planned) - 1)) + 1]
+    except Exception:  # noqa: BLE001
+        return []
+
+
 def _remember_measured_room_time(
     entry: Any, room: str | None, seconds: float | None
 ) -> None:
@@ -471,6 +494,7 @@ async def async_record_mission(
     zones: list[str],
     start_ts: int,
     nstuck_delta: int,
+    observed_rooms: list[str] | None = None,
     mission_error_code: int = 0,
     recharge_min: int = 0,
     result_override: str | None = None,
@@ -484,6 +508,8 @@ async def async_record_mission(
         mission:         cleanMissionStatus dict from the end-of-mission MQTT message.
         reported:        Full reported state dict from the same MQTT message.
         zones:           Zone names captured at mission START (not end).
+        observed_rooms:  Rooms the tracker advanced through -- what was
+                         actually worked in, where tracking ran.
         start_ts:        mssnStrtTm cached at mission START. The 980/900-series
                          firmware resets this field to 0 in the end MQTT message,
                          so it must be captured when the cleaning phase begins.
@@ -613,6 +639,25 @@ async def async_record_mission(
         "result": result,
         "initiator": mission.get("initiator", "none"),
         "zones": zones,
+        # WHAT WAS ACTUALLY CLEANED, alongside what was asked for.
+        #
+        # `zones` is resolved at mission START -- the request. A room
+        # the robot never reached is in it all the same.
+        #
+        # The completed-room source is `timeline.finEvents`, and the
+        # timeline is Prime-only. On Classic the resolution therefore
+        # found nothing every time and the vacuum attribute held
+        # whatever it had last managed to resolve: @ScenicSystemsLLC saw
+        # all seven rooms of a whole-house run still listed after two
+        # separate two-room missions.
+        #
+        # Room tracking now confirms transitions from observations on
+        # both generations, so the rooms it advanced through are rooms
+        # the robot worked in. Stored under the key the resolver already
+        # falls back to, so no new source is needed -- the timeline
+        # still wins where it exists, because it reports real
+        # completions with a status.
+        "last_cleaned_rooms": observed_rooms or zones,
         "error_code": error_code if error_code else None,
         "bbrun_hr": bbrun_hr,
         "battery_cycles": battery_cycles,   # v2.9.0 DAILY-DIGEST
@@ -1594,7 +1639,30 @@ def make_mission_callback(
                     entry,
                     mission,
                     reported,
+                    # THE ROOMS THE ROBOT ACTUALLY WORKED IN, where we
+                    # know them.
+                    #
+                    # `current_mission_zones` is resolved at mission
+                    # START: it is what was REQUESTED. A room the robot
+                    # never reached -- flat battery, stuck, cancelled --
+                    # is in it all the same, so `last_cleaned_rooms`
+                    # built from it would be naming a plan.
+                    #
+                    # The completed-room source was `timeline.finEvents`,
+                    # which is Prime-only. On Classic it is never there,
+                    # so the resolution returned nothing every time and
+                    # the attribute held whatever it last managed to
+                    # resolve -- @ScenicSystemsLLC saw all seven rooms
+                    # of a whole-house run still listed after two
+                    # two-room missions.
+                    #
+                    # Room tracking now confirms transitions from
+                    # observations on both generations, so the rooms it
+                    # advanced through ARE rooms the robot worked in.
+                    # That is the honest Classic answer, and it did not
+                    # exist until this release.
                     list(current_mission_zones),
+                    observed_rooms=_observed_rooms(entry),
                     start_ts=mission_start_ts,
                     nstuck_delta=nstuck_delta,
                     mission_error_code=mission_error_code,
