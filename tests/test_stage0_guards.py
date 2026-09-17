@@ -862,3 +862,51 @@ class TestTheGuardCoversClosuresToo:
             "        handle = later(hass, 5, cancel)\n"
             "    return cancel, attempt\n"
         ) == []
+
+
+class TestAWarningNamesItsCause:
+    """A broad `except Exception:` that warns without saying what failed
+    turns every future report of it into guesswork.
+
+    The startup cloud fetch did exactly this. Two separate incidents of
+    it have now been argued about -- one attributed to too many logins
+    and later shown to be a rate-limited polling loop instead, the other
+    (@ScenicSystemsLLC losing the room list on three robots at once)
+    still unexplained, because a rate limit, a DNS failure during boot
+    and a rejected credential all produced the same sentence.
+
+    The rule is narrow on purpose: it applies only where the code
+    chooses to WARN. A handler that deliberately stays quiet, or that
+    logs at debug, is a different decision and is left alone.
+    """
+
+    def test_no_broad_warning_discards_the_exception(self) -> None:
+        import ast
+        import pathlib
+
+        offenders = []
+        for path in sorted(
+            pathlib.Path("custom_components/roomba_plus").glob("*.py")
+        ):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for handler in ast.walk(tree):
+                if not isinstance(handler, ast.ExceptHandler):
+                    continue
+                broad = handler.type is None or (
+                    isinstance(handler.type, ast.Name)
+                    and handler.type.id == "Exception"
+                )
+                if not broad or handler.name is not None:
+                    continue
+                body = ast.unparse(handler)
+                warns = (
+                    "_LOGGER.warning" in body or "_LOGGER.error" in body
+                )
+                if warns and "exc_info" not in body:
+                    offenders.append(f"{path.name}:{handler.lineno}")
+
+        assert not offenders, (
+            "these warn about a failure without recording what it was: "
+            f"{offenders}. Bind the exception and include its type and "
+            "message, or add exc_info=True."
+        )

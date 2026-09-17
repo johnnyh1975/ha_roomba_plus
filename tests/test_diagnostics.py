@@ -1958,13 +1958,47 @@ class TestTheActiveMapVersionIsRecorded:
         assert '"active_map_versions"' in source[end:]
 
     def test_never_read_is_distinct_from_no_maps(self) -> None:
-        """An empty dict and "we have not asked yet" mean different
+        """An empty answer and "we have not asked yet" mean different
         things, and conflating them is how this was misread in the
         first place."""
-        import pathlib
+        from types import SimpleNamespace
 
-        source = pathlib.Path(
-            "custom_components/roomba_plus/diagnostics.py"
-        ).read_text(encoding="utf-8")
+        from custom_components.roomba_plus.diagnostics import (
+            _active_map_versions,
+        )
 
-        assert 'or "not read yet this session"' in source
+        nothing = SimpleNamespace(prime_map_versions={})
+
+        assert _active_map_versions(nothing, {}) == "not read yet this session"
+
+    def test_a_classic_robot_uses_its_own_source(self) -> None:
+        """Recorded in a Prime-only path, this said "not read yet" on a
+        Classic robot while the same download carried correct versions
+        three sections away. Contradicting itself is worse than being
+        silent."""
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.diagnostics import (
+            _active_map_versions,
+        )
+
+        out = _active_map_versions(
+            SimpleNamespace(prime_map_versions={}),
+            {"pmaps": [{"MAP-A": "260916T181500"}]},
+        )
+
+        assert out == {"MAP-A": "260916T181500"}
+
+    def test_a_recorded_value_wins_over_the_fallback(self) -> None:
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.diagnostics import (
+            _active_map_versions,
+        )
+
+        out = _active_map_versions(
+            SimpleNamespace(prime_map_versions={"MAP-B": "LIVE"}),
+            {"pmaps": [{"MAP-A": "OLD"}]},
+        )
+
+        assert out == {"MAP-B": "LIVE"}

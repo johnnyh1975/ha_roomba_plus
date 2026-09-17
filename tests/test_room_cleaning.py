@@ -3818,3 +3818,66 @@ class TestClassicRecordsWhatItSendsToo:
         block = source[source.index("record_command("):]
 
         assert "ok=" not in block[:200]
+
+
+class TestTheRoomListSurvivesACloudOutage:
+    """Two methods on the same class offer the same rooms, and only one
+    of them worked without the cloud.
+
+    `available_rooms()` starts from the saved zone data, so cleaning by
+    name kept working. `get_segments()` returned nothing, so the
+    dropdown emptied. The same rooms reachable one way and absent the
+    other, at the same moment, is an inconsistency no user could
+    explain.
+
+    A PRECAUTION, NOT A FIX: nobody reported it. It is here because the
+    two methods disagreed, found by walking the early-return pattern
+    rather than by waiting for a report.
+
+    THE GUARD ITSELF WAS RIGHT. A segment id without a map prefix is
+    what produces "this robot has N maps and is not reporting which one"
+    when it is sent. The saved data carries `pmap_id` per region, so the
+    prefix is known rather than guessed -- and an entry lacking one is
+    skipped rather than offered.
+    """
+
+    @staticmethod
+    def _segments(saved):
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.room_cleaning import (
+            ClassicRoomCleaning,
+        )
+
+        backend = ClassicRoomCleaning.__new__(ClassicRoomCleaning)
+        backend._config_entry = SimpleNamespace(
+            options={"smart_zone_data": saved}
+        )
+        return backend._segments_from_saved_zone_data()
+
+    def test_saved_rooms_are_offered(self) -> None:
+        out = self._segments({
+            "15": {"name": "Guest Bath", "pmap_id": "MAP-A"},
+            "14": {"name": "Hallway", "pmap_id": "MAP-A"},
+        })
+
+        assert sorted(s.name for s in out) == ["Guest Bath", "Hallway"]
+        assert all(s.id.startswith("MAP-A/") for s in out)
+
+    def test_an_entry_without_a_map_is_skipped(self) -> None:
+        """Offering it would put the user back in front of the refusal
+        this fallback exists to avoid."""
+        out = self._segments({
+            "15": {"name": "Guest Bath", "pmap_id": "MAP-A"},
+            "99": {"name": "Orphan"},
+        })
+
+        assert [s.name for s in out] == ["Guest Bath"]
+
+    def test_an_entry_without_a_name_is_skipped(self) -> None:
+        out = self._segments({"99": {"pmap_id": "MAP-A"}})
+
+        assert out == []
+
+    def test_nothing_saved_yields_nothing(self) -> None:
+        assert self._segments({}) == []

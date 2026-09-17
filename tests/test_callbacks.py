@@ -4258,3 +4258,79 @@ class TestTheRobotLearnsItsOwnRoomTimes:
         source = inspect.getsource(_remember_measured_room_time)
 
         assert "STORED IMMEDIATELY" in source
+
+
+class TestLastCleanedRoomsReportsWhatWasCleaned:
+    """The attribute named rooms that were cleaned and showed rooms that
+    were requested -- or worse, rooms from a mission two runs back.
+
+    THE COMPLETED-ROOM SOURCE IS PRIME-ONLY. `timeline.finEvents`
+    carries real completions with a status; a Classic record has no
+    timeline at all. So the resolution returned nothing every time, the
+    vacuum entity kept its last successful answer, and
+    @ScenicSystemsLLC saw all seven rooms of a whole-house run still
+    listed after two separate two-room missions.
+
+    The requested list was the obvious substitute and the wrong one: it
+    is resolved at mission START, so a room the robot never reached --
+    flat battery, stuck, cancelled -- is in it all the same. Naming a
+    plan in a field called `last_cleaned_rooms` is worse than naming
+    nothing.
+
+    Room tracking confirms transitions from observations now, on both
+    generations. The rooms it advanced through are rooms the robot
+    worked in, which is the honest Classic answer and did not exist
+    before this release.
+    """
+
+    @staticmethod
+    def _observed(planned, index):
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.callbacks import _observed_rooms
+
+        return _observed_rooms(
+            SimpleNamespace(
+                runtime_data=SimpleNamespace(
+                    mission_timer_store=SimpleNamespace(
+                        planned_rooms=planned, current_room_idx=index
+                    )
+                )
+            )
+        )
+
+    def test_a_completed_run_lists_every_room(self) -> None:
+        assert self._observed(["A", "B", "C"], 2) == ["A", "B", "C"]
+
+    def test_the_current_room_counts_as_worked_in(self) -> None:
+        """Advancing INTO a room is what confirms the previous one
+        finished, so the room the tracker is showing has been worked
+        in."""
+        assert self._observed(["A", "B"], 1) == ["A", "B"]
+
+    def test_a_mission_cut_short_lists_only_what_it_reached(self) -> None:
+        """The whole point: a room the robot never got to must not be
+        reported as cleaned."""
+        assert self._observed(["Guest Bathroom", "Hallway"], 0) == [
+            "Guest Bathroom"
+        ]
+
+    def test_nothing_tracked_yields_nothing(self) -> None:
+        """Empty means "fall back to the requested list", which the
+        caller handles -- not "no rooms were cleaned"."""
+        assert self._observed([], 0) == []
+
+    def test_an_index_past_the_end_does_not_overrun(self) -> None:
+        assert self._observed(["A", "B"], 99) == ["A", "B"]
+
+    def test_the_record_stores_it_under_the_resolver_s_key(self) -> None:
+        """No new source: the resolver already falls back to
+        `last_cleaned_rooms`, and the timeline still wins where it
+        exists."""
+        import inspect
+
+        from custom_components.roomba_plus import callbacks
+
+        source = inspect.getsource(callbacks.async_record_mission)
+
+        assert '"last_cleaned_rooms": observed_rooms or zones,' in source

@@ -1269,3 +1269,87 @@ class TestProgressUsesTheRobotsOwnStartTime:
         block = source[source.index("_elapsed_wall = _mission_elapsed_wall_sec"):]
 
         assert "_elapsed_wall if _elapsed_wall is not None" in block[:400]
+
+
+class TestAMeasuredRoomTimeIsActuallyUsed:
+    """4.2.6 measured how long each room took and kept it. Nothing ever
+    read it back.
+
+    The lookup returned early when the cloud offered no estimates at
+    all, and the fallback to our own measurement sat below that return.
+    So the one situation the measurement exists for -- auto pass mode,
+    where the cloud gives nothing by design -- was the one situation
+    that never reached it.
+
+    @ScenicSystemsLLC measured Guest Bathroom three times across three
+    missions (232s, 220s, 197s), each logged as "kept for next time",
+    and every run still started with `estimates=[None, None]`. He ran
+    the same pairing three times specifically to rule out a timing
+    fluke.
+
+    SAME SHAPE AS THE FAULT BEFORE IT -- a fallback behind a guard the
+    affected case never passes -- which is twice in two releases, so
+    these tests exercise the whole write-then-read path rather than
+    checking that the code contains a particular line.
+    """
+
+    @staticmethod
+    def _entry():
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            runtime_data=SimpleNamespace(
+                robot_profile_store=SimpleNamespace(room_estimate_cache={}),
+                prime_time_estimates=None,      # auto pass mode
+            )
+        )
+
+    def test_a_measurement_is_read_back_next_mission(self) -> None:
+        from custom_components.roomba_plus.callbacks import (
+            _remember_measured_room_time,
+        )
+        from custom_components.roomba_plus.sensor_rooms import (
+            _prime_room_time_estimates,
+        )
+
+        entry = self._entry()
+        for seconds in (232.0, 220.0, 197.0):
+            _remember_measured_room_time(entry, "Guest Bathroom", seconds)
+        _remember_measured_room_time(entry, "Hallway", 780.0)
+
+        assert _prime_room_time_estimates(
+            entry, ["Guest Bathroom", "Hallway"]
+        ) == [197, 780]
+
+    def test_a_room_never_measured_still_returns_nothing(self) -> None:
+        """The fallback must not invent a figure for a room the robot
+        has not cleaned."""
+        from custom_components.roomba_plus.sensor_rooms import (
+            _prime_room_time_estimates,
+        )
+
+        assert _prime_room_time_estimates(self._entry(), ["Kitchen"]) == [None]
+
+    def test_nothing_measured_at_all_is_still_nothing(self) -> None:
+        from custom_components.roomba_plus.sensor_rooms import (
+            _prime_room_time_estimates,
+        )
+
+        assert _prime_room_time_estimates(
+            self._entry(), ["Guest Bathroom", "Hallway"]
+        ) == [None, None]
+
+    def test_whole_seconds(self) -> None:
+        """The caller's contract is integers, and a measurement is not
+        precise enough for the fraction to mean anything."""
+        from custom_components.roomba_plus.callbacks import (
+            _remember_measured_room_time,
+        )
+        from custom_components.roomba_plus.sensor_rooms import (
+            _prime_room_time_estimates,
+        )
+
+        entry = self._entry()
+        _remember_measured_room_time(entry, "Hallway", 197.6)
+
+        assert _prime_room_time_estimates(entry, ["Hallway"]) == [197]
