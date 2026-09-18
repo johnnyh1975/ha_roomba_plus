@@ -644,6 +644,30 @@ def _shadow_map_picture(data: Any) -> dict[str, Any] | str:
     }
 
 
+def _missions_with_traversals(data: Any) -> int | str:
+    """How many stored missions carry `traversal` events.
+
+    These are what the bootstrap alignment derives door positions from
+    when the robot publishes no pose of its own. Two are needed. A
+    download showed neither the count nor whether any existed.
+    """
+    store = getattr(data, "mission_store", None)
+    records = getattr(store, "records", None)
+    if not isinstance(records, list):
+        return "no mission store"
+    count = 0
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        events = (record.get("timeline") or {}).get("finEvents") or []
+        if any(
+            isinstance(e, dict) and e.get("type") == "traversal"
+            for e in events
+        ):
+            count += 1
+    return count
+
+
 def _position_chain(data: Any) -> dict[str, Any]:
     """Where the "which room" chain stands, link by link.
 
@@ -677,6 +701,32 @@ def _position_chain(data: Any) -> dict[str, Any]:
         "door_candidates": len(
             getattr(aligner, "_door_candidates", None) or []
         ) if aligner is not None else None,
+        # WHAT A FALSE ALIGNMENT ACTUALLY COSTS.
+        #
+        # `aligner_aligned: false` reads like a defect and often is not
+        # one. Matching needs door candidates from the floor plan AND
+        # markers from observed positions; a robot that publishes no
+        # position has the first and never the second. The fallback
+        # calibration then runs in UMF space, room lookup is correct,
+        # and only the drawn map lacks outlines.
+        #
+        # @Thonno removed and re-added his device chasing this, and
+        # then asked whether that had broken it. It had not, and his
+        # room tracking was working the whole time -- the field just
+        # gave him no way to know that.
+        "alignment_note": (
+            None if getattr(aligner, "aligned", False) else
+            "not aligned: needs door candidates AND position-derived "
+            "markers. Room lookup still works via UMF-space fallback; "
+            "only drawn room outlines are affected"
+        ) if aligner is not None else None,
+        # WHETHER THE FALLBACK CAN EVER START.
+        #
+        # Without positions, synthetic markers are derived from
+        # `traversal` events in the cloud mission history. If there are
+        # none, that route cannot run either -- and nothing showed it,
+        # so the question could only be guessed at.
+        "missions_with_traversals": _missions_with_traversals(data),
         "room_polygons": len(
             getattr(aligner, "room_polygons_umf", None) or {}
         ) if aligner is not None else None,
@@ -1388,6 +1438,7 @@ async def _build_diagnostics(
             # the first place -- @Thonno's room tracking and
             # @theChef613's zone names -- and neither could see them.
             "position_chain": _position_chain(data),
+            "missions_with_traversals": _missions_with_traversals(data),
             # THE STATE-DERIVED SECTIONS, from the shadows. Same
             # helpers the local dump uses, same shape of input --
             # the only thing that was ever local-only is where the

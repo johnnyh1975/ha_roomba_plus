@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from .models import RoombaConfigEntry
 
 
+from homeassistant.config_entries import SOURCE_IGNORE
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.util import dt as dt_util
@@ -1705,9 +1706,45 @@ async def async_check_core_roomba_conflict(hass: HomeAssistant) -> None:
     legitimate. Someone running only Classic robots may well prefer the
     built-in one.
     """
-    if not any(
-        entry.domain == "roomba" for entry in hass.config_entries.async_entries()
-    ):
+    # ONLY ENTRIES THAT ACTUALLY LOAD.
+    #
+    # `async_entries()` returns ignored and disabled entries too. An
+    # ignored discovery -- the user clicking "Ignore" on the built-in
+    # integration's auto-discovery -- leaves a `roomba` config entry
+    # behind that never loads and never appears in the integrations
+    # list.
+    #
+    # So this told two people they had two integrations installed while
+    # the page showed one, and no amount of restarting changed it
+    # (@boelle, @mermr1). A warning that cannot be acted on is worse
+    # than none: they went looking for something that was not there.
+    #
+    # A CONFLICT MEANS BOTH ARE SET UP, not both are listed.
+    #
+    # The library clash is real and this warning stays: core ships
+    # roombapy 1.8.x, we need 2.x, and Home Assistant installs one copy,
+    # so one integration fails to load. But that only happens when the
+    # built-in one actually LOADS.
+    #
+    # `async_entries()` also returns entries that never load:
+    #
+    #   - ignored discoveries (source "ignore"), created by clicking
+    #     "Ignore" on a discovered robot
+    #   - disabled entries
+    #
+    # Neither installs roombapy, so neither can collide -- and neither
+    # appears in the integrations list. The notice therefore named a
+    # second integration the user could not find and could not remove.
+    #
+    # Two users reported exactly that, one after a full restart and
+    # shutdown (@boelle, @mermr1).
+    _conflicting = [
+        entry for entry in hass.config_entries.async_entries()
+        if entry.domain == "roomba"
+        and entry.source != SOURCE_IGNORE
+        and entry.disabled_by is None
+    ]
+    if not _conflicting:
         ir.async_delete_issue(hass, DOMAIN, "core_roomba_conflict")
         return
 

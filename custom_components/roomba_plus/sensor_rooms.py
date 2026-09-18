@@ -753,7 +753,44 @@ def _resolve_smart_tier_room_state(config_entry: Any) -> dict[str, Any]:
             cumulative += est
         else:
             # All rooms elapsed — in final room
+            # THE CLOCK RAN PAST THE WHOLE ESTIMATE, and the tracker
+            # knows where the robot actually is.
+            #
+            # This loop asks the estimates which room the elapsed time
+            # falls into. Once elapsed exceeds their sum no room
+            # matches, and everything below fell through to a
+            # whole-house mean that was also exceeded -- so the
+            # countdown read 0 while three of four rooms were done and
+            # the fourth had not started.
+            #
+            # @Thonno hit this because 4.2.7 works: his measured room
+            # times replaced a generous average with real, shorter
+            # figures, so the mission outran its own estimate. A fix
+            # creating the conditions for the next one.
+            #
+            # SIXTH TIME FOR THIS SHAPE -- an observation exists and
+            # the code re-derives it from a forecast. The room
+            # display, the percentage, the gate estimate, and now the
+            # countdown. The percentage learned it in 4.2.8; this is
+            # its sibling.
             current_room = planned_order[-1]
+            _idx = int(getattr(mts, "current_room_idx", 0) or 0)
+            if 0 <= _idx < len(planned_order):
+                current_room = planned_order[_idx]
+                next_room = (
+                    planned_order[_idx + 1]
+                    if _idx + 1 < len(planned_order) else None
+                )
+                _in_room = float(
+                    getattr(mts, "time_in_current_room_sec", 0.0) or 0.0
+                )
+                _this_room = float(
+                    getattr(mts, "expected_room_sec", 0.0) or 0.0
+                ) or (known[_idx] if _idx < len(known) else 0.0)
+                remaining_sec = max(0.0, _this_room - _in_room) + sum(
+                    known[j] for j in range(_idx + 1, len(known))
+                )
+                estimated_remaining_min = max(0, round(remaining_sec / 60))
 
     if estimated_remaining_min is None:
         # v2.9.0 — fallback for whenever the per-room estimate calculation
@@ -1145,7 +1182,47 @@ class RoombaMissionProgress(IRobotEntity, SensorEntity):
         total_sec = sum(estimates)  # type: ignore[arg-type]
         if total_sec == 0:
             return None
-        self._last_progress = min(99, round(elapsed / total_sec * 100))
+
+        # THE SAME OBSERVED-ROOM RULE AS THE BRANCH ABOVE.
+        #
+        # This is the all-estimates-known path, and it was pure
+        # elapsed/total. 4.2.8 taught the other branch to use the room
+        # the tracker is actually in; this twin was left as it was.
+        #
+        # @Thonno landed here BECAUSE 4.2.7 works: once his measured
+        # room times filled every slot, no estimate was missing any
+        # more, so he stopped taking the branch that had been fixed. He
+        # saw 75% for most of the third room and then 99% for the rest
+        # of the mission -- elapsed/total saturating, with the tracker
+        # sitting on the answer.
+        #
+        # SEVENTH TIME FOR THIS SHAPE, and the first I caused myself:
+        # repairing one branch and leaving its twin is how the gate
+        # estimate went wrong two releases ago. Found by a tester again,
+        # not by me.
+        _rooms = len(planned_order)
+        _idx = int(getattr(mts, "current_room_idx", 0) or 0)
+        _done = (
+            min(_idx, _rooms - 1)
+            if getattr(mts, "room_progress_observed", False) else 0
+        )
+        _in_room = float(getattr(mts, "time_in_current_room_sec", 0.0) or 0.0)
+        _this_room = float(
+            getattr(mts, "expected_room_sec", 0.0) or 0.0
+        ) or (estimates[_idx] if _idx < len(estimates) else 0.0)
+        _part = (
+            min(1.0, _in_room / _this_room) if _this_room else 0.0
+        )
+
+        _by_time = round(elapsed / total_sec * 100)
+        _observed = round((_done + _part) / _rooms * 100) if _rooms else 0
+        _pct = min(99, max(_by_time, _observed))
+
+        # Never backwards: a shorter estimate arriving mid-room must not
+        # shrink the bar.
+        if self._last_progress is not None:
+            _pct = max(_pct, int(self._last_progress))
+        self._last_progress = _pct
         return self._last_progress
 
     @property
