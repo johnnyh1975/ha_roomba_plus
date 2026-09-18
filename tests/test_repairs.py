@@ -3096,3 +3096,48 @@ class TestTheZoneNamingDialogIsUsable:
             if "{zone_count}" not in text:
                 continue
             assert "{robot}" in text, path.name
+
+
+class TestTheConflictWarningNeedsARealConflict:
+    """Core ships roombapy 1.8.x, this needs 2.x, and Home Assistant
+    installs one copy — so one integration fails to load. The warning is
+    right and stays.
+
+    It only applies when the built-in integration actually LOADS.
+    `async_entries()` also returns entries that never do: ignored
+    discoveries and disabled entries. Neither installs roombapy, so
+    neither can collide — and neither appears in the integrations list.
+
+    So the notice named a second integration the user could not find and
+    could not remove. @boelle and @mermr1 both reported it, one after a
+    full restart and shutdown.
+    """
+
+    def test_an_ignored_discovery_is_not_a_conflict(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus import repairs
+
+        source = inspect.getsource(repairs.async_check_core_roomba_conflict)
+
+        assert "entry.source != SOURCE_IGNORE" in source
+
+    def test_a_disabled_entry_is_not_a_conflict(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus import repairs
+
+        source = inspect.getsource(repairs.async_check_core_roomba_conflict)
+
+        assert "entry.disabled_by is None" in source
+
+    def test_a_loaded_core_entry_still_warns(self) -> None:
+        """The whole point of the check must survive the narrowing."""
+        import inspect
+
+        from custom_components.roomba_plus import repairs
+
+        source = inspect.getsource(repairs.async_check_core_roomba_conflict)
+
+        assert 'entry.domain == "roomba"' in source
+        assert "async_delete_issue" in source

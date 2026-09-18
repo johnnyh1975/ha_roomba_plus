@@ -1431,3 +1431,50 @@ class TestProgressUsesTheObservedRoomCount:
         assert self._pct(
             idx=0, elapsed=1800.0, avg=830.0, rooms=3, observed=False
         ) > 0
+
+
+class TestTheCountdownUsesTheObservedRoom:
+    """The remaining-time loop walks the per-room estimates and asks
+    which room the elapsed time falls into. Once elapsed exceeds their
+    sum, no room matches, and it fell through to a whole-house mean that
+    was also exceeded -- so the countdown read 0 while three of four
+    rooms were done and the fourth had not started.
+
+    @Thonno hit this BECAUSE 4.2.7 works: his measured room times
+    replaced a generous average with real, shorter figures, so the
+    mission outran its own estimate. A fix creating the conditions for
+    the next one.
+
+    SIXTH TIME FOR THIS SHAPE -- an observation exists and the code
+    re-derives it from a forecast. The room display, the percentage, the
+    gate estimate, and now the countdown.
+    """
+
+    @staticmethod
+    def _remaining(idx, in_room, this_room, later_rooms):
+        """The shape the sensor now computes when the clock overruns."""
+        return max(0, round(
+            (max(0.0, this_room - in_room) + sum(later_rooms)) / 60
+        ))
+
+    def test_thonnos_numbers(self) -> None:
+        """Room 3 of 4, 223s into it, 495s expected, one room after.
+        Was 0."""
+        assert self._remaining(2, 223.0, 495.5, [495.5]) == 13
+
+    def test_the_last_room_counts_only_itself(self) -> None:
+        assert self._remaining(3, 100.0, 495.5, []) == 7
+
+    def test_a_room_over_its_estimate_does_not_go_negative(self) -> None:
+        """Overrunning the current room must not subtract from the rooms
+        still to come."""
+        assert self._remaining(2, 9_999.0, 495.5, [495.5]) == 8
+
+    def test_the_code_reads_the_tracker_in_that_branch(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus import sensor_rooms
+
+        source = inspect.getsource(sensor_rooms)
+
+        assert 'current_room = planned_order[-1]\n            _idx' in source

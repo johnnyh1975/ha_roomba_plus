@@ -492,6 +492,16 @@ class TestAttributesUseElapsedSec:
         mts = MagicMock()
         mts.mission_id = "m1"
         mts.effective_elapsed_min = 6.0  # 360s effective — no recharge involved
+        # SPELLED OUT, because a bare MagicMock answers 1 to everything.
+        # This test is about the elapsed value feeding the formula; with
+        # the tracking fields left as mocks, `current_room_idx` reads 1
+        # and `time_in_current_room_sec / expected_room_sec` reads 1.0,
+        # so the observed-room route returns 99% and the elapsed value
+        # under test never shows.
+        mts.current_room_idx = 0
+        mts.room_progress_observed = False
+        mts.time_in_current_room_sec = 0.0
+        mts.expected_room_sec = 0.0
 
         state = {"cleanMissionStatus": {"phase": "run"}}
         data = MagicMock()

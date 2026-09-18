@@ -2077,3 +2077,81 @@ class TestAFailedAlignmentSaysWhy:
 
         assert out["outline_points"] is None
         assert out["door_candidates"] is None
+
+
+class TestAFalseAlignmentSaysWhatItCosts:
+    """`aligner_aligned: false` reads like a defect and often is not
+    one. Matching needs door candidates from the floor plan AND markers
+    derived from observed positions; a robot publishing no position has
+    the first and never the second. The fallback calibration then runs
+    in UMF space, room lookup is correct, and only the drawn map lacks
+    outlines.
+
+    @Thonno removed and re-added his device chasing this, then asked
+    whether that had broken it. It had not, and his room tracking was
+    working throughout -- the field gave him no way to know.
+    """
+
+    def test_an_unaligned_aligner_explains_itself(self) -> None:
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.diagnostics import _position_chain
+
+        out = _position_chain(SimpleNamespace(
+            umf_aligner=SimpleNamespace(
+                aligned=False, _points2d=[{}] * 169,
+                _door_candidates=[(1.0, 2.0)] * 39,
+                room_polygons_umf={"1": []},
+            ),
+            renderer=SimpleNamespace(point_count=0),
+            geometry_store=SimpleNamespace(door_markers=[]),
+            mission_store=None,
+        ))
+
+        assert "Room lookup still works" in out["alignment_note"]
+
+    def test_an_aligned_one_says_nothing(self) -> None:
+        """A note on a healthy robot is noise."""
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.diagnostics import _position_chain
+
+        out = _position_chain(SimpleNamespace(
+            umf_aligner=SimpleNamespace(
+                aligned=True, _points2d=[], _door_candidates=[],
+                room_polygons_umf={},
+            ),
+            renderer=SimpleNamespace(point_count=10),
+            geometry_store=SimpleNamespace(door_markers=[1, 2]),
+            mission_store=None,
+        ))
+
+        assert out["alignment_note"] is None
+
+    def test_traversal_missions_are_counted(self) -> None:
+        """Without positions these are the only route to alignment, and
+        nothing showed whether any existed."""
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.diagnostics import (
+            _missions_with_traversals,
+        )
+
+        data = SimpleNamespace(mission_store=SimpleNamespace(records=[
+            {"timeline": {"finEvents": [{"type": "traversal"}]}},
+            {"timeline": {"finEvents": [{"type": "room"}]}},
+            {"timeline": {}},
+        ]))
+
+        assert _missions_with_traversals(data) == 1
+
+    def test_no_store_is_distinct_from_no_traversals(self) -> None:
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.diagnostics import (
+            _missions_with_traversals,
+        )
+
+        assert _missions_with_traversals(
+            SimpleNamespace(mission_store=None)
+        ) == "no mission store"
