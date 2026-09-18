@@ -2002,3 +2002,78 @@ class TestTheActiveMapVersionIsRecorded:
         )
 
         assert out == {"MAP-B": "LIVE"}
+
+
+class TestAFailedAlignmentSaysWhy:
+    """`aligner_aligned: false` with room polygons present says the
+    geometry arrived and the mapping did not, and stops there.
+
+    Three different situations produced that same line:
+
+      - the floor plan outline never arrived from the cloud
+      - it arrived and the gap search found no door-shaped gaps in it
+      - it arrived, gaps were found, and the match still failed
+
+    @Thonno has eight room polygons, real doors between every room, and
+    zero door markers. Which of the three he is in was not answerable
+    from a download, so it was a guess -- and he had already re-added
+    the device once, chasing a cause that turned out to be unrelated.
+
+    THE ALIGNMENT DOES NOT NEED A POSITION. Door candidates are the
+    midpoints of gaps in the outline, so a robot that publishes no pose
+    can still align, provided the outline has gaps. That makes these two
+    numbers the whole question.
+    """
+
+    @staticmethod
+    def _chain(aligner):
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.diagnostics import _position_chain
+
+        return _position_chain(
+            SimpleNamespace(
+                umf_aligner=aligner,
+                renderer=SimpleNamespace(point_count=0),
+                geometry_store=SimpleNamespace(door_markers=[]),
+            )
+        )
+
+    @staticmethod
+    def _aligner(points, candidates):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            _points2d=points,
+            _door_candidates=candidates,
+            aligned=bool(candidates),
+            room_polygons_umf={"1": []},
+        )
+
+    def test_no_outline_is_distinguishable(self) -> None:
+        out = self._chain(self._aligner([], []))
+
+        assert out["outline_points"] == 0
+        assert out["door_candidates"] == 0
+
+    def test_an_outline_with_no_gaps_is_distinguishable(self) -> None:
+        """The case that was indistinguishable from the one above, and
+        the one that would mean the fallback can never work in that
+        home."""
+        out = self._chain(self._aligner([{}] * 412, []))
+
+        assert out["outline_points"] == 412
+        assert out["door_candidates"] == 0
+
+    def test_gaps_found_shows_them(self) -> None:
+        out = self._chain(self._aligner([{}] * 412, [(1.0, 2.0), (3.0, 4.0)]))
+
+        assert out["door_candidates"] == 2
+
+    def test_no_aligner_at_all_reports_none(self) -> None:
+        """Absent and empty are different, and conflating them is how
+        this became a guess in the first place."""
+        out = self._chain(None)
+
+        assert out["outline_points"] is None
+        assert out["door_candidates"] is None

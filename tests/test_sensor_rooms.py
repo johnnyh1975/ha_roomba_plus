@@ -1353,3 +1353,81 @@ class TestAMeasuredRoomTimeIsActuallyUsed:
         _remember_measured_room_time(entry, "Hallway", 197.6)
 
         assert _prime_room_time_estimates(entry, ["Hallway"]) == [197]
+
+
+class TestProgressUsesTheObservedRoomCount:
+    """The percentage derived how many rooms were finished by dividing
+    elapsed time by an average. A room cleaned FASTER than the estimate
+    therefore counted as zero rooms done.
+
+    @Thonno watched the display move to the second room while the
+    percentage sat at 0: his bathroom took about 11 minutes against a
+    13.8-minute figure, so `int(654 / 831)` was 0 and 0/3 rooms is 0%.
+
+    Room tracking already knew: `current_room_idx` was 1. Re-deriving it
+    from a forecast threw away an observation -- the same habit that
+    made the room display itself stick before 4.2.6.
+
+    THE CLOCK STILL MOVES IT. Whole rooms alone would jump once per room
+    and stand still in between, which reads as frozen on a long room. So
+    finished rooms set the floor and time in the current room fills the
+    step above it, capped at one room's worth.
+    """
+
+    @staticmethod
+    def _pct(idx, elapsed, avg, rooms, in_room=0.0, room_sec=None, observed=True):
+        """The shape the sensor now computes."""
+        observed_done = min(idx, rooms - 1) if observed else 0
+        by_time = min(rooms - 1, int(elapsed / avg))
+        completed = max(observed_done, by_time)
+        secs = room_sec or avg
+        part = min(1.0, in_room / secs) if secs > 0 else 0.0
+        return min(99, round((completed + part) / rooms * 100))
+
+    def test_thonnos_numbers(self) -> None:
+        """One room done, 39.7s into the second, three rooms planned.
+        Was 0%."""
+        assert self._pct(
+            idx=1, elapsed=653.98, avg=830.67, rooms=3,
+            in_room=39.7, room_sec=830.67,
+        ) == 35
+
+    def test_a_fast_room_still_counts(self) -> None:
+        """The whole bug: finishing early must not read as unfinished."""
+        assert self._pct(idx=1, elapsed=100.0, avg=830.0, rooms=3) > 0
+
+    def test_time_moves_it_between_rooms(self) -> None:
+        """Otherwise it jumps once per room and looks frozen in
+        between."""
+        early = self._pct(idx=1, elapsed=700.0, avg=830.0, rooms=3, in_room=60.0)
+        later = self._pct(idx=1, elapsed=1100.0, avg=830.0, rooms=3, in_room=460.0)
+
+        assert later > early
+
+    def test_a_long_room_cannot_overrun_into_the_next(self) -> None:
+        """The fraction for the CURRENT room is capped at one room's
+        worth, so a room running past its estimate cannot push the bar
+        into a room the robot has not reached.
+
+        Held with a low elapsed so the time route does not legitimately
+        count a second room -- an earlier version of this test used a
+        50-minute elapsed against a 41-minute mission and then objected
+        to a correct 99%.
+        """
+        overrun = self._pct(
+            idx=1, elapsed=900.0, avg=830.0, rooms=3,
+            in_room=99_999.0, room_sec=830.0,
+        )
+        exact = self._pct(
+            idx=1, elapsed=900.0, avg=830.0, rooms=3,
+            in_room=830.0, room_sec=830.0,
+        )
+
+        assert overrun == exact == round(2 / 3 * 100)
+
+    def test_the_time_route_still_works_without_tracking(self) -> None:
+        """A robot with no confirmed transitions keeps the old
+        behaviour rather than being pinned at zero."""
+        assert self._pct(
+            idx=0, elapsed=1800.0, avg=830.0, rooms=3, observed=False
+        ) > 0
