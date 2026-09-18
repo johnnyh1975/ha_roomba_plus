@@ -248,10 +248,6 @@ class RobotProfileStore:
     #: another. A cache keyed by room alone would hand back the
     #: two-pass figure for a one-pass mission, silently.
     room_estimate_cache: dict[str, float] = field(default_factory=dict)
-    #: Last per-room cloud time estimate seen, keyed by
-    #: "<region>|<params>". See `remember_room_estimates()` for why the
-    #: parameters belong in the key.
-    room_estimate_seconds: dict[str, float] = field(default_factory=dict)
     mission_duration_std: float | None = None
     mission_area_mean: float | None = None
 
@@ -382,12 +378,6 @@ class RobotProfileStore:
             # Mission statistics
             dm = data.get("mission_duration_mean")
             self.mission_duration_mean = float(dm) if dm is not None else None
-            raw_est = data.get("room_estimate_seconds") or {}
-            self.room_estimate_seconds = {
-                str(k): float(v)
-                for k, v in raw_est.items()
-                if isinstance(v, (int, float)) and v > 0
-            } if isinstance(raw_est, dict) else {}
             ds = data.get("mission_duration_std")
             self.mission_duration_std = float(ds) if ds is not None else None
             am = data.get("mission_area_mean")
@@ -470,7 +460,6 @@ class RobotProfileStore:
             "correlation_pending": self.correlation_pending,
             "correlation_samples": self.correlation_samples,
             "mission_duration_mean": self.mission_duration_mean,
-            "room_estimate_seconds": dict(self.room_estimate_seconds),
             "mission_duration_std": self.mission_duration_std,
             "mission_area_mean": self.mission_area_mean,
             "coverage_baseline": self.coverage_baseline,
@@ -532,18 +521,6 @@ class RobotProfileStore:
 
     # ── Public update API ─────────────────────────────────────────────────────
 
-    def update_from_maintenance_store(
-        self,
-        learned_filter: float | None,
-        learned_brush: float | None,
-    ) -> None:
-        """Mirror learned maintenance intervals from MaintenanceStore.
-
-        Called after each reset_filter / reset_brush event so this store
-        reflects the canonical values for diagnostics and L8 health score.
-        """
-        self.learned_filter_hours = learned_filter
-        self.learned_brush_hours = learned_brush
 
     def update_room_dirt_index(
         self,
@@ -1395,61 +1372,5 @@ class RobotProfileStore:
         }
         return score, breakdown
 
-    @staticmethod
-    def _estimate_key(region_id: str, params: dict[str, Any] | None) -> str:
-        """The cache key: a room AND the parameters it was measured for.
 
-        THE PARAMETERS BELONG IN THE KEY. The cloud returns one estimate
-        per set of cleaning parameters, and they differ by a lot -- the
-        vendor's own sample gives eighteen minutes under one set and
-        thirty-four under another for the same room. A cache keyed by
-        room alone would hand back a two-pass figure for a one-pass
-        mission, which is the same error the live path already avoids,
-        only delayed and invisible.
 
-        Sorted, so the same parameters always produce the same key
-        whatever order the cloud lists them in.
-        """
-        flat = ",".join(
-            f"{k}={v}" for k, v in sorted((params or {}).items())
-        )
-        return f"{region_id}|{flat}"
-
-    def remember_room_estimates(
-        self, region_id: str, estimates: list[Any]
-    ) -> bool:
-        """Record what the cloud said for one room, per parameter set.
-
-        Called with whatever the cloud returned -- confident or not.
-        Confidence is a property of the moment, not of the room, and the
-        consumer that reads this back is a gate that wants a lower bound
-        rather than a forecast.
-        """
-        changed = False
-        for est in estimates or []:
-            seconds = getattr(est, "seconds", None)
-            if not isinstance(seconds, (int, float)) or seconds <= 0:
-                continue
-            key = self._estimate_key(
-                str(region_id), getattr(est, "params", None)
-            )
-            if self.room_estimate_seconds.get(key) != float(seconds):
-                self.room_estimate_seconds[key] = float(seconds)
-                changed = True
-        return changed
-
-    def remembered_room_seconds(self, region_id: str) -> float | None:
-        """The shortest remembered estimate for a room, or None.
-
-        SHORTEST, for the same reason the live path takes the shortest:
-        the only consumer asks "has enough time passed in this room",
-        and the shortest plausible duration is the point past which the
-        answer can be yes at all. Longer figures block a room that may
-        well be finished.
-        """
-        prefix = f"{region_id}|"
-        seconds = [
-            v for k, v in self.room_estimate_seconds.items()
-            if k.startswith(prefix)
-        ]
-        return min(seconds) if seconds else None

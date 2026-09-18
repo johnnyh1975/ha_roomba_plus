@@ -1068,15 +1068,61 @@ class RoombaMissionProgress(IRobotEntity, SensorEntity):
             total_known = sum(e for e in estimates if e is not None)
             known_count = len([e for e in estimates if e is not None])
             avg_sec = total_known / max(known_count, 1)
+            # ROOMS FINISHED IS OBSERVED; THE CURRENT ROOM IS ESTIMATED.
+            #
+            # `completed_rooms` used to be derived from elapsed time
+            # divided by an average -- so a room cleaned FASTER than the
+            # estimate counted as zero rooms done. @Thonno's bathroom
+            # took about 11 minutes against a 13.8-minute figure, the
+            # display moved to Corridoio in front of him, and the
+            # percentage sat at 0.
+            #
+            # Room tracking already knows how many rooms are behind it:
+            # `current_room_idx` is an observation, and since 4.2.6 a
+            # reliable one. Re-deriving it from a forecast threw that
+            # away -- the same habit that made the display itself stick.
+            #
+            # THE CLOCK STILL MOVES IT. Whole rooms alone would jump
+            # once per room and stand still in between, which reads as
+            # frozen on a long room. So the finished rooms set the floor
+            # and the time spent in the current one fills the step
+            # above it, capped at one room's worth: a room running over
+            # its estimate must not push the bar into the next room.
+            _idx = int(getattr(mts, "current_room_idx", 0) or 0)
+            _observed_done = (
+                min(_idx, total_rooms - 1)
+                if getattr(mts, "room_progress_observed", False) else 0
+            )
             if avg_sec > 0:
-                completed_rooms = min(total_rooms - 1, int(elapsed / avg_sec))
+                _by_time = min(total_rooms - 1, int(elapsed / avg_sec))
+                completed_rooms = max(_observed_done, _by_time)
+
+                _in_room = float(
+                    getattr(mts, "time_in_current_room_sec", 0.0) or 0.0
+                )
+                _room_sec = float(
+                    getattr(mts, "expected_room_sec", 0.0) or 0.0
+                ) or avg_sec
+                _part = min(1.0, _in_room / _room_sec) if _room_sec > 0 else 0.0
+
+                _pct = min(
+                    99,
+                    round((completed_rooms + _part) / total_rooms * 100),
+                )
                 _LOGGER.debug(
                     "mission_progress: count-based branch total_rooms=%d "
-                    "avg_sec=%.1f completed_rooms=%d -> %d%%",
-                    total_rooms, avg_sec, completed_rooms,
-                    min(99, round(completed_rooms / total_rooms * 100)),
+                    "avg_sec=%.1f observed_done=%d by_time=%d part=%.2f "
+                    "-> %d%%",
+                    total_rooms, avg_sec, _observed_done, _by_time,
+                    _part, _pct,
                 )
-                self._last_progress = min(99, round(completed_rooms / total_rooms * 100))
+                # NEVER BACKWARDS. The floor only rises, but a shorter
+                # `expected_room_sec` arriving mid-room could shrink the
+                # fraction, and a bar that goes down mid-clean is worse
+                # than one that pauses.
+                if self._last_progress is not None:
+                    _pct = max(_pct, int(self._last_progress))
+                self._last_progress = _pct
                 return self._last_progress
             # v2.9.0 — known_count==0 here (ALL per-room estimates are None,
             # e.g. Auto pass mode — TE1 cloud data has no per-room times for

@@ -969,9 +969,6 @@ class MissionArchive:
                 totals[rid] = totals.get(rid, 0) + delta
         return totals
 
-    def raw_finEvents(self, n_mssn: int) -> list[Any] | None:
-        """Return Layer 3 raw finEvents for a given mission number, or None."""
-        return self._raw.get(n_mssn)
 
     def all_derived_oldest_first(self) -> list[dict[str, Any]]:
         """Return all derived records ordered oldest-first.

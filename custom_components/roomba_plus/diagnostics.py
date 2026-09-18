@@ -657,6 +657,26 @@ def _position_chain(data: Any) -> dict[str, Any]:
         "position_points_collected": getattr(renderer, "point_count", None),
         "aligner_present": aligner is not None,
         "aligner_aligned": getattr(aligner, "aligned", None),
+        # THE TWO NUMBERS THAT SAY WHY IT IS NOT ALIGNED.
+        #
+        # `aligner_aligned: false` with room polygons present says the
+        # geometry arrived and the mapping did not, and stops there. The
+        # mapping needs door candidates, which are the midpoints of gaps
+        # in the floor plan's outline -- so a robot that publishes no
+        # position can still align, provided the outline has
+        # door-shaped gaps in it.
+        #
+        # @Thonno has eight room polygons, doors between every room, and
+        # zero door markers. Whether the outline never arrived or the
+        # gap search found nothing in it was not answerable from a
+        # download, which is the sort of gap that turns a question into
+        # a guess.
+        "outline_points": len(
+            getattr(aligner, "_points2d", None) or []
+        ) if aligner is not None else None,
+        "door_candidates": len(
+            getattr(aligner, "_door_candidates", None) or []
+        ) if aligner is not None else None,
         "room_polygons": len(
             getattr(aligner, "room_polygons_umf", None) or {}
         ) if aligner is not None else None,

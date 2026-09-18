@@ -1230,11 +1230,6 @@ class PrimeCleaningModeSelect(IRobotEntity, RestoreEntity, SelectEntity):
         if last is not None and last.state in self.MODES:
             self._restored = last.state
 
-    @property
-    def selected_operating_mode(self) -> int | None:
-        """The value to send with a start, or None to leave it alone."""
-        option = self.current_option
-        return self.MODES.get(option) if option else None
 
 
 def _robot_sku(config_entry: RoombaConfigEntry) -> str | None:
