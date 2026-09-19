@@ -38,6 +38,17 @@ PACKAGE = ROOT / "custom_components" / "roomba_plus"
 #: a circular import", because this script has established that they do
 #: not.
 NON_CYCLE_REASONS: dict[str, str] = {
+    "__init__ -> repairs": (
+        "NOT A CYCLE -- a load-order requirement. This import sits in "
+        "the branch that runs when `roombapy` failed to import, and it "
+        "exists to raise the repair that names the conflict. Hoisting "
+        "it to the top would put a second import between the guarded "
+        "`roombapy` import and the code that reports its failure, which "
+        "is exactly the module-level import chain being defended "
+        "against: if `repairs` ever grows a top-level dependency that "
+        "itself touches the library, the integration would fail to load "
+        "again with no message, which is the bug this was added to fix."
+    ),
     "button -> services": (
         "A REAL CYCLE, both ways. `button` reaches into `services` for "
         "the maintenance-reset event and the cloud push; `services` "

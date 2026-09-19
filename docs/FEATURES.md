@@ -635,7 +635,21 @@ A multi-room mission waits briefly (typically up to ~90 seconds, occasionally le
 
 > ☁️ Requires cloud credentials · SMART robots only
 
+`sensor.{name}_last_mission_area` *(v4.2.10)* — square metres covered by the last completed mission, the counterpart to `Missions – Last duration`. Unlike `area_cleaned_today`, which sums the day and resets at midnight, this describes one run. Empty on robots that report no area at all (600-series).
+
 `sensor.{name}_mission_progress` — live mission completion percentage (0–100 %) using per-room time estimates and effective mission time (wall-clock duration minus robot-confirmed recharge time — see below). The timer persists across HA restarts.
+
+**Where the per-room estimates come from**, in order:
+
+1. iRobot's own estimate for that room, where the cloud offers one
+2. how long the room actually took your robot, averaged across runs and kept separately per cleaning mode *(measured since v4.2.6, used from v4.2.7, averaged from v4.2.10)*
+3. a whole-house average divided by the rooms in this mission — a last resort, and a poor one
+
+If your robot decides its own number of passes while running (auto pass mode), the cloud offers no estimate at all: there is nothing to forecast before the run. Those robots relied entirely on the third source until v4.2.7, which on a two-room clean could mean expecting six hours per room.
+
+A room the cloud has no figure for is not permanent — iRobot builds its estimates from cleaning history, so a room cleaned often enough may gain one.
+
+**The room display follows the robot, not the clock.** A confirmed room change moves it — the robot arriving somewhere and then working there. Before v4.2.6 that confirmation could not happen, so the display relied on elapsed time against an estimate and stayed on the first room for whole missions on robots that had no estimate.
 
 Attributes: `current_room` · `current_room_source` *(v4.0.0b3)* · `next_room` · `elapsed_run_min` · `estimated_remaining_min` · `room_sequence` · `mission_duration_min` *(v2.9.0)* · `recharge_min` *(v2.9.0)*
 

@@ -59,6 +59,100 @@ stable line, not something you did wrong.
 
 ---
 
+### `Error occurred loading flow for integration roomba` in your log
+
+Repeating every few minutes, alongside a blocking-call warning about
+`homeassistant.components.roomba.config_flow`:
+
+```
+ERROR [homeassistant.components.roomba] Error occurred loading flow for
+integration roomba: cannot import name 'Roomba' from 'roombapy'
+```
+
+**Nothing is broken.** Roomba+ needs `roombapy` 2.x, which is
+asynchronous; Home Assistant's built-in Roomba integration uses the
+synchronous 1.x interface. Home Assistant installs one copy of the
+library, so the built-in integration cannot import what it expects.
+
+You see this even without that integration set up: Home Assistant finds
+your robot on the network and tries to prepare the built-in setup
+dialog, which is what fails. Your robot, and Roomba+, are unaffected.
+
+**Two things you can do, neither required:**
+
+*Ignore the discovered robot.* Settings → Devices & Services, find the
+discovered **Roomba** card, and ignore it. That stops Home Assistant
+offering the built-in setup for a robot you already have here. From
+v4.2.9 an ignored entry no longer triggers the "Two Roomba
+integrations" notice.
+
+*Silence the messages.* In `configuration.yaml`:
+
+```yaml
+logger:
+  logs:
+    homeassistant.components.roomba: fatal
+```
+
+This affects only the built-in integration's own logging. Nothing from
+Roomba+ is hidden by it.
+
+**Why it is not simply fixed:** resolving it means the built-in
+integration moving from the synchronous library to the asynchronous
+one — a rewrite of that integration, not a version bump, and not ours
+to make.
+
+#### A workaround, if you do not use the built-in integration
+
+Contributed by @nareso, and it works for a reason worth understanding:
+Home Assistant loads an integration from `custom_components/` in
+preference to its own copy of the same domain. A folder named `roomba`
+containing a manifest with **no `requirements`** therefore shadows the
+built-in one, and nothing installs the old library.
+
+`/config/custom_components/roomba/manifest.json`:
+
+```json
+{
+  "domain": "roomba",
+  "name": "Roomba Override",
+  "version": "1.0.0",
+  "integration_type": "device"
+}
+```
+
+`/config/custom_components/roomba/config_flow.py`:
+
+```python
+from homeassistant import config_entries
+
+
+class ConfigFlow(config_entries.ConfigFlow, domain="roomba"):
+    """Dummy config flow for the overridden Roomba integration."""
+
+    async def async_step_user(self, user_input=None):
+        return self.async_abort(reason="not_supported")
+```
+
+Restart Home Assistant afterwards.
+
+**Read this part before you do it.** You are replacing a core
+integration with an empty one:
+
+- The built-in Roomba integration becomes unavailable. If you have
+  entities from it, they stop working. Only do this if you use Roomba+
+  for every robot.
+- Home Assistant will log that you are running a custom integration it
+  has not tested. That warning is correct and expected here.
+- It is yours to maintain. Delete the folder to undo it, and check it
+  still behaves after Home Assistant upgrades.
+- Roomba+ neither ships nor requires this. Removing the built-in
+  integration through Settings is the supported route; this is for
+  people who would rather not have it reappear through discovery.
+
+
+---
+
 ## Setup & connection
 
 **"Failed to connect" during setup**
@@ -146,6 +240,17 @@ useless without them. [What is in it, in full →](DATA_PRIVACY.md)
 A partial download is more useful than none: send the block that matters if
 the rest gives you pause.
 
+**If a command seemed to do nothing**, three fields answer most of it, and
+a download taken *while it is still broken* is worth far more than one
+taken after a restart:
+
+- `map.sent_commands` — what Roomba+ actually sent, when, and which rooms
+  or zones it named *(v4.2.5; all robots from v4.2.6)*
+- `push_freshness` — how long since the robot last said anything. "No push
+  message since startup" after a mission means nothing is arriving
+- `map.active_map_versions` and `smart_map.last_command_summary` — which
+  map a command named, which is what a localisation failure turns on
+
 ---
 
 **Smart Map zones not appearing (i/s/j-series)**
@@ -227,6 +332,36 @@ re-learning in the iRobot app.
 
 Fixed in v4.2.4 for rooms and v4.2.5 for zones. Before those, every map
 the robot knew was merged into one flat list, so rooms from a map the
+robot was not on could be selected — and produced the 224 above.
+
+### The robot accepts a room clean, then sits on the dock
+
+The log shows the command accepted and no mission started, with
+`error=224` — a localisation failure. The robot could not work out
+where it was on the map it was asked to clean.
+
+**If you have more than one map**, that is the usual cause: a robot can
+only clean the map it is standing on. Since v4.2.4 the room list
+follows the robot rather than merging every map, and v4.2.5 does the
+same for zones.
+
+v4.2.6 fixed a related fault: where a room number existed on both maps,
+the room took its name from one map and its map assignment from the
+other, so the command went out with the right room and the wrong map.
+That one looked intermittent — the same room could work one day and
+fail the next.
+
+On a cloud-connected robot you also have a **Map** entity. Leave it on
+"follow robot" unless you deliberately want a different map.
+
+**If you have one map**, 224 means the robot genuinely could not
+localise: it may have been moved while docked, or the map may need
+re-learning in the iRobot app.
+
+### Rooms from another floor appear in the list
+
+Fixed in v4.2.4 for rooms and v4.2.5 for zones. Before those, every map
+the robot knew was merged into one flat list, so a room from a map the
 robot was not on could be selected — and produced the 224 above.
 
 ## Mission sensors on Prime robots

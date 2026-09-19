@@ -9,6 +9,59 @@ note are listed — most releases need zero action beyond updating.
 
 ---
 
+## v4.2.10 — from v4.2.9
+
+One new sensor appears on its own: **Missions – Last area**, the square
+metres your robot covered on its last completed mission. It stays empty
+until the next mission finishes, and on robots that report no area at
+all (600-series) it stays empty for good.
+
+**Room time estimates settle from here.** Roomba+ measures how long each
+room takes and now averages those measurements instead of keeping only
+the most recent one, separately per cleaning mode. Anything measured
+before this release counts as a single run, so the figures move for a
+mission or two and then steady.
+
+---
+
+## v4.2.9 — from v4.2.8
+
+Nothing to do.
+
+**If your remaining-time estimate dropped to zero mid-mission**, that is
+this release. It showed up on robots whose measured room times are
+shorter than the estimate they replaced.
+
+**If you saw "Two Roomba integrations installed" with only one
+visible**, that notice was counting entries that never load — an ignored
+discovery or a disabled entry. It will not reappear.
+
+---
+
+## v4.2.8 — from v4.2.7
+
+Nothing to do.
+
+**If your room display moved but the percentage stayed at 0%**, that is
+this release. It affected any robot that cleans a room faster than its
+estimate.
+
+---
+
+## v4.2.7 — from v4.2.6
+
+Nothing to do.
+
+**If your room display started working in 4.2.6 but every mission still
+began with no time estimates**, that is this release. The measurements
+4.2.6 was keeping are now read back.
+
+**`last_cleaned_rooms` on a locally connected robot** was showing the
+rooms of whichever mission last resolved successfully — often a much
+older one. It now lists the rooms the robot actually worked in.
+
+---
+
 ## v4.2.6 — from v4.2.5
 
 Nothing to do.
