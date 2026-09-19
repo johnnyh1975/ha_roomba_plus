@@ -4334,3 +4334,85 @@ class TestLastCleanedRoomsReportsWhatWasCleaned:
         source = inspect.getsource(callbacks.async_record_mission)
 
         assert '"last_cleaned_rooms": observed_rooms or zones,' in source
+
+
+class TestMeasuredRoomTimesAverage:
+    """Keeping only the latest measurement made the estimate swing with
+    each run. @ScenicSystemsLLC's Guest Bathroom measured 232, 220, 197
+    and 250 seconds across four missions -- a 25% spread the estimate
+    followed exactly, and no sign of settling.
+
+    PER CLEANING MODE, because a mop pass and a vacuum pass over the
+    same floor are not the same room to a robot. Averaging them
+    together produces a figure that describes neither, which is why the
+    cloud keys its own estimates by parameters too.
+    """
+
+    @staticmethod
+    def _store():
+        from types import SimpleNamespace
+
+        profile = SimpleNamespace(room_estimate_cache={})
+        return profile, SimpleNamespace(
+            runtime_data=SimpleNamespace(robot_profile_store=profile)
+        )
+
+    def test_four_runs_average(self) -> None:
+        from custom_components.roomba_plus.callbacks import (
+            _remember_measured_room_time,
+        )
+
+        profile, entry = self._store()
+        for seconds in (232.0, 220.0, 197.0, 250.0):
+            _remember_measured_room_time(entry, "Guest Bathroom", seconds, mode=2)
+
+        # The exact mean of the four, not a rounded running one:
+        # rounding at each step compounded and produced 224.7.
+        assert profile.room_estimate_cache[
+            "Guest Bathroom|measured|2"
+        ] == 224.75
+        assert profile.room_estimate_cache[
+            "Guest Bathroom|measured|2|count"
+        ] == 4.0
+
+    def test_modes_do_not_mix(self) -> None:
+        from custom_components.roomba_plus.callbacks import (
+            _remember_measured_room_time,
+        )
+
+        profile, entry = self._store()
+        _remember_measured_room_time(entry, "Bath", 200.0, mode=2)
+        _remember_measured_room_time(entry, "Bath", 900.0, mode=6)
+
+        assert profile.room_estimate_cache["Bath|measured|2"] == 200.0
+        assert profile.room_estimate_cache["Bath|measured|6"] == 900.0
+
+    def test_the_count_is_not_read_as_a_duration(self) -> None:
+        """Counts and durations share the room prefix, and the lookup
+        takes the smallest value under it. Without a filter, a count of
+        4 would be read as a four-second room and win outright."""
+        from custom_components.roomba_plus.callbacks import (
+            _remember_measured_room_time,
+        )
+        from custom_components.roomba_plus.sensor_rooms import (
+            cached_room_seconds,
+        )
+
+        profile, entry = self._store()
+        for seconds in (232.0, 220.0, 197.0, 250.0):
+            _remember_measured_room_time(entry, "Bath", seconds, mode=2)
+
+        assert cached_room_seconds(entry, "Bath") == 224.75
+
+    def test_an_unknown_mode_gets_its_own_bucket(self) -> None:
+        """Folding it into a known mode is the mixing this avoids."""
+        from custom_components.roomba_plus.callbacks import (
+            _remember_measured_room_time,
+        )
+
+        profile, entry = self._store()
+        _remember_measured_room_time(entry, "Bath", 200.0, mode=2)
+        _remember_measured_room_time(entry, "Bath", 400.0, mode=None)
+
+        assert profile.room_estimate_cache["Bath|measured|2"] == 200.0
+        assert profile.room_estimate_cache["Bath|measured|unknown"] == 400.0

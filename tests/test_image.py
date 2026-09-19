@@ -3225,3 +3225,51 @@ class TestZonesAreDrawnAndNamed:
         # The label pass walks both collections, not just rooms.
         assert "_labelled = [" in source
         assert "self._polygons, (230, 230, 230)" in source
+
+
+class TestUnnamedZonesShowTheirNumber:
+    """The repair notice asks you to name zones by number, and the map
+    skipped them for having no name — so the only place that could show
+    you where zone 23 is was the one place refusing to draw it.
+
+    @liblit, twice: "Nothing shows me where these new zones might be
+    relative to existing landmarks that I would recognize on a map."
+
+    Drawing the bare id closes the loop: the notice names a number, the
+    map shows that number in a room you recognise.
+    """
+
+    @staticmethod
+    def _label(region_id, names):
+        """The derivation the renderer now uses."""
+        name = names.get(region_id)
+        if not name:
+            name = str(region_id).rsplit("/", 1)[-1]
+            if name.startswith("zid_"):
+                name = name[4:]
+        return name
+
+    def test_an_unnamed_zone_shows_its_number(self) -> None:
+        assert self._label("MAP-A/zid_23", {}) == "23"
+
+    def test_the_type_marker_is_not_shown(self) -> None:
+        """`zid_23` is an internal id shape; the notice says 23."""
+        assert "zid" not in self._label("MAP-A/zid_23", {})
+
+    def test_a_named_zone_keeps_its_name(self) -> None:
+        assert self._label(
+            "MAP-A/zid_23", {"MAP-A/zid_23": "Foyer Zone"}
+        ) == "Foyer Zone"
+
+    def test_a_bare_id_works_too(self) -> None:
+        assert self._label("23", {}) == "23"
+
+    def test_the_renderer_no_longer_skips_unnamed(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus import image
+
+        source = inspect.getsource(image)
+
+        assert "if not name or not ring:" not in source
+        assert "if not ring:" in source

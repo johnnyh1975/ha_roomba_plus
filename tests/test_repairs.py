@@ -3061,16 +3061,23 @@ class TestTheZoneNamingDialogIsUsable:
 
         assert "multiline=True" in source
 
-    def test_the_prefill_still_uses_newlines(self) -> None:
-        """One per line is the canonical format; the field just has to
-        be able to show it."""
+    def test_there_is_no_prefill_to_misread(self) -> None:
+        """THE PRE-FILL WAS THE PROBLEM, not its line endings.
+
+        A grey box holding `2=`, `20=`, `21=` reads as a result list,
+        not as something to type into -- @liblit opened it and wrote
+        "I haven't the foggiest idea what to do here". Small zone
+        counts now get a labelled, empty field each, which cannot be
+        mistaken for output and needs no format at all.
+        """
         import inspect
 
         from custom_components.roomba_plus import repairs
 
-        assert '"\\n".join(f"{rid}=" for rid in unlabelled)' in (
-            inspect.getsource(repairs)
-        )
+        source = inspect.getsource(repairs)
+
+        assert '"\\n".join(f"{rid}=" for rid in unlabelled)' not in source
+        assert 'vol.Optional(f"Zone {rid}")' in source
 
     def test_the_dialog_names_the_robot(self) -> None:
         """The issue is raised per config entry, so this was always
@@ -3141,3 +3148,142 @@ class TestTheConflictWarningNeedsARealConflict:
 
         assert 'entry.domain == "roomba"' in source
         assert "async_delete_issue" in source
+
+
+class TestTheNamingFormNamesTheRobot:
+    """The robot name was added to the issue CARD, and the user is
+    looking at the fix-flow FORM — a separate string, which lived only
+    in `en.json` and not in `strings.json`, so editing the obvious file
+    changed the text nobody was reading.
+
+    @liblit reported the same two problems against 4.2.9 that he had
+    reported before, and he was right: one fix had landed in the wrong
+    place.
+    """
+
+    def test_the_form_description_carries_the_robot(self) -> None:
+        import json
+        import pathlib
+
+        data = json.loads(
+            pathlib.Path(
+                "custom_components/roomba_plus/strings.json"
+            ).read_text(encoding="utf-8")
+        )
+        step = (
+            data["issues"]["smart_zones_need_naming"]
+            ["fix_flow"]["step"]["init"]
+        )
+
+        assert "{robot}" in step["description"]
+
+    def test_every_language_does_too(self) -> None:
+        import json
+        import pathlib
+
+        for path in pathlib.Path(
+            "custom_components/roomba_plus/translations"
+        ).glob("*.json"):
+            data = json.loads(path.read_text(encoding="utf-8"))
+            step = (
+                data.get("issues", {}).get("smart_zones_need_naming", {})
+                .get("fix_flow", {}).get("step", {}).get("init")
+            )
+            if not step or "description" not in step:
+                continue
+            assert "{robot}" in step["description"], path.name
+
+    def test_the_flow_passes_that_placeholder(self) -> None:
+        """A placeholder in the text and not in the call renders as the
+        literal `{robot}`."""
+        import inspect
+
+        from custom_components.roomba_plus import repairs
+
+        assert '"robot"' in inspect.getsource(repairs)
+
+
+class TestTheZoneFormIsRecognisableAsAForm:
+    """@liblit opened it and wrote "I haven't the foggiest idea what to
+    do here". His screenshot explains why better than the sentence does:
+    a borderless grey box holding `2=`, `20=`, `21=` reads as a result
+    list, and the format hint sat below it, off screen.
+
+    A labelled, empty field per zone cannot be read as output. It also
+    removes the `id=Name` format, and with it the parser, the "No valid
+    entries found" error, and every way to write it wrong.
+    """
+
+    @staticmethod
+    def _parse(user_input):
+        """The extraction the flow now performs."""
+        return {
+            key[len("Zone "):]: str(value).strip()
+            for key, value in user_input.items()
+            if key.startswith("Zone ") and str(value).strip()
+        }
+
+    def test_naming_two_of_six_gives_two(self) -> None:
+        """Leaving four blank is a normal answer, not an error — under
+        the old format it meant deleting four lines."""
+        assert self._parse({
+            "Zone 21": "Corridor",
+            "Zone 22": "Kitchen",
+        }) == {"21": "Corridor", "22": "Kitchen"}
+
+    def test_whitespace_is_not_a_name(self) -> None:
+        assert self._parse({"Zone 2": "   "}) == {}
+
+    def test_the_field_key_reads_as_a_label(self) -> None:
+        """Labels come from `step.data`, keyed by field name, and these
+        names are built from zone ids at runtime — so no translation can
+        exist and Home Assistant shows the key. The key is written to be
+        shown."""
+        import inspect
+
+        from custom_components.roomba_plus import repairs
+
+        assert 'f"Zone {rid}"' in inspect.getsource(repairs)
+
+    def test_many_zones_fall_back_to_one_box(self) -> None:
+        """Thirty labelled fields is a worse form than one box."""
+        import inspect
+
+        from custom_components.roomba_plus import repairs
+
+        source = inspect.getsource(repairs)
+
+        assert "_MAX_ZONE_FIELDS" in source
+        assert "multiline=True" in source
+
+    def test_the_card_title_names_the_robot(self) -> None:
+        """Two robots produced two cards with the same generic title,
+        and opening one was the only way to tell them apart."""
+        import json
+        import pathlib
+
+        data = json.loads(
+            pathlib.Path(
+                "custom_components/roomba_plus/strings.json"
+            ).read_text(encoding="utf-8")
+        )
+
+        assert "{robot}" in data["issues"]["smart_zones_need_naming"]["title"]
+
+    def test_the_error_says_what_to_do(self) -> None:
+        """"No valid entries found" names a failure; it does not say
+        that a name goes next to a zone."""
+        import json
+        import pathlib
+
+        data = json.loads(
+            pathlib.Path(
+                "custom_components/roomba_plus/strings.json"
+            ).read_text(encoding="utf-8")
+        )
+        text = (
+            data["issues"]["smart_zones_need_naming"]
+            ["fix_flow"]["error"]["no_valid_entries"]
+        )
+
+        assert "type a name" in text.lower()

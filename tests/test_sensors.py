@@ -2528,3 +2528,78 @@ class TestSensorValueFnResilienceFromResilienceFile:
             assert isinstance(REAL_980_STATE[key], dict)
         assert REAL_980_STATE["bbrun"]["hr"] == 438
         assert REAL_980_STATE["bbmssn"]["nMssn"] == 425
+
+
+class TestLastMissionArea:
+    """`area_cleaned_today` sums the day and resets at midnight, so it
+    never shows what the last completed mission covered. There was no
+    counterpart to `last_mission_duration` for area (@zenyatta80).
+
+    ASKED BEFORE BUILDING: "area" means two things in Home Assistant --
+    square metres, or which rooms. He meant square metres, wanted no
+    long-term statistics, and runs an i7+. Building the other reading
+    would have been a plausible guess and the wrong entity.
+    """
+
+    @staticmethod
+    def _value(record):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.sensor_helpers import (
+            _last_mission_area_m2,
+        )
+
+        store = MagicMock()
+        store.latest.return_value = record
+        entity = MagicMock()
+        entity._config_entry.runtime_data = SimpleNamespace(
+            mission_store=store
+        )
+        return _last_mission_area_m2(entity)
+
+    def test_square_feet_become_square_metres(self) -> None:
+        assert self._value({"area_sqft": 428}) == 39.8
+
+    def test_a_robot_reporting_no_area_yields_none(self) -> None:
+        """The 600-series never sends `sqft`. An empty sensor is honest;
+        a zero would claim the robot cleaned nothing."""
+        assert self._value({"area_sqft": None}) is None
+        assert self._value({"area_sqft": 0}) is None
+
+    def test_no_mission_yet_yields_none(self) -> None:
+        assert self._value(None) is None
+
+    def test_it_carries_no_state_class(self) -> None:
+        """He was asked and said he did not want long-term statistics.
+        Adding the class later is easy; removing it breaks whatever has
+        recorded against it."""
+        import inspect
+
+        from custom_components.roomba_plus import sensor_core
+
+        # THE DESCRIPTION, NOT THE SOURCE TEXT. The comment above the
+        # field explains why there is no state_class, so a substring
+        # search over the source finds the word in its own explanation --
+        # which is how an earlier version of this test failed on a
+        # correct implementation.
+        from custom_components.roomba_plus.sensor_core import SENSORS
+
+        description = next(
+            d for d in SENSORS if d.key == "last_mission_area"
+        )
+
+        assert description.state_class is None
+
+    def test_it_sits_beside_its_sibling(self) -> None:
+        """Same record, same availability rule as the duration sensor it
+        was asked to match."""
+        import inspect
+
+        from custom_components.roomba_plus import sensor_core
+
+        source = inspect.getsource(sensor_core)
+
+        assert source.index('key="last_mission_duration"') < source.index(
+            'key="last_mission_area"'
+        )

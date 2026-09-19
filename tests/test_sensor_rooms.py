@@ -1317,9 +1317,13 @@ class TestAMeasuredRoomTimeIsActuallyUsed:
             _remember_measured_room_time(entry, "Guest Bathroom", seconds)
         _remember_measured_room_time(entry, "Hallway", 780.0)
 
+        # THE MEAN, not the last one. Four runs of this room measured
+        # 232, 220, 197 and 250 seconds -- a 25% spread that the
+        # estimate followed exactly while it kept only the latest
+        # (@ScenicSystemsLLC). 216 is the average of the three here.
         assert _prime_room_time_estimates(
             entry, ["Guest Bathroom", "Hallway"]
-        ) == [197, 780]
+        ) == [216, 780]
 
     def test_a_room_never_measured_still_returns_nothing(self) -> None:
         """The fallback must not invent a figure for a room the robot
@@ -1478,3 +1482,62 @@ class TestTheCountdownUsesTheObservedRoom:
         source = inspect.getsource(sensor_rooms)
 
         assert 'current_room = planned_order[-1]\n            _idx' in source
+
+
+class TestEveryEstimateLookupReadsOurMeasurements:
+    """Three functions answer "how long does this room take", and the
+    fallback to what the robot measured itself went into them one at a
+    time, over three releases, each time after a tester found the gap:
+
+      - the display lookup (4.2.7)
+      - the transition gate (4.2.7, found by searching for siblings)
+      - the cloud-credentials lookup (4.2.10, @Thonno)
+
+    His log showed both halves of the last one in a single mission:
+    `measured Bagno principale at 665s, kept for next time`, and then
+    `estimates=[None, None, 1900]` for the whole run. Measured, kept,
+    never read.
+
+    THE MISTAKE IS REPAIRING WHERE THE REPORT POINTS. Fixing one branch
+    and leaving its siblings is what made this take three attempts, so
+    this test asserts the property across all of them rather than
+    checking the one that was reported.
+    """
+
+    def test_all_three_consult_the_measured_times(self) -> None:
+        import ast
+        import inspect
+
+        from custom_components.roomba_plus import sensor_rooms
+
+        tree = ast.parse(inspect.getsource(sensor_rooms))
+        checked = 0
+        for node in tree.body:
+            if not isinstance(node, ast.FunctionDef):
+                continue
+            if node.name not in (
+                "_prime_room_time_estimates",
+                "shortest_plausible_room_seconds",
+                "_compute_room_time_estimates",
+            ):
+                continue
+            checked += 1
+            assert "cached_room_seconds" in ast.unparse(node), (
+                f"{node.name} answers a room-duration question without "
+                f"consulting what the robot measured itself"
+            )
+
+        assert checked == 3, f"expected 3 lookups, found {checked}"
+
+    def test_a_cloud_figure_still_wins(self) -> None:
+        """The measurement is a fallback, not an override: where iRobot
+        offers an estimate for the room, that is the better number."""
+        import inspect
+
+        from custom_components.roomba_plus.sensor_rooms import (
+            _compute_room_time_estimates,
+        )
+
+        source = inspect.getsource(_compute_room_time_estimates)
+
+        assert "if _cloud:" in source

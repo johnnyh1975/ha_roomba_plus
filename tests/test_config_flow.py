@@ -1128,3 +1128,86 @@ class TestSettingsCorrelationField:
             )
         assert result["type"].value == "create_entry"
         assert result["data"][CONF_CORRELATION_ENTITIES] == ["sensor.humidity"]
+
+
+class TestAWrongLibrarySaysSo:
+    """`config_flow.py` imported `roombapy` at module level, so a wrong
+    version stopped Home Assistant loading the flow at all and the user
+    got "Config flow could not be loaded: Invalid handler specified".
+
+    @bandit254 saw that, tried three Roomba+ versions looking for one
+    that worked, and concluded the smaller releases must ship fewer
+    dependencies. They do not: 4.2.0 and 4.2.9 pin the same
+    `roombapy==2.0.2` and import the same class on the same line. The
+    fault was the installed library, which the message never named.
+
+    THE NOTICE NOW FIRES ON THE LIBRARY, NOT ON A CONFIG ENTRY.
+    Counting entries asks "is the other integration set up", a proxy for
+    "is the shared library wrong". The library answers directly and
+    catches the case the proxy misses -- discovery loading the built-in
+    integration's flow with no entry ever created.
+    """
+
+    def test_the_flow_imports_defensively(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus import config_flow
+
+        source = inspect.getsource(config_flow)
+
+        assert "ROOMBAPY_IMPORT_ERROR" in source
+        assert "except ImportError" in source
+
+    def test_the_flow_aborts_with_the_reason(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus import config_flow
+
+        source = inspect.getsource(
+            config_flow.RoombaPlusConfigFlow.async_step_user
+        )
+
+        assert 'reason="wrong_roombapy"' in source
+        assert '"error": ROOMBAPY_IMPORT_ERROR' in source
+
+    def test_the_abort_text_names_the_conflict_and_the_remedy(self) -> None:
+        """Naming the fault without naming what to do about it is what
+        sent him version-hunting."""
+        import json
+        import pathlib
+
+        data = json.loads(
+            pathlib.Path(
+                "custom_components/roomba_plus/strings.json"
+            ).read_text(encoding="utf-8")
+        )
+        text = data["config"]["abort"]["wrong_roombapy"]
+
+        assert "Restart Home Assistant" in text
+        assert "built-in" in text
+        assert "{error}" in text
+        # And the thing he got wrong, said plainly:
+        assert "version makes no difference" in text
+
+    def test_setup_fails_with_the_reason_too(self) -> None:
+        """An existing install that breaks after an update never reaches
+        the config flow."""
+        import inspect
+
+        from custom_components import roomba_plus
+
+        source = inspect.getsource(roomba_plus)
+
+        assert "ROOMBAPY_IMPORT_ERROR is not None" in source
+
+    def test_the_repair_fires_on_the_library(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus import repairs
+
+        source = inspect.getsource(
+            repairs.async_check_core_roomba_conflict
+        )
+
+        assert "_wrong_library" in source
+        assert "not _conflicting and not _wrong_library" in source
