@@ -16,6 +16,7 @@ import logging
 import time
 from typing import Any
 
+from homeassistant.util import slugify
 from homeassistant.helpers import selector
 import voluptuous as vol
 
@@ -111,6 +112,10 @@ async def async_create_fix_flow(
     return ConfirmRepairFlow()
 
 
+#: Above this many zones, a field each is a worse form than one box.
+_MAX_ZONE_FIELDS = 15
+
+
 class SmartZoneNamingRepairFlow(RepairsFlow):
     """Fix flow for naming newly discovered Smart Map zones.
 
@@ -172,8 +177,23 @@ class SmartZoneNamingRepairFlow(RepairsFlow):
             # between two "id=..." tokens (i.e. the pattern ",digits="), split
             # on commas first.  Otherwise split on newlines.  This lets names
             # contain commas (e.g. "Living room, open plan") without breaking.
-            raw: str = user_input.get("zones", "").strip()
             parsed: dict[str, str] = {}
+
+            # ONE FIELD PER ZONE, when that is the form we showed.
+            #
+            # `zone_20=Hallway` needs no format, no parser and no way to
+            # get the syntax wrong. Blank fields are simply zones the
+            # user chose not to name, which is a normal answer rather
+            # than an error.
+            _per_zone = {
+                key[len("Zone "):]: str(value).strip()
+                for key, value in user_input.items()
+                if key.startswith("Zone ") and str(value).strip()
+            }
+            if _per_zone:
+                parsed.update(_per_zone)
+
+            raw: str = user_input.get("zones", "").strip()
 
             import re as _re
             # Detect comma-as-delimiter: a comma followed by digits then "="
@@ -266,37 +286,49 @@ class SmartZoneNamingRepairFlow(RepairsFlow):
                 self._dismiss()
                 return self.async_create_entry(data={})
 
-        # Build the default textarea value: one "id=" stub per unlabelled zone,
-        # separated by newlines so each zone starts on its own line.
+        # ONE FIELD PER ZONE, while there are few enough to fit.
         #
-        # The HA repair frontend renders a <textarea> for `str` schema fields.
-        # Python's "\n".join() produces a string with real newline characters
-        # which the browser preserves correctly in a textarea — each zone ID
-        # appears on its own line and the user fills in the name after "=".
+        # This was a single multiline box pre-filled with "2=", "20=",
+        # one per line. @liblit opened it and wrote "I haven't the
+        # foggiest idea what to do here" -- and his screenshot shows
+        # why: a grey box with no visible border, holding what reads
+        # as a result list rather than something to type into. The
+        # format hint sat BELOW the box, off screen.
         #
-        # Historical note: an earlier version used ", ".join() which caused all
-        # IDs to appear on a single line (e.g. "1=17=19=") and prompted users
-        # to enter comma-separated input. The parser now accepts both formats
-        # for backwards compatibility, but the canonical pre-fill is newlines.
-        default_text = "\n".join(f"{rid}=" for rid in unlabelled)
-
-        # A MULTILINE FIELD, so the pre-fill survives being shown.
+        # A labelled, empty field per zone cannot be mistaken for
+        # output. It also removes the `id=Name` format, and with it
+        # the parser, the "No valid entries found" error, and every
+        # way to get the syntax wrong. Naming two of six zones means
+        # filling two boxes instead of deleting four lines.
         #
-        # A plain `str` renders as a one-line input, which collapses the
-        # newlines this pre-fill is built from: three ids arrive as
-        # "20=21=23=" on one line. The parser was taught to accept
-        # commas as a workaround, but the box still shows something the
-        # instructions above it call invalid, and the user is left to
-        # guess (@liblit).
-        schema = vol.Schema(
-            {
-                vol.Required("zones", default=default_text): (
-                    selector.TextSelector(
+        # ABOVE THE CAP the text box returns: thirty labelled fields
+        # is a worse form than one box. It returns EMPTY, with the
+        # example as placeholder, because the pre-fill is the part
+        # that read as output.
+        if len(unlabelled) <= _MAX_ZONE_FIELDS:
+            schema = vol.Schema(
+                {
+                    # THE KEY IS THE LABEL. Field labels come from
+                    # `step.data` in strings.json, keyed by field name --
+                    # and these names are built from the robot's zone
+                    # ids at runtime, so no translation can exist for
+                    # them. Home Assistant falls back to showing the key
+                    # itself, so the key is written to read as a label:
+                    # "Zone 20", not "zone_20".
+                    vol.Optional(f"Zone {rid}"): selector.TextSelector(
+                        selector.TextSelectorConfig()
+                    )
+                    for rid in unlabelled
+                }
+            )
+        else:
+            schema = vol.Schema(
+                {
+                    vol.Required("zones"): selector.TextSelector(
                         selector.TextSelectorConfig(multiline=True)
                     )
-                )
-            }
-        )
+                }
+            )
         return self.async_show_form(
             step_id="init",  # MUST be "init" — HA repair frontend requirement
             data_schema=schema,
@@ -310,6 +342,19 @@ class SmartZoneNamingRepairFlow(RepairsFlow):
                 # tell from the notice which one it meant (@liblit).
                 "robot": (
                     getattr(self._config_entry, "title", None) or "this robot"
+                ),
+                # THE ENTITY THAT ANSWERS "WHERE IS ZONE 23".
+                #
+                # The notice asks for names by number and the map is
+                # the only thing that can show where those numbers are,
+                # so it is worth naming outright rather than expecting
+                # the user to guess which of their entities it is.
+                #
+                # Slugged the way Home Assistant slugs entity ids, so
+                # it can be pasted. A title with characters that do not
+                # survive slugging still leaves a usable stem.
+                "robot_slug": slugify(
+                    getattr(self._config_entry, "title", None) or "roomba"
                 ),
             },
         )
@@ -1738,13 +1783,30 @@ async def async_check_core_roomba_conflict(hass: HomeAssistant) -> None:
     #
     # Two users reported exactly that, one after a full restart and
     # shutdown (@boelle, @mermr1).
+    # THE LIBRARY IS THE EVIDENCE; THE CONFIG ENTRY IS A GUESS.
+    #
+    # Counting entries asks "is the other integration set up", which is
+    # a proxy for "is the shared library wrong". The library itself
+    # answers directly, and it catches the case the proxy misses:
+    # Home Assistant discovering a robot and loading the built-in
+    # integration's config flow, with no entry ever created.
+    #
+    # @bandit254 hit that. Roomba+ would not load at all, so the check
+    # below could not even run for him -- which is why this is now
+    # also called from `async_setup`, before any entry is set up.
+    _wrong_library = False
+    try:
+        from roombapy import RoombaClient  # noqa: F401, PLC0415
+    except ImportError:
+        _wrong_library = True
+
     _conflicting = [
         entry for entry in hass.config_entries.async_entries()
         if entry.domain == "roomba"
         and entry.source != SOURCE_IGNORE
         and entry.disabled_by is None
     ]
-    if not _conflicting:
+    if not _conflicting and not _wrong_library:
         ir.async_delete_issue(hass, DOMAIN, "core_roomba_conflict")
         return
 

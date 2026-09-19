@@ -459,6 +459,9 @@
       },
       "region_last_cleaned": {
         "default": "mdi:calendar-check-outline"
+      },
+      "last_mission_area": {
+        "default": "mdi:texture-box"
       }
     },
     "button": {

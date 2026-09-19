@@ -838,6 +838,18 @@ class SmartZoneSelect(IRobotEntity, SelectEntity):
             translation_placeholders={
                 "zone_count": str(len(unlabelled)),
                 "zone_ids": ", ".join(unlabelled),
+                # THE CARD HAS TO NAME THE ROBOT TOO.
+                #
+                # With two robots the repairs list showed two cards with
+                # the same generic title, and the only way to tell them
+                # apart was to open one. @liblit: "Nothing tells me
+                # which of my two Roomba devices this repair relates
+                # to." The form was fixed first and the card left
+                # generic, which is half an answer.
+                "robot": (
+                    getattr(self._config_entry, "title", None)
+                    or "this robot"
+                ),
             },
         )
         _LOGGER.debug(

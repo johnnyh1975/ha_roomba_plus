@@ -130,7 +130,8 @@
       "room_schedule_no_rooms": "Dla tego robota nie są jeszcze znane żadne pomieszczenia. Pozwól mu najpierw ukończyć mapowanie.",
       "room_schedule_not_supported": "Harmonogramy pomieszczeń wymagają robota zgłaszającego dane pomieszczeń.",
       "no_rooms_to_name": "Nie znaleziono pokoi do nazwania. Pokoje tego robota pojawią się, gdy przynajmniej raz posprząta konkretne pokoje lub gdy jego mapa będzie dostępna z konta iRobot.",
-      "all_rooms_named": "Każdy pokój ma już nazwę. Zmień nazwę jednego z nich w selektorze stref na stronie urządzenia."
+      "all_rooms_named": "Każdy pokój ma już nazwę. Zmień nazwę jednego z nich w selektorze stref na stronie urządzenia.",
+      "wrong_roombapy": "Roomba+ wymaga asynchronicznej biblioteki `roombapy` 2.x, a zainstalowana kopia jest starsza:\n\n`{error}`\n\n**Najpierw uruchom ponownie Home Assistant** — wtedy zainstaluje wersję wymaganą przez Roomba+.\n\nJeśli błąd wróci po restarcie, **wbudowana integracja Roomba** instaluje starą bibliotekę z powrotem. Obie nie mogą współistnieć: usuń wbudowaną (Ustawienia → Urządzenia i usługi → Roomba → usuń) i uruchom ponownie. Roomba+ obejmuje wszystko, co ona potrafi.\n\nWersja Roomba+ nie ma tu znaczenia — każde wydanie 4.2.x wymaga tej samej biblioteki."
     }
   },
   "options": {
@@ -1301,6 +1302,9 @@
       },
       "reset_diagnostics_summary": {
         "name": "Liczniki resetów diagnostycznych"
+      },
+      "last_mission_area": {
+        "name": "Misje – Ostatnia powierzchnia"
       }
     },
     "binary_sensor": {
@@ -1730,12 +1734,12 @@
       }
     },
     "smart_zones_need_naming": {
-      "title": "Odkryto nowe strefy Smart Map",
+      "title": "Strefy Smart Map robota {robot} potrzebują nazw",
       "fix_flow": {
         "step": {
           "init": {
             "title": "Nazwij strefy Smart Map",
-            "description": "Wprowadź jeden wpis na linię w formacie `id=Nazwa`. ID stref do nazwania: {zone_ids}",
+            "description": "{robot}: {zone_count} stref(y) bez nazwy. Wpisz po jednej w wierszu jako `id=Nazwa`. Identyfikatory: {zone_ids}\n\nNazwy należą do Ciebie i pozostają w Home Assistant — nic nie jest zmieniane w aplikacji iRobot ani wysyłane do robota.\n\nNie wiesz, która jest która? Otwórz obraz mapy tego robota (`image.{robot_slug}_rooms_map`): strefy bez nazwy mają na sobie swój numer.",
             "data": {
               "zones": "Przypisania stref"
             },
@@ -1745,7 +1749,7 @@
           }
         },
         "error": {
-          "no_valid_entries": "Nie znaleziono prawidłowych wpisów. Użyj formatu `id=Nazwa`, jeden wpis na linię.",
+          "no_valid_entries": "Nie wpisano jeszcze nazw — wpisz nazwę przy co najmniej jednej strefie.",
           "pmap_not_resolved": "Nie można rozwiązać ID mapy. Upewnij się, że robot jest zadokowany i połączony, a następnie spróbuj ponownie."
         }
       }

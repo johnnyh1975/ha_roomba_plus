@@ -130,7 +130,8 @@
       "room_schedule_no_rooms": "Für diesen Roboter sind noch keine Räume bekannt. Lass ihn zuerst eine Kartierungsfahrt abschließen.",
       "room_schedule_not_supported": "Raumzeitpläne brauchen einen Roboter, der Raumdaten meldet.",
       "no_rooms_to_name": "Es wurden keine Räume zum Benennen gefunden. Die Räume erscheinen, sobald der Roboter mindestens einmal gezielt Räume gereinigt hat oder die Karte aus deinem iRobot-Konto vorliegt.",
-      "all_rooms_named": "Alle Räume haben bereits einen Namen. Umbenennen geht über die Zonenauswahl auf der Geräteseite."
+      "all_rooms_named": "Alle Räume haben bereits einen Namen. Umbenennen geht über die Zonenauswahl auf der Geräteseite.",
+      "wrong_roombapy": "Roomba+ benötigt das asynchrone `roombapy` 2.x; installiert ist eine ältere Fassung:\n\n`{error}`\n\n**Starten Sie zuerst Home Assistant neu** – dabei wird die von Roomba+ verlangte Fassung installiert.\n\nKehrt der Fehler danach zurück, installiert Home Assistants **eingebaute Roomba-Integration** die ältere Bibliothek darüber. Beide können nicht nebeneinander bestehen: Entfernen Sie die eingebaute (Einstellungen → Geräte & Dienste → Roomba → löschen) und starten Sie erneut. Roomba+ deckt alles ab, was sie kann.\n\nDie Roomba+-Version spielt dabei keine Rolle – alle 4.2.x verlangen dieselbe Bibliothek."
     }
   },
   "options": {
@@ -1301,6 +1302,9 @@
       },
       "reset_diagnostics_summary": {
         "name": "Reset-Diagnostik-Zähler"
+      },
+      "last_mission_area": {
+        "name": "Missionen – Zuletzt gereinigte Fläche"
       }
     },
     "binary_sensor": {
@@ -1730,12 +1734,12 @@
       }
     },
     "smart_zones_need_naming": {
-      "title": "Neue Smart-Map-Zonen entdeckt",
+      "title": "Smart-Map-Zonen von {robot} brauchen Namen",
       "fix_flow": {
         "step": {
           "init": {
             "title": "Smart-Map-Zonen benennen",
-            "description": "Tragen Sie für jede Zone einen Namen ein — jede vorausgefüllte Zeile zeigt eine Zonen-ID, geben Sie den Namen nach dem Gleichheitszeichen ein. Zu benennende Zonen-IDs: {zone_ids}",
+            "description": "{robot}: {zone_count} Zone(n) haben noch keinen Namen. Eine pro Zeile als `id=Name` eingeben. Zu benennende Zonen-IDs: {zone_ids}\n\nDie Namen gehören Ihnen und bleiben in Home Assistant – in der iRobot-App wird nichts umbenannt, und an den Roboter wird nichts gesendet.\n\nUnklar, welche Zone welche ist? Öffnen Sie das Kartenbild dieses Roboters (`image.{robot_slug}_rooms_map`): Unbenannte Zonen tragen ihre Nummer, neben Räumen, die Sie wiedererkennen.",
             "data": {
               "zones": "Zonenzuweisungen"
             },
@@ -1745,7 +1749,7 @@
           }
         },
         "error": {
-          "no_valid_entries": "Keine gültigen Einträge gefunden. Jeder Eintrag muss das Format id=Name haben — einen pro Zeile oder kommagetrennt.",
+          "no_valid_entries": "Noch keine Namen eingetragen – tragen Sie neben mindestens einer Zone einen Namen ein.",
           "pmap_not_resolved": "Karten-ID konnte nicht aufgelöst werden. Stelle sicher, dass der Roboter angedockt und verbunden ist, und versuche es erneut."
         }
       }
@@ -1804,7 +1808,7 @@
     },
     "core_roomba_conflict": {
       "title": "Zwei Roomba-Integrationen installiert",
-      "description": "Die eingebaute **Roomba**-Integration von Home Assistant ist neben Roomba+ eingerichtet. Beide nutzen dieselbe `roombapy`-Bibliothek, und Home Assistant installiert davon nur eine Fassung – eine der beiden wird sich also nicht laden lassen, meist mit einem `ImportError` im Protokoll.\n\nDas kann keine der beiden Integrationen beheben. Entfernen Sie die, die Sie nicht brauchen: Roomba+ deckt alles ab, was die eingebaute kann, und zusätzlich die neueren Cloud-Roboter – haben Sie nur ältere Roboter und sind mit der eingebauten zufrieden, entfernen Sie stattdessen Roomba+."
+      "description": "Die eingebaute **Roomba**-Integration von Home Assistant ist neben Roomba+ eingerichtet. Beide nutzen dieselbe `roombapy`-Bibliothek, und Home Assistant installiert davon nur eine Fassung – eine der beiden wird sich also nicht laden lassen, meist mit einem `ImportError` im Protokoll.\n\nDas kann keine der beiden Integrationen beheben. Entfernen Sie die, die Sie nicht brauchen: Roomba+ deckt alles ab, was die eingebaute kann, und zusätzlich die neueren Cloud-Roboter – haben Sie nur ältere Roboter und sind mit der eingebauten zufrieden, entfernen Sie stattdessen Roomba+.\n\nWenn `cannot import name 'Roomba' from 'roombapy'` im Protokoll steht, ohne dass die eingebaute Integration eingerichtet ist, ist das etwas anderes — siehe TROUBLESHOOTING.md, „Error occurred loading flow for integration roomba“."
     }
   },
   "device_automation": {

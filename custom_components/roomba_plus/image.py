@@ -4373,8 +4373,28 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
             for _rings, _colour in _labelled:
                 for room_id, ring in _rings.items():
                     name = self._names.get(room_id)
-                    if not name or not ring:
+                    if not ring:
                         continue
+                    if not name:
+                        # AN UNNAMED ZONE IS EXACTLY THE ONE YOU NEED TO
+                        # FIND.
+                        #
+                        # The repair notice asks you to name zones by
+                        # number, and until you do, the map skipped them
+                        # for having no name -- so the only place that
+                        # could show you where zone 23 is was the one
+                        # place that refused to draw it.
+                        #
+                        # @liblit: "Nothing shows me where these new
+                        # zones might be relative to existing landmarks
+                        # that I would recognize on a map."
+                        #
+                        # Drawing the bare id closes that loop: the
+                        # notice names a number, the map shows the same
+                        # number in a room you recognise.
+                        name = str(room_id).rsplit("/", 1)[-1]
+                        if name.startswith("zid_"):
+                            name = name[4:]
                     cx = sum(x for x, _ in ring) / len(ring)
                     cy = sum(y for _, y in ring) / len(ring)
                     draw.text(

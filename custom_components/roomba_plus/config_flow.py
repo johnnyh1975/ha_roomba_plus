@@ -7,9 +7,30 @@ import asyncio
 import logging
 from typing import Any
 
-from roombapy import RoombaClient, RoombaInfo
-from roombapy.discovery import RoombaDiscovery
-from roombapy.getpassword import RoombaPassword
+# GUARDED, SO A WRONG LIBRARY SAYS SO.
+#
+# These are module-level, so an ImportError here stops Home Assistant
+# loading the config flow at all and the user gets "Config flow could
+# not be loaded: Invalid handler specified" -- which names nothing and
+# suggests nothing.
+#
+# @bandit254 saw exactly that, tried three different Roomba+ versions
+# looking for one that worked, and concluded the smaller releases must
+# ship fewer dependencies. They do not: 4.2.0 and 4.2.9 pin the same
+# `roombapy==2.0.2` and import the same class on the same line. The
+# real fault was the installed library, which the message never
+# mentioned.
+#
+# With the import guarded, the flow loads and can say what is wrong.
+try:
+    from roombapy import RoombaClient, RoombaInfo
+    from roombapy.discovery import RoombaDiscovery
+    from roombapy.getpassword import RoombaPassword
+
+    ROOMBAPY_IMPORT_ERROR: str | None = None
+except ImportError as _exc:  # pragma: no cover - depends on environment
+    RoombaClient = RoombaInfo = RoombaDiscovery = RoombaPassword = None  # type: ignore[assignment,misc]
+    ROOMBAPY_IMPORT_ERROR = str(_exc)
 from roombapy_prime import LoginResult
 import voluptuous as vol
 from homeassistant.helpers.selector import (
@@ -463,6 +484,18 @@ class RoombaPlusConfigFlow(ConfigFlow, domain=DOMAIN):
            path is actually needed -- no reason to show a form asking
            again when the answer is already known.
         """
+        # THE LIBRARY, BEFORE ANYTHING ELSE.
+        #
+        # Nothing below can work if the wrong `roombapy` is installed,
+        # and without this the user only ever saw "Invalid handler
+        # specified" from Home Assistant, with the real reason buried
+        # in a traceback they had to go find.
+        if ROOMBAPY_IMPORT_ERROR is not None:
+            return self.async_abort(
+                reason="wrong_roombapy",
+                description_placeholders={"error": ROOMBAPY_IMPORT_ERROR},
+            )
+
         if user_input is not None:
             chosen = user_input.get(CONF_HOST)
             if chosen == _CLOUD_ACCOUNT_SENTINEL:

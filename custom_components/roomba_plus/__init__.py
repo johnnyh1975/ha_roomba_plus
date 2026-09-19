@@ -20,7 +20,20 @@ from datetime import timedelta
 import logging
 from typing import Any, Final
 
-from roombapy import RoombaClient, RoombaConnectionError
+# GUARDED, SO AN EXISTING INSTALL FAILS WITH A REASON.
+#
+# An ImportError here stops the whole integration loading, and Home
+# Assistant reports it as a setup failure with the cause only in a
+# traceback. Guarding it lets setup below say what is wrong and raise
+# the repair that names the conflict.
+try:
+    from roombapy import RoombaClient, RoombaConnectionError
+
+    ROOMBAPY_IMPORT_ERROR: str | None = None
+except ImportError as _roombapy_exc:  # pragma: no cover - environment
+    RoombaClient = None  # type: ignore[assignment,misc]
+    RoombaConnectionError = Exception  # type: ignore[assignment,misc]
+    ROOMBAPY_IMPORT_ERROR = str(_roombapy_exc)
 
 from homeassistant import exceptions
 from homeassistant.const import (
@@ -1231,6 +1244,24 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: RoombaConfigEntry
         5. _build_runtime_data — assemble and assign RoombaData
         6. _phase_finalize   — background tasks, platforms, REST views, callbacks
     """
+    # THE LIBRARY, BEFORE ANYTHING ELSE.
+    #
+    # Without this the integration simply fails to load and Home
+    # Assistant shows a setup error whose cause lives in a traceback.
+    # @bandit254 spent three version downgrades on that, and the
+    # versions were identical.
+    if ROOMBAPY_IMPORT_ERROR is not None:
+        from .repairs import async_check_core_roomba_conflict  # noqa: PLC0415
+
+        await async_check_core_roomba_conflict(hass)
+        raise exceptions.ConfigEntryNotReady(
+            f"Roomba+ needs the asynchronous roombapy 2.x and an older "
+            f"one is installed ({ROOMBAPY_IMPORT_ERROR}). Restart Home "
+            f"Assistant; if it persists, Home Assistant's built-in "
+            f"Roomba integration is reinstalling the old library and "
+            f"needs removing."
+        )
+
     if _connection_type(config_entry) == ConnectionType.CLOUD_ONLY:
         return await _async_setup_entry_prime(hass, config_entry)
 

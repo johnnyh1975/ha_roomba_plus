@@ -130,7 +130,8 @@
       "room_schedule_no_rooms": "Er zijn nog geen kamers bekend voor deze robot. Laat hem eerst een kartering voltooien.",
       "room_schedule_not_supported": "Kamerschema's vereisen een robot die kamergegevens rapporteert.",
       "no_rooms_to_name": "Geen kamers gevonden om te benoemen. De kamers van deze robot verschijnen zodra hij minstens één keer specifieke kamers heeft schoongemaakt, of zodra zijn kaart beschikbaar is via je iRobot-account.",
-      "all_rooms_named": "Elke kamer heeft al een naam. Hernoem er een via de zoneselector op de apparaatpagina."
+      "all_rooms_named": "Elke kamer heeft al een naam. Hernoem er een via de zoneselector op de apparaatpagina.",
+      "wrong_roombapy": "Roomba+ heeft het asynchrone `roombapy` 2.x nodig; de door Home Assistant geïnstalleerde versie is ouder:\n\n`{error}`\n\n**Start Home Assistant eerst opnieuw op** — dan wordt de versie geïnstalleerd die Roomba+ vraagt.\n\nKomt de fout daarna terug, dan installeert de **ingebouwde Roomba-integratie** van Home Assistant de oude bibliotheek eroverheen. Beide kunnen niet naast elkaar: verwijder de ingebouwde (Instellingen → Apparaten en diensten → Roomba → verwijderen) en start opnieuw op. Roomba+ doet alles wat zij doet.\n\nDe Roomba+-versie maakt hier niets uit — elke 4.2.x vraagt dezelfde bibliotheek."
     }
   },
   "options": {
@@ -1301,6 +1302,9 @@
       },
       "reset_diagnostics_summary": {
         "name": "Diagnostische reset-tellers"
+      },
+      "last_mission_area": {
+        "name": "Missies – Laatste oppervlakte"
       }
     },
     "binary_sensor": {
@@ -1730,12 +1734,12 @@
       }
     },
     "smart_zones_need_naming": {
-      "title": "Nieuwe Smart Map-zones gevonden",
+      "title": "Smart Map-zones van {robot} hebben namen nodig",
       "fix_flow": {
         "step": {
           "init": {
             "title": "Smart Map-zones een naam geven",
-            "description": "Voer één zone per regel in het formaat `id=Naam` in. Te benoemen ID's: {zone_ids}",
+            "description": "{robot}: {zone_count} zone(s) hebben nog geen naam. Voer er één per regel in als `id=Naam`. Zone-ID's: {zone_ids}\n\nDe namen zijn van u en blijven in Home Assistant — er wordt niets hernoemd in de iRobot-app en niets naar de robot gestuurd.\n\nWeet u niet welke zone welke is? Open de kaartafbeelding van deze robot (`image.{robot_slug}_rooms_map`): naamloze zones tonen hun nummer.",
             "data": {
               "zones": "Zonetoewijzingen"
             },
@@ -1745,7 +1749,7 @@
           }
         },
         "error": {
-          "no_valid_entries": "Geen geldige invoer gevonden. Gebruik het formaat `id=Naam`, één per regel.",
+          "no_valid_entries": "Nog geen namen ingevuld — typ een naam bij ten minste één zone.",
           "pmap_not_resolved": "Kan de kaart-ID niet oplossen. Zorg ervoor dat de robot gedockt en verbonden is en probeer het opnieuw."
         }
       }

@@ -83,6 +83,7 @@ from .sensor_helpers import (
     _last_mission_team_id,
     _mission_elapsed_value,
     _mission_store_last_started_at,
+    _last_mission_area_m2,
     _mission_store_value,
     _mop_behavior,
     _mop_clean_mode,
@@ -1195,6 +1196,27 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         value_fn=lambda e: _mission_store_value(
             e, lambda s: s.latest().get("duration_min") if s.latest() else None
         ),
+        available_fn=lambda e: bool(
+            e._config_entry.runtime_data.mission_store
+            and e._config_entry.runtime_data.mission_store.records
+        ),
+    ),
+    RoombaSensorDescription(
+        key="last_mission_area",
+        translation_key="last_mission_area",
+        name="Missions – Last area",
+        device_class=SensorDeviceClass.AREA,
+        native_unit_of_measurement=UnitOfArea.SQUARE_METERS,
+        suggested_display_precision=1,
+        # NO state_class ON PURPOSE.
+        #
+        # Long-term statistics are left off because the reporter was
+        # asked and said he did not want them. A value that jumps to
+        # each new mission's figure has no meaningful mean anyway, and
+        # adding the class later is easy while removing it breaks
+        # whatever has already recorded against it.
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda e: _last_mission_area_m2(e),
         available_fn=lambda e: bool(
             e._config_entry.runtime_data.mission_store
             and e._config_entry.runtime_data.mission_store.records

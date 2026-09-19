@@ -130,7 +130,8 @@
       "room_schedule_no_rooms": "No rooms are known for this robot yet. Let it complete a mapping run first.",
       "room_schedule_not_supported": "Room schedules need a robot that reports room data.",
       "no_rooms_to_name": "No rooms were found to name. This robot's rooms appear once it has cleaned specific rooms at least once, or once its map is available from your iRobot account.",
-      "all_rooms_named": "Every room already has a name. Rename one from the zone selector on the device page."
+      "all_rooms_named": "Every room already has a name. Rename one from the zone selector on the device page.",
+      "wrong_roombapy": "Roomba+ needs the asynchronous `roombapy` 2.x, and the copy Home Assistant has installed is an older one:\n\n`{error}`\n\n**Restart Home Assistant first** — that makes it install the version Roomba+ asks for.\n\nIf it comes back after a restart, Home Assistant's **built-in Roomba integration** is installing the older library over it. Both cannot be present: remove the built-in one (Settings → Devices & Services → Roomba → delete) and restart again. Roomba+ covers everything it does.\n\nThe Roomba+ version makes no difference here — every 4.2.x release needs the same library."
     }
   },
   "options": {
@@ -1303,6 +1304,9 @@
       },
       "reset_diagnostics_summary": {
         "name": "Diagnostics reset counters"
+      },
+      "last_mission_area": {
+        "name": "Missions – Last area"
       }
     },
     "device_tracker": {
@@ -1732,12 +1736,12 @@
       }
     },
     "smart_zones_need_naming": {
-      "title": "New Smart Map zones discovered",
+      "title": "Smart Map zones on {robot} need names",
       "fix_flow": {
         "step": {
           "init": {
             "title": "Name Smart Map zones",
-            "description": "Fill in a name for each zone below — each pre-filled line shows a zone ID, type the name after the equals sign. Zone IDs to name: {zone_ids}",
+            "description": "{robot}: {zone_count} zone(s) have no name yet. Enter one per line as `id=Name`. Zone IDs to name: {zone_ids}\n\nThe names are yours and stay in Home Assistant — you are not renaming anything in the iRobot app, and nothing here is sent to your robot.\n\nNot sure which zone is which? Open this robot's map image (`image.{robot_slug}_rooms_map`): unnamed zones are drawn with their number on them, next to rooms you will recognise.",
             "data": {
               "zones": "Zone assignments"
             },
@@ -1747,7 +1751,7 @@
           }
         },
         "error": {
-          "no_valid_entries": "No valid entries found. Each entry must be in the format id=Name — one per line or comma-separated.",
+          "no_valid_entries": "No names entered yet — type a name next to at least one zone.",
           "pmap_not_resolved": "Could not resolve the map ID. Ensure the robot is docked and connected, then try again."
         }
       }
@@ -1806,7 +1810,7 @@
     },
     "core_roomba_conflict": {
       "title": "Two Roomba integrations installed",
-      "description": "Home Assistant's built-in **Roomba** integration is set up alongside Roomba+. Both use the same `roombapy` library, and Home Assistant installs only one copy of it — so one of the two will fail to load, usually with an `ImportError` in the log.\n\nThis is not something either integration can fix. Remove whichever one you do not need: Roomba+ covers everything the built-in one does and adds the newer cloud robots, but if you only have older robots and are happy with the built-in one, remove Roomba+ instead."
+      "description": "Home Assistant's built-in **Roomba** integration is set up alongside Roomba+. Both use the same `roombapy` library, and Home Assistant installs only one copy of it — so one of the two will fail to load, usually with an `ImportError` in the log.\n\nThis is not something either integration can fix. Remove whichever one you do not need: Roomba+ covers everything the built-in one does and adds the newer cloud robots, but if you only have older robots and are happy with the built-in one, remove Roomba+ instead.\n\nIf you see `cannot import name 'Roomba' from 'roombapy'` in your log without having set the built-in one up, that is a different thing — see TROUBLESHOOTING.md, \"Error occurred loading flow for integration roomba\"."
     }
   },
   "device_automation": {

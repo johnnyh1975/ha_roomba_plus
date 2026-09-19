@@ -408,6 +408,30 @@ def _mission_store_last_started_at(entity: "IRobotEntity") -> "datetime.datetime
 
 # ── v1.8.0 — L1 / L3 / L6 helper functions ──────────────────────────────────
 
+def _last_mission_area_m2(entity: "IRobotEntity") -> StateType:
+    """Square metres the last completed mission covered, or None.
+
+    `area_cleaned_today` sums the day and resets at midnight, so it
+    never shows what the last completed mission did (@zenyatta80). This
+    is the counterpart to `last_mission_duration`, which reads the same
+    record.
+
+    None on a robot that reports no area: the 600-series never sends
+    `sqft`, and a 0 there means "no data" rather than a mission that
+    covered nothing, which is why the record stores None for it.
+    """
+    def _area(store: Any) -> float | None:
+        record = store.latest()
+        if not record:
+            return None
+        sqft = record.get("area_sqft")
+        if not sqft:
+            return None
+        return round(float(sqft) * SQFT_TO_M2, 1)
+
+    return _mission_store_value(entity, _area)
+
+
 def _mission_store_value(entity: "IRobotEntity", fn: Any) -> StateType:
     """Safely access MissionStore — returns None if unavailable."""
     store = entity._config_entry.runtime_data.mission_store

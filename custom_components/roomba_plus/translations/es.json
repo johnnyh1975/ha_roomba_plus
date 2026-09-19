@@ -130,7 +130,8 @@
       "room_schedule_no_rooms": "Todavía no se conocen habitaciones para este robot. Deja que complete un mapeo primero.",
       "room_schedule_not_supported": "Las programaciones por habitación requieren un robot que informe de datos de habitaciones.",
       "no_rooms_to_name": "No se encontraron habitaciones para nombrar. Las habitaciones de este robot aparecen cuando ha limpiado habitaciones concretas al menos una vez, o cuando su mapa está disponible en tu cuenta de iRobot.",
-      "all_rooms_named": "Cada habitación ya tiene nombre. Cambia uno desde el selector de zonas en la página del dispositivo."
+      "all_rooms_named": "Cada habitación ya tiene nombre. Cambia uno desde el selector de zonas en la página del dispositivo.",
+      "wrong_roombapy": "Roomba+ necesita `roombapy` 2.x (asíncrono); la copia instalada por Home Assistant es anterior:\n\n`{error}`\n\n**Reinicie Home Assistant primero**: así se instala la versión que Roomba+ solicita.\n\nSi el error vuelve tras reiniciar, la **integración Roomba incorporada** de Home Assistant está instalando la biblioteca antigua encima. No pueden coexistir: elimine la incorporada (Ajustes → Dispositivos y servicios → Roomba → eliminar) y reinicie de nuevo. Roomba+ cubre todo lo que hace.\n\nLa versión de Roomba+ no influye: todas las 4.2.x necesitan la misma biblioteca."
     }
   },
   "options": {
@@ -1301,6 +1302,9 @@
       },
       "reset_diagnostics_summary": {
         "name": "Contadores de reseteo de diagnóstico"
+      },
+      "last_mission_area": {
+        "name": "Misiones – Última superficie"
       }
     },
     "binary_sensor": {
@@ -1730,12 +1734,12 @@
       }
     },
     "smart_zones_need_naming": {
-      "title": "Nuevas zonas Smart Map descubiertas",
+      "title": "Las zonas de Smart Map de {robot} necesitan nombres",
       "fix_flow": {
         "step": {
           "init": {
             "title": "Nombrar zonas Smart Map",
-            "description": "Introduce una zona por línea en el formato `id=Nombre`. IDs a nombrar: {zone_ids}",
+            "description": "{robot}: {zone_count} zona(s) sin nombre. Introduzca una por línea como `id=Nombre`. ID: {zone_ids}\n\nLos nombres son suyos y permanecen en Home Assistant: no se renombra nada en la app de iRobot ni se envía nada al robot.\n\n¿No sabe cuál es cuál? Abra la imagen del mapa de este robot (`image.{robot_slug}_rooms_map`): las zonas sin nombre llevan su número.",
             "data": {
               "zones": "Asignación de zonas"
             },
@@ -1745,7 +1749,7 @@
           }
         },
         "error": {
-          "no_valid_entries": "No se encontraron entradas válidas. Usa el formato `id=Nombre`, una por línea.",
+          "no_valid_entries": "Aún no hay nombres: escriba un nombre junto a al menos una zona.",
           "pmap_not_resolved": "No se pudo resolver el ID del mapa. Asegúrate de que el robot esté en la base y conectado, luego inténtalo de nuevo."
         }
       }

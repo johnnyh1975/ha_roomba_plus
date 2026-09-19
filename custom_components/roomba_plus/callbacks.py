@@ -157,7 +157,8 @@ def _observed_rooms(entry: Any) -> list[str]:
 
 
 def _remember_measured_room_time(
-    entry: Any, room: str | None, seconds: float | None
+    entry: Any, room: str | None, seconds: float | None,
+    mode: int | None = None,
 ) -> None:
     """Keep what a room actually took, so the next mission has a figure.
 
@@ -195,7 +196,37 @@ def _remember_measured_room_time(
         #
         # "measured" as the parameter part: honest about where it came
         # from, and distinct from any cloud entry for the same room.
-        cache[f"{room}|measured"] = float(seconds)
+        # A RUNNING MEAN, PER CLEANING MODE.
+        #
+        # This stored the last measurement, so a room swung with each
+        # run: @ScenicSystemsLLC's Guest Bathroom went 232 -> 220 ->
+        # 197 -> 250 seconds across four missions, a 25% spread that
+        # the estimate followed exactly. A mean settles.
+        #
+        # PER MODE, because they are not the same room to a robot. A
+        # mop pass and a vacuum pass over the same floor take different
+        # times, and averaging them together produces a figure that
+        # describes neither. The cloud keys its own estimates by
+        # parameters for the same reason.
+        #
+        # An unknown mode gets its own bucket rather than being folded
+        # into a known one -- mixing is the thing being avoided.
+        _key = f"{room}|measured|{mode if mode is not None else 'unknown'}"
+        _count_key = f"{_key}|count"
+
+        _n = int(cache.get(_count_key, 0) or 0)
+        _mean = float(cache.get(_key, 0.0) or 0.0)
+        if _n > 0 and _mean > 0:
+            _mean = (_mean * _n + float(seconds)) / (_n + 1)
+            _n += 1
+        else:
+            _mean, _n = float(seconds), 1
+
+        # STORED UNROUNDED. Rounding at each step compounds: four runs
+        # averaging 224.75 came out as 224.7 because every intermediate
+        # mean lost a digit. The readers round when they present it.
+        cache[_key] = _mean
+        cache[_count_key] = float(_n)
         _LOGGER.debug(
             "AUTO-ADVANCE-ROOM: measured %s at %.0fs, kept for next time "
             "(the cloud offers no per-room estimate in auto pass mode)",
@@ -2182,7 +2213,8 @@ def make_mission_callback(
                 _advanced = _mts_upd.advance_room(hass, entry.entry_id)
                 if _advanced:
                     _remember_measured_room_time(
-                        entry, _finished_room, _measured
+                        entry, _finished_room, _measured,
+                        mode=mission.get("operatingMode"),
                     )
                     # The new room has not been cleaned yet.
                     cleaned_in_room = False

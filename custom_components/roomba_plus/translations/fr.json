@@ -130,7 +130,8 @@
       "room_schedule_no_rooms": "Aucune pièce n'est encore connue pour ce robot. Laissez-le d'abord terminer une cartographie.",
       "room_schedule_not_supported": "Les programmes par pièce nécessitent un robot qui transmet des données de pièces.",
       "no_rooms_to_name": "Aucune pièce à nommer. Les pièces de ce robot apparaissent une fois qu'il a nettoyé des pièces spécifiques au moins une fois, ou lorsque sa carte est disponible depuis votre compte iRobot.",
-      "all_rooms_named": "Chaque pièce a déjà un nom. Renommez-en une depuis le sélecteur de zones sur la page de l'appareil."
+      "all_rooms_named": "Chaque pièce a déjà un nom. Renommez-en une depuis le sélecteur de zones sur la page de l'appareil.",
+      "wrong_roombapy": "Roomba+ a besoin de `roombapy` 2.x (asynchrone) ; la copie installée par Home Assistant est plus ancienne :\n\n`{error}`\n\n**Redémarrez d'abord Home Assistant** — cela installe la version demandée par Roomba+.\n\nSi l'erreur revient après un redémarrage, l'**intégration Roomba intégrée** de Home Assistant réinstalle l'ancienne bibliothèque par-dessus. Les deux ne peuvent pas coexister : supprimez l'intégrée (Paramètres → Appareils et services → Roomba → supprimer) puis redémarrez. Roomba+ couvre tout ce qu'elle fait.\n\nLa version de Roomba+ n'y change rien — toutes les 4.2.x demandent la même bibliothèque."
     }
   },
   "options": {
@@ -1301,6 +1302,9 @@
       },
       "reset_diagnostics_summary": {
         "name": "Compteurs de réinitialisation du diagnostic"
+      },
+      "last_mission_area": {
+        "name": "Missions – Dernière surface"
       }
     },
     "binary_sensor": {
@@ -1730,12 +1734,12 @@
       }
     },
     "smart_zones_need_naming": {
-      "title": "Nouvelles zones Smart Map découvertes",
+      "title": "Les zones Smart Map de {robot} ont besoin de noms",
       "fix_flow": {
         "step": {
           "init": {
             "title": "Nommer les zones Smart Map",
-            "description": "Entrez une zone par ligne au format `id=Nom`. IDs à nommer : {zone_ids}",
+            "description": "{robot} : {zone_count} zone(s) sans nom. Saisissez une par ligne sous la forme `id=Nom`. ID à nommer : {zone_ids}\n\nCes noms vous appartiennent et restent dans Home Assistant — rien n'est renommé dans l'application iRobot, rien n'est envoyé au robot.\n\nVous ne savez pas quelle zone est laquelle ? Ouvrez l'image de la carte de ce robot (`image.{robot_slug}_rooms_map`) : les zones sans nom y portent leur numéro.",
             "data": {
               "zones": "Assignation des zones"
             },
@@ -1745,7 +1749,7 @@
           }
         },
         "error": {
-          "no_valid_entries": "Aucune entrée valide trouvée. Utilisez le format `id=Nom`, une par ligne.",
+          "no_valid_entries": "Aucun nom saisi — indiquez un nom pour au moins une zone.",
           "pmap_not_resolved": "Impossible de résoudre l'ID de la carte. Assurez-vous que le robot est en station et connecté, puis réessayez."
         }
       }

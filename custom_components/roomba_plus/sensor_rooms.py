@@ -340,7 +340,14 @@ def cached_room_seconds(config_entry: Any, region_id: str) -> float | None:
     profile = getattr(config_entry.runtime_data, "robot_profile_store", None)
     cache = getattr(profile, "room_estimate_cache", None) or {}
     prefix = f"{region_id}|"
-    seconds = [v for k, v in cache.items() if k.startswith(prefix) and v > 0]
+    # COUNTS ARE NOT DURATIONS. A measured entry stores how many runs it
+    # averages alongside the average itself, and both live under the
+    # same room prefix. Without this filter a count of 3 would be read
+    # as a three-second room and win the `min()` outright.
+    seconds = [
+        v for k, v in cache.items()
+        if k.startswith(prefix) and v > 0 and not k.endswith("|count")
+    ]
     return min(seconds) if seconds else None
 
 
@@ -604,10 +611,34 @@ def _compute_room_time_estimates(
         # string). (room_name or "") avoids an AttributeError crash on
         # .lower() rather than relying on that invariant holding forever.
         est = region_map.get((room_name or "").lower(), {})
-        if pass_key is None:
-            result.append(None)
+        _cloud = est.get(pass_key) if pass_key is not None else None
+        # THE THIRD PLACE THAT READS OUR OWN MEASUREMENTS.
+        #
+        # Three lookups answer "how long does this room take", and the
+        # fallback to what we measured ourselves went into two of
+        # them. This one serves robots WITH cloud credentials and only
+        # ever asked the cloud -- so a room the cloud has no figure
+        # for stayed None even with a real measurement on file.
+        #
+        # @Thonno's log showed both halves in one mission:
+        #
+        #   measured Bagno principale at 665s, kept for next time
+        #   measured Corridoio at 510s, kept for next time
+        #   ...
+        #   estimates=[None, None, 1900]
+        #
+        # Measured, kept, never read. His countdown then worked from
+        # one room's figure applied to all three and ran out early.
+        #
+        # THIRD INSTANCE IN THREE RELEASES. Repairing one branch and
+        # leaving its siblings is the mistake this keeps being.
+        if _cloud:
+            result.append(_cloud)
         else:
-            result.append(est.get(pass_key))
+            # Whole seconds, as the cloud figures are: a measurement is
+            # not precise enough for the fraction to carry meaning.
+            _measured = cached_room_seconds(config_entry, str(room_name))
+            result.append(int(_measured) if _measured else None)
     return result
 
 
