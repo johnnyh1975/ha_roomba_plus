@@ -173,11 +173,16 @@ def _registrations(
                 out[name] = _schema_field_names(last, constants, named)
 
     for node in ast.walk(tree):
-        if not (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and node.func.attr == "async_register"
-        ):
+        # `hass.services.async_register(...)`, or since 4.2.11 the guarded
+        # wrapper `register_guarded(hass, ...)` from service_guard.py, which
+        # every Roomba+ service now goes through (quality scale:
+        # action-setup). Missing the second form made every service look
+        # unregistered here.
+        is_register = isinstance(node, ast.Call) and (
+            (isinstance(node.func, ast.Attribute) and node.func.attr == "async_register")
+            or (isinstance(node.func, ast.Name) and node.func.id == "register_guarded")
+        )
+        if not is_register:
             continue
 
         # (hass, DOMAIN, service, handler, ...) or (DOMAIN, service, …)

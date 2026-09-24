@@ -9,6 +9,152 @@ note are listed — most releases need zero action beyond updating.
 
 ---
 
+## v4.2.11 — from v4.2.10
+
+### Config entries on schema versions 4 to 10 could not be migrated
+
+**If your Roomba+ stopped loading at some point and you never worked
+out why, this may have been it.** An entry on one of those versions —
+from the v2.1.x series — matched no migration step, never advanced, and
+Home Assistant refuses to load an entry it cannot bring up to date. No
+error named the cause.
+
+Seven per-entity migration steps were collapsed into a single version
+jump some releases ago. The jump's own condition was correct; it was
+nested one level too deep, inside the branch for version 3 alone. An
+entry on 3 worked. Everything from 4 to 10 fell through.
+
+Nothing is needed from you: the next start migrates the entry and it
+loads. A test now walks every version from 1 to the current one and
+asserts each arrives — the guard that was there before searched the
+source for the condition's text, found it, and could not see which
+branch it sat in.
+
+### Fifteen entities report *Unknown* rather than *Unavailable*
+
+**Fifteen entities no longer go *Unavailable* when they simply have
+nothing to report.** They read *Unknown* instead, and two are no longer
+created at all on robots that cannot supply them.
+
+Alongside **Mission start** and **Mission elapsed time**, this covers
+the last-mission sensors (result, duration, area), the error sensors
+(code, time, zone), problem zone, consecutive mission anomalies,
+estimated battery end-of-life, lifetime completion rate, and the three
+maintenance "last cleaned" timestamps.
+
+In Home Assistant, *Unavailable* means the device cannot be reached.
+*Unknown* means it is fine and has no value right now — which is what a
+docked robot that has never errored, or a fresh install with no mission
+history, actually is. Tools that list broken entities, such as Orphan
+Entity Cleaner, stop flagging these.
+
+**Battery cycle count** and **Battery age** now disappear entirely on
+robots that do not report the underlying data, instead of existing
+permanently unavailable. If your robot never populated them, they will
+vanish from the entity list — nothing was lost; they never had a value.
+
+**Nothing about the values changes.** Nothing is retained that was not
+retained before, and no sensor reports something it did not report
+before — only the state it shows while empty is different.
+
+**If you have an automation or template that tests any of these sensors
+for being unavailable, update it.** A condition written as
+`is_state('sensor.roomba_mission_elapsed_time', 'unavailable')` will no
+longer fire; test for `unknown`, or better, check the robot's activity
+directly. Anything that tests `has_value()` or compares the numeric
+state keeps working unchanged.
+
+Looking for the **completed** mission's figures? Those live in
+**Missions – Last** (when it started) and **Missions – Last duration**
+(how long it took), and they keep their values until the next mission.
+
+### Room history counts a room the robot cleaned in, even if it did not finish
+
+On a robot with a cloud account, room history is built from iRobot's own
+mission record. Until now a room counted only when its pass *finished*.
+A room the robot cleaned but did not finish — cut short by a recharge, a
+time limit, or the end of the mission — was left out, while the iRobot app
+showed it cleaned (@Thonno: the Kitchen, first of four rooms, missing).
+
+It now counts whenever the robot cleaned floor there. **One consequence:**
+if you stop a mission part-way through a room, that room's *last cleaned*
+time moves to that mission. Room *coverage* is unchanged — it still counts
+only finished passes, as does everything that decides when a mission has
+ended.
+
+### Live state goes *Unavailable* when the robot cannot be reached
+
+**If the local connection stays down for more than a minute, the entities
+that describe what the robot is doing right now become *Unavailable*** —
+the vacuum, phase, readiness, battery, signal strength, position, mission
+progress and the running mission's times. Until now they kept their last
+value indefinitely: a robot with a flat battery read "cleaning, 99 %" for
+hours (@mdarocha).
+
+History, counters, settings and the last mission keep their values, since
+they are still true while the robot is away. **Connected** and **MQTT
+stale** stay available — they are how you see the outage. Cloud-connected
+Prime robots are not affected.
+
+The minute of grace rides out a Wi-Fi blip: the robot reconnects on its
+own, and nothing flickers.
+
+**If an automation reacts to the vacuum's state,** decide what it should
+do when that state is `unavailable` — it will now see it whenever the
+robot is out of reach.
+
+### Side brush and Clean Base bag reset buttons on local robots
+
+These two existed only when iRobot's cloud reported the part, and
+Classic robots never receive that data — a fully working cloud
+connection still returns no consumable list for them. So a locally
+operated robot had no way to reset those counters at all, and the
+maintenance sensor stayed overdue for good after a replacement.
+
+They now appear for any robot that has the parts: a Braava still gets
+no side-brush button, a robot without a Clean Base still gets no bag
+button. **If you did not have these two before, they will show up as
+new entities.** Pressing one records the replacement locally and then
+reports it to iRobot if there is a cloud connection — the order the
+filter and main-brush buttons have always used, so a cloud outage no
+longer costs you the reset.
+
+### Under the hood
+
+Nothing to do for any of these; listed because they change behaviour
+you could otherwise notice.
+
+- **Background work is now owned by the config entry.** Forty-two places
+  scheduled tasks on Home Assistant itself, which meant they kept
+  running after a reload — including statistics backfills writing to
+  stores that were being closed. They are cancelled on unload now, and
+  their exceptions reach the log: twenty-one of them used a bridge that
+  swallowed errors completely, repair checks after every mission
+  included
+- **The four stores whose contents cannot be rebuilt** — maintenance
+  history, mission history, mission timers, learned measurements — now
+  record a payload version. Nothing changes today; it means a future
+  format change is refused cleanly instead of misread. Existing files
+  without the field are read as the current format, so nothing is lost
+- **The REST endpoints send an `X-Roomba-Plus-Api-Version` header.**
+  Deliberately useless today: the Lovelace card ships separately and
+  cannot check a version that is not being sent, so this has to be out
+  in the field first
+- **The mission callback was restructured, with no change in behaviour.**
+  It is the code that decides when a mission starts, which room the
+  robot is in, and when a mission has really ended. Its state had lived
+  in eighteen hidden variables and its logic in one 1,230-line function;
+  it is now five named steps. Along the way the end-of-mission check and
+  its own log line turned out to compute the same decision twice, in two
+  slightly different ways that only agreed because of a rule enforced
+  somewhere else — they now share one computation, so a log saying why
+  a mission was not yet closed always describes what the code did.
+  Checked by replaying a real three-room field mission through the old
+  and new code: identical room changes, identical refusals, identical
+  end
+
+---
+
 ## v4.2.10 — from v4.2.9
 
 One new sensor appears on its own: **Missions – Last area**, the square

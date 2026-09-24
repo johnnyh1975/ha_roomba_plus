@@ -49,6 +49,16 @@ CHECKED_LEVELS: dict[str, str] = {
 
 #: Tables with no vendor enum, each with its reason.
 NO_VENDOR_ENUM: dict[str, str] = {
+    "const.READINESS_WIRE_TO_INDEX": (
+        "Classic, not Prime: it maps the `notReady` value a Classic robot "
+        "sends when it refuses a start onto the app's display index. "
+        "Built from three sources the comment above the table sets out -- "
+        "the lewis and ruby firmware constants, the app enum's indices, "
+        "and the app's `history_start_refuse_<n>` strings -- none of which "
+        "is in the Prime vendor extract this check searches. Values with "
+        "an unproven step (99) or conflicting sources (40) are left out "
+        "on purpose, with the reason recorded there."
+    ),
     "select_prime.SUCTION_LEVELS": (
         "Confirmed from two real captures of operating_mode_defaults, "
         "where each room stores a suctionLevel beside a profile name. "

@@ -89,3 +89,20 @@ markers = [
     # it.
     "assumed(reason): asserts on a value that is not field-confirmed",
 ]
+
+# COVERAGE — the same exclusions Home Assistant core uses in its own
+# measurement (home-assistant/core, pyproject.toml, [tool.coverage.report]),
+# so the figure here is the one the quality scale's test-coverage rule is
+# judged by. Nothing added beyond core's list: in particular no pragma
+# comments sprinkled over real code. A TYPE_CHECKING block never runs
+# under pytest; counting it would make "95 % of every module" depend on
+# how many imports a module has for mypy.
+[tool.coverage.report]
+exclude_lines = [
+  "pragma: no cover",
+  "def __repr__",
+  "raise AssertionError",
+  "raise NotImplementedError",
+  "if TYPE_CHECKING:",
+  "@overload",
+]
