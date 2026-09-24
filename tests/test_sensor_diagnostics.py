@@ -10,46 +10,17 @@ look in.
 
 from unittest.mock import MagicMock
 
-from custom_components.roomba_plus.sensor_cloud import (
-    CloudRawSensor,
-    CloudRawSensorDescription,
-)
 from custom_components.roomba_plus.sensor_diagnostics import (
     RoombaFirmwareVersionSensor,
     RoombaResetDiagnosticsSensor,
 )
 
 from tests.conftest import robot_mock
+import time
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+import pytest
 
-def _make_sensor(
-    has_cloud: bool = True,
-    last_update_success: bool = True,
-    coordinator_data: dict | None = None,
-) -> CloudRawSensor:
-    """Build a minimal CloudRawSensor with mocked internals."""
-    roomba = robot_mock()
-    blid = "test_blid"
-
-    coordinator = MagicMock()
-    coordinator.last_update_success = last_update_success
-    coordinator.data = coordinator_data if coordinator_data is not None else {"pmaps": []}
-    coordinator.raw_records = []
-
-    config_entry = MagicMock()
-    runtime_data = MagicMock()
-    # has_cloud is a property — set it on the mock
-    type(runtime_data).has_cloud = PropertyMock(return_value=has_cloud)
-    config_entry.runtime_data = runtime_data
-
-    description = CloudRawSensorDescription(
-        key="recent_dirt_events",
-        translation_key="recent_dirt_events",
-        name="Dirt events",
-        value_fn=lambda records: None,
-    )
-
-    sensor = CloudRawSensor(roomba, blid, coordinator, description, config_entry)
-    return sensor
 
 
 
@@ -197,3 +168,81 @@ def _make_health_trend_sensor(rps):
     return sensor
 
 
+# ── formerly tests/test_coverage_mid_gaps.py ────────────────────────────────────
+#
+# Mid-sized coverage gaps — quality scale, test-coverage (Silver).
+#
+# Error branches and fallbacks: bad cloud values, missing fields, foreign
+# entities. Each test pins what the branch protects against.
+
+class TestRawStateSensor:
+
+    def _sensor(self, state):
+        from custom_components.roomba_plus.sensor_diagnostics import RawStateSensor
+
+        s = RawStateSensor.__new__(RawStateSensor)
+        s.vacuum_state = state
+        return s
+
+    def test_value_is_the_number_of_reported_keys(self):
+        assert self._sensor({"a": 1, "b": 2}).native_value == 2
+
+    def test_nested_values_become_json_strings(self):
+        attrs = self._sensor({"batPct": 90, "cap": {"maps": 3}, "l": [1, 2]}).extra_state_attributes
+        assert attrs["batPct"] == 90
+        assert attrs["cap"] == '{"maps": 3}'
+        assert attrs["l"] == "[1, 2]"
+
+    def test_an_unserialisable_value_falls_back_to_str(self):
+        """A self-referencing structure must not break the attributes."""
+        loop: dict = {}
+        loop["self"] = loop
+        attrs = self._sensor({"x": loop}).extra_state_attributes
+        assert isinstance(attrs["x"], str)
+
+    def test_it_updates_on_every_message(self):
+        assert self._sensor({}).new_state_filter({"signal": {}}) is True
+
+
+class TestOptimalCleanWindow:
+
+    def test_a_window_already_past_today_is_tomorrow(self):
+        import datetime as dt
+
+        from custom_components.roomba_plus.sensor_diagnostics import RoombaOptimalCleanWindow
+
+        s = RoombaOptimalCleanWindow.__new__(RoombaOptimalCleanWindow)
+        now = dt.datetime.now(dt.timezone.utc).astimezone()
+        s._config_entry = MagicMock()
+        s._config_entry.runtime_data.presence_manager.preferred_window.return_value = (0, now.hour)
+        value = s.native_value
+        assert value > now
+        assert value.hour == now.hour and value.date() > now.date() or value.date() == (now + dt.timedelta(days=1)).date()
+
+
+class TestIntegrationHealthSensor:
+
+    @pytest.mark.asyncio
+    async def test_the_periodic_tick_is_started_and_stopped(self, monkeypatch):
+        from custom_components.roomba_plus import sensor_diagnostics as sd
+        from custom_components.roomba_plus.entity import IRobotEntity
+
+        s = sd.RoombaIntegrationHealthSensor.__new__(sd.RoombaIntegrationHealthSensor)
+        s.hass = MagicMock()
+        s._unsub_tick = None
+        stop = MagicMock()
+        monkeypatch.setattr(sd, "async_track_time_interval", lambda *a, **k: stop)
+        monkeypatch.setattr(IRobotEntity, "async_added_to_hass", AsyncMock())
+        await s.async_added_to_hass()
+        assert s._unsub_tick is stop
+        await s.async_will_remove_from_hass()
+        stop.assert_called_once()
+        assert s._unsub_tick is None
+
+    def test_the_value_is_the_computed_score(self, monkeypatch):
+        from custom_components.roomba_plus import sensor_diagnostics as sd
+
+        s = sd.RoombaIntegrationHealthSensor.__new__(sd.RoombaIntegrationHealthSensor)
+        s.hass, s._entry = MagicMock(), MagicMock()
+        monkeypatch.setattr(sd, "_compute_integration_health", lambda _h, _e: (87, {}))
+        assert s.native_value == 87

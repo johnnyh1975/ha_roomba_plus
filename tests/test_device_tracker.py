@@ -13,6 +13,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from tests.conftest import robot_mock, hass_mock
+import time
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 
 def _make_tracker(map_capability_value: str = "smart"):
@@ -796,3 +799,77 @@ class TestTheTrackerListensWhereItReads:
             "the room-name listener must survive; it answers a different "
             "question"
         )
+
+
+# ── formerly tests/test_coverage_mid_gaps.py ────────────────────────────────────
+#
+# Mid-sized coverage gaps — quality scale, test-coverage (Silver).
+#
+# Error branches and fallbacks: bad cloud values, missing fields, foreign
+# entities. Each test pins what the branch protects against.
+
+def _tracker(prime_rooms=None):
+    from custom_components.roomba_plus.device_tracker import RoombaDeviceTracker
+
+    t = RoombaDeviceTracker.__new__(RoombaDeviceTracker)
+    t._config_entry = MagicMock()
+    t.hass = MagicMock()
+    t._prime_rooms = dict(prime_rooms or {})
+    return t
+
+
+class TestTrackerPrimeRooms:
+
+    @pytest.mark.asyncio
+    async def test_a_failing_room_refresh_is_recorded_not_raised(self, monkeypatch):
+        from custom_components.roomba_plus import device_tracker as dt_mod, room_cleaning
+
+        monkeypatch.setattr(room_cleaning, "async_get_room_cleaning_backend",
+                            MagicMock(side_effect=RuntimeError("cloud down")))
+        failures = []
+        monkeypatch.setattr(dt_mod, "record_failure", lambda *a: failures.append(a))
+        await _tracker()._async_refresh_prime_rooms()
+        assert failures and failures[0][0] == "prime room names"
+
+    def test_an_unnamed_region_shows_its_id(self):
+        t = _tracker({"Kitchen": "map/3"})
+        report = SimpleNamespace(event=[SimpleNamespace(room=SimpleNamespace(region_id="9"), zone=None)])
+        data = SimpleNamespace(prime_coordinator=SimpleNamespace(data=report))
+        assert t._resolve_prime_room(data) == "Room 9"
+
+
+class TestTrackerAreaResolution:
+
+    def test_prime_room_resolves_through_its_segment(self, monkeypatch):
+        from custom_components.roomba_plus import area_resolver
+        from custom_components.roomba_plus.models import ConnectionType
+
+        t = _tracker({"Kitchen": "map1/3"})
+        t._config_entry.runtime_data.connection_type = ConnectionType.CLOUD_ONLY
+        monkeypatch.setattr(area_resolver, "async_area_for_segment",
+                            lambda _h, _e, seg: "kitchen" if seg == "rid_3" else None)
+        assert t._async_area_for("Kitchen") == "kitchen"
+
+    def test_classic_room_resolves_through_the_cloud_region(self, monkeypatch):
+        from custom_components.roomba_plus import area_resolver
+        from custom_components.roomba_plus.models import ConnectionType
+
+        t = _tracker()
+        t._config_entry.runtime_data.connection_type = ConnectionType.LOCAL_PUSH
+        t._config_entry.runtime_data.cloud_coordinator.regions = [
+            {"name": "Hall", "pmap_id": "p1", "id": "2"},
+            {"name": "Kitchen", "pmap_id": "p1", "id": "3"},
+        ]
+        monkeypatch.setattr(area_resolver, "async_area_for_segment",
+                            lambda _h, _e, seg: "kitchen" if seg == "p1_rid_3" else None)
+        assert t._async_area_for("Kitchen") == "kitchen"
+
+    def test_a_failing_resolution_gives_no_area(self, monkeypatch):
+        from custom_components.roomba_plus import area_resolver
+        from custom_components.roomba_plus.models import ConnectionType
+
+        t = _tracker({"Kitchen": "map1/3"})
+        t._config_entry.runtime_data.connection_type = ConnectionType.CLOUD_ONLY
+        monkeypatch.setattr(area_resolver, "async_area_for_segment",
+                            MagicMock(side_effect=RuntimeError("registry gone")))
+        assert t._async_area_for("Kitchen") is None

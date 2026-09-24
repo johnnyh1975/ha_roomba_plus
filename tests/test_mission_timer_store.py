@@ -21,6 +21,7 @@ import itertools
 import pytest
 from contextlib import contextmanager
 import tests.conftest
+
 from custom_components.roomba_plus.robot_profile_store import RobotProfileStore
 from custom_components.roomba_plus.mission_timer_store import MissionTimerStore
 from custom_components.roomba_plus.maintenance_store import MaintenanceStore
@@ -29,6 +30,7 @@ from custom_components.roomba_plus.callbacks import _ROOM_TRANSITION_CANDIDATE_P
 from custom_components.roomba_plus.callbacks import _ROOM_TRANSITION_MIN_ELAPSED_RATIO
 from custom_components.roomba_plus.callbacks import _room_transition_confidence_ok
 from custom_components.roomba_plus.callbacks import make_mission_callback
+from types import SimpleNamespace
 
 
 @contextmanager
@@ -119,7 +121,11 @@ def _msg(phase: str, cycle: str = "clean", error: int = 0, nmssn: int = 42) -> d
 
 
 def _make_entry(mts: MissionTimerStore) -> MagicMock:
-    entry = MagicMock()
+    # entry_mock(), not a bare MagicMock: production now schedules
+    # background work through entry.async_create_task(), and a bare
+    # mock swallows the coroutine unawaited -- which this suite
+    # treats as an error.
+    entry = tests.conftest.entry_mock()
     entry.entry_id = "test_entry"
     entry.data = {"blid": "ABC123"}
     entry.options = {}
@@ -139,7 +145,11 @@ def _make_entry(mts: MissionTimerStore) -> MagicMock:
 
 
 def _make_entry_v280_auto_advance_room_live(mts: MissionTimerStore) -> MagicMock:
-    entry = MagicMock()
+    # entry_mock(), not a bare MagicMock: production now schedules
+    # background work through entry.async_create_task(), and a bare
+    # mock swallows the coroutine unawaited -- which this suite
+    # treats as an error.
+    entry = tests.conftest.entry_mock()
     entry.entry_id = "test_entry"
     entry.data = {"blid": "ABC123"}
     entry.options = {}
@@ -539,6 +549,9 @@ class TestAttributesUseElapsedSec:
         data.roomba_reported_state.return_value = {"cleanMissionStatus": {"phase": "run"}}
         data.mission_timer_store = mts
         data.robot_profile_store.mission_duration_mean = 20.0  # 20-min typical mission
+        # The code reads the derived property; a MagicMock would return
+        # a MagicMock for it, not a number.
+        data.robot_profile_store.mission_duration_mean_sec = round(20.0 * 60)
         sensor._config_entry.runtime_data = data
 
         with patch(
@@ -597,6 +610,9 @@ class TestAttributesUseElapsedSec:
         data.roomba_reported_state.return_value = {"cleanMissionStatus": {"phase": "run"}}
         data.mission_timer_store = mts
         data.robot_profile_store.mission_duration_mean = 20.0  # 1200s typical
+        # The code reads the derived property; a MagicMock would return
+        # a MagicMock for it, not a number.
+        data.robot_profile_store.mission_duration_mean_sec = round(20.0 * 60)
         config_entry.runtime_data = data
 
         with patch(
@@ -941,14 +957,9 @@ class TestNamesExtractionRidFormat:
                 if _asyncio.iscoroutine(a):
                     a.close()
         hass.async_create_task = _close_coro
-        # v3.3.0 DELAY-SAVE — schedule_save now routes via
-        # loop.call_soon_threadsafe; a MagicMock loop records the
-        # scheduling without executing it (the old None + patched
-        # run_coroutine_threadsafe served the same isolation purpose).
-        hass.loop = MagicMock()
 
         with patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            "asyncio.run_coroutine_threadsafe",
             side_effect=lambda coro, loop: coro.close(),
         ), patch(
             "custom_components.roomba_plus.sensor._compute_room_time_estimates",
@@ -983,14 +994,9 @@ class TestNamesExtractionRidFormat:
                 if _asyncio.iscoroutine(a):
                     a.close()
         hass.async_create_task = _close_coro
-        # v3.3.0 DELAY-SAVE — schedule_save now routes via
-        # loop.call_soon_threadsafe; a MagicMock loop records the
-        # scheduling without executing it (the old None + patched
-        # run_coroutine_threadsafe served the same isolation purpose).
-        hass.loop = MagicMock()
 
         with patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            "asyncio.run_coroutine_threadsafe",
             side_effect=lambda coro, loop: coro.close(),
         ), patch(
             "custom_components.roomba_plus.sensor._compute_room_time_estimates",
@@ -1024,14 +1030,9 @@ class TestNamesExtractionRidFormat:
                 if _asyncio.iscoroutine(a):
                     a.close()
         hass.async_create_task = _close_coro
-        # v3.3.0 DELAY-SAVE — schedule_save now routes via
-        # loop.call_soon_threadsafe; a MagicMock loop records the
-        # scheduling without executing it (the old None + patched
-        # run_coroutine_threadsafe served the same isolation purpose).
-        hass.loop = MagicMock()
 
         with patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            "asyncio.run_coroutine_threadsafe",
             side_effect=lambda coro, loop: coro.close(),
         ), patch(
             "custom_components.roomba_plus.sensor._compute_room_time_estimates",
@@ -1078,14 +1079,9 @@ class TestNamesPrefersCloudName:
                 if _asyncio.iscoroutine(a):
                     a.close()
         hass.async_create_task = _close_coro
-        # v3.3.0 DELAY-SAVE — schedule_save now routes via
-        # loop.call_soon_threadsafe; a MagicMock loop records the
-        # scheduling without executing it (the old None + patched
-        # run_coroutine_threadsafe served the same isolation purpose).
-        hass.loop = MagicMock()
 
         with patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            "asyncio.run_coroutine_threadsafe",
             side_effect=lambda coro, loop: coro.close(),
         ), patch(
             "custom_components.roomba_plus.sensor._compute_room_time_estimates",
@@ -1121,14 +1117,9 @@ class TestNamesPrefersCloudName:
                 if _asyncio.iscoroutine(a):
                     a.close()
         hass.async_create_task = _close_coro
-        # v3.3.0 DELAY-SAVE — schedule_save now routes via
-        # loop.call_soon_threadsafe; a MagicMock loop records the
-        # scheduling without executing it (the old None + patched
-        # run_coroutine_threadsafe served the same isolation purpose).
-        hass.loop = MagicMock()
 
         with patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            "asyncio.run_coroutine_threadsafe",
             side_effect=lambda coro, loop: coro.close(),
         ), patch(
             "custom_components.roomba_plus.sensor._compute_room_time_estimates",
@@ -1163,14 +1154,9 @@ class TestNamesPrefersCloudName:
                 if _asyncio.iscoroutine(a):
                     a.close()
         hass.async_create_task = _close_coro
-        # v3.3.0 DELAY-SAVE — schedule_save now routes via
-        # loop.call_soon_threadsafe; a MagicMock loop records the
-        # scheduling without executing it (the old None + patched
-        # run_coroutine_threadsafe served the same isolation purpose).
-        hass.loop = MagicMock()
 
         with patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            "asyncio.run_coroutine_threadsafe",
             side_effect=lambda coro, loop: coro.close(),
         ), patch(
             "custom_components.roomba_plus.sensor._compute_room_time_estimates",
@@ -1628,14 +1614,9 @@ class TestAutoAdvanceRoomIntegration:
                 if _asyncio.iscoroutine(a):
                     a.close()
         hass.async_create_task = _close_coro
-        # v3.3.0 DELAY-SAVE — schedule_save now routes via
-        # loop.call_soon_threadsafe; a MagicMock loop records the
-        # scheduling without executing it (the old None + patched
-        # run_coroutine_threadsafe served the same isolation purpose).
-        hass.loop = MagicMock()
 
         with patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            "asyncio.run_coroutine_threadsafe",
             side_effect=lambda coro, loop: coro.close(),
         ):
             cb = make_mission_callback(hass, entry)
@@ -1663,10 +1644,9 @@ class TestAutoAdvanceRoomIntegration:
                 if _asyncio.iscoroutine(a):
                     a.close()
         hass.async_create_task = _close_coro
-        hass.loop = MagicMock()  # v2.9.0 BUGFIX: call_soon_threadsafe needs a non-None loop
 
         with patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            "asyncio.run_coroutine_threadsafe",
             side_effect=lambda coro, loop: coro.close(),
         ):
             cb = make_mission_callback(hass, entry)
@@ -1695,10 +1675,9 @@ class TestAutoAdvanceRoomIntegration:
                 if _asyncio.iscoroutine(a):
                     a.close()
         hass.async_create_task = _close_coro
-        hass.loop = MagicMock()  # v2.9.0 BUGFIX: call_soon_threadsafe needs a non-None loop
 
         with patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            "asyncio.run_coroutine_threadsafe",
             side_effect=lambda coro, loop: coro.close(),
         ):
             cb = make_mission_callback(hass, entry)
@@ -1730,14 +1709,9 @@ class TestAutoAdvanceRoomIntegration:
                 if _asyncio.iscoroutine(a):
                     a.close()
         hass.async_create_task = _close_coro
-        # v3.3.0 DELAY-SAVE — schedule_save now routes via
-        # loop.call_soon_threadsafe; a MagicMock loop records the
-        # scheduling without executing it (the old None + patched
-        # run_coroutine_threadsafe served the same isolation purpose).
-        hass.loop = MagicMock()
 
         with patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            "asyncio.run_coroutine_threadsafe",
             side_effect=lambda coro, loop: coro.close(),
         ):
             cb = make_mission_callback(hass, entry)
@@ -1763,14 +1737,9 @@ class TestAutoAdvanceRoomIntegration:
                 if _asyncio.iscoroutine(a):
                     a.close()
         hass.async_create_task = _close_coro
-        # v3.3.0 DELAY-SAVE — schedule_save now routes via
-        # loop.call_soon_threadsafe; a MagicMock loop records the
-        # scheduling without executing it (the old None + patched
-        # run_coroutine_threadsafe served the same isolation purpose).
-        hass.loop = MagicMock()
 
         with patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            "asyncio.run_coroutine_threadsafe",
             side_effect=lambda coro, loop: coro.close(),
         ):
             cb = make_mission_callback(hass, entry)
@@ -1797,14 +1766,9 @@ class TestAutoAdvanceRoomIntegration:
                 if _asyncio.iscoroutine(a):
                     a.close()
         hass.async_create_task = _close_coro
-        # v3.3.0 DELAY-SAVE — schedule_save now routes via
-        # loop.call_soon_threadsafe; a MagicMock loop records the
-        # scheduling without executing it (the old None + patched
-        # run_coroutine_threadsafe served the same isolation purpose).
-        hass.loop = MagicMock()
 
         with patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            "asyncio.run_coroutine_threadsafe",
             side_effect=lambda coro, loop: coro.close(),
         ):
             cb = make_mission_callback(hass, entry)
@@ -1833,14 +1797,9 @@ class TestAutoAdvanceRoomIntegration:
                 if _asyncio.iscoroutine(a):
                     a.close()
         hass.async_create_task = _close_coro
-        # v3.3.0 DELAY-SAVE — schedule_save now routes via
-        # loop.call_soon_threadsafe; a MagicMock loop records the
-        # scheduling without executing it (the old None + patched
-        # run_coroutine_threadsafe served the same isolation purpose).
-        hass.loop = MagicMock()
 
         with patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            "asyncio.run_coroutine_threadsafe",
             side_effect=lambda coro, loop: coro.close(),
         ):
             cb = make_mission_callback(hass, entry)
@@ -2034,15 +1993,10 @@ class TestCallbacksWiresRealEstimates:
                 if _asyncio.iscoroutine(a):
                     a.close()
         hass.async_create_task = _close_coro
-        # v3.3.0 DELAY-SAVE — schedule_save now routes via
-        # loop.call_soon_threadsafe; a MagicMock loop records the
-        # scheduling without executing it (the old None + patched
-        # run_coroutine_threadsafe served the same isolation purpose).
-        hass.loop = MagicMock()
 
         fake_estimates = [600, 400]  # Kitchen, Hall
         with patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            "asyncio.run_coroutine_threadsafe",
             side_effect=lambda coro, loop: coro.close(),
         ), patch(
             "custom_components.roomba_plus.sensor._compute_room_time_estimates",
@@ -2067,14 +2021,9 @@ class TestCallbacksWiresRealEstimates:
                 if _asyncio.iscoroutine(a):
                     a.close()
         hass.async_create_task = _close_coro
-        # v3.3.0 DELAY-SAVE — schedule_save now routes via
-        # loop.call_soon_threadsafe; a MagicMock loop records the
-        # scheduling without executing it (the old None + patched
-        # run_coroutine_threadsafe served the same isolation purpose).
-        hass.loop = MagicMock()
 
         with patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            "asyncio.run_coroutine_threadsafe",
             side_effect=lambda coro, loop: coro.close(),
         ), patch(
             "custom_components.roomba_plus.sensor._compute_room_time_estimates",
@@ -2108,6 +2057,9 @@ class TestCallbacksWiresRealEstimates:
         entry = _make_entry_v280_auto_advance_room_live(mts)
         rps = MagicMock()
         rps.mission_duration_mean = 30.0  # minutes — robot's own history
+        # The code reads the derived property; a MagicMock would return
+        # a MagicMock for it, not a number.
+        rps.mission_duration_mean_sec = round(30.0 * 60)
         entry.runtime_data.robot_profile_store = rps
         hass = MagicMock()
         def _close_coro(*args, **kwargs):
@@ -2116,14 +2068,9 @@ class TestCallbacksWiresRealEstimates:
                 if _asyncio.iscoroutine(a):
                     a.close()
         hass.async_create_task = _close_coro
-        # v3.3.0 DELAY-SAVE — schedule_save now routes via
-        # loop.call_soon_threadsafe; a MagicMock loop records the
-        # scheduling without executing it (the old None + patched
-        # run_coroutine_threadsafe served the same isolation purpose).
-        hass.loop = MagicMock()
 
         with patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            "asyncio.run_coroutine_threadsafe",
             side_effect=lambda coro, loop: coro.close(),
         ), patch(
             "custom_components.roomba_plus.sensor._compute_room_time_estimates",
@@ -2153,6 +2100,9 @@ class TestCallbacksWiresRealEstimates:
         entry = _make_entry_v280_auto_advance_room_live(mts)
         rps = MagicMock()
         rps.mission_duration_mean = None  # no history yet
+        # The code reads the derived property; a MagicMock would return
+        # a MagicMock for it, not a number.
+        rps.mission_duration_mean_sec = 0
         entry.runtime_data.robot_profile_store = rps
         hass = MagicMock()
         def _close_coro(*args, **kwargs):
@@ -2161,14 +2111,9 @@ class TestCallbacksWiresRealEstimates:
                 if _asyncio.iscoroutine(a):
                     a.close()
         hass.async_create_task = _close_coro
-        # v3.3.0 DELAY-SAVE — schedule_save now routes via
-        # loop.call_soon_threadsafe; a MagicMock loop records the
-        # scheduling without executing it (the old None + patched
-        # run_coroutine_threadsafe served the same isolation purpose).
-        hass.loop = MagicMock()
 
         with patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            "asyncio.run_coroutine_threadsafe",
             side_effect=lambda coro, loop: coro.close(),
         ), patch(
             "custom_components.roomba_plus.sensor._compute_room_time_estimates",
@@ -2190,6 +2135,9 @@ class TestCallbacksWiresRealEstimates:
         entry = _make_entry_v280_auto_advance_room_live(mts)
         rps = MagicMock()
         rps.mission_duration_mean = 20.0  # minutes -> 1200s total -> 600s/room
+        # The code reads the derived property; a MagicMock would return
+        # a MagicMock for it, not a number.
+        rps.mission_duration_mean_sec = round(20.0 * 60)
         entry.runtime_data.robot_profile_store = rps
         hass = MagicMock()
         def _close_coro(*args, **kwargs):
@@ -2198,10 +2146,9 @@ class TestCallbacksWiresRealEstimates:
                 if _asyncio.iscoroutine(a):
                     a.close()
         hass.async_create_task = _close_coro
-        hass.loop = MagicMock()  # v2.9.0 BUGFIX: call_soon_threadsafe needs a non-None loop
 
         with patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            "asyncio.run_coroutine_threadsafe",
             side_effect=lambda coro, loop: coro.close(),
         ), patch(
             "custom_components.roomba_plus.sensor._compute_room_time_estimates",
@@ -2234,11 +2181,10 @@ class TestCallbacksWiresRealEstimates:
                 if _asyncio.iscoroutine(a):
                     a.close()
         hass.async_create_task = _close_coro
-        hass.loop = MagicMock()  # v2.9.0 BUGFIX: call_soon_threadsafe needs a non-None loop
 
         fake_estimates = [600, 400]  # Kitchen=600s, Hall=400s
         with patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            "asyncio.run_coroutine_threadsafe",
             side_effect=lambda coro, loop: coro.close(),
         ), patch(
             "custom_components.roomba_plus.sensor._compute_room_time_estimates",
@@ -2278,15 +2224,10 @@ class TestEstimateRetry:
                 if _asyncio.iscoroutine(a):
                     a.close()
         hass.async_create_task = _close_coro
-        # v3.3.0 DELAY-SAVE — schedule_save now routes via
-        # loop.call_soon_threadsafe; a MagicMock loop records the
-        # scheduling without executing it (the old None + patched
-        # run_coroutine_threadsafe served the same isolation purpose).
-        hass.loop = MagicMock()
 
         # Mission start: cloud not synced yet — estimates all None.
         with patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            "asyncio.run_coroutine_threadsafe",
             side_effect=lambda coro, loop: coro.close(),
         ), patch(
             "custom_components.roomba_plus.sensor._compute_room_time_estimates",
@@ -2301,7 +2242,7 @@ class TestEstimateRetry:
 
         # A few messages later: cloud data has now arrived.
         with patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            "asyncio.run_coroutine_threadsafe",
             side_effect=lambda coro, loop: coro.close(),
         ), patch(
             "custom_components.roomba_plus.sensor._compute_room_time_estimates",
@@ -2334,14 +2275,9 @@ class TestEstimateRetry:
                 if _asyncio.iscoroutine(a):
                     a.close()
         hass.async_create_task = _close_coro
-        # v3.3.0 DELAY-SAVE — schedule_save now routes via
-        # loop.call_soon_threadsafe; a MagicMock loop records the
-        # scheduling without executing it (the old None + patched
-        # run_coroutine_threadsafe served the same isolation purpose).
-        hass.loop = MagicMock()
 
         with patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            "asyncio.run_coroutine_threadsafe",
             side_effect=lambda coro, loop: coro.close(),
         ), patch(
             "custom_components.roomba_plus.sensor._compute_room_time_estimates",
@@ -2371,14 +2307,9 @@ class TestEstimateRetry:
                 if _asyncio.iscoroutine(a):
                     a.close()
         hass.async_create_task = _close_coro
-        # v3.3.0 DELAY-SAVE — schedule_save now routes via
-        # loop.call_soon_threadsafe; a MagicMock loop records the
-        # scheduling without executing it (the old None + patched
-        # run_coroutine_threadsafe served the same isolation purpose).
-        hass.loop = MagicMock()
 
         with patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            "asyncio.run_coroutine_threadsafe",
             side_effect=lambda coro, loop: coro.close(),
         ), patch(
             "custom_components.roomba_plus.sensor._compute_room_time_estimates",
@@ -2389,7 +2320,7 @@ class TestEstimateRetry:
             cb(_msg("run", cycle="clean"))
 
         with patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            "asyncio.run_coroutine_threadsafe",
             side_effect=lambda coro, loop: coro.close(),
         ), patch(
             "custom_components.roomba_plus.sensor._compute_room_time_estimates",
@@ -2415,14 +2346,9 @@ class TestInterRoomRechargeMTSNotReset:
                 if _asyncio.iscoroutine(a):
                     a.close()
         hass.async_create_task = _close_coro
-        # v3.3.0 DELAY-SAVE — schedule_save now routes via
-        # loop.call_soon_threadsafe; a MagicMock loop records the
-        # scheduling without executing it (the old None + patched
-        # run_coroutine_threadsafe served the same isolation purpose).
-        hass.loop = MagicMock()
 
         with patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            "asyncio.run_coroutine_threadsafe",
             side_effect=lambda coro, loop: coro.close(),
         ):
             cb = make_mission_callback(hass, entry)
@@ -2454,14 +2380,9 @@ class TestInterRoomRechargeMTSNotReset:
                 if _asyncio.iscoroutine(a):
                     a.close()
         hass.async_create_task = _close_coro
-        # v3.3.0 DELAY-SAVE — schedule_save now routes via
-        # loop.call_soon_threadsafe; a MagicMock loop records the
-        # scheduling without executing it (the old None + patched
-        # run_coroutine_threadsafe served the same isolation purpose).
-        hass.loop = MagicMock()
 
         with patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            "asyncio.run_coroutine_threadsafe",
             side_effect=lambda coro, loop: coro.close(),
         ):
             cb = make_mission_callback(hass, entry)
@@ -2488,14 +2409,9 @@ class TestInterRoomRechargeMTSNotReset:
                 if _asyncio.iscoroutine(a):
                     a.close()
         hass.async_create_task = _close_coro
-        # v3.3.0 DELAY-SAVE — schedule_save now routes via
-        # loop.call_soon_threadsafe; a MagicMock loop records the
-        # scheduling without executing it (the old None + patched
-        # run_coroutine_threadsafe served the same isolation purpose).
-        hass.loop = MagicMock()
 
         with patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            "asyncio.run_coroutine_threadsafe",
             side_effect=lambda coro, loop: coro.close(),
         ):
             cb = make_mission_callback(hass, entry)
@@ -2528,14 +2444,9 @@ class TestInterRoomRechargeMTSNotReset:
                 if _asyncio.iscoroutine(a):
                     a.close()
         hass.async_create_task = _close_coro
-        # v3.3.0 DELAY-SAVE — schedule_save now routes via
-        # loop.call_soon_threadsafe; a MagicMock loop records the
-        # scheduling without executing it (the old None + patched
-        # run_coroutine_threadsafe served the same isolation purpose).
-        hass.loop = MagicMock()
 
         with patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            "asyncio.run_coroutine_threadsafe",
             side_effect=lambda coro, loop: coro.close(),
         ):
             cb = make_mission_callback(hass, entry)
@@ -2563,14 +2474,9 @@ class TestInterRoomRechargeMTSNotReset:
                 if _asyncio.iscoroutine(a):
                     a.close()
         hass.async_create_task = _close_coro
-        # v3.3.0 DELAY-SAVE — schedule_save now routes via
-        # loop.call_soon_threadsafe; a MagicMock loop records the
-        # scheduling without executing it (the old None + patched
-        # run_coroutine_threadsafe served the same isolation purpose).
-        hass.loop = MagicMock()
 
         with patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            "asyncio.run_coroutine_threadsafe",
             side_effect=lambda coro, loop: coro.close(),
         ):
             cb = make_mission_callback(hass, entry)
@@ -2608,14 +2514,9 @@ class TestGenuineMissionEndClearsMTS:
                 if _asyncio.iscoroutine(a):
                     a.close()
         hass.async_create_task = _close_coro
-        # v3.3.0 DELAY-SAVE — schedule_save now routes via
-        # loop.call_soon_threadsafe; a MagicMock loop records the
-        # scheduling without executing it (the old None + patched
-        # run_coroutine_threadsafe served the same isolation purpose).
-        hass.loop = MagicMock()
 
         with patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            "asyncio.run_coroutine_threadsafe",
             side_effect=lambda coro, loop: coro.close(),
         ), _patch_callbacks_time():
             cb = make_mission_callback(hass, entry)
@@ -2645,14 +2546,9 @@ class TestGenuineMissionEndClearsMTS:
                 if _asyncio.iscoroutine(a):
                     a.close()
         hass.async_create_task = _close_coro
-        # v3.3.0 DELAY-SAVE — schedule_save now routes via
-        # loop.call_soon_threadsafe; a MagicMock loop records the
-        # scheduling without executing it (the old None + patched
-        # run_coroutine_threadsafe served the same isolation purpose).
-        hass.loop = MagicMock()
 
         with patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            "asyncio.run_coroutine_threadsafe",
             side_effect=lambda coro, loop: coro.close(),
         ), _patch_callbacks_time():
             cb = make_mission_callback(hass, entry)
@@ -2676,14 +2572,9 @@ class TestGenuineMissionEndClearsMTS:
                 if _asyncio.iscoroutine(a):
                     a.close()
         hass.async_create_task = _close_coro
-        # v3.3.0 DELAY-SAVE — schedule_save now routes via
-        # loop.call_soon_threadsafe; a MagicMock loop records the
-        # scheduling without executing it (the old None + patched
-        # run_coroutine_threadsafe served the same isolation purpose).
-        hass.loop = MagicMock()
 
         with patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            "asyncio.run_coroutine_threadsafe",
             side_effect=lambda coro, loop: coro.close(),
         ):
             cb = make_mission_callback(hass, entry)
@@ -2705,11 +2596,6 @@ class TestGenuineMissionEndClearsMTS:
                 if _asyncio.iscoroutine(a):
                     a.close()
         hass.async_create_task = _close_coro
-        # v3.3.0 DELAY-SAVE — schedule_save now routes via
-        # loop.call_soon_threadsafe; a MagicMock loop records the
-        # scheduling without executing it (the old None + patched
-        # run_coroutine_threadsafe served the same isolation purpose).
-        hass.loop = MagicMock()
 
         def _msg_no_cycle(phase: str) -> dict:
             return {"state": {"reported": {
@@ -2721,7 +2607,7 @@ class TestGenuineMissionEndClearsMTS:
             }}}
 
         with patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            "asyncio.run_coroutine_threadsafe",
             side_effect=lambda coro, loop: coro.close(),
         ), _patch_callbacks_time():
             cb = make_mission_callback(hass, entry)
@@ -2760,14 +2646,9 @@ class TestEndDebounceV281:
                 if _asyncio.iscoroutine(a):
                     a.close()
         hass.async_create_task = _close_coro
-        # v3.3.0 DELAY-SAVE — schedule_save now routes via
-        # loop.call_soon_threadsafe; a MagicMock loop records the
-        # scheduling without executing it (the old None + patched
-        # run_coroutine_threadsafe served the same isolation purpose).
-        hass.loop = MagicMock()
 
         with patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            "asyncio.run_coroutine_threadsafe",
             side_effect=lambda coro, loop: coro.close(),
         ):
             cb = make_mission_callback(hass, entry)
@@ -2801,14 +2682,9 @@ class TestEndDebounceV281:
                 if _asyncio.iscoroutine(a):
                     a.close()
         hass.async_create_task = _close_coro
-        # v3.3.0 DELAY-SAVE — schedule_save now routes via
-        # loop.call_soon_threadsafe; a MagicMock loop records the
-        # scheduling without executing it (the old None + patched
-        # run_coroutine_threadsafe served the same isolation purpose).
-        hass.loop = MagicMock()
 
         with patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            "asyncio.run_coroutine_threadsafe",
             side_effect=lambda coro, loop: coro.close(),
         ):
             cb = make_mission_callback(hass, entry)
@@ -2837,14 +2713,9 @@ class TestEndDebounceV281:
                 if _asyncio.iscoroutine(a):
                     a.close()
         hass.async_create_task = _close_coro
-        # v3.3.0 DELAY-SAVE — schedule_save now routes via
-        # loop.call_soon_threadsafe; a MagicMock loop records the
-        # scheduling without executing it (the old None + patched
-        # run_coroutine_threadsafe served the same isolation purpose).
-        hass.loop = MagicMock()
 
         with patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            "asyncio.run_coroutine_threadsafe",
             side_effect=lambda coro, loop: coro.close(),
         ), patch(
             "custom_components.roomba_plus.callbacks._time_mod"
@@ -2890,14 +2761,9 @@ class TestEndDebounceV281:
                 if _asyncio.iscoroutine(a):
                     a.close()
         hass.async_create_task = _close_coro
-        # v3.3.0 DELAY-SAVE — schedule_save now routes via
-        # loop.call_soon_threadsafe; a MagicMock loop records the
-        # scheduling without executing it (the old None + patched
-        # run_coroutine_threadsafe served the same isolation purpose).
-        hass.loop = MagicMock()
 
         with patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            "asyncio.run_coroutine_threadsafe",
             side_effect=lambda coro, loop: coro.close(),
         ), patch(
             "custom_components.roomba_plus.callbacks._time_mod"
@@ -2940,14 +2806,9 @@ class TestEndDebounceV281:
                 if _asyncio.iscoroutine(a):
                     a.close()
         hass.async_create_task = _close_coro
-        # v3.3.0 DELAY-SAVE — schedule_save now routes via
-        # loop.call_soon_threadsafe; a MagicMock loop records the
-        # scheduling without executing it (the old None + patched
-        # run_coroutine_threadsafe served the same isolation purpose).
-        hass.loop = MagicMock()
 
         with patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            "asyncio.run_coroutine_threadsafe",
             side_effect=lambda coro, loop: coro.close(),
         ):
             cb = make_mission_callback(hass, entry)
@@ -2972,14 +2833,9 @@ class TestEndDebounceV281:
                 if _asyncio.iscoroutine(a):
                     a.close()
         hass.async_create_task = _close_coro
-        # v3.3.0 DELAY-SAVE — schedule_save now routes via
-        # loop.call_soon_threadsafe; a MagicMock loop records the
-        # scheduling without executing it (the old None + patched
-        # run_coroutine_threadsafe served the same isolation purpose).
-        hass.loop = MagicMock()
 
         with patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            "asyncio.run_coroutine_threadsafe",
             side_effect=lambda coro, loop: coro.close(),
         ):
             cb = make_mission_callback(hass, entry)
@@ -3052,16 +2908,11 @@ class TestPeriodicStuckMissionRecheck:
                 if _asyncio.iscoroutine(a):
                     a.close()
         hass.async_create_task = _close_coro
-        # v3.3.0 DELAY-SAVE — schedule_save now routes via
-        # loop.call_soon_threadsafe; a MagicMock loop records the
-        # scheduling without executing it (the old None + patched
-        # run_coroutine_threadsafe served the same isolation purpose).
-        hass.loop = MagicMock()
 
         clock, fake_monotonic = self._make_clock(0.0)
 
         with patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            "asyncio.run_coroutine_threadsafe",
             side_effect=lambda coro, loop: coro.close(),
         ), patch(
             "custom_components.roomba_plus.callbacks._time_mod"
@@ -3127,6 +2978,9 @@ class TestPeriodicStuckMissionRecheck:
         mts.total_estimated_sec = 200.0
         entry = _make_entry(mts)
         entry.runtime_data.last_mqtt_message_ts = 12345.0
+        # Derived on RoombaData: a MagicMock would answer with a
+        # MagicMock, not a number.
+        entry.runtime_data.silence_reference_ts = 12345.0
         hass = MagicMock()
 
         def _close_coro(*args, **kwargs):
@@ -3135,16 +2989,11 @@ class TestPeriodicStuckMissionRecheck:
                 if _asyncio.iscoroutine(a):
                     a.close()
         hass.async_create_task = _close_coro
-        # v3.3.0 DELAY-SAVE — schedule_save now routes via
-        # loop.call_soon_threadsafe; a MagicMock loop records the
-        # scheduling without executing it (the old None + patched
-        # run_coroutine_threadsafe served the same isolation purpose).
-        hass.loop = MagicMock()
 
         clock, fake_monotonic = self._make_clock(0.0)
 
         with patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            "asyncio.run_coroutine_threadsafe",
             side_effect=lambda coro, loop: coro.close(),
         ), patch(
             "custom_components.roomba_plus.callbacks._time_mod"
@@ -3176,6 +3025,9 @@ class TestPeriodicStuckMissionRecheck:
             # NOT re-stamp this, even though _time_mod.time() would return
             # the same 99999.0 if it were (wrongly) called.
             entry.runtime_data.last_mqtt_message_ts = 12345.0
+            # Derived on RoombaData: a MagicMock would answer with a
+            # MagicMock, not a number.
+            entry.runtime_data.silence_reference_ts = 12345.0
             entry.runtime_data.roomba_reported_state = MagicMock(
                 return_value=_msg_v280_inter_room_recharge("run", cycle="clean")
                 ["state"]["reported"]
@@ -3230,11 +3082,14 @@ class TestStoreEncapTimerApi:
         mts = MissionTimerStore()
         assert MissionTimerStore._schedule_save is MissionTimerStore.schedule_save
         hass = MagicMock()
+        store = MagicMock()
+        mts._ha_store = store
         mts.schedule_save(hass, "entry1")
-        # v3.3.0 DELAY-SAVE — schedules the loop-side half threadsafe
-        hass.loop.call_soon_threadsafe.assert_called_once_with(
-            mts._delay_save_on_loop, hass, "entry1"
-        )
+        # A debounced save was scheduled on the store. Previously this
+        # asserted that `call_soon_threadsafe` received the loop-side
+        # half — pinning how the save was dispatched rather than that
+        # it happened.
+        store.async_delay_save.assert_called_once()
 
 
 
@@ -3306,7 +3161,11 @@ class TestDelaySave:
         store.async_save = AsyncMock()
         for _ in range(5):
             mts.on_phase_run("m_1", hass, "entry1")
-        assert hass.loop.call_soon_threadsafe.call_count == 5
+        # The OUTCOME, not the mechanism: every save went through the
+        # debounced path and none wrote immediately. This used to count
+        # `hass.loop.call_soon_threadsafe` calls — an internal hand-off
+        # that no longer exists, and never was the property that mattered.
+        assert store.async_delay_save.call_count == 5
         store.async_save.assert_not_called()  # no immediate disk writes
 
     def test_payload_is_callable_snapshot_at_write_time(self):
@@ -3412,6 +3271,9 @@ class TestMissionPhaseSourcePrime:
 
         rps = MagicMock()
         rps.mission_duration_mean = 52.2
+        # The code reads the derived property; a MagicMock would return
+        # a MagicMock for it, not a number.
+        rps.mission_duration_mean_sec = round(52.2 * 60)
 
         data = MagicMock()
         data.roomba_reported_state.return_value = {}
@@ -3526,3 +3388,73 @@ class TestElapsedTimeSurvivesAQuietRobot:
         source = inspect.getsource(MissionTimerStore.on_phase_other)
 
         assert "_last_phase_was_run = False" in source
+
+
+# ── formerly tests/test_coverage_small_gaps.py ──────────────────────────────────
+#
+# Small gaps in eight modules — quality scale, test-coverage (Silver).
+#
+# Mostly error branches and edge cases: a malformed input must not crash,
+# must not return something wrong, and where the code logs, it must log.
+# Each test pins what the branch is for, not only that it ran.
+
+class TestMissionTimerStoreEdges:
+
+    def _store_with(self, monkeypatch, data):
+        from custom_components.roomba_plus import mission_timer_store as mts
+
+        backing = MagicMock()
+        backing.async_load = AsyncMock(return_value=data)
+        monkeypatch.setattr(mts, "Store", lambda *a, **k: backing)
+        return mts.MissionTimerStore()
+
+    @pytest.mark.asyncio
+    async def test_a_payload_from_a_newer_release_is_not_loaded(self, hass, monkeypatch, caplog):
+        """Downgrade safety: an unknown format is left alone, not misread."""
+        from custom_components.roomba_plus import mission_timer_store as mts
+
+        store = self._store_with(monkeypatch, {"payload_version": mts.PAYLOAD_VERSION + 1,
+                                               "mission_id": "m1"})
+        await store.async_load(hass, "e1")
+        assert store.mission_id is None
+        assert "not loading it" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_a_corrupt_payload_is_logged_not_raised(self, hass, monkeypatch, caplog):
+        store = self._store_with(monkeypatch, {"snapshot_ts": time.time(), "run_sec": "garbage"})
+        await store.async_load(hass, "e1")
+        assert "load failed" in caplog.text
+
+    def test_a_recharge_is_noted_once_per_room(self, hass):
+        from custom_components.roomba_plus.mission_timer_store import MissionTimerStore
+
+        s = MissionTimerStore()
+        s._schedule_save = MagicMock()
+        s.current_room_idx = 2
+        s.on_recharge(hass, "e1")
+        s.on_recharge(hass, "e1")
+        assert s.recharge_positions == [2]
+
+    def test_accessors_without_a_mission(self):
+        from custom_components.roomba_plus.mission_timer_store import MissionTimerStore
+
+        s = MissionTimerStore()
+        assert s.elapsed_run_min is None
+        assert s.current_room is None
+        assert s.next_room is None
+        assert s.expected_room_sec is None
+
+    def test_the_last_room_has_no_next(self):
+        from custom_components.roomba_plus.mission_timer_store import MissionTimerStore
+
+        s = MissionTimerStore()
+        s.planned_rooms, s.current_room_idx = ["Kitchen", "Hall"], 1
+        assert s.next_room is None
+
+    def test_an_invalid_total_estimate_gives_no_room_estimate(self):
+        from custom_components.roomba_plus.mission_timer_store import MissionTimerStore
+
+        s = MissionTimerStore()
+        s.planned_rooms = ["Kitchen"]
+        s.total_estimated_sec = "nonsense"
+        assert s.expected_room_sec is None

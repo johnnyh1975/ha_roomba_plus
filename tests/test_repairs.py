@@ -31,6 +31,12 @@ from custom_components.roomba_plus.repairs import _DOCK_ABORTS_THRESHOLD
 from custom_components.roomba_plus.repairs import _DOCK_CHATTERS_THRESHOLD
 from custom_components.roomba_plus.repairs import _DOCK_KNOCKOFFS_THRESHOLD
 from custom_components.roomba_plus.repairs import async_check_dock_health
+from types import SimpleNamespace
+from pytest_homeassistant_custom_component.common import MockConfigEntry
+from custom_components.roomba_plus import repairs as rp
+from custom_components.roomba_plus.const import CONF_SMART_ZONE_HIDDEN
+from custom_components.roomba_plus.const import DOMAIN
+from homeassistant.helpers import issue_registry as ir
 
 
 _ep = sys.modules.get('homeassistant.helpers.entity_platform')
@@ -1588,6 +1594,9 @@ class TestComputeIntegrationHealth:
         entry = MagicMock()
         entry.entry_id = entry_id
         entry.runtime_data.last_mqtt_message_ts = 0.0
+        # Derived on RoombaData: a MagicMock would answer with a
+        # MagicMock, not a number.
+        entry.runtime_data.silence_reference_ts = 0.0
         entry.runtime_data.mission_archive = None
         entry.runtime_data.cloud_coordinator = None
         return entry
@@ -1648,9 +1657,11 @@ class TestComputeIntegrationHealth:
         import time
 
         entry = self._make_entry()
-        entry.runtime_data.last_mqtt_message_ts = (
-            time.time() - 25 * 3600  # 25h ago — beyond the 24h threshold
-        )
+        _ts = time.time() - 25 * 3600  # 25h ago — beyond the 24h threshold
+        entry.runtime_data.last_mqtt_message_ts = _ts
+        # Derived on RoombaData: a MagicMock would answer with a
+        # MagicMock, not a number.
+        entry.runtime_data.silence_reference_ts = _ts
         hass = MagicMock()
         registry = MagicMock()
         registry.issues = {}
@@ -1669,6 +1680,9 @@ class TestComputeIntegrationHealth:
 
         entry = self._make_entry()
         entry.runtime_data.last_mqtt_message_ts = time.time() - 600  # 10 min ago
+        # Derived on RoombaData: a MagicMock would answer with a
+        # MagicMock, not a number.
+        entry.runtime_data.silence_reference_ts = time.time() - 600
         hass = MagicMock()
         registry = MagicMock()
         registry.issues = {}
@@ -1739,6 +1753,9 @@ class TestComputeIntegrationHealth:
 
         entry = self._make_entry()
         entry.runtime_data.last_mqtt_message_ts = time.time() - 30 * 3600
+        # Derived on RoombaData: a MagicMock would answer with a
+        # MagicMock, not a number.
+        entry.runtime_data.silence_reference_ts = time.time() - 30 * 3600
         hass = MagicMock()
         registry = MagicMock()
 
@@ -2537,6 +2554,9 @@ class TestIntegrationHealthPlainStatus:
         entry = MagicMock()
         entry.entry_id = entry_id
         entry.runtime_data.last_mqtt_message_ts = 0.0
+        # Derived on RoombaData: a MagicMock would answer with a
+        # MagicMock, not a number.
+        entry.runtime_data.silence_reference_ts = 0.0
         entry.runtime_data.mission_archive = None
         entry.runtime_data.cloud_coordinator = None
         return entry
@@ -3287,3 +3307,174 @@ class TestTheZoneFormIsRecognisableAsAForm:
         )
 
         assert "type a name" in text.lower()
+
+
+# ── formerly tests/test_coverage_repairs.py ─────────────────────────────────────
+#
+# repairs.py, the zone-naming repair flow — quality scale, test-coverage.
+#
+# What a user sees after "smart zones need naming": one field per zone, or a
+# multi-line `3=Kitchen` box when there are many. Names are saved with the
+# map they belong to; with no map to attach them to, the user is told
+# instead of names being saved into nowhere.
+
+def _flow(hass, *, options=None, state=None):
+    entry = MockConfigEntry(domain=DOMAIN, data={"blid": "B"}, options=options or {})
+    entry.add_to_hass(hass)
+    roomba = MagicMock()
+    roomba.master_state = {"state": {"reported": state or {}}}
+    entry.runtime_data = SimpleNamespace(roomba=roomba)
+    f = rp.SmartZoneNamingRepairFlow(entry)
+    f.hass = hass
+    f.flow_id = "f1"
+    f.handler = DOMAIN
+    f.issue_id = "smart_zones_need_naming"
+    return f, entry
+
+
+_LAST = {"lastCommand": {"pmap_id": "p1", "regions": [{"region_id": "3"}]}}
+
+
+def _issue(hass, issue_id):
+    return ir.async_get(hass).async_get_issue(DOMAIN, issue_id)
+
+
+class TestNamingFlowShape:
+
+    @pytest.mark.asyncio
+    async def test_no_entry_just_closes(self, hass):
+        f = rp.SmartZoneNamingRepairFlow(None)
+        f.hass = hass
+        assert (await f.async_step_init())["type"] == "create_entry"
+
+    @pytest.mark.asyncio
+    async def test_nothing_left_to_name_closes(self, hass):
+        f, _e = _flow(hass, options={"discovered_zone_ids": ["3", "5"],
+                                     "smart_zone_labels": {"3": "Kitchen"}, CONF_SMART_ZONE_HIDDEN: ["5"]})
+        assert (await f.async_step_init())["type"] == "create_entry"
+
+    @pytest.mark.asyncio
+    async def test_a_few_zones_get_a_field_each(self, hass):
+        f, _e = _flow(hass, options={"discovered_zone_ids": ["3", "5"]})
+        result = await f.async_step_init()
+        assert result["type"] == "form"
+        keys = {str(k) for k in result["data_schema"].schema}
+        assert keys == {"Zone 3", "Zone 5"}
+
+    @pytest.mark.asyncio
+    async def test_many_zones_get_one_text_box(self, hass):
+        ids = [str(i) for i in range(rp._MAX_ZONE_FIELDS + 1)]
+        f, _e = _flow(hass, options={"discovered_zone_ids": ids})
+        result = await f.async_step_init()
+        assert {str(k) for k in result["data_schema"].schema} == {"zones"}
+
+    @pytest.mark.asyncio
+    async def test_with_nothing_stored_the_live_state_supplies_the_zones(self, hass):
+        state = {"cleanSchedule2": [{"cmd": {"regions": [{"region_id": "7"}]}}], **_LAST}
+        f, _e = _flow(hass, state=state)
+        result = await f.async_step_init()
+        assert {str(k) for k in result["data_schema"].schema} == {"Zone 3", "Zone 7"}
+
+
+class TestNamingFlowSave:
+
+    @pytest.mark.asyncio
+    async def test_per_zone_fields_are_saved_with_their_map(self, hass):
+        f, entry = _flow(hass, options={"discovered_zone_ids": ["3", "5"]}, state=_LAST)
+        result = await f.async_step_init({"Zone 3": " Kitchen ", "Zone 5": ""})
+        assert result["type"] == "create_entry"
+        assert entry.options["smart_zone_labels"] == {"3": "Kitchen"}
+        assert entry.options["smart_zone_data"]["3"] == {"name": "Kitchen", "pmap_id": "p1"}
+
+    @pytest.mark.parametrize("text", ["3=Kitchen, 5=Hall", "3=Kitchen\n5=Hall\nnonsense\n9=Unknown"])
+    @pytest.mark.asyncio
+    async def test_the_text_box_takes_commas_or_lines(self, hass, text):
+        ids = ["3", "5"] + [str(i) for i in range(100, 100 + rp._MAX_ZONE_FIELDS)]
+        f, entry = _flow(hass, options={"discovered_zone_ids": ids}, state=_LAST)
+        await f.async_step_init({"zones": text})
+        assert entry.options["smart_zone_labels"] == {"3": "Kitchen", "5": "Hall"}
+
+    @pytest.mark.asyncio
+    async def test_nothing_usable_is_an_error_on_the_form(self, hass):
+        f, entry = _flow(hass, options={"discovered_zone_ids": ["3"]}, state=_LAST)
+        result = await f.async_step_init({"Zone 3": ""})
+        assert result["type"] == "form" and result["errors"] == {"zones": "no_valid_entries"}
+        assert "smart_zone_labels" not in entry.options
+
+    @pytest.mark.asyncio
+    async def test_no_map_to_attach_the_names_to_is_said(self, hass):
+        """Saving names without a map id would store names nothing can use."""
+        f, entry = _flow(hass, options={"discovered_zone_ids": ["3"]}, state={})
+        result = await f.async_step_init({"Zone 3": "Kitchen"})
+        assert result["errors"] == {"zones": "pmap_not_resolved"}
+        assert "smart_zone_labels" not in entry.options
+
+
+class TestFixFlowRouting:
+
+    @pytest.mark.asyncio
+    async def test_a_naming_issue_opens_the_naming_flow_for_its_entry(self, hass):
+        entry = MockConfigEntry(domain=DOMAIN, data={"blid": "B"})
+        entry.add_to_hass(hass)
+        flow = await rp.async_create_fix_flow(hass, f"smart_zones_need_naming_{entry.entry_id}", None)
+        assert isinstance(flow, rp.SmartZoneNamingRepairFlow) and flow._config_entry is entry
+
+    @pytest.mark.parametrize("issue_id", ["smart_zones_need_naming_gone", "smart_zones_need_naming"])
+    @pytest.mark.asyncio
+    async def test_an_old_or_unknown_naming_issue_falls_back_to_the_first_entry(self, hass, issue_id):
+        entry = MockConfigEntry(domain=DOMAIN, data={"blid": "B"})
+        entry.add_to_hass(hass)
+        flow = await rp.async_create_fix_flow(hass, issue_id, None)
+        assert flow._config_entry is entry
+
+    @pytest.mark.asyncio
+    async def test_any_other_issue_is_a_confirmation(self, hass):
+        flow = await rp.async_create_fix_flow(hass, "something_else", None)
+        assert isinstance(flow, rp.ConfirmRepairFlow)
+        flow.hass = hass
+        assert (await flow.async_step_init())["type"] == "form"
+        assert (await flow.async_step_init({}))["type"] == "create_entry"
+
+
+class TestCounterReset:
+    """The robot's runtime counter below a stored baseline means the robot
+    was reset or its board replaced; the maintenance baselines are wrong."""
+
+    @pytest.mark.asyncio
+    async def test_a_reset_counter_names_the_affected_parts(self, hass):
+        store = SimpleNamespace(filter_reset_hr=500, brush_reset_hr=100, battery_reset_hr=900)
+        await rp.async_check_bbrun_reset(hass, MagicMock(), store, 300)
+        issue = _issue(hass, "maintenance_baselines_reset")
+        assert issue is not None
+        assert "filter" in issue.translation_placeholders["parts"]
+        assert "brush" not in issue.translation_placeholders["parts"]
+
+    @pytest.mark.asyncio
+    async def test_a_consistent_counter_clears_the_issue(self, hass):
+        store = SimpleNamespace(filter_reset_hr=500, brush_reset_hr=500, battery_reset_hr=500)
+        await rp.async_check_bbrun_reset(hass, MagicMock(), store, 300)
+        await rp.async_check_bbrun_reset(hass, MagicMock(), store, 900)
+        assert _issue(hass, "maintenance_baselines_reset") is None
+
+
+class TestObservedZones:
+
+    def _entry(self, *, centroids, stuck, cloud=True, grid=True):
+        data = SimpleNamespace(
+            cloud_coordinator=SimpleNamespace(observed_zone_centroids=centroids) if cloud else None,
+            grid_store=SimpleNamespace(stuck_event_count=stuck) if grid else None)
+        return SimpleNamespace(runtime_data=data)
+
+    @pytest.mark.asyncio
+    async def test_zones_the_robot_avoids_are_suggested_until_it_gets_stuck_there(self, hass):
+        await rp.async_check_observed_zones(hass, self._entry(centroids=[{"x": 1}], stuck=0))
+        assert _issue(hass, "observed_zones_detected") is not None
+        await rp.async_check_observed_zones(hass, self._entry(centroids=[{"x": 1}], stuck=2))
+        assert _issue(hass, "observed_zones_detected") is None
+
+    @pytest.mark.parametrize("kw", [{"cloud": False}, {"centroids": []}, {"grid": False}])
+    @pytest.mark.asyncio
+    async def test_without_the_inputs_nothing_is_raised(self, hass, kw):
+        args = {"centroids": [{"x": 1}], "stuck": 0, **kw}
+        await rp.async_check_observed_zones(hass, self._entry(**args))
+        assert _issue(hass, "observed_zones_detected") is None

@@ -7,6 +7,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from freezegun import freeze_time
+import datetime as dt
+from types import SimpleNamespace
+from homeassistant.exceptions import ServiceValidationError
+from custom_components.roomba_plus import calendar as cal
 
 
 def _make_calendar(vacuum_state: dict | None = None, config_entry=None):
@@ -1743,3 +1747,220 @@ class TestClassicReadsBydayToo:
         weekday = await self._written_weekday(tuesday, "FREQ=WEEKLY;BYDAY=MO,WE")
 
         assert weekday == 2  # dtstart's Tuesday, Sunday-based (Sun=0)
+
+
+# ── formerly tests/test_coverage_calendar.py ────────────────────────────────────
+#
+# calendar.py — quality scale, test-coverage.
+#
+# The schedule calendar writes straight to the robot. Every refusal must be
+# a clear message and must write nothing; every accepted change must write
+# the robot's own schedule format, under the key it reports.
+
+def _classic(reported=None, roomba="default"):
+    c = cal.RoombaScheduleCalendar.__new__(cal.RoombaScheduleCalendar)
+    c.vacuum_state = reported if reported is not None else {"cleanSchedule2": []}
+    c._config_entry = MagicMock()
+    if roomba == "default":
+        roomba = MagicMock()
+        roomba.set_preference = AsyncMock()
+    c._config_entry.runtime_data.roomba = roomba
+    return c
+
+
+def _at(day: int, hour: int = 9) -> dt.datetime:
+    """A local datetime on the given Python weekday (Mon=0)."""
+    from homeassistant.util import dt as dt_util
+
+    base = dt_util.now().replace(hour=hour, minute=30, second=0, microsecond=0)
+    return base + dt.timedelta(days=(day - base.weekday()) % 7)
+
+
+def _prime(rooms=None):
+    c = cal.PrimeScheduleCalendar.__new__(cal.PrimeScheduleCalendar)
+    c._config_entry = MagicMock()
+    c.hass = MagicMock()
+    c._room_names = lambda: dict(rooms or {"3": "Kitchen", "5": "Hall"})
+    c._existing_frequency = lambda uid: "WEEKLY"
+    return c
+
+
+class TestFrequencyWord:
+
+    def test_no_rule_and_no_freq_are_none(self):
+        assert cal._frequency_word(None) is None
+        assert cal._frequency_word("INTERVAL=2") is None
+        assert cal._frequency_word("RRULE:FREQ=weekly;BYDAY=MO") == "WEEKLY"
+
+
+class TestClassicCalendarRefusals:
+
+    @pytest.mark.parametrize("reported", [{}, {"cleanSchedule2": "not a list"}])
+    @pytest.mark.asyncio
+    async def test_a_robot_without_a_readable_schedule_is_refused(self, reported):
+        """A malformed schedule counts as none: refusing beats overwriting
+        something the robot holds in a form we do not understand."""
+        c = _classic(reported)
+        with pytest.raises(ServiceValidationError):
+            await c.async_create_event(dtstart=_at(0), summary="x")
+        c._config_entry.runtime_data.roomba.set_preference.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_missing_start_is_refused(self):
+        with pytest.raises(ServiceValidationError, match="start time"):
+            await _classic().async_create_event(summary="x")
+
+    @pytest.mark.asyncio
+    async def test_an_all_day_event_is_refused(self):
+        with pytest.raises(ServiceValidationError, match="All-day"):
+            await _classic().async_create_event(dtstart=dt.date(2026, 9, 21), summary="x")
+
+    @pytest.mark.asyncio
+    async def test_without_a_connection_nothing_is_written(self):
+        with pytest.raises(ServiceValidationError, match="Not connected"):
+            await _classic(roomba=None).async_create_event(dtstart=_at(0), summary="x")
+
+    @pytest.mark.asyncio
+    async def test_a_single_occurrence_cannot_be_changed(self):
+        with pytest.raises(ServiceValidationError):
+            await _classic().async_update_event("weekday-1", {"dtstart": _at(0)},
+                                                recurrence_range="THISEVENT")
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_entry_cannot_be_deleted(self):
+        with pytest.raises(ServiceValidationError, match="cannot be identified"):
+            await _classic().async_delete_event("something-else")
+
+
+class TestClassicCalendarWrites:
+
+    @pytest.mark.asyncio
+    async def test_a_new_entry_is_written_under_the_modern_key(self):
+        c = _classic({"cleanSchedule2": []})
+        await c.async_create_event(dtstart=_at(0), summary="Morning")
+        key, value = c._config_entry.runtime_data.roomba.set_preference.await_args.args
+        assert key == "cleanSchedule2"
+        assert isinstance(value, list) and len(value) == 1
+
+    @pytest.mark.asyncio
+    async def test_moving_an_entry_to_another_day_drops_the_old_day(self):
+        """Robot weekday numbering is Sun=0; the uid carries it."""
+        c = _classic({"cleanSchedule2": [{"enabled": True, "start": {"day": [1], "hour": 9, "min": 0}}]})
+        await c.async_update_event("weekday-1", {"dtstart": _at(2), "rrule": "FREQ=WEEKLY"})
+        written = c._config_entry.runtime_data.roomba.set_preference.await_args.args[1]
+        tage = [d for e in written for d in (e.get("start") or {}).get("day", [])]
+        assert 1 not in tage, "Monday was moved away, not copied"
+        assert 3 in tage, "and is now on Wednesday"
+
+    @pytest.mark.asyncio
+    async def test_deleting_a_day_writes_the_rest(self):
+        c = _classic({"cleanSchedule2": [{"enabled": True, "start": {"day": [1, 3], "hour": 9, "min": 0}}]})
+        await c.async_delete_event("weekday-1")
+        written = c._config_entry.runtime_data.roomba.set_preference.await_args.args[1]
+        assert written[0]["start"]["day"] == [3]
+
+    @pytest.mark.asyncio
+    async def test_an_impossible_update_is_refused_not_written(self, monkeypatch):
+        from custom_components.roomba_plus.classic_schedule_write import ScheduleFormatError
+
+        c = _classic()
+        monkeypatch.setattr(c, "_with_entry", MagicMock(side_effect=ScheduleFormatError("too many")))
+        with pytest.raises(ServiceValidationError, match="too many"):
+            await c.async_update_event("weekday-1", {"dtstart": _at(0)})
+        c._config_entry.runtime_data.roomba.set_preference.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_an_impossible_delete_is_refused_not_written(self, monkeypatch):
+        from custom_components.roomba_plus.classic_schedule_write import ScheduleFormatError
+
+        c = _classic()
+        monkeypatch.setattr(c, "_without_day", MagicMock(side_effect=ScheduleFormatError("bad day")))
+        with pytest.raises(ServiceValidationError, match="bad day"):
+            await c.async_delete_event("weekday-1")
+
+
+class TestPrimeCalendarCreate:
+
+    @pytest.mark.asyncio
+    async def test_a_named_room_becomes_a_room_schedule(self, monkeypatch):
+        from custom_components.roomba_plus import prime_schedule_services as pss
+
+        create = AsyncMock()
+        monkeypatch.setattr(pss, "async_create_schedule_from_calendar", create)
+        await _prime().async_create_event(dtstart=_at(0), summary="Kitchen", rrule="FREQ=WEEKLY")
+        kw = create.await_args.kwargs
+        assert kw["room_ids"] == ["3"]
+        assert (kw["hour"], kw["minute"]) == (9, 30)
+        # #71: the robot counts from Sunday. A Monday must arrive as 1, not 0.
+        assert kw["weekday"] == 1
+
+    @pytest.mark.asyncio
+    async def test_text_naming_no_room_is_refused_not_turned_into_a_whole_house_run(self, monkeypatch):
+        """A typo must not quietly schedule the whole house."""
+        from custom_components.roomba_plus import prime_schedule_services as pss
+
+        create = AsyncMock()
+        monkeypatch.setattr(pss, "async_create_schedule_from_calendar", create)
+        with pytest.raises(ServiceValidationError) as exc:
+            await _prime().async_create_event(dtstart=_at(0), summary="Kitchn")
+        assert exc.value.translation_key == "calendar_room_not_found"
+        create.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_an_ambiguous_room_is_refused(self, monkeypatch):
+        from custom_components.roomba_plus import prime_schedule_services as pss
+
+        monkeypatch.setattr(pss, "async_create_schedule_from_calendar", AsyncMock())
+        with pytest.raises(ServiceValidationError):
+            await _prime({"3": "Bedroom", "4": "Bedroom"}).async_create_event(
+                dtstart=_at(0), summary="Bedroom")
+
+    @pytest.mark.parametrize("kwargs,text", [({}, "start time"),
+                                             ({"dtstart": dt.date(2026, 9, 21)}, "All-day")])
+    @pytest.mark.asyncio
+    async def test_no_time_of_day_is_refused(self, kwargs, text):
+        with pytest.raises(ServiceValidationError, match=text):
+            await _prime().async_create_event(summary="Kitchen", **kwargs)
+
+
+class TestPrimeCalendarUpdateAndDelete:
+
+    @pytest.mark.asyncio
+    async def test_without_a_new_rule_the_existing_frequency_is_kept(self, monkeypatch):
+        from custom_components.roomba_plus import prime_schedule_services as pss
+
+        update = AsyncMock()
+        monkeypatch.setattr(pss, "async_update_schedule_from_calendar", update)
+        await _prime().async_update_event("s1", {"dtstart": _at(0), "summary": "Hall"})
+        kw = update.await_args.kwargs
+        assert kw["frequency"] == "WEEKLY"
+        assert kw["room_ids"] == ["5"]
+
+    @pytest.mark.asyncio
+    async def test_update_refuses_what_create_refuses(self, monkeypatch):
+        from custom_components.roomba_plus import prime_schedule_services as pss
+
+        monkeypatch.setattr(pss, "async_update_schedule_from_calendar", AsyncMock())
+        c = _prime({"3": "Bedroom", "4": "Bedroom"})
+        with pytest.raises(ServiceValidationError, match="single occurrence"):
+            await c.async_update_event("s1", {"dtstart": _at(0)}, recurrence_range="THISEVENT")
+        with pytest.raises(ServiceValidationError, match="start time"):
+            await c.async_update_event("s1", {})
+        with pytest.raises(ServiceValidationError, match="All-day"):
+            await c.async_update_event("s1", {"dtstart": dt.date(2026, 9, 21)})
+        with pytest.raises(ServiceValidationError):
+            await c.async_update_event("s1", {"dtstart": _at(0), "summary": "Bedroom"})
+
+    @pytest.mark.asyncio
+    async def test_delete_goes_to_the_schedule_service(self, monkeypatch):
+        from custom_components.roomba_plus import prime_schedule_services as pss
+
+        delete = AsyncMock()
+        monkeypatch.setattr(pss, "async_delete_schedule_by_id", delete)
+        await _prime().async_delete_event("s1")
+        assert delete.await_args.args[2] == "s1"
+
+    def test_no_rule_means_once_and_an_unsupported_rule_is_refused(self):
+        assert cal.PrimeScheduleCalendar._frequency_from_rrule(None) == "ONCE"
+        with pytest.raises(ServiceValidationError, match="cannot express"):
+            cal.PrimeScheduleCalendar._frequency_from_rrule("FREQ=HOURLY")

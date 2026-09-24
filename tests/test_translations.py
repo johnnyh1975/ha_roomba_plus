@@ -15,6 +15,8 @@ from pathlib import Path
 import pytest
 import importlib
 from unittest.mock import MagicMock
+import ast
+import pathlib
 
 
 _ROOT = Path(__file__).parent.parent / "custom_components" / "roomba_plus"
@@ -882,3 +884,491 @@ class TestStringsJsonAgreesWithEnglish:
             + "\n".join(f"  {p}\n    strings: {a}\n    en:      {b}"
                         for p, a, b in offenders)
         )
+
+
+# ── formerly tests/test_guard_exception_translations.py ─────────────────────────
+#
+# Guard: quality scale Gold, exception-translations.
+#
+# Every Home Assistant exception the integration raises carries a
+# translation key; every key exists in strings.json and in all eight
+# translations; the placeholders the code passes match the message exactly,
+# in both directions; and Home Assistant itself can format every message.
+#
+# The placeholder check exists because eight call sites once named a key
+# whose text needed {entity_id} and passed nothing — the user saw a broken
+# message instead of which entity was meant.
+
+PKG = pathlib.Path("custom_components/roomba_plus")
+
+
+_HA_EXCEPTIONS = {"HomeAssistantError", "ServiceValidationError", "ConfigEntryNotReady",
+                  "ConfigEntryAuthFailed", "ConfigEntryError", "UpdateFailed", "IntegrationError"}
+
+
+_LANGS = ["de", "en", "es", "fr", "it", "nl", "pl", "pt"]
+
+
+def _messages(path: pathlib.Path) -> dict[str, str]:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return {k: v["message"] for k, v in data.get("exceptions", {}).items()}
+
+
+def _placeholders(text: str) -> set[str]:
+    return set(re.findall(r"\{(\w+)\}", text))
+
+
+def _raises():
+    for f in sorted(PKG.glob("*.py")):
+        tree = ast.parse(f.read_text(encoding="utf-8"))
+        for n in ast.walk(tree):
+            if not (isinstance(n, ast.Raise) and isinstance(n.exc, ast.Call)):
+                continue
+            func = n.exc.func
+            name = func.id if isinstance(func, ast.Name) else getattr(func, "attr", None)
+            if name in _HA_EXCEPTIONS or name == "Invalid":
+                yield f.name, n.lineno, name, {k.arg: k.value for k in n.exc.keywords}
+
+
+RAISES = list(_raises())
+
+
+STRINGS = _messages(PKG / "strings.json")
+
+
+def _issue_calls():
+    for f in sorted(PKG.glob("*.py")):
+        tree = ast.parse(f.read_text(encoding="utf-8"))
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Call) and getattr(n.func, "attr", getattr(n.func, "id", "")) == "async_create_issue":
+                yield f.name, n.lineno, {k.arg: k.value for k in n.keywords}
+
+
+def _issues(lang_file):
+    return json.loads(lang_file.read_text(encoding="utf-8")).get("issues", {})
+
+
+def test_raises_were_found():
+    assert len(RAISES) > 100
+
+
+def test_no_voluptuous_invalid_is_raised_from_handlers():
+    """vol.Invalid is for schemas; from a handler it reaches the user
+    untranslated. ServiceValidationError carries a translation."""
+    assert [(f, l) for f, l, n, _k in RAISES if n == "Invalid"] == []
+
+
+def test_every_raise_is_translatable():
+    missing = [f"{f}:{l} {n}" for f, l, n, kw in RAISES
+               if n != "Invalid" and not ("translation_key" in kw and "translation_domain" in kw)]
+    assert not missing, missing
+
+
+def test_every_key_exists_and_its_placeholders_match_exactly():
+    problems = []
+    for f, l, _n, kw in RAISES:
+        key_node = kw.get("translation_key")
+        if not isinstance(key_node, ast.Constant):
+            continue
+        key = key_node.value
+        if key not in STRINGS:
+            problems.append(f"{f}:{l} key {key!r} not in strings.json")
+            continue
+        needed = _placeholders(STRINGS[key])
+        ph = kw.get("translation_placeholders")
+        if ph is None:
+            given = set()
+        elif isinstance(ph, ast.Dict):
+            given = {k.value for k in ph.keys if isinstance(k, ast.Constant)}
+        else:
+            continue   # built dynamically: checked at runtime by the formatting test
+        if needed - given:
+            problems.append(f"{f}:{l} {key}: text needs {sorted(needed - given)}")
+        if given - needed:
+            problems.append(f"{f}:{l} {key}: passes unused {sorted(given - needed)}")
+    assert not problems, problems
+
+
+@pytest.mark.parametrize("lang", _LANGS)
+def test_every_translation_has_every_key_with_the_same_placeholders(lang):
+    tr = _messages(PKG / "translations" / f"{lang}.json")
+    assert set(tr) == set(STRINGS), sorted(set(STRINGS) ^ set(tr))
+    wrong = [k for k in STRINGS if _placeholders(tr[k]) != _placeholders(STRINGS[k])]
+    assert not wrong, wrong
+
+
+def test_english_translation_equals_strings_json_entirely():
+    """Home Assistant shows translations/en.json at runtime; strings.json
+    is the source. They drifted twice in opposite directions: once the
+    runtime text was newer, once the source was — English users missed a
+    hint the flow actually supports."""
+    src = json.loads((PKG / "strings.json").read_text(encoding="utf-8"))
+    en = json.loads((PKG / "translations" / "en.json").read_text(encoding="utf-8"))
+    assert en == src
+
+
+@pytest.mark.parametrize("lang", _LANGS)
+@pytest.mark.asyncio
+async def test_home_assistant_can_format_every_message(hass, enable_custom_integrations, lang):
+    """Through Home Assistant's own translation loader, not a copy of it."""
+    from homeassistant.helpers.translation import async_get_translations
+
+    from custom_components.roomba_plus.const import DOMAIN
+
+    table = await async_get_translations(hass, lang, "exceptions", {DOMAIN})
+    prefix = f"component.{DOMAIN}.exceptions."
+    loaded = {k[len(prefix):-len(".message")]: v for k, v in table.items() if k.startswith(prefix)}
+    assert set(loaded) == set(STRINGS)
+    for key, text in loaded.items():
+        filled = text.format(**{p: "X" for p in _placeholders(text)})
+        assert "{" not in filled, (lang, key)
+
+
+@pytest.mark.parametrize("lang", _LANGS)
+def test_every_constant_issue_key_exists_with_its_placeholders(lang):
+    """observed_zones_detected once carried the zone-NAMING text: it asked
+    for input the notice has no field for, and for placeholders the code
+    never passed."""
+    issues = _issues(PKG / "translations" / f"{lang}.json")
+    problems = []
+    for f, l, kw in _issue_calls():
+        key = kw.get("translation_key")
+        if not isinstance(key, ast.Constant):
+            continue
+        entry = issues.get(key.value)
+        if entry is None:
+            problems.append(f"{f}:{l} {key.value} missing")
+            continue
+        needed = _placeholders(entry.get("title", "") + entry.get("description", ""))
+        ph = kw.get("translation_placeholders")
+        if ph is None or isinstance(ph, ast.Dict):
+            given = {k.value for k in ph.keys} if isinstance(ph, ast.Dict) else set()
+            if needed - given:
+                problems.append(f"{f}:{l} {key.value}: needs {sorted(needed - given)}")
+    assert not problems, problems
+
+
+# ── formerly tests/test_guard_gold_entities.py ──────────────────────────────────
+#
+# Guards for three Gold rules on entities.
+#
+# icon-translations: icons live in icons.json, not in code. One documented
+# exception: the cloud room picker's icon follows the region TYPE of the
+# selected room, and the options are the household's own room names.
+#
+# entity-device-class: a sensor measuring a span of time carries the
+# DURATION device class, so Home Assistant formats it and lets users pick
+# the unit. Seventeen sensors lacked it.
+#
+# entity-translations: every entity translation key exists for its platform
+# in all eight languages.
+
+def _trees():
+    for f in sorted(PKG.glob("*.py")):
+        yield f.name, ast.parse(f.read_text(encoding="utf-8"))
+
+
+def _platform(fname):
+    stem = fname[:-3]
+    for p in ("binary_sensor", "device_tracker", "sensor", "button", "select", "switch",
+              "image", "vacuum", "calendar", "todo", "number", "event", "update"):
+        if stem == p or stem.startswith(p + "_"):
+            return p
+    return None
+
+
+@pytest.mark.parametrize("lang", _LANGS)
+def test_every_entity_translation_key_exists(lang):
+    entity = json.loads((PKG / "translations" / f"{lang}.json").read_text(encoding="utf-8")).get("entity", {})
+    missing = []
+    for fname, tree in _trees():
+        plat = _platform(fname)
+        if plat is None:
+            continue
+        for n in ast.walk(tree):
+            key = None
+            if isinstance(n, ast.Call) and getattr(n.func, "attr", getattr(n.func, "id", "")) != "async_create_issue":
+                kw = {k.arg: k.value for k in n.keywords}
+                if "translation_domain" not in kw and isinstance(kw.get("translation_key"), ast.Constant):
+                    key = kw["translation_key"].value
+            if isinstance(n, (ast.Assign, ast.AnnAssign)):
+                tgs = [n.target] if isinstance(n, ast.AnnAssign) else n.targets
+                if any(ast.unparse(t).endswith("_attr_translation_key") for t in tgs) \
+                   and isinstance(getattr(n, "value", None), ast.Constant):
+                    key = n.value.value
+            if key and key not in entity.get(plat, {}):
+                missing.append(f"{fname}:{getattr(n, 'lineno', '?')} {plat}.{key}")
+    assert not missing, missing
+
+
+@pytest.mark.parametrize("lang", _LANGS)
+def test_every_flow_field_has_a_description(lang):
+    """26 fields had none: five in setup, 21 in the options."""
+    data = json.loads((PKG / "translations" / f"{lang}.json").read_text(encoding="utf-8"))
+    missing = []
+    for area in ("config", "options"):
+        for step, v in data.get(area, {}).get("step", {}).items():
+            for field in v.get("data", {}):
+                if field not in v.get("data_description", {}):
+                    missing.append(f"{area}.{step}.{field}")
+    assert not missing, missing
+
+
+def test_no_select_option_label_is_hard_coded():
+    """Two option lists were English in every language. Selector labels
+    come from strings.json -> selector.<translation_key>."""
+    found = []
+    for fname, tree in _trees():
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Call) and getattr(n.func, "attr", "") == "SelectOptionDict":
+                if any(k.arg == "label" and isinstance(k.value, ast.Constant) for k in n.keywords):
+                    found.append(f"{fname}:{n.lineno}")
+    assert not found, found
+
+
+@pytest.mark.parametrize("lang", _LANGS)
+def test_every_selector_translation_key_has_its_options(lang):
+    selectors = json.loads((PKG / "translations" / f"{lang}.json").read_text(encoding="utf-8")).get("selector", {})
+    missing = []
+    for fname, tree in _trees():
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Call) and getattr(n.func, "attr", "") == "SelectSelectorConfig":
+                kw = {k.arg: k.value for k in n.keywords}
+                tk, opts = kw.get("translation_key"), kw.get("options")
+                if isinstance(tk, ast.Constant) and isinstance(opts, ast.List):
+                    want = {e.value for e in opts.elts if isinstance(e, ast.Constant)}
+                    have = set(selectors.get(tk.value, {}).get("options", {}))
+                    if want - have:
+                        missing.append(f"{fname}:{n.lineno} {tk.value}: {sorted(want - have)}")
+    assert not missing, missing
+
+
+def test_no_entity_translation_is_orphaned():
+    """Thirteen sensor translations outlived their sensors, which had been
+    merged into consolidated ones. migrations.py does not count as a use:
+    it holds old names on purpose."""
+    used = set()
+    for fname, tree in _trees():
+        if fname == "migrations.py":
+            continue
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Constant) and isinstance(n.value, str):
+                used.add(n.value)
+            if isinstance(n, ast.JoinedStr):
+                used.update(v.value for v in n.values if isinstance(v, ast.Constant))
+    entity = json.loads((PKG / "translations" / "en.json").read_text(encoding="utf-8"))["entity"]
+    orphaned = [f"{p}.{k}" for p, keys in entity.items() for k in keys
+                if k not in used and not any(len(u) >= 6 and u in k for u in used if "_" in u)]
+    assert not orphaned, orphaned
+
+
+# ── formerly tests/test_locale_slug_guard.py ──────────────────────────
+#
+# Locale-slug guard: enforces Roomba+ entity naming conventions.
+#
+# Two rules are checked at collection time (no HA fixtures needed):
+#
+# RULE 1 — No _attr_name alongside _attr_translation_key at class level.
+#     In HA 2024+, a class-level _attr_name string overrides _attr_translation_key.
+#     The entity always shows the English hardcoded string regardless of locale.
+#     Root cause of 15 locale-slug regressions fixed in v3.0.0.
+#
+# RULE 2 — Every entity class with _attr_translation_key must have
+#     suggested_object_id available (own or inherited from IRobotEntity).
+#     Without it HA slugifies the translated name at first registration,
+#     producing locale-specific entity_ids (e.g. 'akkualter' vs 'battery_age_days').
+#
+# Adding new entities:
+#   1. Set  _attr_translation_key = "english_key"
+#   2. Set  _attr_unique_id = f"{self.robot_unique_id}_{english_key}"  in __init__
+#   3. Do NOT set _attr_name at class level
+#   4. Inherit from IRobotEntity — suggested_object_id fires automatically.
+#      EntityDescription-based classes: override to return entity_description.key.
+
+INTEGRATION = Path(__file__).parent.parent / "custom_components" / "roomba_plus"
+
+
+# AUTO-DISCOVERED (this session) rather than a manually maintained list --
+# a manually maintained list is EXACTLY what caused two real gaps: calendar.py
+# and sensor_prime.py both had real IRobotEntity subclasses with
+# _attr_translation_key, correctly following both rules, but were simply never
+# added to this list, so this guard never actually checked them at all. Scanning
+# every .py file in the integration is safe even though most of them (const.py,
+# models.py, schedule_parser.py, etc.) define no entity classes at all -- the
+# rules below only ever fire on classes that actually match the pattern
+# (_attr_translation_key present), so scanning "too many" files costs nothing,
+# while the previous "too few" manually-curated list cost two real regressions.
+PLATFORM_FILES = sorted(p.name for p in INTEGRATION.glob("*.py") if p.name != "__init__.py")
+
+
+# FavoriteButton sets _attr_name dynamically in __init__ from iRobot app routine
+# name — this is intentional and locale-independent (app names are user-defined).
+RULE1_EXEMPT: set[str] = {"FavoriteButton"}
+
+
+def _class_blocks(source: str) -> list[tuple[str, str, str]]:
+    """Yield (class_name, bases_str, body_str) for every class in source."""
+    results = []
+    for m in re.finditer(
+        r"^class (\w+)\(([^)]*)\)[^\n]*\n((?:(?!^class ).*\n)*)",
+        source,
+        re.MULTILINE,
+    ):
+        results.append((m.group(1), m.group(2), m.group(3)))
+    return results
+
+
+def _build_irobot_subclasses(sources: dict[str, str]) -> set[str]:
+    """Return names of all classes that (directly or indirectly) inherit IRobotEntity."""
+    direct: dict[str, set[str]] = {}  # cls → set of base class names
+    for src in sources.values():
+        for cls, bases, _ in _class_blocks(src):
+            direct[cls] = {b.strip() for b in bases.split(",") if b.strip()}
+
+    irobot_family: set[str] = {"IRobotEntity"}
+    changed = True
+    while changed:
+        changed = False
+        for cls, bases in direct.items():
+            if cls not in irobot_family and irobot_family & bases:
+                irobot_family.add(cls)
+                changed = True
+    return irobot_family
+
+
+def _rule1_violations() -> list[str]:
+    violations = []
+    for fname in PLATFORM_FILES:
+        src = (INTEGRATION / fname).read_text(encoding="utf-8")
+        for cls, _, body in _class_blocks(src):
+            if cls in RULE1_EXEMPT:
+                continue
+            has_name = bool(re.search(r'^\s{4}_attr_name\s*=\s*"[^"]+"', body, re.MULTILINE))
+            has_tk   = bool(re.search(r'_attr_translation_key\s*=\s*"', body))
+            if has_name and has_tk:
+                val = re.search(r'_attr_name\s*=\s*"([^"]+)"', body).group(1)
+                violations.append(f"{fname}:{cls}: _attr_name={val!r} + _attr_translation_key")
+    return violations
+
+
+def _rule2_violations() -> list[str]:
+    sources = {f: (INTEGRATION / f).read_text(encoding="utf-8") for f in PLATFORM_FILES}
+    irobot_family = _build_irobot_subclasses(sources)
+
+    violations = []
+    for fname, src in sources.items():
+        for cls, bases, body in _class_blocks(src):
+            if not re.search(r'_attr_translation_key\s*=\s*"', body):
+                continue
+            base_set = {b.strip() for b in bases.split(",") if b.strip()}
+            inherits_irobot = bool(irobot_family & base_set)
+            has_soid = "suggested_object_id" in body
+            if not inherits_irobot and not has_soid:
+                violations.append(
+                    f"{fname}:{cls}: has _attr_translation_key but neither "
+                    "inherits IRobotEntity nor defines suggested_object_id"
+                )
+    return violations
+
+
+@pytest.mark.parametrize("v", _rule1_violations() or [None], ids=lambda v: v or "ok")
+def test_no_attr_name_with_translation_key(v: str | None) -> None:
+    """RULE 1: No class may set both _attr_name (string) and _attr_translation_key.
+
+    Fix: remove _attr_name; rely on _attr_translation_key + translations/*.json.
+    Exempt: add class name to RULE1_EXEMPT with a justification comment.
+    """
+    if v is None:
+        return
+    pytest.fail(
+        f"\n\nLocale-slug RULE 1 violation:\n  {v}\n\n"
+        "Remove the class-level _attr_name. HA 2024+ ignores _attr_translation_key\n"
+        "when _attr_name is set, so the entity always shows English text.\n"
+    )
+
+
+@pytest.mark.parametrize("v", _rule2_violations() or [None], ids=lambda v: v or "ok")
+def test_suggested_object_id_covered(v: str | None) -> None:
+    """RULE 2: Every entity with _attr_translation_key must provide suggested_object_id.
+
+    IRobotEntity.suggested_object_id covers all subclasses automatically.
+    For non-IRobotEntity classes add:
+
+        @property
+        def suggested_object_id(self) -> str:
+            return self.entity_description.key  # or the English key literal
+    """
+    if v is None:
+        return
+    pytest.fail(
+        f"\n\nLocale-slug RULE 2 violation:\n  {v}\n\n"
+        "Inherit from IRobotEntity (preferred), or add suggested_object_id.\n"
+    )
+
+
+def test_device_tracker_suggested_object_id_returns_none():
+    """RoombaDeviceTracker uses device-name-only entity_id (no _position suffix)."""
+    import re
+    src = (INTEGRATION / "device_tracker.py").read_text(encoding="utf-8")
+    # Must override suggested_object_id and return None
+    assert "def suggested_object_id" in src, \
+        "RoombaDeviceTracker must override suggested_object_id"
+    # The override body must return None (not the unique_id suffix)
+    m = re.search(
+        r"def suggested_object_id.*?return None",
+        src, re.DOTALL,
+    )
+    assert m is not None, \
+        "RoombaDeviceTracker.suggested_object_id must return None"
+
+
+def test_vacuum_suggested_object_id_returns_none():
+    """RoombaVacuum is the primary entity — entity_id = device name only."""
+    import re
+    src = (INTEGRATION / "vacuum.py").read_text(encoding="utf-8")
+    assert "def suggested_object_id" in src, \
+        "RoombaVacuum must override suggested_object_id"
+    m = re.search(
+        r"def suggested_object_id.*?return None",
+        src, re.DOTALL,
+    )
+    assert m is not None, \
+        "RoombaVacuum.suggested_object_id must return None"
+
+
+def test_base_suggested_object_id_strips_robot_prefix():
+    """IRobotEntity.suggested_object_id returns the English key for prefixed uids."""
+    from unittest.mock import MagicMock
+    from custom_components.roomba_plus.entity import IRobotEntity
+
+    obj = MagicMock(spec=IRobotEntity)
+    obj.robot_unique_id = "roomba_plus_ABC123"
+    obj._attr_unique_id = "roomba_plus_ABC123_battery_age_days"
+    # Call the real property getter against the mock
+    result = IRobotEntity.suggested_object_id.fget(obj)
+    assert result == "battery_age_days"
+
+
+def test_base_suggested_object_id_none_when_no_prefix_match():
+    """Returns None when unique_id has no robot prefix (e.g. vacuum primary)."""
+    from unittest.mock import MagicMock
+    from custom_components.roomba_plus.entity import IRobotEntity
+
+    obj = MagicMock(spec=IRobotEntity)
+    obj.robot_unique_id = "roomba_plus_ABC123"
+    obj._attr_unique_id = "roomba_plus_ABC123"  # exact match, no trailing key
+    result = IRobotEntity.suggested_object_id.fget(obj)
+    assert result is None
+
+
+def test_base_suggested_object_id_handles_fav_id_with_underscores():
+    """fav_id containing underscores is returned intact (prefix strip, not rfind)."""
+    from unittest.mock import MagicMock
+    from custom_components.roomba_plus.entity import IRobotEntity
+
+    obj = MagicMock(spec=IRobotEntity)
+    obj.robot_unique_id = "roomba_plus_ABC123"
+    obj._attr_unique_id = "roomba_plus_ABC123_fav_my_fav_routine"
+    result = IRobotEntity.suggested_object_id.fget(obj)
+    # Must return the WHOLE suffix "fav_my_fav_routine", not just "routine"
+    assert result == "fav_my_fav_routine"

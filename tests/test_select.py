@@ -22,6 +22,15 @@ from unittest.mock import AsyncMock
 from unittest.mock import patch
 from custom_components.roomba_plus.umf_aligner import UmfAligner
 import asyncio
+from types import SimpleNamespace
+from homeassistant.helpers import issue_registry as ir
+from pytest_homeassistant_custom_component.common import MockConfigEntry
+from custom_components.roomba_plus import select as sel
+from custom_components.roomba_plus.const import CONF_SMART_ZONE_HIDDEN
+from custom_components.roomba_plus.const import DOMAIN
+import inspect
+from homeassistant.components.select import SelectEntity
+from custom_components.roomba_plus.entity import IRobotEntity
 
 
 def _mission_sensor(cycle="none", phase=""):
@@ -1493,3 +1502,279 @@ class TestPairedSettingsGoOutTogether:
         )
 
 
+# ── formerly tests/test_coverage_select.py ──────────────────────────────────────
+#
+# select.py — quality scale, test-coverage.
+#
+# On a robot WITHOUT a cloud account, unnamed smart-map zones raise a repair
+# issue asking the user to name them; with a cloud account the names come
+# from the cloud and nothing is raised. Hidden zones do not count. Run
+# against Home Assistant's real issue registry.
+
+def _zone_select_m(hass, *, has_cloud=False, options=None):
+    entry = MockConfigEntry(domain=DOMAIN, data={"blid": "B"}, options=options or {})
+    entry.add_to_hass(hass)
+    entry.runtime_data = SimpleNamespace(has_cloud=has_cloud)
+    s = sel.SmartZoneSelect.__new__(sel.SmartZoneSelect)
+    s._config_entry = entry
+    s.hass = hass
+    s._known_unlabelled = set()
+    s._selected = None
+    return s, entry
+
+
+def _issue(hass, entry):
+    return ir.async_get(hass).async_get_issue(DOMAIN, f"smart_zones_need_naming_{entry.entry_id}")
+
+
+_TYPICAL = {"carpetBoost": True, "vacHigh": False, "noAutoPasses": True, "twoPass": False,
+            "padWetness": {"disposable": 2, "reusable": 3}, "detectedPad": "reusableWet",
+            "lastCommand": {"pmap_id": "p1", "regions": [{"region_id": "3"}]},
+            "pmaps": [{"p1": "v1"}], "cap": {"pmaps": 1}}
+
+
+def _robot(state):
+    r = MagicMock()
+    r.master_state = {"state": {"reported": state}}
+    return r
+
+
+def _build(cls, hass, state):
+    roomba = _robot(state)
+    entry = MockConfigEntry(domain=DOMAIN, data={"blid": "B"},
+                            options={"smart_zone_data": {"3": {"name": "Kitchen"}}})
+    entry.add_to_hass(hass)
+    entry.runtime_data = SimpleNamespace(has_cloud=False, roomba=roomba, room_seg_store=None,
+                                         cloud_coordinator=None, map_capability=None)
+    params = inspect.signature(cls.__init__).parameters
+    if cls is sel.SimpleRoombaSelect:
+        e = cls(roomba, "B", sel._CLEANING_PASSES_DESC)
+    elif cls is sel.CloudSmartZoneSelect:
+        e = cls(roomba, "B", entry, pmap_id="p1", map_name="Ground",
+                regions=[{"id": "3", "name": "Kitchen", "region_type": "kitchen"}],
+                zones=[{"id": "7", "name": "Rug"}])
+    elif "config_entry" in params:
+        e = cls(roomba, "B", entry)
+    else:
+        e = cls(roomba, "B")
+    e.hass = hass
+    e._config_entry = getattr(e, "_config_entry", entry)
+    return e
+
+
+_CLASSIC = sorted(
+    (c for n, c in inspect.getmembers(sel, inspect.isclass)
+     if c.__module__ == sel.__name__ and issubclass(c, SelectEntity) and issubclass(c, IRobotEntity)),
+    key=lambda c: c.__name__)
+
+
+class TestNamingIssue:
+
+    @pytest.mark.asyncio
+    async def test_unnamed_zones_are_recorded_and_the_user_is_asked(self, hass):
+        s, entry = _zone_select_m(hass, options={"discovered_zone_ids": ["1"]})
+        await s._async_raise_naming_issue(["3", "5"])
+        assert entry.options["discovered_zone_ids"] == ["1", "3", "5"]
+        assert _issue(hass, entry) is not None
+
+    @pytest.mark.asyncio
+    async def test_with_a_cloud_account_nothing_is_raised(self, hass):
+        s, entry = _zone_select_m(hass, has_cloud=True)
+        await s._async_raise_naming_issue(["3"])
+        assert _issue(hass, entry) is None
+        assert "discovered_zone_ids" not in entry.options
+
+    @pytest.mark.asyncio
+    async def test_hidden_zones_do_not_ask_for_a_name(self, hass):
+        s, entry = _zone_select_m(hass, options={CONF_SMART_ZONE_HIDDEN: ["3"]})
+        await s._async_raise_naming_issue(["3"])
+        assert _issue(hass, entry) is None
+
+    @pytest.mark.asyncio
+    async def test_nothing_to_name_does_nothing(self, hass):
+        s, entry = _zone_select_m(hass)
+        await s._async_raise_naming_issue([])
+        assert _issue(hass, entry) is None
+
+    @pytest.mark.asyncio
+    async def test_the_issue_goes_away_when_all_are_named(self, hass):
+        s, entry = _zone_select_m(hass)
+        await s._async_raise_naming_issue(["3"])
+        assert _issue(hass, entry) is not None
+        await s._async_dismiss_naming_issue()
+        assert _issue(hass, entry) is None
+
+
+class TestMessagesDriveTheIssue:
+
+    def _live(self, hass, unlabelled_seq):
+        s, entry = _zone_select_m(hass)
+        s.vacuum = MagicMock()
+        s.vacuum.master_state = {"state": {"reported": {}}}
+        s.schedule_update_ha_state = MagicMock()
+        seq = iter(unlabelled_seq)
+        s._unlabelled_region_ids = lambda: next(seq)
+        s.new_state_filter = lambda _st: True
+        scheduled = []
+        entry.async_create_task = lambda _h, coro, *a, **k: scheduled.append(coro.__qualname__) or coro.close()
+        return s, scheduled
+
+    def test_new_unnamed_zones_raise_then_all_named_dismisses(self, hass):
+        s, scheduled = self._live(hass, [["3"], ["3"], []])
+        msg = {"state": {"reported": {"pmaps": []}}}
+        s.on_message(msg)            # new: raise
+        s.on_message(msg)            # unchanged: nothing
+        s.on_message(msg)            # all named: dismiss
+        assert [q.rsplit(".", 1)[-1] for q in scheduled] == [
+            "_async_raise_naming_issue", "_async_dismiss_naming_issue"]
+
+
+class TestCleaningPasses:
+
+    @pytest.mark.parametrize("option", list(sel._OPTION_TO_PREFS))
+    @pytest.mark.asyncio
+    async def test_each_option_writes_its_two_preferences(self, option):
+        entity = SimpleNamespace(vacuum=MagicMock(set_preferences=AsyncMock()))
+        await sel._select_cleaning_passes(entity, option)
+        no_auto, two_pass = sel._OPTION_TO_PREFS[option]
+        entity.vacuum.set_preferences.assert_awaited_once_with({"noAutoPasses": no_auto, "twoPass": two_pass})
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_option_writes_nothing(self):
+        entity = SimpleNamespace(vacuum=MagicMock(set_preferences=AsyncMock()))
+        await sel._select_cleaning_passes(entity, "turbo")
+        entity.vacuum.set_preferences.assert_not_awaited()
+
+
+class TestSmartZoneMap:
+
+    def _s(self, hass, state, ids=("3", "5"), options=None):
+        s, _entry = _zone_select_m(hass, options=options or {})
+        s.vacuum_state = state
+        s._collect_region_ids = lambda: list(ids)
+        return s
+
+    def test_the_map_comes_from_the_last_command_first(self, hass):
+        s = self._s(hass, {"lastCommand": {"pmap_id": "p1", "user_pmapv_id": "v7"},
+                          "cleanSchedule2": [{"cmd": {"pmap_id": "p9"}}]})
+        assert s.selected_pmap_info == {"pmap_id": "p1", "user_pmapv_id": "v7"}
+
+    def test_then_from_the_schedule(self, hass):
+        s = self._s(hass, {"cleanSchedule2": [{"cmd": {}}, {"cmd": {"pmap_id": "p9"}}]})
+        assert s.selected_pmap_info == {"pmap_id": "p9", "user_pmapv_id": ""}
+
+    def test_no_map_known(self, hass):
+        assert self._s(hass, {}).selected_pmap_info == {}
+
+    def test_the_selected_label_maps_back_to_its_region(self, hass):
+        s = self._s(hass, {}, options={"smart_zone_data": {"5": {"name": "Hall"}}})
+        s._selected = s._region_label("5")
+        assert s.selected_region_id == "5"
+
+    def test_an_unknown_choice_falls_back_to_the_first_region(self, hass):
+        s = self._s(hass, {})
+        s._selected = "Gone"
+        assert s.selected_region_id == "3"
+        empty = self._s(hass, {}, ids=())
+        empty._selected = None
+        assert empty.selected_region_id is None
+
+
+@pytest.mark.parametrize("cls", _CLASSIC, ids=lambda c: c.__name__)
+@pytest.mark.parametrize("state", [{}, _TYPICAL], ids=["empty", "typical"])
+def test_a_select_answers_without_raising(hass, cls, state):
+    e = _build(cls, hass, state)
+    e.vacuum_state = state
+    opts = e.options
+    assert isinstance(opts, list)
+    cur = e.current_option
+    assert cur is None or isinstance(cur, str)
+    assert e.icon is None or isinstance(e.icon, str)
+    attrs = e.extra_state_attributes
+    assert attrs is None or isinstance(attrs, dict)
+
+
+@pytest.mark.parametrize("cls", _CLASSIC, ids=lambda c: c.__name__)
+@pytest.mark.asyncio
+async def test_a_select_accepts_one_of_its_own_options(hass, cls):
+    e = _build(cls, hass, _TYPICAL)
+    e.vacuum_state = _TYPICAL
+    e.vacuum.set_preference = AsyncMock()
+    e.vacuum.set_preferences = AsyncMock()
+    e.async_write_ha_state = MagicMock()
+    assert e.new_state_filter({"batPct": 1}) in (True, False)
+    assert e.available in (True, False)
+    if e.options:
+        await e.async_select_option(e.options[0])
+
+
+class TestPadWetnessKeepsTheOtherPad:
+    """Both pad types share one robot setting; changing one must write the
+    other back unchanged."""
+
+    @pytest.mark.asyncio
+    async def test_disposable(self):
+        entity = SimpleNamespace(vacuum_state={"padWetness": {"disposable": 1, "reusable": 3}},
+                                 vacuum=MagicMock(set_preference=AsyncMock()))
+        await sel._select_disposable_wetness(entity, "2")
+        entity.vacuum.set_preference.assert_awaited_once_with("padWetness", {"disposable": 2, "reusable": 3})
+
+    @pytest.mark.asyncio
+    async def test_reusable(self):
+        entity = SimpleNamespace(vacuum_state={"padWetness": {"disposable": 1, "reusable": 3}},
+                                 vacuum=MagicMock(set_preference=AsyncMock()))
+        await sel._select_reusable_wetness(entity, "2")
+        entity.vacuum.set_preference.assert_awaited_once_with("padWetness", {"disposable": 1, "reusable": 2})
+
+
+class TestNamingIssueAtStartup:
+
+    @pytest.mark.asyncio
+    async def test_unnamed_zones_present_at_start_raise_the_issue(self, hass, monkeypatch):
+        s, entry = _zone_select_m(hass)
+        monkeypatch.setattr(IRobotEntity, "async_added_to_hass", AsyncMock())
+        s._unlabelled_region_ids = lambda: ["3"]
+        await s.async_added_to_hass()
+        assert s._known_unlabelled == {"3"}
+        assert _issue(hass, entry) is not None
+
+
+class TestClassicSelectSetup:
+    """Which selects a Classic robot gets follows what it reports."""
+
+    @pytest.mark.asyncio
+    async def test_the_reported_capabilities_decide(self, hass, monkeypatch):
+        from custom_components.roomba_plus.models import ConnectionType
+
+        state = {"noAutoPasses": False, "twoPass": False, "carpetBoost": True, "vacHigh": False,
+                 "padWetness": {"disposable": 1, "reusable": 1}, "cap": {"carpetBoost": 1}}
+        entry = MagicMock()
+        entry.options = {}
+        data = entry.runtime_data
+        data.connection_type = ConnectionType.LOCAL_PUSH
+        data.roomba = _robot(state)
+        data.blid = "B"
+        data.map_capability = None
+        data.has_cloud = False
+        monkeypatch.setattr(sel, "has_smart_map", lambda _s: False)
+        added = []
+        await sel.async_setup_entry(hass, entry, lambda ents, *a, **k: added.extend(ents))
+        names = {type(e).__name__ for e in added}
+        assert {"CleaningPassesSelect", "DisposablePadWetnessSelect", "ReusablePadWetnessSelect",
+                "PrimeCleaningModeSelect"} <= names, names
+
+    @pytest.mark.asyncio
+    async def test_a_robot_reporting_nothing_gets_none_of_them(self, hass, monkeypatch):
+        from custom_components.roomba_plus.models import ConnectionType
+
+        entry = MagicMock()
+        entry.options = {}
+        data = entry.runtime_data
+        data.connection_type = ConnectionType.LOCAL_PUSH
+        data.roomba = _robot({})
+        data.blid = "B"
+        data.has_cloud = False
+        monkeypatch.setattr(sel, "has_smart_map", lambda _s: False)
+        added = []
+        await sel.async_setup_entry(hass, entry, lambda ents, *a, **k: added.extend(ents))
+        assert not {"CleaningPassesSelect", "DisposablePadWetnessSelect"} & {type(e).__name__ for e in added}

@@ -7,6 +7,9 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from tests.conftest import robot_mock, hass_mock, entry_mock
+from types import SimpleNamespace
+from homeassistant.exceptions import ServiceValidationError
+from custom_components.roomba_plus import room_cleaning as rc
 
 
 class TestBackendSelection:
@@ -3881,3 +3884,320 @@ class TestTheRoomListSurvivesACloudOutage:
 
     def test_nothing_saved_yields_nothing(self) -> None:
         assert self._segments({}) == []
+
+
+# ── formerly tests/test_coverage_room_cleaning.py ───────────────────────────────
+#
+# room_cleaning.py — quality scale, test-coverage.
+#
+# Starting a room clean on a Classic robot: segments are validated against
+# the map they name, rooms on two floors are refused, stale room ids are
+# healed through their names, and the start command carries the map and
+# its version. A wrong room id would send the robot somewhere else.
+
+def _classic(*, regions=None, by_pmap=None, active="p1", pmapv="v7", labels=None):
+    b = rc.ClassicRoomCleaning.__new__(rc.ClassicRoomCleaning)
+    b._data = MagicMock()
+    b._data.cloud_coordinator = SimpleNamespace(
+        active_pmap_id=active,
+        regions=regions if regions is not None else [{"id": "3", "name": "Kitchen"},
+                                                     {"id": "5", "name": "Hall"}],
+        regions_by_pmap=by_pmap if by_pmap is not None else {"p1": {}},
+        active_user_pmapv_id=pmapv,
+    )
+    b._config_entry = MagicMock()
+    b._config_entry.options = {"smart_zone_labels": labels or {}}
+    b._data.roomba_reported_state.return_value = {}
+    b._data.roomba = MagicMock()
+    b._data.roomba.send_command = AsyncMock()
+    b._roomba = b._data.roomba          # as the constructor sets it
+    b.where_the_robot_is = AsyncMock(return_value=(None, False))
+    return b
+
+
+def _sent(b):
+    cmd, params = b._data.roomba.send_command.await_args.args
+    assert cmd == "start"
+    return params
+
+
+def _room(rid, name=""):
+    return SimpleNamespace(room_id=rid, name=name, region_type=None)
+
+
+def _prime(*, versions, metadata=None, region_names=None, meta_error=None, names_error=None):
+    robot = MagicMock()
+    robot.get_active_map_versions = AsyncMock(return_value=versions)
+
+    async def _meta(mid):
+        if meta_error and mid in meta_error:
+            raise RuntimeError("cloud")
+        return (metadata or {}).get(mid)
+
+    robot.get_map_metadata = AsyncMock(side_effect=_meta)
+
+    async def _names(mid, _version):
+        if names_error and mid in names_error:
+            raise RuntimeError("cloud")
+        return (region_names or {}).get(mid, {})
+
+    robot.get_map_region_names = AsyncMock(side_effect=_names)
+    data = MagicMock()
+    data.prime_robot = robot
+    return rc.PrimeRoomCleaning(data, MagicMock())
+
+
+def _vers(*ids):
+    return [{"p2map_id": i, "name": f"Floor {i}"} for i in ids]
+
+
+class TestClassicCleanSegments:
+
+    @pytest.mark.asyncio
+    async def test_rooms_start_on_their_map_with_its_version(self):
+        b = _classic()
+        await b.clean_segments(["p1_3", "p1_5"])
+        p = _sent(b)
+        assert p["pmap_id"] == "p1" and p["user_pmapv_id"] == "v7"
+        assert [r["region_id"] for r in p["regions"]] == ["3", "5"]
+        assert all(r["type"] == "rid" for r in p["regions"])
+
+    @pytest.mark.asyncio
+    async def test_no_active_map_is_refused(self):
+        b = _classic(active=None)
+        with pytest.raises(ServiceValidationError) as exc:
+            await b.clean_segments(["p1_3"])
+        assert exc.value.translation_key == "no_valid_segments"
+        b._data.roomba.send_command.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_rooms_on_two_floors_are_refused(self):
+        """One mission cannot span two maps; starting on one would clean
+        the wrong rooms on the other."""
+        b = _classic(by_pmap={"p1": {}, "p2": {}})
+        with pytest.raises(ServiceValidationError) as exc:
+            await b.clean_segments(["p1_3", "p2_8"])
+        assert exc.value.translation_key == "rooms_different_floors"
+        b._data.roomba.send_command.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_segment_of_no_known_map_is_refused(self):
+        b = _classic()
+        with pytest.raises(ServiceValidationError):
+            await b.clean_segments(["elsewhere_3"])
+        b._data.roomba.send_command.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_stale_room_id_is_healed_through_its_name(self):
+        """The map was retrained: room 9 is gone, the room once labelled
+        'Kitchen' is now id 3. Clean the Kitchen, not nothing."""
+        b = _classic(labels={"9": "Kitchen"})
+        await b.clean_segments(["p1_9"])
+        assert [r["region_id"] for r in _sent(b)["regions"]] == ["3"]
+
+    @pytest.mark.asyncio
+    async def test_a_stale_id_with_no_name_to_heal_through_is_refused(self):
+        b = _classic()
+        with pytest.raises(ServiceValidationError):
+            await b.clean_segments(["p1_9"])
+        b._data.roomba.send_command.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_zones_are_sent_as_zones_and_without_a_map_version(self):
+        zid = rc.ZID_PREFIX + "4"
+        b = _classic()
+        await b.clean_segments([f"p1_{zid}"])
+        p = _sent(b)
+        assert p["regions"][0]["region_id"] == "4"
+        assert p["regions"][0]["type"] != "rid"
+        assert "user_pmapv_id" not in p, "the version is only sent with rooms"
+
+    @pytest.mark.asyncio
+    async def test_without_a_resolvable_version_rooms_still_start(self):
+        b = _classic(pmapv=None)
+        await b.clean_segments(["p1_3"])
+        assert "user_pmapv_id" not in _sent(b)
+
+
+class TestPrimeRegionNames:
+
+    @pytest.mark.asyncio
+    async def test_names_are_collected_across_maps_first_map_wins(self):
+        meta = {"m1": SimpleNamespace(active_p2mapv_id="v1"), "m2": SimpleNamespace(active_p2mapv_id="v2")}
+        b = _prime(versions=_vers("m1", "m2"), metadata=meta,
+                   region_names={"m1": {"3": "Kitchen"}, "m2": {"3": "Other", "9": "Attic", "": "x"}})
+        names = await b._named_regions_across_maps()
+        assert names == {"3": "Kitchen", "9": "Attic"}
+        assert b._region_map_ids == {"3": "m1", "9": "m2"}
+
+    @pytest.mark.asyncio
+    async def test_a_map_that_fails_or_has_no_version_is_skipped(self):
+        meta = {"m2": SimpleNamespace(active_p2mapv_id=None, user_p2mapv_id=None),
+                "m3": SimpleNamespace(active_p2mapv_id="v3"), "m4": SimpleNamespace(active_p2mapv_id="v4")}
+        b = _prime(versions=_vers("m1", "m2", "m3", "m4", "m5"), metadata=meta, meta_error={"m1"},
+                   names_error={"m3"}, region_names={"m4": {"7": "Hall"}})
+        assert await b._named_regions_across_maps() == {"7": "Hall"}
+
+    @pytest.mark.asyncio
+    async def test_map_names_fall_back_to_the_id(self):
+        b = _prime(versions=[{"p2map_id": "m1", "name": ""}, "junk", {"p2map_id": "m2", "name": "Upstairs"}])
+        assert await b.map_names() == {"m1": "m1", "m2": "Upstairs"}
+
+    @pytest.mark.asyncio
+    async def test_an_unreadable_map_list_gives_no_names(self):
+        b = _prime(versions=[])
+        b._robot.get_active_map_versions = AsyncMock(side_effect=RuntimeError("cloud"))
+        assert await b.map_names() == {}
+        assert await b._all_map_ids() == []
+
+
+class TestPrimeRegionToMap:
+
+    @pytest.mark.asyncio
+    async def test_a_room_id_on_two_maps_is_left_out(self):
+        """An id that exists on two maps cannot say which map to clean."""
+        meta = {"m1": SimpleNamespace(rooms_metadata=[_room("3"), _room("4"), _room(None)]),
+                "m2": SimpleNamespace(rooms_metadata=[_room("3"), _room("8")])}
+        b = _prime(versions=_vers("m1", "m2", "m3"), metadata=meta, meta_error={"m3"})
+        assert await b._region_to_map() == {"4": "m1", "8": "m2"}
+
+
+class TestPrimeAvailableRooms:
+
+    def _b(self, monkeypatch, current):
+        meta = {"m1": SimpleNamespace(rooms_metadata=[_room("3", "Kitchen"), _room("4", "")]),
+                "m2": SimpleNamespace(rooms_metadata=[
+                    _room("7", "Kitchen"),
+                    SimpleNamespace(room_id="z1", name="Rug", region_type=SimpleNamespace(value="zid"))])}
+        b = _prime(versions=_vers("m1", "m2"), metadata=meta)
+        b._current_map_id = AsyncMock(return_value=current)
+        monkeypatch.setattr(rc, "_maps_to_offer", AsyncMock(side_effect=lambda _s, ids: ids))
+        b._config_entry.runtime_data.prime_room_names = {}
+        return b
+
+    @pytest.mark.asyncio
+    async def test_a_duplicate_name_on_the_current_map_wins(self, monkeypatch, caplog):
+        rooms = await self._b(monkeypatch, current="m2").available_rooms()
+        assert rooms["Kitchen"] == "m2/7"
+        assert "more than one map" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_otherwise_the_first_map_keeps_the_name(self, monkeypatch):
+        rooms = await self._b(monkeypatch, current="m9").available_rooms()
+        assert rooms["Kitchen"] == "m1/3"
+
+    @pytest.mark.asyncio
+    async def test_zones_are_marked_and_unnamed_rooms_left_out(self, monkeypatch):
+        rooms = await self._b(monkeypatch, current="m1").available_rooms()
+        assert rooms["Rug"] == f"m2/{rc.ZID_PREFIX}z1"
+        assert "" not in rooms and len(rooms) == 2
+
+
+class TestSelectedCleaningMode:
+
+    def _entry(self, hass, *, entity_id="select.robbie_mode", state=None):
+        entry = MagicMock()
+        entry.hass = hass
+        entry.runtime_data.blid = "B1"
+        if state is not None:
+            hass.states.async_set(entity_id, state)
+        return entry
+
+    def test_without_hass_there_is_no_mode(self):
+        assert rc._selected_cleaning_mode(SimpleNamespace(hass=None, runtime_data=None)) is None
+
+    def test_the_selects_state_gives_the_mode(self, hass, monkeypatch):
+        from custom_components.roomba_plus.select_prime import PrimeCleaningModeSelect
+
+        mode_name, mode_value = next(iter(PrimeCleaningModeSelect.MODES.items()))
+        monkeypatch.setattr(__import__("homeassistant.helpers.entity_registry", fromlist=["x"]), "async_get",
+                            lambda _h: MagicMock(async_get_entity_id=lambda *a: "select.robbie_mode"))
+        assert rc._selected_cleaning_mode(self._entry(hass, state=mode_name)) == mode_value
+
+    @pytest.mark.parametrize("entity_id", [None, "select.never_set"])
+    def test_a_missing_select_or_state_gives_no_mode(self, hass, monkeypatch, entity_id):
+        monkeypatch.setattr(__import__("homeassistant.helpers.entity_registry", fromlist=["x"]), "async_get",
+                            lambda _h: MagicMock(async_get_entity_id=lambda *a: entity_id))
+        assert rc._selected_cleaning_mode(self._entry(hass)) is None
+
+    def test_a_failing_registry_gives_no_mode(self, hass, monkeypatch):
+        monkeypatch.setattr(__import__("homeassistant.helpers.entity_registry", fromlist=["x"]), "async_get", MagicMock(side_effect=RuntimeError("gone")))
+        assert rc._selected_cleaning_mode(self._entry(hass)) is None
+
+
+class TestBackendDefaults:
+    """The base class answers 'nothing known' for a backend that does not
+    override a lookup — a caller must get an empty answer, not an error."""
+
+    @pytest.mark.asyncio
+    async def test_the_base_answers_are_empty(self):
+        class _Minimal(rc.RoomCleaningBackend):
+            async def available_rooms(self):
+                return {}
+
+            async def clean_rooms(self, *a, **k):
+                return None
+
+            async def clean_segments(self, *a, **k):
+                return None
+
+            async def get_segments(self):
+                return []
+
+        b = _Minimal.__new__(_Minimal)
+        assert await rc.RoomCleaningBackend.map_names(b) == {}
+        assert await rc.RoomCleaningBackend._all_map_ids(b) == []
+        assert await rc.RoomCleaningBackend._current_map_id(b) is None
+        assert await rc.RoomCleaningBackend.where_the_robot_is(b) == (None, False)
+
+
+class TestRegionParams:
+
+    def test_an_operating_mode_is_passed_through(self):
+        captured = {}
+
+        def _cls(**fields):
+            captured.update(fields)
+            return fields
+
+        rc._region_params(_cls, None, None, 0, operating_mode=[3])
+        assert captured.get("operating_mode") == 3
+
+
+class TestMapUpdatingGuard:
+    """While the robot rebuilds its map, region ids are in flux: a room
+    command sent now can target a room that no longer exists on arrival."""
+
+    def test_prime_refuses_while_the_map_updates(self):
+        b = _prime(versions=[])
+        b._data.prime_status_coordinator = SimpleNamespace(
+            data={"ro-currentstate": {"cleanMissionStatus": {"notReady": rc.MAP_UPDATING_NOT_READY}}})
+        with pytest.raises(ServiceValidationError):
+            b._raise_if_map_updating()
+
+    def test_prime_without_state_does_not_refuse(self):
+        b = _prime(versions=[])
+        b._data.prime_status_coordinator = None
+        b._raise_if_map_updating()   # must not raise
+
+    @pytest.mark.parametrize("not_ready,refused", [
+        (rc.MAP_UPDATING_NOT_READY, True), (0, False), ("odd", False)])
+    def test_classic_refuses_only_for_the_map_update_bit(self, not_ready, refused):
+        b = _classic()
+        b._data.roomba_reported_state.return_value = {"cleanMissionStatus": {"notReady": not_ready}}
+        if refused:
+            with pytest.raises(ServiceValidationError) as exc:
+                b._raise_if_map_updating()
+            assert exc.value.translation_key == "map_updating"
+        else:
+            b._raise_if_map_updating()
+
+
+class TestPrimeWithoutRobot:
+
+    @pytest.mark.asyncio
+    async def test_no_robot_means_no_names(self):
+        b = _prime(versions=[])
+        b._robot = None
+        assert await b.map_names() == {}
+        assert await b._named_regions_across_maps() == {}

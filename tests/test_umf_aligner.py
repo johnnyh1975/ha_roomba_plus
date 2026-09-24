@@ -871,6 +871,8 @@ class TestU1ValidateTransform:
 # ═══════════════════════════════════════════════════════════════════════
 
 from custom_components.roomba_plus.umf_aligner import _polygon_area_m2
+import time
+from types import SimpleNamespace
 
 
 class TestPolygonAreaM2Helper:
@@ -1006,3 +1008,46 @@ class TestReviewRemainderRebindSemantics:
         assert a._room_polygons is not old_ref
         assert {k: list(v) for k, v in old_ref.items()} == old_snapshot
         assert "r1" in a._room_polygons  # rebuild produced the same content
+
+
+# ── formerly tests/test_coverage_small_gaps.py ──────────────────────────────────
+#
+# Small gaps in eight modules — quality scale, test-coverage (Silver).
+#
+# Mostly error branches and edge cases: a malformed input must not crash,
+# must not return something wrong, and where the code logs, it must log.
+# Each test pins what the branch is for, not only that it ran.
+
+def _aligner():
+    from custom_components.roomba_plus.umf_aligner import UmfAligner
+
+    gs = MagicMock()
+    gs.door_markers = []
+    return UmfAligner([], [], gs)
+
+
+class TestUmfAlignerEdges:
+
+    def test_a_degenerate_room_has_no_centroid(self):
+        """A polygon of one or two points is not a room shape."""
+        a = _aligner()
+        a._room_polygons = {"1": [(0, 0), (10, 0)], "2": [(0, 0), (10, 0), (10, 10), (0, 10)]}
+        assert a.room_centroids_umf() == {"2": (5.0, 5.0)}
+
+    def test_no_calibration_points_before_alignment(self):
+        a = _aligner()
+        a._aligned = False
+        assert a.calibration_points(lambda x, y: (x, y)) is None
+
+    def test_validation_without_a_transform_is_neutral(self):
+        a = _aligner()
+        a._transform = None
+        assert a._validate_transform([]) == 0.0
+
+    def test_validation_without_markers_is_a_moderate_penalty(self):
+        from custom_components.roomba_plus.umf_aligner import _RESIDUAL_SCALE
+
+        a = _aligner()
+        a._transform = MagicMock()
+        a._door_candidates = [(0.0, 0.0)]
+        assert a._validate_transform([]) == _RESIDUAL_SCALE / 2

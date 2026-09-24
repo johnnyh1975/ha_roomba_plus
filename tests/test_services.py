@@ -118,27 +118,23 @@ class TestServicesRegistration:
         assert registered[(DOMAIN, "clean_room")] is first_handler
         assert len(registered) == 23
 
-    def test_removes_all_registered_services(self):
-        from custom_components.roomba_plus.services import (
-            async_register_services,
-            async_remove_services,
-        )
+    # THE REMOVAL TESTS ARE GONE WITH THE REMOVAL (4.2.11, quality scale:
+    # action-setup). Services used to disappear when the last entry
+    # unloaded; they are now registered once in async_setup and stay for
+    # the whole run. What replaces the old contract is below and in
+    # TestServiceGuard.
+
+    def test_async_setup_registers_the_services_before_any_entry(self):
+        """So an automation can be validated while no robot is loaded."""
+        import asyncio
+
+        from custom_components.roomba_plus import async_setup
         from custom_components.roomba_plus.const import DOMAIN
 
         hass, registered = self._make_hass()
-        async_register_services(hass)
-        # 18 + the three Prime schedule write services (#49).
+        assert asyncio.run(async_setup(hass, {})) is True
+        assert (DOMAIN, "clean_room") in registered
         assert len(registered) == 23
-
-        async_remove_services(hass)
-        assert len(registered) == 0
-
-    def test_remove_is_safe_when_not_registered(self):
-        """async_remove_services does not raise when services are absent."""
-        from custom_components.roomba_plus.services import async_remove_services
-        hass, registered = self._make_hass()
-        async_remove_services(hass)   # should not raise
-        assert len(registered) == 0
 
 
 class TestConfCleanDelayMin:
@@ -408,7 +404,7 @@ class TestHandleResetServiceFiresEvent:
             "custom_components.roomba_plus.services.er.async_get",
             return_value=ent_reg,
         ), patch(
-            "custom_components.roomba_plus.services._async_signal_entities",
+            "custom_components.roomba_plus.services._async_signal_maintenance_changed",
         ):
             call = MagicMock()
             call.hass = hass
@@ -453,7 +449,7 @@ class TestHandleInspectResetServiceFiresEvent:
             "custom_components.roomba_plus.services.er.async_get",
             return_value=ent_reg,
         ), patch(
-            "custom_components.roomba_plus.services._async_signal_entities",
+            "custom_components.roomba_plus.services._async_signal_maintenance_changed",
         ):
             call = MagicMock()
             call.hass = hass
@@ -1374,6 +1370,15 @@ class TestExplainMission:
 # ─────────────────────────────────────────────────────────────────────────────
 
 from custom_components.roomba_plus.models import MapCapability
+import datetime as dt
+from types import SimpleNamespace
+from homeassistant.exceptions import ServiceValidationError as ServiceValidationError_m
+from homeassistant.helpers import entity_registry as er
+from pytest_homeassistant_custom_component.common import MockConfigEntry
+from custom_components.roomba_plus import services as svc
+from custom_components.roomba_plus.const import DOMAIN
+from pytest_homeassistant_custom_component.common import async_mock_service
+from custom_components.roomba_plus.models import ConnectionType
 
 
 class TestCleanOverdueRooms:
@@ -2894,3 +2899,458 @@ class TestPerRoomOptionsCoverAllFour:
         source = inspect.getsource(services._async_clean_rooms_via_backend)
 
         assert "if any(v is not None for v in resolved) else None" in source
+
+
+class TestServiceGuard:
+    """A call for a robot whose entry is not loaded is refused, translated,
+    before the handler runs (service_guard.py). Services exist for the
+    whole run now, so the handlers can no longer assume a loaded entry."""
+
+    def _hass_with(self, state):
+        from homeassistant.config_entries import ConfigEntryState
+
+        from custom_components.roomba_plus.const import DOMAIN
+
+        hass = MagicMock()
+        entry = MagicMock()
+        entry.domain = DOMAIN
+        entry.state = getattr(ConfigEntryState, state)
+        hass.config_entries.async_get_entry.return_value = entry
+        reg_entry = MagicMock()
+        reg_entry.config_entry_id = "e1"
+        return hass, reg_entry
+
+    def _call(self, hass):
+        call = MagicMock()
+        call.hass = hass
+        call.service = "clean_room"
+        call.data = {"entity_id": ["vacuum.roomba"]}
+        return call
+
+    @pytest.mark.parametrize("state", ["NOT_LOADED", "SETUP_RETRY", "SETUP_ERROR"])
+    def test_a_target_whose_entry_is_not_loaded_is_refused(self, state, monkeypatch):
+        import asyncio
+        from unittest.mock import AsyncMock
+
+        from homeassistant.exceptions import ServiceValidationError
+
+        from custom_components.roomba_plus import service_guard
+
+        hass, reg_entry = self._hass_with(state)
+        monkeypatch.setattr(service_guard.er, "async_get",
+                            lambda _h: MagicMock(async_get=lambda _e: reg_entry))
+        handler = AsyncMock()
+
+        with pytest.raises(ServiceValidationError) as exc:
+            asyncio.run(service_guard.guarded(handler)(self._call(hass)))
+
+        assert exc.value.translation_key == "entry_not_loaded"
+        handler.assert_not_awaited()
+
+    def test_a_loaded_target_reaches_the_handler(self, monkeypatch):
+        import asyncio
+        from unittest.mock import AsyncMock
+
+        from custom_components.roomba_plus import service_guard
+
+        hass, reg_entry = self._hass_with("LOADED")
+        monkeypatch.setattr(service_guard.er, "async_get",
+                            lambda _h: MagicMock(async_get=lambda _e: reg_entry))
+        handler = AsyncMock(return_value=None)
+        call = self._call(hass)
+
+        asyncio.run(service_guard.guarded(handler)(call))
+
+        handler.assert_awaited_once_with(call)
+
+    def test_every_roomba_plus_service_goes_through_the_guard(self):
+        """A service registered around the guard would bypass the check."""
+        import ast
+        import pathlib
+
+        roh = []
+        for f in ("services.py", "prime_schedule_services.py"):
+            tree = ast.parse(pathlib.Path(
+                f"custom_components/roomba_plus/{f}").read_text(encoding="utf-8"))
+            roh += [f"{f}:{n.lineno}" for n in ast.walk(tree)
+                    if isinstance(n, ast.Call)
+                    and ast.unparse(n.func) == "hass.services.async_register"]
+        assert not roh, f"registered without the loaded-entry guard: {roh}"
+
+    def test_the_message_is_translated_in_every_language(self):
+        import json
+        import pathlib
+
+        base = pathlib.Path("custom_components/roomba_plus")
+        for f in [base / "strings.json", *sorted((base / "translations").glob("*.json"))]:
+            d = json.loads(f.read_text(encoding="utf-8"))
+            assert "entry_not_loaded" in d.get("exceptions", {}), f.name
+
+
+# ── formerly tests/test_coverage_services.py ────────────────────────────────────
+#
+# services.py — quality scale, test-coverage.
+#
+# Quiet hours on a Prime robot take exactly one of two shapes: a daily
+# window (start AND end) or a one-off end (ends_at). Anything else is a
+# clear refusal before the cloud is touched. Real registry and entries.
+
+def _robot_entity(hass, *, prime=True):
+    entry = MockConfigEntry(domain=DOMAIN, data={"blid": "PB"})
+    entry.add_to_hass(hass)
+    robot = MagicMock(set_dnd_settings=AsyncMock())
+    entry.runtime_data = SimpleNamespace(prime_robot=robot if prime else None,
+                                         prime_household_id="h1" if prime else None)
+    eid = er.async_get(hass).async_get_or_create("vacuum", DOMAIN, "PB_vac", config_entry=entry,
+                                                 suggested_object_id="robbie").entity_id
+    return eid, robot
+
+
+def _call(hass, **data):
+    return SimpleNamespace(hass=hass, data=data)
+
+
+def _two_vacuums(hass):
+    entry = MockConfigEntry(domain=DOMAIN, data={"blid": "B"})
+    entry.add_to_hass(hass)
+    reg = er.async_get(hass)
+    a = reg.async_get_or_create("vacuum", DOMAIN, "A_vac", config_entry=entry, suggested_object_id="downstairs").entity_id
+    b = reg.async_get_or_create("vacuum", DOMAIN, "B_vac", config_entry=entry, suggested_object_id="upstairs").entity_id
+    return a, b
+
+
+def _fav_entity(hass, *, kind, has_cloud=True):
+    entry = MockConfigEntry(domain=DOMAIN, data={"blid": "B"})
+    entry.add_to_hass(hass)
+    entry.runtime_data = SimpleNamespace(
+        connection_type=ConnectionType.CLOUD_ONLY if kind == "prime" else ConnectionType.LOCAL_PUSH,
+        has_cloud=has_cloud)
+    eid = er.async_get(hass).async_get_or_create("vacuum", DOMAIN, f"{kind}_vac", config_entry=entry,
+                                                 suggested_object_id=kind).entity_id
+    return eid, entry
+
+
+_HANDLERS = [
+    ("smart_start", lambda c: svc.async_handle_smart_start(c)),
+    ("clean_overdue_rooms", lambda c: svc.async_handle_clean_overdue_rooms(c)),
+    ("auto_clean_dirty_rooms", lambda c: svc.async_handle_auto_clean_dirty_rooms(c)),
+    ("reset_filter", lambda c: svc._handle_reset_service(c.hass, c, "filter")),
+    ("inspect_reset", lambda c: svc._handle_inspect_reset_service(c.hass, c, "wheels")),
+]
+
+
+def _maint_entity(hass, *, prime, store=True, hours=None):
+    entry = MockConfigEntry(domain=DOMAIN, data={"blid": "B"})
+    entry.add_to_hass(hass)
+    maint = MagicMock(async_save=AsyncMock()) if store else None
+    data = SimpleNamespace(
+        connection_type=ConnectionType.CLOUD_ONLY if prime else ConnectionType.LOCAL_PUSH,
+        maintenance_store=maint, blid="B",
+        prime_status_coordinator=SimpleNamespace(data={"ro-stats": {"runtimeStats": {"hours": hours}}}),
+        roomba_reported_state=lambda: {"bbrun": {"hr": hours}})
+    entry.runtime_data = data
+    eid = er.async_get(hass).async_get_or_create("vacuum", DOMAIN, "B_vac", config_entry=entry,
+                                                 suggested_object_id="robbie").entity_id
+    return eid, maint
+
+
+class TestQuietHours:
+
+    @pytest.mark.parametrize("data", [
+        {"start": dt.time(22, 0)},                                              # start without end
+        {"start": dt.time(22, 0), "end": dt.time(7, 0), "ends_at": dt.datetime(2026, 9, 24, 7)},  # both
+        {},                                                                     # neither
+    ], ids=["start_only", "both_shapes", "neither"])
+    @pytest.mark.asyncio
+    async def test_exactly_one_shape_is_accepted(self, hass, data):
+        eid, robot = _robot_entity(hass)
+        with pytest.raises(ServiceValidationError_m):
+            await svc.async_handle_set_quiet_hours(_call(hass, entity_id=eid, **data))
+        robot.set_dnd_settings.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_daily_window_is_sent_in_minutes_since_midnight(self, hass):
+        eid, robot = _robot_entity(hass)
+        await svc.async_handle_set_quiet_hours(_call(hass, entity_id=eid, start=dt.time(22, 30), end=dt.time(6, 15)))
+        household, body = robot.set_dnd_settings.await_args.args
+        assert household == "h1"
+        assert body == {"dailyStart": 22 * 60 + 30, "dailyEnd": 6 * 60 + 15}
+
+    @pytest.mark.asyncio
+    async def test_a_one_off_end_is_sent_in_utc_milliseconds(self, hass):
+        from homeassistant.util import dt as dt_util
+
+        eid, robot = _robot_entity(hass)
+        when = dt.datetime(2026, 9, 24, 7, 0, tzinfo=dt.UTC)
+        await svc.async_handle_set_quiet_hours(_call(hass, entity_id=[eid], ends_at=when))
+        _h, body = robot.set_dnd_settings.await_args.args
+        assert body == {"endsAt": int(when.timestamp() * 1000)}
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_entity_is_refused(self, hass):
+        with pytest.raises(ServiceValidationError_m):
+            await svc.async_handle_set_quiet_hours(_call(hass, entity_id="vacuum.nobody", start=dt.time(22), end=dt.time(6)))
+
+    @pytest.mark.asyncio
+    async def test_a_classic_robot_is_refused(self, hass):
+        eid, _robot = _robot_entity(hass, prime=False)
+        with pytest.raises(ServiceValidationError_m):
+            await svc.async_handle_set_quiet_hours(_call(hass, entity_id=eid, start=dt.time(22), end=dt.time(6)))
+
+
+class TestCleanSequence:
+
+    @pytest.mark.asyncio
+    async def test_the_second_starts_once_the_first_has_docked(self, hass):
+        a, b = _two_vacuums(hass)
+        starts = async_mock_service(hass, "vacuum", "start")
+        hass.states.async_set(a, "cleaning")
+        await svc.async_handle_clean_sequence(_call(hass, entity_id=a, target_entity_id=b))
+        hass.states.async_set(a, "returning")
+        await hass.async_block_till_done()
+        assert starts == []
+        hass.states.async_set(a, "docked")
+        await hass.async_block_till_done()
+        assert [c.data["entity_id"] for c in starts] == [b]
+        # One-shot: a later docking does not start it again.
+        hass.states.async_set(a, "cleaning")
+        hass.states.async_set(a, "docked")
+        await hass.async_block_till_done()
+        assert len(starts) == 1
+
+    @pytest.mark.asyncio
+    async def test_an_error_counts_only_when_completion_is_not_required(self, hass):
+        a, b = _two_vacuums(hass)
+        starts = async_mock_service(hass, "vacuum", "start")
+        hass.states.async_set(a, "cleaning")
+        await svc.async_handle_clean_sequence(_call(hass, entity_id=a, target_entity_id=b, require_completed=True))
+        hass.states.async_set(a, "error")
+        await hass.async_block_till_done()
+        assert starts == []
+
+    @pytest.mark.asyncio
+    async def test_with_completion_not_required_an_error_also_hands_over(self, hass):
+        a, b = _two_vacuums(hass)
+        starts = async_mock_service(hass, "vacuum", "start")
+        hass.states.async_set(a, "cleaning")
+        await svc.async_handle_clean_sequence(_call(hass, entity_id=a, target_entity_id=b, require_completed=False))
+        hass.states.async_set(a, "error")
+        await hass.async_block_till_done()
+        assert len(starts) == 1
+
+    @pytest.mark.asyncio
+    async def test_a_delay_waits_before_starting(self, hass, monkeypatch):
+        import asyncio
+
+        waited = []
+        real_sleep = asyncio.sleep
+
+        async def _sleep(s, *a, **k):
+            waited.append(s)
+            await real_sleep(0)   # still yield: HA's own waiting relies on it
+
+        monkeypatch.setattr(asyncio, "sleep", _sleep)
+        a, b = _two_vacuums(hass)
+        starts = async_mock_service(hass, "vacuum", "start")
+        hass.states.async_set(a, "cleaning")
+        await svc.async_handle_clean_sequence(_call(hass, entity_id=a, target_entity_id=b, delay_minutes=3))
+        hass.states.async_set(a, "docked")
+        await hass.async_block_till_done()
+        assert 180 in waited and len(starts) == 1
+
+    @pytest.mark.asyncio
+    async def test_a_foreign_entity_is_refused_with_a_translated_message(self, hass):
+        a, _b = _two_vacuums(hass)
+        with pytest.raises(ServiceValidationError_m) as exc:
+            await svc.async_handle_clean_sequence(_call(hass, entity_id=a, target_entity_id="vacuum.other_brand"))
+        assert exc.value.translation_key == "not_a_roomba_plus_vacuum"
+        assert exc.value.translation_placeholders == {"entity_id": "vacuum.other_brand"}
+
+
+class TestRunFavorite:
+
+    @pytest.mark.asyncio
+    async def test_a_prime_favourite_runs_through_the_cloud(self, hass, monkeypatch):
+        from custom_components.roomba_plus import button_prime
+
+        run = AsyncMock(return_value=True)
+        monkeypatch.setattr(button_prime, "async_run_favorite", run)
+        eid, entry = _fav_entity(hass, kind="prime")
+        await svc.async_handle_run_favorite(_call(hass, entity_id=[eid], favorite_id="f1"))
+        run.assert_awaited_once_with(entry, "f1")
+
+    @pytest.mark.asyncio
+    async def test_a_classic_favourite_needs_the_cloud_account(self, hass, monkeypatch):
+        from custom_components.roomba_plus import button
+
+        run = AsyncMock(return_value=True)
+        monkeypatch.setattr(button, "async_run_classic_favorite", run)
+        eid, _entry = _fav_entity(hass, kind="classic", has_cloud=False)
+        with pytest.raises(ServiceValidationError_m):
+            await svc.async_handle_run_favorite(_call(hass, entity_id=[eid], favorite_id="f1"))
+        run.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_classic_favourite_with_the_account_runs(self, hass, monkeypatch):
+        from custom_components.roomba_plus import button
+
+        run = AsyncMock(return_value=True)
+        monkeypatch.setattr(button, "async_run_classic_favorite", run)
+        eid, entry = _fav_entity(hass, kind="classic")
+        await svc.async_handle_run_favorite(_call(hass, entity_id=[eid], favorite_id="f1"))
+        run.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_a_favourite_that_did_not_run_is_reported(self, hass, monkeypatch):
+        from custom_components.roomba_plus import button_prime
+
+        monkeypatch.setattr(button_prime, "async_run_favorite", AsyncMock(return_value=False))
+        eid, _entry = _fav_entity(hass, kind="prime")
+        with pytest.raises(ServiceValidationError_m):
+            await svc.async_handle_run_favorite(_call(hass, entity_id=[eid], favorite_id="nope"))
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_entity_is_skipped(self, hass):
+        await svc.async_handle_run_favorite(_call(hass, entity_id=["vacuum.nobody"], favorite_id="f1"))
+
+
+class TestResetRobotProfile:
+
+    @pytest.mark.asyncio
+    async def test_each_robot_with_a_profile_is_reset_others_are_skipped(self, hass):
+        entry = MockConfigEntry(domain=DOMAIN, data={"blid": "B"})
+        entry.add_to_hass(hass)
+        rps = MagicMock(async_reset=AsyncMock())
+        entry.runtime_data = SimpleNamespace(robot_profile_store=rps)
+        eid = er.async_get(hass).async_get_or_create("vacuum", DOMAIN, "B_vac", config_entry=entry,
+                                                     suggested_object_id="robbie").entity_id
+        entry2 = MockConfigEntry(domain=DOMAIN, data={"blid": "C"})
+        entry2.add_to_hass(hass)
+        entry2.runtime_data = SimpleNamespace(robot_profile_store=None)
+        eid2 = er.async_get(hass).async_get_or_create("vacuum", DOMAIN, "C_vac", config_entry=entry2,
+                                                      suggested_object_id="other").entity_id
+        await svc.async_handle_reset_robot_profile(_call(hass, entity_id=[eid, eid2, "vacuum.nobody"]))
+        rps.async_reset.assert_awaited_once_with(hass, entry.entry_id)
+
+    @pytest.mark.asyncio
+    async def test_a_single_entity_id_string_is_accepted(self, hass):
+        entry = MockConfigEntry(domain=DOMAIN, data={"blid": "B"})
+        entry.add_to_hass(hass)
+        rps = MagicMock(async_reset=AsyncMock())
+        entry.runtime_data = SimpleNamespace(robot_profile_store=rps)
+        eid = er.async_get(hass).async_get_or_create("vacuum", DOMAIN, "B_vac", config_entry=entry,
+                                                     suggested_object_id="robbie").entity_id
+        await svc.async_handle_reset_robot_profile(_call(hass, entity_id=eid))
+        rps.async_reset.assert_awaited_once()
+
+
+class TestMaintenanceChangeReachesTheEntities:
+    """After a reset, the sensors must show the NEW value at once.
+
+    The old path wrote each chosen sensor's CURRENT state back with a new
+    timestamp -- the old value -- and the reset buttons refreshed only
+    themselves. The new value appeared with the robot's next message."""
+
+    @pytest.mark.asyncio
+    async def test_an_entity_re_renders_its_new_value_on_the_signal(self, hass, monkeypatch):
+        from homeassistant.components.sensor import SensorEntity
+
+        from custom_components.roomba_plus.entity import IRobotEntity
+
+        store = {"hours": 120}
+
+        class _Remaining(IRobotEntity, SensorEntity):
+            _attr_unique_id = "roomba_plus_B_filter_remaining_hours"
+            _attr_has_entity_name = False
+            _attr_name = "filter remaining"
+
+            @property
+            def native_value(self):
+                return store["hours"]
+
+        roomba = MagicMock()
+        roomba.master_state = {"state": {"reported": {}}}
+        entry = MockConfigEntry(domain=DOMAIN, data={"blid": "B"})
+        entry.add_to_hass(hass)
+        entry.runtime_data = SimpleNamespace(blid="B")
+        e = _Remaining(roomba, "B")
+        e._config_entry = entry
+        monkeypatch.setattr(IRobotEntity, "_async_update_device_name", AsyncMock())
+        from homeassistant.helpers.entity_platform import EntityPlatform
+
+        platform = EntityPlatform(hass=hass, logger=MagicMock(), domain="sensor", platform_name=DOMAIN,
+                                  platform=None, scan_interval=__import__("datetime").timedelta(seconds=30),
+                                  entity_namespace=None)
+        await platform.async_add_entities([e])
+        await hass.async_block_till_done()
+        assert hass.states.get(e.entity_id).state == "120"
+
+        store["hours"] = 150          # the reset wrote the store
+        svc._async_signal_maintenance_changed(hass, entry)
+        await hass.async_block_till_done()
+        assert hass.states.get(e.entity_id).state == "150"
+
+
+@pytest.mark.parametrize("name,handler", _HANDLERS, ids=[n for n, _ in _HANDLERS])
+@pytest.mark.asyncio
+async def test_an_unknown_robot_given_as_a_string_is_refused_with_a_translated_message(hass, name, handler):
+    with pytest.raises(ServiceValidationError_m) as exc:
+        await handler(_call(hass, entity_id="vacuum.nobody"))
+    assert exc.value.translation_key, f"{name}: refusal without a translation key"
+    assert exc.value.translation_domain == DOMAIN
+
+
+class TestMaintenanceResetHours:
+
+    @pytest.mark.parametrize("prime", [True, False], ids=["prime_from_the_cloud", "classic_from_mqtt"])
+    @pytest.mark.asyncio
+    async def test_the_reset_is_booked_against_the_robots_hour_meter(self, hass, monkeypatch, prime):
+        monkeypatch.setattr(svc, "_fire_maintenance_reset_event", lambda *a: None)
+        monkeypatch.setattr(svc, "_async_push_part_reset_to_cloud", AsyncMock(), raising=False)
+        eid, maint = _maint_entity(hass, prime=prime, hours=412)
+        await svc._handle_reset_service(hass, _call(hass, entity_id=eid), "filter")
+        maint.reset_filter.assert_called_once_with(412)
+        maint.async_save.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_no_maintenance_store_is_a_translated_refusal(self, hass):
+        eid, _m = _maint_entity(hass, prime=False, store=False)
+        with pytest.raises(ServiceValidationError_m) as exc:
+            await svc._handle_reset_service(hass, _call(hass, entity_id=[eid]), "filter")
+        assert exc.value.translation_key == "maintenance_store_unavailable"
+
+
+class TestRouteOrder:
+    """Room order by nearest neighbour from the dock. Routing is a bonus:
+    anything missing or failing keeps the user's order."""
+
+    def _data(self, *, centroids=None, dock=(0.0, 0.0), error=None):
+        aligner = MagicMock(aligned=True)
+        aligner.room_centroids_umf = MagicMock(side_effect=error, return_value=centroids or {})
+        aligner.pose_to_umf.return_value = dock
+        return SimpleNamespace(umf_aligner=aligner)
+
+    def test_nearest_room_first(self):
+        data = self._data(centroids={"1": (9.0, 0.0), "2": (1.0, 0.0), "3": (5.0, 0.0)})
+        out = svc._route_optimize_order(data, ["Far", "Near", "Mid"], {"1": "Far", "2": "Near", "3": "Mid"})
+        assert out == ["Near", "Mid", "Far"]
+
+    @pytest.mark.parametrize("kw", [{"error": RuntimeError("map")}, {"centroids": {}}, {"dock": None}],
+                             ids=["failing_aligner", "no_centroids", "no_dock"])
+    def test_anything_missing_keeps_the_users_order(self, kw):
+        order = ["Far", "Near"]
+        assert svc._route_optimize_order(self._data(**kw), order, {"1": "Far", "2": "Near"}) == order
+
+
+class TestUnwrapStringifiedList:
+
+    @pytest.mark.parametrize("names,known,out", [
+        (["Kitchen, Hall"], {"Kitchen", "Hall"}, ["Kitchen", "Hall"]),      # comma list of known rooms
+        (["Dining, Living"], {"Dining, Living"}, ["Dining, Living"]),       # a room whose name has a comma
+        (["['Kitchen', 'Hall']"], set(), ["Kitchen", "Hall"]),              # a stringified list
+        (["[not python"], set(), ["[not python"]),                          # unparseable stays as given
+        (["[1, 2]"], set(), ["[1, 2]"]),                                    # not a list of names
+        (["A", "B"], set(), ["A", "B"]),                                    # already a list
+    ])
+    def test_cases(self, names, known, out):
+        assert svc._unwrap_stringified_list(names, known) == out

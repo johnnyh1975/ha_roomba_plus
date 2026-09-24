@@ -28,6 +28,9 @@ from custom_components.roomba_plus.device_trigger import (
     async_attach_trigger,
     async_get_triggers,
 )
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+from homeassistant.exceptions import HomeAssistantError
 
 
 def _make_device(identifiers=None, primary_config_entry="entry_abc", config_entries=None):
@@ -460,3 +463,105 @@ class TestPrimeRobotsCanUseTheDeviceTriggers:
 
         source = inspect.getsource(device_trigger)
         assert "state_trigger.async_attach_trigger" in source
+
+
+# ── formerly tests/test_coverage_mid_gaps_3.py ──────────────────────────────────
+#
+# Mid-sized coverage gaps, third batch — quality scale, test-coverage.
+#
+# Prime schedules come from the cloud as nested, loosely typed structures.
+# The readers must skip what they cannot read, never guess a day or a time,
+# and never crash the switch that shows them.
+
+def _state_trigger_branches():
+    """(trigger constant, translation key) for every state-trigger branch,
+    read from the source — a branch added later is tested automatically."""
+    import ast
+    import pathlib
+
+    src = pathlib.Path("custom_components/roomba_plus/device_trigger.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.AsyncFunctionDef) and n.name == "async_attach_trigger")
+    out = []
+    for node in fn.body:
+        if not (isinstance(node, ast.If) and isinstance(node.test, ast.Compare)):
+            continue
+        rhs = node.test.comparators[0]
+        if not isinstance(rhs, ast.Name):
+            continue
+        call = next((c for c in ast.walk(node) if isinstance(c, ast.Call)
+                     and getattr(c.func, "id", "") == "_find_entity"), None)
+        if call is not None:
+            out.append((rhs.id, call.args[2].value))
+    return out
+
+
+class TestDeviceTriggerStateBranches:
+
+    BRANCHES = _state_trigger_branches()
+
+    def test_the_branches_were_found(self):
+        assert len(self.BRANCHES) >= 7
+
+    @pytest.mark.parametrize("const,key", _state_trigger_branches())
+    @pytest.mark.asyncio
+    async def test_each_attaches_a_state_trigger_on_its_entity(self, monkeypatch, const, key):
+        from custom_components.roomba_plus import device_trigger as dt
+
+        gesucht = []
+        monkeypatch.setattr(dt, "_find_entity",
+                            lambda _h, _d, k: gesucht.append(k) or f"sensor.robot_{k}")
+        attach = AsyncMock(return_value="detach")
+        monkeypatch.setattr(dt.state_trigger, "async_attach_trigger", attach)
+
+        result = await dt.async_attach_trigger(
+            MagicMock(), {"type": getattr(dt, const), "device_id": "d1"}, MagicMock(), {})
+
+        assert gesucht == [key]
+        assert result == "detach"
+        assert attach.await_args.args[1]["entity_id"] == [f"sensor.robot_{key}"]
+
+    @pytest.mark.parametrize("const,key", _state_trigger_branches())
+    @pytest.mark.asyncio
+    async def test_a_missing_entity_gives_a_harmless_detach(self, monkeypatch, const, key):
+        """The entity may be disabled; the automation must load anyway."""
+        from custom_components.roomba_plus import device_trigger as dt
+
+        monkeypatch.setattr(dt, "_find_entity", lambda *_a: None)
+        detach = await dt.async_attach_trigger(
+            MagicMock(), {"type": getattr(dt, const), "device_id": "d1"}, MagicMock(), {})
+        assert detach() is None
+
+
+class TestDeviceTriggerLookups:
+
+    def test_the_entity_is_found_by_its_translation_key(self, monkeypatch):
+        from custom_components.roomba_plus import device_trigger as dt
+
+        entries = [SimpleNamespace(domain="light", platform="hue", translation_key="phase", entity_id="light.x"),
+                   SimpleNamespace(domain="sensor", platform="roomba_plus", translation_key="error", entity_id="sensor.e"),
+                   SimpleNamespace(domain="sensor", platform="roomba_plus", translation_key="phase", entity_id="sensor.p")]
+        monkeypatch.setattr(dt.er, "async_get", lambda _h: MagicMock())
+        monkeypatch.setattr(dt.er, "async_entries_for_device", lambda _r, _d: entries)
+        assert dt._find_entity(MagicMock(), "d1", "phase") == "sensor.p"
+        assert dt._find_entity(MagicMock(), "d1", "bin_full") is None
+
+    def test_an_unknown_device_has_no_entry_and_no_triggers(self, monkeypatch):
+        import asyncio
+
+        from custom_components.roomba_plus import device_trigger as dt
+
+        monkeypatch.setattr(dt.dr, "async_get", lambda _h: MagicMock(async_get=lambda _d: None))
+        assert dt._entry_id_for_device(MagicMock(), "gone") is None
+        assert asyncio.run(dt.async_get_triggers(MagicMock(), "gone")) == []
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_trigger_type_warns_and_never_fires(self, monkeypatch, caplog):
+        from custom_components.roomba_plus import device_trigger as dt
+
+        monkeypatch.setattr(dt, "_entry_id_for_device", lambda *_a: "e1")
+        detach = await dt.async_attach_trigger(
+            MagicMock(), {"type": "no_such_trigger", "device_id": "d1"}, MagicMock(), {})
+        assert detach() is None
+        assert "unknown trigger type" in caplog.text

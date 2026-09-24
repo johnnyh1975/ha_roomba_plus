@@ -23,6 +23,10 @@ from custom_components.roomba_plus.const import (
     DEFAULT_BLOCKING_TIMEOUT_MIN,
 )
 from custom_components.roomba_plus.models import ConnectionType
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+from unittest.mock import MagicMock
+from homeassistant.exceptions import HomeAssistantError
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -494,3 +498,151 @@ class TestNonBinarySensorBlockers:
         entry = _make_entry(["input_boolean.vacation_mode"])
         bm = BlockingManager(hass, entry)
         assert bm.blocking_entities == []
+
+
+# ── formerly tests/test_coverage_mid_gaps_3.py ──────────────────────────────────
+#
+# Mid-sized coverage gaps, third batch — quality scale, test-coverage.
+#
+# Prime schedules come from the cloud as nested, loosely typed structures.
+# The readers must skip what they cannot read, never guess a day or a time,
+# and never crash the switch that shows them.
+
+def _bm(hass, **runtime):
+    from custom_components.roomba_plus.blocking_manager import BlockingManager
+
+    entry = MagicMock()
+    entry.entry_id = "e1"
+    for k, v in runtime.items():
+        setattr(entry.runtime_data, k, v)
+    return BlockingManager(hass, entry)
+
+
+class TestBlockingCallbacks:
+
+    def test_a_failing_listener_does_not_stop_the_others(self, hass):
+        m = _bm(hass)
+        calls = []
+        m.register_state_callback(MagicMock(side_effect=RuntimeError("bad")))
+        m.register_state_callback(lambda: calls.append(1))
+        m._notify_state_change()
+        assert calls == [1]
+
+    def test_unsubscribing_twice_is_harmless(self, hass):
+        m = _bm(hass)
+        unsub = m.register_state_callback(lambda: None)
+        unsub()
+        unsub()
+        assert m._state_callbacks == []
+
+
+class TestBlockingQueue:
+
+    @pytest.mark.asyncio
+    async def test_a_queued_start_runs_once_the_block_clears(self, hass):
+        m = _bm(hass)
+        m._cancel_listeners = [MagicMock()]
+        m._queued_rooms = ["Kitchen"]
+        m._do_start = AsyncMock()
+        await m._trigger_queued_start()
+        m._do_start.assert_awaited_once_with(["Kitchen"])
+        assert m.is_queued is False
+
+    @pytest.mark.asyncio
+    async def test_nothing_queued_starts_nothing(self, hass):
+        m = _bm(hass)
+        m._do_start = AsyncMock()
+        await m._trigger_queued_start()
+        m._do_start.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_timeout_gives_up_counts_a_skip_and_says_so(self, hass, monkeypatch):
+        from custom_components.roomba_plus import callbacks
+        from custom_components.roomba_plus.blocking_manager import EVENT_START_TIMEOUT
+
+        store = MagicMock(consecutive_skips=2)
+        store.async_save = AsyncMock()
+        m = _bm(hass, maintenance_store=store)
+        m._cancel_listeners = [MagicMock()]
+        monkeypatch.setattr(callbacks, "async_record_mission", AsyncMock())
+        fired = []
+        hass.bus.async_listen(EVENT_START_TIMEOUT, lambda e: fired.append(e))
+
+        await m._run_timeout(0)
+        await hass.async_block_till_done()
+
+        assert fired, "the timeout is announced"
+        assert m.is_queued is False
+        assert store.consecutive_skips == 3
+
+    @pytest.mark.asyncio
+    async def test_a_cancelled_timeout_ends_quietly(self, hass):
+        import asyncio
+
+        m = _bm(hass)
+        task = hass.async_create_task(m._run_timeout(3600))
+        await asyncio.sleep(0)
+        m._timeout_task = task
+        m._cancel_listeners = [MagicMock()]
+        m.cancel_queue()
+        await asyncio.sleep(0)
+        assert task.done()
+
+
+class TestBlockingStart:
+
+    @pytest.mark.asyncio
+    async def test_rooms_on_a_prime_robot_are_refused(self, hass):
+        from custom_components.roomba_plus.models import ConnectionType
+
+        m = _bm(hass, connection_type=ConnectionType.CLOUD_ONLY, blid="B1")
+        hass.services = MagicMock()
+        await m._do_start(["Kitchen"])
+        hass.services.async_call.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_rooms_on_a_classic_robot_go_through_clean_room(self, hass, monkeypatch):
+        from homeassistant.helpers import entity_registry as er
+
+        from custom_components.roomba_plus.models import ConnectionType
+
+        m = _bm(hass, connection_type=ConnectionType.LOCAL_PUSH, blid="B1")
+        reg = MagicMock()
+        reg.async_get_entity_id.return_value = "vacuum.robbie"
+        monkeypatch.setattr(er, "async_get", lambda _h: reg)
+        calls = []
+
+        async def _clean_room(call):
+            calls.append(dict(call.data))
+
+        hass.services.async_register("roomba_plus", "clean_room", _clean_room)
+        await m._do_start(["Kitchen"])
+        assert calls and calls[0]["entity_id"] == "vacuum.robbie"
+
+    @pytest.mark.asyncio
+    async def test_an_unresolvable_vacuum_starts_nothing(self, hass, monkeypatch):
+        from homeassistant.helpers import entity_registry as er
+
+        from custom_components.roomba_plus.models import ConnectionType
+
+        m = _bm(hass, connection_type=ConnectionType.LOCAL_PUSH, blid="B1")
+        monkeypatch.setattr(er, "async_get", lambda _h: MagicMock(async_get_entity_id=lambda *a: None))
+        hass.services = MagicMock()
+        await m._do_start(["Kitchen"])
+        hass.services.async_call.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_a_whole_house_start_on_prime(self, hass):
+        robot = MagicMock()
+        robot.send_simple_command = AsyncMock(return_value=True)
+        m = _bm(hass, prime_robot=robot, sent_commands=[])
+        await m._do_start(None)
+        robot.send_simple_command.assert_awaited_once_with("start")
+
+    @pytest.mark.asyncio
+    async def test_a_whole_house_start_on_classic(self, hass):
+        roomba = MagicMock()
+        roomba.send_command = AsyncMock()
+        m = _bm(hass, prime_robot=None, roomba=roomba, sent_commands=[])
+        await m._do_start(None)
+        roomba.send_command.assert_awaited_once_with("start")

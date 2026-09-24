@@ -33,6 +33,25 @@ from custom_components.roomba_plus.const import CLEANING_PHASES
 from custom_components.roomba_plus.const import MISSION_END_PHASES
 import time
 from typing import Any
+from types import SimpleNamespace
+from custom_components.roomba_plus import image as img
+from custom_components.roomba_plus.const import GAP_THRESHOLD_MM
+from custom_components.roomba_plus.const import MAX_DOOR_WIDTH_MM
+from custom_components.roomba_plus.const import MIN_DOOR_WIDTH_MM
+from roombapy_prime.models.livemap import MapUpdateMessage
+from roombapy_prime.models.livemap import PositionUpdateMessage
+import io
+from PIL import Image
+from custom_components.roomba_plus.prime_room_map import PrimeFloorPlan
+from custom_components.roomba_plus.grid_store import GridStore
+from custom_components.roomba_plus.models import ConnectionType
+from custom_components.roomba_plus import prime_room_map
+from custom_components.roomba_plus import room_cleaning
+import json
+from pathlib import Path
+from custom_components.roomba_plus.image import RoombaMapImage
+from custom_components.roomba_plus.mission_map import MissionMapMismatch
+from custom_components.roomba_plus.mission_map import MissionMapUnavailable
 
 
 def _make_entity(cell_count: int = 5, stuck_count: int = 2):
@@ -245,7 +264,7 @@ class TestRoombaMapImageAttrs:
     def _entity(self, aligner=None, renderer=None):
         from custom_components.roomba_plus.image import RoombaMapImage
         entity = object.__new__(RoombaMapImage)
-        entity._config_entry = MagicMock()
+        entity._config_entry = entry_mock()
         entity._config_entry.runtime_data.umf_aligner = aligner
         entity._renderer = renderer
         return entity
@@ -318,7 +337,7 @@ class TestRoombaRoomsImage:
     def _entity(self, aligner=None):
         from custom_components.roomba_plus.image import RoombaRoomsImage
         entity = object.__new__(RoombaRoomsImage)
-        entity._config_entry = MagicMock()
+        entity._config_entry = entry_mock()
         entity._config_entry.runtime_data.umf_aligner = aligner
         entity._last_x_min = 0.0
         entity._last_x_max = 5000.0
@@ -352,7 +371,7 @@ class TestRoombaRoomsImage:
         """Entity unique_id includes robot blid + rooms_map suffix."""
         from custom_components.roomba_plus.image import RoombaRoomsImage
         entity = object.__new__(RoombaRoomsImage)
-        entity._config_entry = MagicMock()
+        entity._config_entry = entry_mock()
         entity._config_entry.runtime_data.umf_aligner = None
         entity._last_x_min = entity._last_y_min = 0.0
         entity._last_x_max = entity._last_y_max = 5000.0
@@ -434,7 +453,7 @@ class TestZoneOverlayAndFurnitureRoombaMapImage:
     def _entity(self, aligner=None, renderer=None):
         from custom_components.roomba_plus.image import RoombaMapImage
         entity = object.__new__(RoombaMapImage)
-        entity._config_entry = MagicMock()
+        entity._config_entry = entry_mock()
         entity._config_entry.runtime_data.umf_aligner = aligner
         entity._config_entry.runtime_data.cloud_coordinator.regions = []
         entity._config_entry.runtime_data.cloud_coordinator.observed_zone_centroids = []
@@ -542,7 +561,7 @@ class TestZoneOverlayAndFurnitureRoombaRoomsImage:
     def _entity(self, aligner=None, aligned_render=True):
         from custom_components.roomba_plus.image import RoombaRoomsImage
         entity = object.__new__(RoombaRoomsImage)
-        entity._config_entry = MagicMock()
+        entity._config_entry = entry_mock()
         entity._config_entry.runtime_data.umf_aligner = aligner
         entity._config_entry.runtime_data.cloud_coordinator.regions = []
         entity._config_entry.runtime_data.cloud_coordinator.observed_zone_centroids = []
@@ -715,12 +734,12 @@ class TestTerminalMissionImageRefresh:
 
         scheduled = []
 
-        def schedule(coro, _loop):
+        def schedule(_hass, coro, *_ignored):
             scheduled.append(coro)
             return MagicMock()
 
-        with patch(
-            "custom_components.roomba_plus.image.asyncio.run_coroutine_threadsafe",
+        with patch.object(
+            route._config_entry, "async_create_task",
             side_effect=schedule,
         ):
             route._handle_mission_end()
@@ -827,12 +846,12 @@ class TestTerminalMissionImageRefresh:
 
         scheduled = []
 
-        def schedule(coro, _loop):
+        def schedule(_hass, coro, *_ignored):
             scheduled.append(coro)
             return MagicMock()
 
-        with patch(
-            "custom_components.roomba_plus.image.asyncio.run_coroutine_threadsafe",
+        with patch.object(
+            route._config_entry, "async_create_task",
             side_effect=schedule,
         ):
             route._handle_mission_end()
@@ -922,7 +941,7 @@ def _make_map_entity():
     # behaviour (e.g. the new EPHEMERAL-only gates) override this
     # explicitly afterward.
     entity._map_capability = MapCapability.EPHEMERAL
-    entity._config_entry = MagicMock()
+    entity._config_entry = entry_mock()
     # v3.2.1 DOCK-ANCHOR — explicit None, not left as an
     # auto-generating MagicMock: incidental dock-contact-confirmed
     # triggers (see entity._renderer.point_count comment above) would
@@ -1306,7 +1325,7 @@ class TestMissionCheckpointV282:
 
         entity = RoombaMapImage.__new__(RoombaMapImage)
         entity.hass = hass_mock()
-        entity._config_entry = MagicMock()
+        entity._config_entry = entry_mock()
         entity._renderer = MagicMock()
         entity._zone_store = None
         entity._map_capability = None
@@ -1315,13 +1334,14 @@ class TestMissionCheckpointV282:
         entity._stuck_mission_points = []
         entity._mission_start_ts = "2026-06-18T09:00:00+00:00"
 
-        with patch(
-                "custom_components.roomba_plus.image.asyncio.run_coroutine_threadsafe",
-                side_effect=lambda coro, *a, **k: coro.close(),
+        with patch.object(
+                entity._config_entry, "async_create_task",
+                side_effect=lambda _hass, coro, *a, **k: coro.close(),
             ) as mock_run:
             entity._handle_mission_end(ending_phase="")
 
-        scheduled_coros = [c.args[0] for c in mock_run.call_args_list]
+        # args[1]: config_entry.async_create_task takes (hass, coro).
+        scheduled_coros = [c.args[1] for c in mock_run.call_args_list]
         assert any(
             getattr(c, "__qualname__", "").endswith("_async_clear_mission_checkpoint")
             for c in scheduled_coros
@@ -1345,7 +1365,7 @@ class TestMissionCheckpointV282:
         entity = RoombaMapImage.__new__(RoombaMapImage)
         entity.hass = hass_mock()
         entity.hass.loop = MagicMock()
-        entity._config_entry = MagicMock()
+        entity._config_entry = entry_mock()
         entity._config_entry.entry_id = "test_entry"
         entity._config_entry.runtime_data.grid_store = gs
         entity._renderer = MagicMock()
@@ -1358,9 +1378,9 @@ class TestMissionCheckpointV282:
         entity._mission_start_ts = "2026-06-18T09:00:00+00:00"
         entity.vacuum_state = {"bbmssn": {"nMssn": 77}}
 
-        with patch(
-                "custom_components.roomba_plus.image.asyncio.run_coroutine_threadsafe",
-                side_effect=lambda coro, *a, **k: coro.close(),
+        with patch.object(
+                entity._config_entry, "async_create_task",
+                side_effect=lambda _hass, coro, *a, **k: coro.close(),
             ) as mock_run:
             entity._handle_mission_end(ending_phase="")
 
@@ -1380,7 +1400,7 @@ class TestMissionCheckpointV282:
         entity = RoombaMapImage.__new__(RoombaMapImage)
         entity.hass = hass_mock()
         entity.hass.loop = MagicMock()
-        entity._config_entry = MagicMock()
+        entity._config_entry = entry_mock()
         entity._config_entry.entry_id = "test_entry"
         entity._config_entry.runtime_data.grid_store = gs
         entity._renderer = MagicMock()
@@ -1393,9 +1413,9 @@ class TestMissionCheckpointV282:
         entity._mission_start_ts = "2026-06-18T09:00:00+00:00"
         entity.vacuum_state = {}  # no bbmssn at all
 
-        with patch(
-                "custom_components.roomba_plus.image.asyncio.run_coroutine_threadsafe",
-                side_effect=lambda coro, *a, **k: coro.close(),
+        with patch.object(
+                entity._config_entry, "async_create_task",
+                side_effect=lambda _hass, coro, *a, **k: coro.close(),
             ) as mock_run:
             entity._handle_mission_end(ending_phase="")  # must not raise
 
@@ -1502,9 +1522,9 @@ class TestMissionCheckpointV282:
         entity._had_cleaning_phase = True
         entity._mission_points = [(0.0, 0.0)]
 
-        with patch(
-                "custom_components.roomba_plus.image.asyncio.run_coroutine_threadsafe",
-                side_effect=lambda coro, *a, **k: coro.close(),
+        with patch.object(
+                entity._config_entry, "async_create_task",
+                side_effect=lambda _hass, coro, *a, **k: coro.close(),
             ) as mock_run:
             _feed_map_entity(entity, _stuck_msg(1))
 
@@ -1517,9 +1537,9 @@ class TestMissionCheckpointV282:
         entity = _make_map_entity()
         entity._had_cleaning_phase = False
 
-        with patch(
-                "custom_components.roomba_plus.image.asyncio.run_coroutine_threadsafe",
-                side_effect=lambda coro, *a, **k: coro.close(),
+        with patch.object(
+                entity._config_entry, "async_create_task",
+                side_effect=lambda _hass, coro, *a, **k: coro.close(),
             ) as mock_run:
             _feed_map_entity(entity, _stuck_msg(1))
 
@@ -1537,7 +1557,7 @@ class TestRoomPalette:
         entity = object.__new__(RoombaRoomsImage)
         aligner = _make_aligner(aligned=True)
         aligner._room_polygons = room_polygons
-        entity._config_entry = MagicMock()
+        entity._config_entry = entry_mock()
         entity._config_entry.runtime_data.umf_aligner = aligner
         entity._last_x_min = entity._last_y_min = 0.0
         entity._last_x_max = entity._last_y_max = 5000.0
@@ -1607,7 +1627,7 @@ class TestZoneLayerCache:
         aligner = _make_aligner(aligned=True)
         aligner._room_polygons = room_polygons
         aligner.pmap_version_id = pmap_version_id
-        entity._config_entry = MagicMock()
+        entity._config_entry = entry_mock()
         entity._config_entry.runtime_data.umf_aligner = aligner
         entity._last_x_min = entity._last_y_min = 0.0
         entity._last_x_max = entity._last_y_max = 5000.0
@@ -1703,9 +1723,9 @@ class TestDockAnchorBuffering:
     def test_stuck_event_enters_buffering(self):
         entity = _make_map_entity()
         entity._had_cleaning_phase = True
-        with patch(
-                "custom_components.roomba_plus.image.asyncio.run_coroutine_threadsafe",
-                side_effect=lambda coro, *a, **k: coro.close(),
+        with patch.object(
+                entity._config_entry, "async_create_task",
+                side_effect=lambda _hass, coro, *a, **k: coro.close(),
             ) as mock_run:
             _feed_map_entity(entity, _stuck_msg(1))
             mock_run.call_args.args[0].close()
@@ -1722,9 +1742,9 @@ class TestDockAnchorBuffering:
         _feed_map_entity(entity, _pose_msg(200, 0))
         assert entity._mission_points == [(0.0, 1000.0), (0.0, 2000.0)]
 
-        with patch(
-                "custom_components.roomba_plus.image.asyncio.run_coroutine_threadsafe",
-                side_effect=lambda coro, *a, **k: coro.close(),
+        with patch.object(
+                entity._config_entry, "async_create_task",
+                side_effect=lambda _hass, coro, *a, **k: coro.close(),
             ) as mock_run:
             _feed_map_entity(entity, _stuck_msg(1))
             mock_run.call_args.args[0].close()
@@ -1752,9 +1772,9 @@ class TestDockAnchorBuffering:
         exact distinction is what surfaced the underlying issue)."""
         entity = _make_map_entity()
         entity._had_cleaning_phase = True
-        with patch(
-                "custom_components.roomba_plus.image.asyncio.run_coroutine_threadsafe",
-                side_effect=lambda coro, *a, **k: coro.close(),
+        with patch.object(
+                entity._config_entry, "async_create_task",
+                side_effect=lambda _hass, coro, *a, **k: coro.close(),
             ) as mock_run:
             _feed_map_entity(entity, _stuck_msg(1))
             mock_run.call_args.args[0].close()
@@ -2055,9 +2075,9 @@ class TestHandleDockContactConfirmed:
         # coroutine argument was already built, and dropping it is
         # reported as "never awaited" in whichever later test happens
         # to trigger collection.
-        with patch(
-            "custom_components.roomba_plus.image.asyncio.run_coroutine_threadsafe",
-            side_effect=lambda coro, *a, **k: coro.close(),
+        with patch.object(
+            entity._config_entry, "async_create_task",
+            side_effect=lambda _hass, coro, *a, **k: coro.close(),
         ):
             entity._handle_dock_contact_confirmed()
 
@@ -2169,9 +2189,9 @@ class TestDockAnchorSmartRobotExclusion:
         entity = _make_map_entity()
         entity._map_capability = MapCapability.SMART
         entity._had_cleaning_phase = True
-        with patch(
-                "custom_components.roomba_plus.image.asyncio.run_coroutine_threadsafe",
-                side_effect=lambda coro, *a, **k: coro.close(),
+        with patch.object(
+                entity._config_entry, "async_create_task",
+                side_effect=lambda _hass, coro, *a, **k: coro.close(),
             ) as mock_run:
             _feed_map_entity(entity, _stuck_msg(1))
             mock_run.call_args.args[0].close()
@@ -2210,9 +2230,9 @@ class TestDockAnchorSmartRobotExclusion:
         entity = _make_map_entity()
         assert entity._map_capability == MapCapability.EPHEMERAL
         entity._had_cleaning_phase = True
-        with patch(
-                "custom_components.roomba_plus.image.asyncio.run_coroutine_threadsafe",
-                side_effect=lambda coro, *a, **k: coro.close(),
+        with patch.object(
+                entity._config_entry, "async_create_task",
+                side_effect=lambda _hass, coro, *a, **k: coro.close(),
             ) as mock_run:
             _feed_map_entity(entity, _stuck_msg(1))
             mock_run.call_args.args[0].close()
@@ -2237,9 +2257,9 @@ class TestCheckpointSavedAtDockContactResolution:
         entity._last_dock_anchor_index = 0
         entity._dock_anchor_buffering = False
 
-        with patch(
-                "custom_components.roomba_plus.image.asyncio.run_coroutine_threadsafe",
-                side_effect=lambda coro, *a, **k: coro.close(),
+        with patch.object(
+                entity._config_entry, "async_create_task",
+                side_effect=lambda _hass, coro, *a, **k: coro.close(),
             ) as mock_run:
             entity._handle_dock_contact_confirmed()
 
@@ -2260,9 +2280,9 @@ class TestCheckpointSavedAtDockContactResolution:
         entity._last_dock_anchor_index = 0
         entity._dock_anchor_buffering = False
 
-        with patch(
-                "custom_components.roomba_plus.image.asyncio.run_coroutine_threadsafe",
-                side_effect=lambda coro, *a, **k: coro.close(),
+        with patch.object(
+                entity._config_entry, "async_create_task",
+                side_effect=lambda _hass, coro, *a, **k: coro.close(),
             ) as mock_run:
             entity._handle_dock_contact_confirmed()
 
@@ -2477,7 +2497,7 @@ class TestPrimeMapImageBackgroundTask:
         entity = object.__new__(PrimeMapImage)
         entity._blid = "TESTBLID"
         entity._prime_robot = MagicMock()
-        entity._config_entry = MagicMock()
+        entity._config_entry = entry_mock()
         # async_create_background_task() receives the coroutine as an argument
         # but (being a MagicMock) never awaits/schedules it -- close it
         # explicitly so this test doesn't leak a "coroutine was never
@@ -3273,3 +3293,1355 @@ class TestUnnamedZonesShowTheirNumber:
 
         assert "if not name or not ring:" not in source
         assert "if not ring:" in source
+
+
+# ── formerly tests/test_coverage_image.py ───────────────────────────────────────
+#
+# image.py — quality scale, test-coverage.
+#
+# At mission end the Classic map hands the mission's path to the learning
+# stores: geometry (doorways from gaps in the path), the occupancy grid
+# (with weekday and hour of stuck events), outline and room segmentation.
+# Built through the real constructor, which no test used before.
+
+def _entry(**runtime):
+    entry = MagicMock()
+    entry.options = {}
+    scheduled = []
+
+    def _task(_hass, coro, *a, **k):
+        scheduled.append(getattr(coro, "__qualname__", repr(coro)))
+        if hasattr(coro, "close"):
+            coro.close()
+
+    entry.async_create_task = _task
+    for k in ("geometry_store", "grid_store", "outline_store", "room_seg_store",
+              "freeze_snapshot_store", "mission_store"):
+        setattr(entry.runtime_data, k, runtime.get(k))
+    return entry, scheduled
+
+
+def _map(capability, entry, renderer=None):
+    roomba = MagicMock()
+    roomba.master_state = {"state": {"reported": {"bbmssn": {"nMssn": 7}}}}
+    m = img.RoombaMapImage(roomba, "B", renderer, capability, entry)
+    m.hass = MagicMock()
+    m.vacuum_state = {"bbmssn": {"nMssn": 7}}
+    m._refresh_terminal_mission_images = MagicMock()
+    return m
+
+
+def _path(n=30, step=100.0):
+    return [(i * step, 0.0) for i in range(n)]
+
+
+class _Resp:
+    def __init__(self, status=200, body=b"raw"):
+        self.status, self._body, self.headers = status, body, {"Content-Type": "application/octet-stream"}
+
+    async def read(self):
+        return self._body
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+
+def _prime_map(hass, monkeypatch, streams, *, status=200, decode=b"PNG"):
+    entry = MagicMock()
+    entry.entry_id = "e1"
+    entry.runtime_data.prime_positions = []
+    robot = MagicMock()
+    it = iter(streams)
+
+    def _watch():
+        s = next(it)
+        if isinstance(s, asyncio.CancelledError):
+            raise s          # ends the test's loop
+
+        async def _gen():
+            # Like the real library: an async generator that fails while
+            # being iterated, not when it is created.
+            if isinstance(s, BaseException):
+                raise s
+            for m in s:
+                yield m
+        return _gen()
+
+    robot.watch_live_map = _watch
+    m = img.PrimeMapImage(robot, "PB", entry)
+    m.hass = hass
+    m.async_write_ha_state = MagicMock()
+    m._async_save_png = MagicMock()
+    session = MagicMock()
+    session.get = lambda url: _Resp(status)
+    monkeypatch.setattr(img, "async_get_clientsession", lambda _h: session)
+    from roombapy_prime.models import livemap
+
+    monkeypatch.setattr(livemap, "decode_rawmap_to_png", lambda raw: decode)
+    monkeypatch.setattr(img.asyncio, "sleep", AsyncMock())
+    return m, entry
+
+
+def _position(*points):
+    return PositionUpdateMessage(sequence_number=1, last_update_timestamp=0, expires_at=0,
+                                 updates=[SimpleNamespace(point=p, orientation=0.5) for p in points])
+
+
+def _renderer(has_data=True):
+    r = MagicMock(has_data=has_data, _fit_scale=10.0, _breaks=[])
+    r.render.return_value = b"base"
+    r._mm_to_px.return_value = (1, 1)
+    r._mm_to_px_fit.return_value = (1, 1)
+    r.render_keepout_zones.return_value = b"keepout"
+    r.render_observed_zones.return_value = b"observed"
+    r.render_room_outline.return_value = b"outline"
+    return r
+
+
+def _image_map(hass, *, renderer, capability=MapCapability.SMART, aligned=True, keepout=(),
+               centroids=(), outline_ready=False, extent=None):
+    entry, _s = _entry()
+    data = entry.runtime_data
+    aligner = MagicMock(aligned=aligned)
+    aligner.keepout_polygon_umf.side_effect = lambda z: z.get("poly")
+    aligner.umf_to_pose.side_effect = lambda x, y: None if x < 0 else (x, y)
+    data.umf_aligner = aligner
+    data.cloud_coordinator = SimpleNamespace(keepout_zones=list(keepout), observed_zone_centroids=list(centroids))
+    data.outline_store = MagicMock(ready=outline_ready)
+    data.map_capability = capability
+    data.room_map_extent_mm = extent
+    m = _map(capability, entry, renderer=renderer)
+    m.hass = hass
+    return m
+
+
+def _square(x0, y0, size=2000.0):
+    return [(x0, y0), (x0 + size, y0), (x0 + size, y0 + size), (x0, y0 + size)]
+
+
+def _rooms_image(*, live=None, positions=(), floor=True):
+    r = img.PrimeRoomsImage.__new__(img.PrimeRoomsImage)
+    r._renderer = None
+    r._polygons = {"3": _square(0, 0), "5": _square(2500, 0)}
+    r._names = {"3": "Kitchen", "5": "Hall"}
+    r._zone_polygons = {"z1": _square(500, 500, 400)}
+    r._floor_plan = PrimeFloorPlan(
+        room_names={}, room_polygons={},
+        floor_plan=[_square(-100, -100, 4700)] if floor else [],
+        borders=[_square(0, 0, 4500)], carpet=[_square(200, 200, 600)],
+        furniture=[_square(3000, 300, 300)], dock=(100.0, 100.0), zone_layers={},
+        zone_polygons={}, p2map_id="m1")
+    r._live_bundle = live
+    r._show_live_overlay = True
+    r._include_live = True
+    r._dock_position = lambda: (100.0, 100.0)   # a method on the real class
+    r._live_position_belongs_here = lambda: True
+    r._config_entry = MagicMock()
+    r._config_entry.runtime_data.prime_positions = list(positions)
+    return r
+
+
+def _decode(png):
+    im = Image.open(io.BytesIO(png))
+    im.load()
+    return im
+
+
+def _real_entry(hass, **runtime):
+    entry, _s = _entry(**runtime)
+    entry.entry_id = "e1"
+    d = entry.runtime_data
+    d.cloud_coordinator = None
+    d.umf_aligner = None
+    d.room_seg_store = None
+    d.prime_positions = []
+    d.map_capability = MapCapability.EPHEMERAL
+    return entry
+
+
+def _build_all(hass):
+    roomba = MagicMock()
+    roomba.master_state = {"state": {"reported": {}}}
+    entry = _real_entry(hass, grid_store=GridStore())
+    built = [
+        img.RoombaMapImage(roomba, "B", _renderer(), MapCapability.EPHEMERAL, entry),
+        img.RoombaRoomsImage(roomba, "B", entry),
+        img.RoombaCoverageImage(roomba, "B", entry.runtime_data.grid_store, entry),
+        img.PrimeMapImage(MagicMock(), "PB", entry),
+        img.PrimeRoomsImage("PB", entry, hass),
+    ]
+    for e in built:
+        e.hass = hass
+        e.async_write_ha_state = MagicMock()
+        e.schedule_update_ha_state = MagicMock()
+    return built
+
+
+def _prime_rooms(hass, monkeypatch, *, map_ids, current=None, chosen=None, versions=None,
+                 polygons=None, floor=None):
+    entry = _real_entry(hass)
+    entry.runtime_data.prime_selected_map_id = chosen
+    robot = MagicMock(get_active_map_versions=AsyncMock(return_value=versions or []))
+    entry.runtime_data.prime_robot = robot
+    backend = MagicMock()
+    backend._all_map_ids = AsyncMock(return_value=map_ids)
+    backend._current_map_id = AsyncMock(return_value=current)
+    monkeypatch.setattr(room_cleaning, "async_get_room_cleaning_backend", lambda *_a: backend)
+    built = []
+
+    async def _polys(_e, map_id):
+        built.append(map_id)
+        return dict(polygons or {}), {k: f"R{k}" for k in (polygons or {})}, {}
+
+    monkeypatch.setattr(prime_room_map, "async_build_prime_room_polygons", _polys)
+    fp = floor or PrimeFloorPlan(room_names={}, room_polygons={}, floor_plan=[], borders=[], carpet=[],
+                                 furniture=[], dock=None, zone_layers={}, zone_polygons={}, p2map_id="")
+    monkeypatch.setattr(prime_room_map, "async_build_prime_floor_plan", AsyncMock(return_value=fp))
+    r = img.PrimeRoomsImage("PB", entry, hass)
+    r.hass = hass
+    r._render_png = MagicMock(return_value=b"PNG")
+    return r, built
+
+
+def _rooms_attrs(hass, *, aligned=True, rendered=True, polygons=None, aligner=True):
+    entry = _real_entry(hass)
+    data = entry.runtime_data
+    if aligner:
+        al = MagicMock(aligned=aligned)
+        al.room_polygons_umf = polygons if polygons is not None else {
+            "3": [(1.0, 1.0), (4.0, 1.0), (4.0, 4.0)],
+            "5": [(-1.0, 1.0), (2.0, 1.0), (2.0, 2.0)]}         # one corner does not map back
+        al.umf_to_pose.side_effect = lambda x, y: None if x < 0 else (x * 10, y * 10)
+        al.keepout_polygon_umf.side_effect = lambda z: z.get("poly")
+        al.rid_to_name.return_value = {"3": "Kitchen"}
+        al.calibration_points.return_value = [{"cal": 1}]
+        data.umf_aligner = al
+    else:
+        data.umf_aligner = None
+    data.cloud_coordinator = SimpleNamespace(
+        regions=[{"id": "3", "region_type": "kitchen"}],
+        observed_zone_centroids=[{"x": 2.0, "y": 2.0}, {"x": -3.0, "y": 0.0}],
+        keepout_zones=[{"poly": [(1.0, 1.0), (2.0, 1.0), (2.0, 2.0)]},
+                       {"poly": [(-1.0, 1.0), (2.0, 1.0), (2.0, 2.0)]}, {"poly": None}])
+    data.geometry_store = SimpleNamespace(door_markers=[
+        SimpleNamespace(id="d1", cx=1.0, cy=2.0, label="Door", mission_count=4)])
+    data.grid_store = MagicMock()
+    data.grid_store.furniture_candidates.return_value = [{"x_mm": 5.0, "y_mm": 6.0, "extra": 1}]
+    roomba = MagicMock()
+    roomba.master_state = {"state": {"reported": {}}}
+    r = img.RoombaRoomsImage(roomba, "B", entry)
+    r.hass = hass
+    r._rendered_once = rendered
+    r._to_px_last = lambda x, y: (x, y)
+    return r.extra_state_attributes
+
+
+class TestMissionEnd:
+
+    def test_no_path_saves_nothing_but_clears_the_checkpoint(self):
+        geo = MagicMock()
+        entry, scheduled = _entry(geometry_store=geo)
+        m = _map(MapCapability.EPHEMERAL, entry)
+        m._handle_mission_end("charge")
+        assert any("clear_mission_checkpoint" in s for s in scheduled)
+        geo.async_save.assert_not_called()
+
+    def test_a_docked_ephemeral_mission_saves_the_geometry(self):
+        geo = MagicMock(drift_recovered=MagicMock(return_value=True))
+        entry, scheduled = _entry(geometry_store=geo)
+        m = _map(MapCapability.EPHEMERAL, entry)
+        m._mission_points = _path()
+        m._handle_mission_end("charge")
+        geo.async_save.assert_called_once()
+        assert any("clear_drift_issue" in s for s in scheduled), "a recovered drift clears its issue"
+
+    def test_an_ephemeral_mission_that_did_not_dock_saves_no_geometry(self):
+        """Without the dock as anchor the path may have drifted."""
+        geo = MagicMock()
+        entry, _s = _entry(geometry_store=geo)
+        m = _map(MapCapability.EPHEMERAL, entry)
+        m._mission_points = _path()
+        m._handle_mission_end("stuck")
+        geo.async_save.assert_not_called()
+
+    def test_on_a_smart_map_door_sized_gaps_become_doorways(self):
+        geo = MagicMock()
+        entry, _s = _entry(geometry_store=geo)
+        m = _map(MapCapability.SMART, entry)
+        door = (MIN_DOOR_WIDTH_MM + MAX_DOOR_WIDTH_MM) / 2
+        assert door > GAP_THRESHOLD_MM
+        path = _path(25) + [(2400.0 + door, 0.0)] + [(2400.0 + door + i * 100.0, 0.0) for i in range(1, 5)]
+        m._mission_points = path
+        m._handle_mission_end("charge")
+        (mid,), = [c.args for c in geo.update_from_midpoints.call_args_list]
+        assert mid == [(2400.0 + door / 2, 0.0)]
+
+
+class TestGridAtMissionEnd:
+
+    def test_the_path_and_the_stuck_hour_go_to_the_grid(self, monkeypatch):
+        grid = MagicMock(cells={})
+        entry, _s = _entry(grid_store=grid)
+        m = _map(MapCapability.SMART, entry, renderer=MagicMock(has_data=False, _breaks=[]))
+        m._mission_points = _path(5)
+        m._stuck_mission_points = [(100.0, 0.0)]
+        m._mission_start_ts = "2026-09-21T07:30:00+00:00"
+        monkeypatch.setattr(img, "_anchored_mission_points", lambda pts, *_a, **_k: pts)
+        m._handle_mission_end("charge")
+        args, kwargs = grid.update_from_mission.call_args
+        assert args[1] == [(100.0, 0.0)] and kwargs["stuck_wh"] is not None
+        grid.record_processed_nmssn.assert_called_once_with(7)
+
+    def test_new_unconfirmed_rooms_raise_the_zone_issue(self, monkeypatch):
+        grid = MagicMock(cells={})
+        seg = MagicMock()
+        seg.unconfirmed_rooms = []
+        def _recompute(*_a, **_k):
+            seg.unconfirmed_rooms = ["r1"]
+            return True
+        seg.maybe_recompute = _recompute
+        outline = MagicMock()
+        entry, scheduled = _entry(grid_store=grid, room_seg_store=seg, outline_store=outline)
+        m = _map(MapCapability.EPHEMERAL, entry, renderer=MagicMock(has_data=False, _breaks=[]))
+        m._mission_points = _path(5)
+        monkeypatch.setattr(img, "_anchored_mission_points", lambda pts, *_a, **_k: pts)
+        m._handle_mission_end("charge")
+        outline.recompute_sync.assert_called_once()
+        assert any("trigger_zone_issue" in s for s in scheduled)
+
+
+class TestPrimeLiveMap:
+
+    @pytest.mark.asyncio
+    async def test_positions_feed_the_trail_in_millimetres_and_bad_samples_are_counted(self, hass, monkeypatch):
+        msg = _position((1.0, 2.0), None, ("x",), (None, 3.0))
+        m, entry = _prime_map(hass, monkeypatch, [[msg], asyncio.CancelledError()])
+        with pytest.raises(asyncio.CancelledError):
+            await m._async_watch_live_map()
+        assert entry.runtime_data.prime_positions[0][:2] == (1000.0, 2000.0)
+        stats = m._live_map_stats()
+        assert stats["trail_points_added"] == 1
+        assert stats["trail_skipped_no_point"] == 1 and stats["trail_skipped_no_xy"] == 2
+
+    @pytest.mark.asyncio
+    async def test_a_raw_map_becomes_the_image(self, hass, monkeypatch):
+        msg = MapUpdateMessage(livemap_url=None, livemap_url_raw="https://x/raw", timestamp=0)
+        m, _e = _prime_map(hass, monkeypatch, [[msg], asyncio.CancelledError()])
+        with pytest.raises(asyncio.CancelledError):
+            await m._async_watch_live_map()
+        assert m._png_bytes == b"PNG"
+        m._async_save_png.assert_called_once()
+        assert m._live_map_stats()["decode_ok"] == 1
+
+    @pytest.mark.asyncio
+    async def test_a_failed_download_keeps_the_previous_image(self, hass, monkeypatch):
+        msg = MapUpdateMessage(livemap_url=None, livemap_url_raw="https://x/raw", timestamp=0)
+        m, _e = _prime_map(hass, monkeypatch, [[msg], asyncio.CancelledError()], status=503)
+        m._png_bytes = b"OLD"
+        with pytest.raises(asyncio.CancelledError):
+            await m._async_watch_live_map()
+        assert m._png_bytes == b"OLD"
+
+    @pytest.mark.asyncio
+    async def test_an_undecodable_map_is_counted_and_keeps_the_image(self, hass, monkeypatch):
+        from roombapy_prime.models import livemap
+
+        msg = MapUpdateMessage(livemap_url=None, livemap_url_raw="https://x/raw", timestamp=0)
+        m, _e = _prime_map(hass, monkeypatch, [[msg], asyncio.CancelledError()])
+        monkeypatch.setattr(livemap, "decode_rawmap_to_png", MagicMock(side_effect=ValueError("bad")))
+        m._png_bytes = b"OLD"
+        with pytest.raises(asyncio.CancelledError):
+            await m._async_watch_live_map()
+        assert m._png_bytes == b"OLD" and m._live_map_stats()["decode_failed"] == 1
+
+    @pytest.mark.asyncio
+    async def test_a_dropped_stream_reconnects_with_growing_backoff(self, hass, monkeypatch):
+        m, _e = _prime_map(hass, monkeypatch, [RuntimeError("down"), [], asyncio.CancelledError()])
+        m._record_watch_failure = MagicMock()
+        with pytest.raises(asyncio.CancelledError):
+            await m._async_watch_live_map()
+        waits = [c.args[0] for c in img.asyncio.sleep.await_args_list]
+        assert waits[:2] == [5.0, 10.0]
+        assert m._record_watch_failure.call_count == 2
+
+
+class TestMapImageLayers:
+
+    @pytest.mark.asyncio
+    async def test_without_a_renderer_a_blank_image(self, hass):
+        m = _image_map(hass, renderer=None)
+        m._blank_image = MagicMock(return_value=b"blank")
+        assert await m.async_image() == b"blank"
+
+    @pytest.mark.asyncio
+    async def test_without_own_data_the_cloud_coverage_is_shown(self, hass):
+        m = _image_map(hass, renderer=_renderer(has_data=False))
+        m._async_cloud_coverage_png = AsyncMock(return_value=b"cloud")
+        assert await m.async_image() == b"cloud"
+
+    @pytest.mark.asyncio
+    async def test_keepout_zones_are_drawn_skipping_ones_that_do_not_map_back(self, hass):
+        r = _renderer()
+        m = _image_map(hass, renderer=r, keepout=[
+            {"poly": [(1.0, 1.0), (2.0, 1.0), (2.0, 2.0)]},
+            {"poly": [(-1.0, 1.0), (2.0, 1.0), (2.0, 2.0)]},     # one corner outside: skipped whole
+            {"poly": None}])
+        assert await m.async_image() == b"keepout"
+        (polys,) = r.render_keepout_zones.call_args.args
+        assert len(polys) == 1
+
+    @pytest.mark.asyncio
+    async def test_observed_zones_are_drawn_as_circles(self, hass):
+        r = _renderer()
+        m = _image_map(hass, renderer=r, centroids=[{"x": 5.0, "y": 5.0}, {"x": -1.0, "y": 0.0}])
+        assert await m.async_image() == b"observed"
+        (circles,) = r.render_observed_zones.call_args.args
+        assert len(circles) == 1 and circles[0][2] >= 3
+
+    @pytest.mark.asyncio
+    async def test_an_unaligned_map_gets_no_cloud_overlays(self, hass):
+        r = _renderer()
+        m = _image_map(hass, renderer=r, aligned=False, keepout=[{"poly": [(1.0, 1.0)] * 3}])
+        assert await m.async_image() == b"base"
+        r.render_keepout_zones.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_the_learned_outline_on_a_robot_without_a_smart_map(self, hass):
+        r = _renderer()
+        m = _image_map(hass, renderer=r, capability=MapCapability.EPHEMERAL, outline_ready=True)
+        assert await m.async_image() == b"outline"
+
+    @pytest.mark.asyncio
+    async def test_the_room_extent_fixes_the_frame(self, hass):
+        r = _renderer()
+        m = _image_map(hass, renderer=r, extent=(0, 1000, 0, 800))
+        await m.async_image()
+        assert r._fit_bounds_px is not None
+        m2 = _image_map(hass, renderer=_renderer(), extent=None)
+        await m2.async_image()
+        assert m2._renderer._fit_bounds_px is None
+
+
+class TestPrimeRoomsRender:
+
+    def test_a_full_floor_renders_to_a_valid_square_png_with_the_room_colours(self):
+        from custom_components.roomba_plus.image import ROOM_FILL_PALETTE
+
+        r = _rooms_image()
+        im = _decode(r._render_png())
+        assert im.format == "PNG" and im.size[0] == im.size[1]
+        colours = {c for _n, c in im.convert("RGB").getcolors(maxcolors=1_000_000)}
+        assert ROOM_FILL_PALETTE[0][:3] in colours or tuple(ROOM_FILL_PALETTE[0])[:3] in colours
+
+    def test_live_coverage_and_the_robots_own_trail_are_drawn(self):
+        live = {"coverage": {"type": "FeatureCollection", "features": []},
+                "trajectories": {"features": []}, "hazard": {"features": []}, "manifest": {}}
+        r = _rooms_image(live=live, positions=[(100.0, 100.0, 0.0), (900.0, 400.0, 0.0), (1500.0, 800.0, 0.0)])
+        im = _decode(r._render_png())
+        assert im.size[0] > 0
+
+    def test_without_a_floor_plan_the_rooms_still_render(self):
+        im = _decode(_rooms_image(floor=False)._render_png())
+        assert im.format == "PNG"
+
+
+class TestEveryImageClass:
+
+    @pytest.mark.asyncio
+    async def test_built_for_real_each_answers_its_attributes(self, hass):
+        for e in _build_all(hass):
+            attrs = e.extra_state_attributes
+            assert attrs is None or isinstance(attrs, dict), type(e).__name__
+            assert e.unique_id, type(e).__name__
+
+    @pytest.mark.parametrize("state", [{}, {"cleanMissionStatus": {"phase": "run", "mssnStrtTm": 1},
+                                            "pose": {"point": {"x": 1, "y": 2}, "theta": 0}}],
+                             ids=["empty", "running"])
+    def test_a_classic_message_is_handled(self, hass, state):
+        for e in _build_all(hass)[:3]:
+            e.vacuum.master_state = {"state": {"reported": state}}
+            e.on_message({"state": {"reported": state}})   # must not raise
+
+
+class TestRoomsImage:
+
+    def test_a_learned_room_layout_names_its_rooms(self, hass):
+        entry = _real_entry(hass)
+        seg = MagicMock()
+        seg.rooms = {"r1": SimpleNamespace(name="Kitchen", confirmed=True, cells=[(0, 0)], area_m2=12.0),
+                     "r2": SimpleNamespace(name=None, confirmed=False, cells=[(1, 1)], area_m2=3.0)}
+        seg.unconfirmed_rooms = ["r2"]
+        entry.runtime_data.room_seg_store = seg
+        roomba = MagicMock()
+        roomba.master_state = {"state": {"reported": {}}}
+        r = img.RoombaRoomsImage(roomba, "B", entry)
+        r.hass = hass
+        attrs = r.extra_state_attributes
+        assert isinstance(attrs, dict)
+
+
+class TestImageSetup:
+
+    async def _run(self, hass, **d):
+        entry, _s = _entry()
+        data = entry.runtime_data
+        data.connection_type = d.get("conn", ConnectionType.LOCAL_PUSH)
+        data.prime_robot = d.get("prime_robot")
+        data.map_capability = d.get("cap", MapCapability.EPHEMERAL)
+        data.grid_store = d.get("grid")
+        data.room_seg_store = d.get("seg")
+        data.renderer = _renderer()
+        data.roomba = MagicMock(master_state={"state": {"reported": {}}})
+        data.blid = "B"
+        added = []
+        await img.async_setup_entry(hass, entry, lambda ents, *a, **k: added.extend(ents))
+        return sorted(type(e).__name__ for e in added)
+
+    @pytest.mark.asyncio
+    async def test_prime_with_a_robot_gets_its_images(self, hass):
+        names = await self._run(hass, conn=ConnectionType.CLOUD_ONLY, prime_robot=MagicMock())
+        assert "PrimeMapImage" in names
+
+    @pytest.mark.asyncio
+    async def test_prime_without_a_robot_gets_none(self, hass):
+        assert await self._run(hass, conn=ConnectionType.CLOUD_ONLY, prime_robot=None) == []
+
+    @pytest.mark.asyncio
+    async def test_a_robot_that_cannot_map_gets_none(self, hass):
+        assert await self._run(hass, cap=MapCapability.NONE) == []
+
+    @pytest.mark.asyncio
+    async def test_a_mapping_robot_gets_map_coverage_and_rooms(self, hass):
+        names = await self._run(hass, cap=MapCapability.SMART, grid=GridStore())
+        assert names == ["RoombaCoverageImage", "RoombaMapImage", "RoombaRoomsImage"]
+
+
+class TestMapStateAcrossRestarts:
+
+    def _m(self, hass, renderer):
+        entry, _s = _entry()
+        entry.entry_id = "e1"
+        m = _map(MapCapability.EPHEMERAL, entry, renderer=renderer)
+        m.hass = hass
+        return m
+
+    @pytest.mark.asyncio
+    async def test_a_stored_map_is_restored(self, hass, monkeypatch):
+        r = _renderer()
+        r.restore_state.return_value = True
+        monkeypatch.setattr(img, "Store", lambda *a, **k: MagicMock(async_load=AsyncMock(return_value={"x": 1})))
+        m = self._m(hass, r)
+        before = m._attr_image_last_updated
+        await m._async_restore_map_state()
+        r.restore_state.assert_called_once_with({"x": 1})
+        assert m._attr_image_last_updated >= before
+
+    @pytest.mark.parametrize("load", [AsyncMock(side_effect=OSError("disk")), AsyncMock(return_value=None)],
+                             ids=["unreadable", "empty"])
+    @pytest.mark.asyncio
+    async def test_an_unreadable_or_empty_store_restores_nothing(self, hass, monkeypatch, load):
+        r = _renderer()
+        monkeypatch.setattr(img, "Store", lambda *a, **k: MagicMock(async_load=load))
+        await self._m(hass, r)._async_restore_map_state()
+        r.restore_state.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_a_stored_map_the_renderer_rejects_is_not_applied(self, hass, monkeypatch):
+        r = _renderer()
+        r.restore_state.return_value = False
+        monkeypatch.setattr(img, "Store", lambda *a, **k: MagicMock(async_load=AsyncMock(return_value={"old": 1})))
+        m = self._m(hass, r)
+        before = m._attr_image_last_updated
+        await m._async_restore_map_state()
+        assert m._attr_image_last_updated == before
+
+    @pytest.mark.asyncio
+    async def test_without_a_renderer_there_is_nothing_to_restore(self, hass, monkeypatch):
+        store = MagicMock(async_load=AsyncMock())
+        monkeypatch.setattr(img, "Store", lambda *a, **k: store)
+        await self._m(hass, None)._async_restore_map_state()
+        store.async_load.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_saving_writes_the_renderers_state(self, hass, monkeypatch):
+        r = _renderer()
+        r.export_state.return_value = {"points": [1, 2]}
+        store = MagicMock(async_save=AsyncMock())
+        monkeypatch.setattr(img, "Store", lambda *a, **k: store)
+        await self._m(hass, r)._async_save_map_state()
+        store.async_save.assert_awaited_once()
+
+
+class TestPrimeRoomsRefresh:
+
+    @pytest.mark.asyncio
+    async def test_the_users_chosen_map_wins(self, hass, monkeypatch):
+        r, built = _prime_rooms(hass, monkeypatch, map_ids=["m1", "m2"], current="m1", chosen="m2")
+        await r._async_refresh_rooms()
+        assert built == ["m2"]
+
+    @pytest.mark.asyncio
+    async def test_then_the_map_the_robot_is_on(self, hass, monkeypatch):
+        r, built = _prime_rooms(hass, monkeypatch, map_ids=["m1", "m2"], current="m2")
+        await r._async_refresh_rooms()
+        assert built == ["m2"]
+
+    @pytest.mark.asyncio
+    async def test_then_the_first_map(self, hass, monkeypatch):
+        r, built = _prime_rooms(hass, monkeypatch, map_ids=["m1", "m2"], current="gone")
+        await r._async_refresh_rooms()
+        assert built == ["m1"]
+
+    @pytest.mark.asyncio
+    async def test_rooms_are_rendered_and_the_map_versions_remembered(self, hass, monkeypatch):
+        r, _b = _prime_rooms(hass, monkeypatch, map_ids=["m1"], current="m1",
+                             versions=[{"p2map_id": "m1", "active_p2mapv_id": "v3"}],
+                             polygons={"3": _square(0, 0)})
+        await r._async_refresh_rooms()
+        assert r._png == b"PNG"
+        assert r._config_entry.runtime_data.prime_map_versions == {"m1": "v3"}
+
+    @pytest.mark.asyncio
+    async def test_no_maps_or_nothing_to_draw_changes_nothing(self, hass, monkeypatch):
+        r, built = _prime_rooms(hass, monkeypatch, map_ids=[])
+        await r._async_refresh_rooms()
+        assert built == []
+        assert getattr(r, "_png", None) is None
+        r2, _b = _prime_rooms(hass, monkeypatch, map_ids=["m1"], current="m1", polygons={})
+        await r2._async_refresh_rooms()
+        r2._render_png.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_a_failing_version_read_still_draws_the_rooms(self, hass, monkeypatch):
+        r, _b = _prime_rooms(hass, monkeypatch, map_ids=["m1"], current="m1", polygons={"3": _square(0, 0)})
+        r._config_entry.runtime_data.prime_robot.get_active_map_versions = AsyncMock(side_effect=RuntimeError())
+        await r._async_refresh_rooms()
+        assert r._png == b"PNG"
+
+
+class TestDockDrift:
+
+    @pytest.mark.parametrize("final,correction", [
+        ((0.0, 0.0), (0.0, 0.0)),
+        ((250.0, -299.0), (0.0, 0.0)),          # within 30 cm: no drift
+        ((450.0, 10.0), (-450.0, -10.0)),        # beyond: correct by the reverse
+        ((0.0, -800.0), (-0.0, 800.0)),
+    ])
+    def test_a_mission_ending_away_from_the_dock_is_drift(self, final, correction):
+        assert img._check_dock_drift(final) == correction
+
+
+class TestZoneLayer:
+
+    def test_zones_are_outlined_never_filled(self):
+        draw = MagicMock()
+        layer = {"features": [
+            {"geometry": {"coordinates": [[(0, 0), (1, 0), (1, 1)]]}},
+            {"geometry": {"coordinates": [[("x", 0), (1, 0), (1, 1)]]}},   # unreadable ring: skipped
+            {"geometry": {"coordinates": [[(0, 0), (1, 1)]]}},             # two points: not a polygon
+            {"geometry": None}]}
+        img.PrimeRoomsImage._draw_zone_layer(draw, lambda x, y: (int(x), int(y)), layer, outline=(1, 2, 3))
+        assert draw.polygon.call_count == 1
+        _args, kwargs = draw.polygon.call_args
+        assert kwargs == {"outline": (1, 2, 3)}, "outline only, no fill"
+
+
+class TestPrimeRoomsStart:
+
+    @pytest.mark.asyncio
+    async def test_a_stored_live_bundle_is_loaded_and_signals_are_followed(self, hass, monkeypatch):
+        from custom_components.roomba_plus.entity import IRobotEntity
+
+        monkeypatch.setattr(IRobotEntity, "async_added_to_hass", AsyncMock())
+        store = MagicMock(async_load=AsyncMock(return_value={"bundle": {"coverage": None}, "plan": "x"}))
+        monkeypatch.setattr(img, "Store", lambda *a, **k: store)
+        entry = _real_entry(hass)
+        r = img.PrimeRoomsImage("PB", entry, hass, include_live=True)
+        r.hass = hass
+        r._async_refresh_rooms = AsyncMock()
+        r.async_on_remove = MagicMock()
+        await r.async_added_to_hass()
+        assert r._stored_live_bundle == {"bundle": {"coverage": None}, "plan": "x"}
+        r._async_refresh_rooms.assert_awaited_once()
+        assert r.async_on_remove.call_count >= 2
+
+
+class TestLiveZonesBelongToTheirMap:
+    """Zone layers come from the live bundle only when it belongs to the
+    map being drawn; a bundle from the other floor would draw its zones
+    here."""
+
+    def _render(self, bundle_map):
+        from custom_components.roomba_plus.const import CONF_MAP_CLEAN_ZONES
+
+        live_layer = {"features": ["live"]}
+        stored_layer = {"features": ["stored"]}
+        r = _rooms_image(live={"manifest": {"pmap_id": bundle_map} if bundle_map else "odd",
+                               "cleanZones": live_layer})
+        r._floor_plan = PrimeFloorPlan(
+            room_names={}, room_polygons={}, floor_plan=[], borders=[], carpet=[], furniture=[],
+            dock=None, zone_layers={"cleanZones": stored_layer}, zone_polygons={}, p2map_id="m1")
+        r._config_entry.options = {CONF_MAP_CLEAN_ZONES: True}
+        r._draw_zone_layer = MagicMock()
+        r._render_png()
+        layers = [c.args[2] for c in r._draw_zone_layer.call_args_list]
+        return live_layer in layers, stored_layer in layers
+
+    def test_a_bundle_from_this_map_supplies_the_zones(self):
+        assert self._render("m1") == (True, False)
+
+    def test_a_bundle_from_another_map_does_not(self):
+        assert self._render("m2") == (False, True)
+
+    def test_a_bundle_that_names_no_map_is_trusted(self):
+        assert self._render(None) == (True, False)
+
+
+class TestLiveBundleFetch:
+
+    @pytest.mark.asyncio
+    async def test_a_bundle_is_parsed_off_the_loop_and_dispatched(self, hass, monkeypatch):
+        from roombapy_prime.models import map_bundle
+
+        parsed = {"manifest": {"pmap_id": "m1"}}
+        monkeypatch.setattr(map_bundle, "parse_map_bundle", lambda raw: parsed)
+        sent = []
+        monkeypatch.setattr(img, "async_dispatcher_send", lambda _h, signal, *a: sent.append((signal, a)))
+        msg = MapUpdateMessage(livemap_url="https://x/bundle", livemap_url_raw=None, timestamp=0)
+        m, _e = _prime_map(hass, monkeypatch, [[msg], asyncio.CancelledError()])
+        with pytest.raises(asyncio.CancelledError):
+            await m._async_watch_live_map()
+        bundle_signals = [a for s, a in sent if "bundle" in s]
+        assert bundle_signals and bundle_signals[0][0] == parsed
+
+    @pytest.mark.asyncio
+    async def test_a_failing_bundle_download_is_recorded_and_the_stream_goes_on(self, hass, monkeypatch):
+        from roombapy_prime.models import map_bundle
+
+        monkeypatch.setattr(map_bundle, "parse_map_bundle", MagicMock(side_effect=ValueError("corrupt")))
+        failures = []
+        monkeypatch.setattr(img, "record_failure", lambda what, *a: failures.append(what))
+        sent = []
+        monkeypatch.setattr(img, "async_dispatcher_send", lambda _h, signal, *a: sent.append(signal))
+        bad = MapUpdateMessage(livemap_url="https://x/bundle", livemap_url_raw=None, timestamp=0)
+        pos = _position((1.0, 1.0))
+        m, entry = _prime_map(hass, monkeypatch, [[bad, pos], asyncio.CancelledError()])
+        with pytest.raises(asyncio.CancelledError):
+            await m._async_watch_live_map()
+        assert "live bundle fetch" in failures
+        assert entry.runtime_data.prime_positions, "the position after the bad bundle still arrived"
+
+
+class TestAfterARoomRecompute:
+
+    def _run(self, monkeypatch, *, snapshot_due, start_ts="2026-09-21T07:30:00+00:00"):
+        grid = MagicMock(cells={})
+        seg = MagicMock()
+        seg.unconfirmed_rooms = []
+        seg.maybe_recompute.return_value = True
+        seg.rooms = {"r1": MagicMock(to_dict=lambda: {"id": "r1"})}
+        seg.doors = [MagicMock(to_dict=lambda: {"id": "d1"})]
+        geo = MagicMock()
+        freeze = MagicMock()
+        freeze.due.return_value = snapshot_due
+        outline = MagicMock(contour_points=[(0, 0), (1, 1)])
+        entry, scheduled = _entry(grid_store=grid, room_seg_store=seg, geometry_store=geo,
+                                  freeze_snapshot_store=freeze, outline_store=outline)
+        m = _map(MapCapability.EPHEMERAL, entry, renderer=MagicMock(has_data=False, _breaks=[]))
+        m._mission_points = _path(5)
+        m._mission_start_ts = start_ts
+        monkeypatch.setattr(img, "_anchored_mission_points", lambda pts, *_a, **_k: pts)
+        m._handle_mission_end("stuck")
+        return grid, geo, freeze
+
+    def test_the_geometry_follows_the_new_rooms_and_a_due_snapshot_is_taken(self, monkeypatch):
+        _g, geo, freeze = self._run(monkeypatch, snapshot_due=True)
+        geo.update_from_room_seg_store.assert_called_once()
+        freeze.note_recompute.assert_called_once()
+        rooms, doors, outline, _when = freeze.snapshot.call_args.args
+        assert rooms == [{"id": "r1"}] and doors == [{"id": "d1"}] and outline == [(0, 0), (1, 1)]
+
+    def test_a_snapshot_not_yet_due_is_not_taken(self, monkeypatch):
+        _g, _geo, freeze = self._run(monkeypatch, snapshot_due=False)
+        freeze.snapshot.assert_not_called()
+
+    def test_an_unreadable_start_time_still_records_the_mission(self, monkeypatch):
+        grid, _geo, _f = self._run(monkeypatch, snapshot_due=False, start_ts=object())
+        _args, kwargs = grid.update_from_mission.call_args
+        assert kwargs["stuck_wh"] is None
+
+
+class TestRoomsImageAttributes:
+
+    def test_rooms_zones_doors_and_furniture_for_the_card(self, hass):
+        attrs = _rooms_attrs(hass)
+        assert attrs["alignment_pending"] is False and attrs["calibration_points"] == [{"cal": 1}]
+        assert list(attrs["rooms"]) == ["Kitchen"], "the room whose outline does not map back is left out"
+        types = [z["type"] for z in attrs["zones"]]
+        assert types.count("observed") == 1 and types.count("keepout") == 1
+        assert attrs["door_markers"][0]["id"] == "d1"
+        assert attrs["furniture_candidates"] == [{"x_mm": 5.0, "y_mm": 6.0}]
+
+    def test_an_unaligned_map_gives_provisional_calibration_and_no_zones(self, hass):
+        attrs = _rooms_attrs(hass, aligned=False)
+        assert attrs["alignment_pending"] is True
+        assert len(attrs["calibration_points"]) == 3
+        assert "zones" not in attrs
+
+    @pytest.mark.parametrize("kw", [{"aligner": False}, {"polygons": {}}, {"rendered": False}],
+                             ids=["no_aligner", "no_rooms", "not_rendered_yet"])
+    def test_nothing_before_there_is_something_to_describe(self, hass, kw):
+        assert _rooms_attrs(hass, **kw) == {}
+
+
+class TestPolicyZonesFollowTheOptions:
+
+    def _drawn(self, keepout, nomop):
+        from custom_components.roomba_plus.const import CONF_MAP_KEEPOUT_ZONES, CONF_MAP_NOMOP_ZONES
+
+        feats = [{"properties": {"type": t}, "geometry": {"coordinates": []}}
+                 for t in ("KeepOutZone", "NoMopZone", "SomethingNew")]
+        r = _rooms_image(live={"manifest": {}, "policyZones": {"features": feats}})
+        r._floor_plan = PrimeFloorPlan(room_names={}, room_polygons={}, floor_plan=[], borders=[], carpet=[],
+                                       furniture=[], dock=None, zone_layers={}, zone_polygons={}, p2map_id="")
+        r._config_entry.options = {CONF_MAP_KEEPOUT_ZONES: keepout, CONF_MAP_NOMOP_ZONES: nomop}
+        r._draw_zone_layer = MagicMock()
+        r._render_png()
+        return sorted(c.args[2]["features"][0]["properties"]["type"]
+                      for c in r._draw_zone_layer.call_args_list
+                      if isinstance(c.args[2], dict) and c.args[2].get("features")
+                      and isinstance(c.args[2]["features"][0], dict))
+
+    @pytest.mark.parametrize("keepout,nomop,shown", [
+        (True, True, ["KeepOutZone", "NoMopZone", "SomethingNew"]),
+        (True, False, ["KeepOutZone"]),
+        (False, True, ["NoMopZone"]),
+        (False, False, []),
+    ])
+    def test_each_type_follows_its_switch_and_unknown_types_need_both(self, keepout, nomop, shown):
+        assert self._drawn(keepout, nomop) == shown
+
+
+class TestImageDelivery:
+
+    @pytest.mark.asyncio
+    async def test_prime_rooms_redraw_only_when_live_data_changed(self, hass):
+        r = _rooms_image()
+        r.hass = hass
+        r._async_refresh_if_map_changed = AsyncMock()
+        r._png = b"cached"
+        r._live_dirty = False
+        assert await r.async_image() == b"cached"
+        r._live_dirty = True
+        r._render_png = MagicMock(return_value=b"fresh")
+        assert await r.async_image() == b"fresh"
+        assert r._live_dirty is False
+
+    @pytest.mark.parametrize("rendered,expected", [(None, b"blank"), (b"heat", b"heat")])
+    @pytest.mark.asyncio
+    async def test_the_coverage_heatmap_or_a_blank_image(self, hass, rendered, expected):
+        grid = MagicMock()
+        grid.render_heatmap.return_value = rendered
+        roomba = MagicMock()
+        roomba.master_state = {"state": {"reported": {}}}
+        c = img.RoombaCoverageImage(roomba, "B", grid, _real_entry(hass))
+        c.hass = hass
+        c._blank_image = MagicMock(return_value=b"blank")
+        assert await c.async_image() == expected
+
+
+# ── formerly tests/test_image_cloud_coverage.py ───────────────────────
+#
+# Cloud-coverage fallback on RoombaMapImage.async_image() for pose-less
+# robots (i3+/lewis-daredevil firmware) — real captured i3+ fixtures.
+#
+# Covers RoombaMapImage._async_cloud_coverage_png() and its integration
+# into async_image(): a robot whose `cap` has no `pose` key can never fill
+# the local renderer (nothing ever calls add_pose()), so when the renderer
+# has no data, async_image() falls back to compositing the newest cloud
+# mission's coverage layer instead of serving a blank canvas. Pose-capable
+# robots are untouched (const.has_pose() gates the whole path).
+
+_FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def _load(name: str):
+    return json.loads((_FIXTURES / name).read_text())
+
+
+_MISSION_HISTORY = _load("irobot_missionhistory_i3plus.json")
+
+
+_MISSION_UMF = _load("irobot_mission_umf_i3plus.json")
+
+
+_HOUSEHOLD_PMAPS = _load("irobot_pmaps_i3plus.json")
+
+
+# Newest record (index 0): nMssn 434, startTime 1787562322, pmaps_info
+# points at pmap_id "0wOiGRFqRaKPJuVkOdwRtQ" / pmapv_id "260824T091539" —
+# the MISSION's OWN map, deliberately different from the household pmap
+# list's pmap_id "D8MepS5KRD6DTWlG-g5IEw" (irobot_pmaps_i3plus.json).
+_NEWEST_RECORD = _MISSION_HISTORY[0]
+
+
+_MISSION_PMAP_ID = "0wOiGRFqRaKPJuVkOdwRtQ"
+
+
+_MISSION_PMAPV_ID = "260824T091539"
+
+
+_HOUSEHOLD_PMAP_ID = _HOUSEHOLD_PMAPS[0]["pmap_id"]
+
+
+def _pose_less_state() -> dict:
+    """Mirror the real i3+ reported state: no 'pose' key under cap."""
+    return {"cap": {}, "sku": "i355640", "softwareVer": "daredevil+2.6.0"}
+
+
+def _pose_capable_state() -> dict:
+    """A robot that has ACTUALLY SENT a pose.
+
+    The gate read `cap.pose` -- the capability flag. @pk-1966's i7 on
+    lewis firmware declares `pose: 2` and never sends one, so the gate
+    blocked the fallback for exactly the robots needing it.
+    """
+    return {
+        "cap": {"pose": 1},
+        "pose": {"theta": 0, "point": {"x": 0, "y": 0}},
+        "sku": "j755840",
+        "softwareVer": "sapphire+1.0.0",
+    }
+
+
+def _promises_pose_but_never_sends() -> dict:
+    """@pk-1966's i7: `cap.pose: 2`, no `pose` key, ever.
+
+    Three robots have shown this -- @veronoicc in June, @Thonno's field
+    dump, and his. A property of lewis 22.52.10, not an install.
+    """
+    return {"cap": {"pose": 2}, "sku": "i755640", "softwareVer": "lewis+22.52.10"}
+
+
+async def _run_executor(fn, *args):
+    return fn(*args)
+
+
+def _make_entity_m(
+    *,
+    vacuum_state: dict,
+    has_data: bool,
+    raw_records=None,
+    cloud_coordinator=True,
+    config_entry_present=True,
+):
+    entity = RoombaMapImage.__new__(RoombaMapImage)
+    entity.hass = MagicMock()
+    entity.hass.async_add_executor_job = AsyncMock(side_effect=_run_executor)
+    entity.vacuum = MagicMock()
+    # The implementation resolves capabilities through
+    # roomba_reported_state(self.vacuum), i.e. master_state["state"]["reported"]
+    # — the same shape the MQTT layer delivers and that test_image.py builds.
+    # Setting only .vacuum_state would leave the real lookup on a MagicMock.
+    entity.vacuum.master_state = {"state": {"reported": vacuum_state}}
+    entity.vacuum_state = vacuum_state
+
+    renderer = MagicMock()
+    renderer.has_data = has_data
+    renderer.render = MagicMock(return_value=b"local-render-bytes")
+    entity._renderer = renderer
+
+    entity._cloud_coverage_png = None
+    entity._cloud_coverage_png_for = None
+
+    if not config_entry_present:
+        entity._config_entry = None
+        return entity, None
+
+    config_entry = MagicMock()
+    entity._config_entry = config_entry
+    data = config_entry.runtime_data
+    data.blid = "9A37307A20804F0CABE9B6011B82DDBE"
+    data.mission_map_cache = {}
+    # No keepout/observed-zone/room-outline overlays by default — kept
+    # minimal so tests assert on the cloud-vs-local split, not overlays.
+    data.umf_aligner = None
+    data.outline_store = None
+
+    if cloud_coordinator:
+        cc = data.cloud_coordinator
+        cc.raw_records = raw_records if raw_records is not None else []
+        cc.api.get_pmap_umf = AsyncMock(return_value=_MISSION_UMF)
+    else:
+        data.cloud_coordinator = None
+
+    return entity, data
+
+
+class TestCloudCoverageFallbackCoreRegression:
+    """A pose-less robot with an empty renderer must get the real cloud
+    coverage PNG, not the blank 200x200 canvas."""
+
+    @pytest.mark.asyncio
+    async def test_async_image_returns_cloud_render_not_blank(self):
+        entity, data = _make_entity_m(
+            vacuum_state=_pose_less_state(),
+            has_data=False,
+            raw_records=[_NEWEST_RECORD],
+        )
+
+        result = await entity.async_image()
+
+        assert result[:8] == b"\x89PNG\r\n\x1a\n"
+        assert result != RoombaMapImage._blank_image()
+
+    @pytest.mark.asyncio
+    async def test_fetch_uses_missions_own_pmap_not_household_pmap(self):
+        entity, data = _make_entity_m(
+            vacuum_state=_pose_less_state(),
+            has_data=False,
+            raw_records=[_NEWEST_RECORD],
+        )
+
+        await entity.async_image()
+
+        cc = data.cloud_coordinator
+        cc.api.get_pmap_umf.assert_awaited_once_with(
+            data.blid, _MISSION_PMAP_ID, _MISSION_PMAPV_ID
+        )
+        # The whole feature rests on this distinction: the fetch must use
+        # the MISSION's own pmap_id/pmapv_id (from pmaps_info on the
+        # mission-history record), never the household pmap list's
+        # pmap_id — the two are deliberately different in the fixtures.
+        called_args = cc.api.get_pmap_umf.await_args.args
+        assert _HOUSEHOLD_PMAP_ID not in called_args
+
+    @pytest.mark.asyncio
+    async def test_decoded_png_has_real_coverage_drawn(self):
+        from PIL import Image
+
+        from custom_components.roomba_plus.mission_map import _PNG_SIZE_PX
+
+        entity, _ = _make_entity_m(
+            vacuum_state=_pose_less_state(),
+            has_data=False,
+            raw_records=[_NEWEST_RECORD],
+        )
+
+        result = await entity.async_image()
+
+        img = Image.open(io.BytesIO(result))
+        assert img.size == (_PNG_SIZE_PX, _PNG_SIZE_PX)
+        colours = img.convert("RGB").getcolors(maxcolors=1_000_000)
+        assert colours is not None and len(colours) > 1, (
+            "917-point coverage layer must produce more than one colour "
+            "— a single-colour image would mean nothing was drawn"
+        )
+
+
+class TestCloudCoverageFeatureGate:
+    """Pose-capable robots must never take the cloud path, even with an
+    empty renderer."""
+
+    @pytest.mark.asyncio
+    async def test_pose_capable_robot_never_calls_cloud_fetch(self):
+        entity, data = _make_entity_m(
+            vacuum_state=_pose_capable_state(),
+            has_data=False,
+            raw_records=[_NEWEST_RECORD],
+        )
+
+        result = await entity.async_image()
+
+        data.cloud_coordinator.api.get_pmap_umf.assert_not_awaited()
+        assert result == b"local-render-bytes"
+        entity._renderer.render.assert_called_once()
+
+
+class TestCloudCoverageNoRegressionWhenRendererHasData:
+    @pytest.mark.asyncio
+    async def test_has_data_true_skips_cloud_path_entirely(self):
+        entity, data = _make_entity_m(
+            vacuum_state=_pose_less_state(),
+            has_data=True,
+            raw_records=[_NEWEST_RECORD],
+        )
+
+        result = await entity.async_image()
+
+        data.cloud_coordinator.api.get_pmap_umf.assert_not_awaited()
+        assert result == b"local-render-bytes"
+
+
+class TestCloudCoverageRendererNoneStillBlank:
+    @pytest.mark.asyncio
+    async def test_no_renderer_returns_blank_image(self):
+        entity, _ = _make_entity_m(
+            vacuum_state=_pose_less_state(),
+            has_data=False,
+            raw_records=[_NEWEST_RECORD],
+        )
+        entity._renderer = None
+
+        result = await entity.async_image()
+
+        assert result == RoombaMapImage._blank_image()
+
+
+class TestCloudCoverageFallsBackToLocalRenderGracefully:
+    """Every "nothing to serve from the cloud" case must fall through to
+    the existing local (blank, since has_data=False) render rather than
+    raising."""
+
+    @pytest.mark.asyncio
+    async def test_no_config_entry(self):
+        entity, _ = _make_entity_m(
+            vacuum_state=_pose_less_state(),
+            has_data=False,
+            config_entry_present=False,
+        )
+
+        result = await entity.async_image()
+
+        assert result == b"local-render-bytes"
+        entity._renderer.render.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_no_cloud_coordinator(self):
+        entity, _ = _make_entity_m(
+            vacuum_state=_pose_less_state(),
+            has_data=False,
+            cloud_coordinator=False,
+        )
+
+        result = await entity.async_image()
+
+        assert result == b"local-render-bytes"
+
+    @pytest.mark.asyncio
+    async def test_empty_raw_records(self):
+        entity, data = _make_entity_m(
+            vacuum_state=_pose_less_state(),
+            has_data=False,
+            raw_records=[],
+        )
+
+        result = await entity.async_image()
+
+        assert result == b"local-render-bytes"
+        data.cloud_coordinator.api.get_pmap_umf.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_no_record_has_pmaps_info(self):
+        record_without_pmaps = {**_NEWEST_RECORD, "pmaps_info": []}
+        entity, data = _make_entity_m(
+            vacuum_state=_pose_less_state(),
+            has_data=False,
+            raw_records=[record_without_pmaps],
+        )
+
+        result = await entity.async_image()
+
+        assert result == b"local-render-bytes"
+        data.cloud_coordinator.api.get_pmap_umf.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_record_missing_both_starttime_and_timestamp(self):
+        record = {**_NEWEST_RECORD}
+        record.pop("startTime", None)
+        record.pop("timestamp", None)
+        entity, data = _make_entity_m(
+            vacuum_state=_pose_less_state(),
+            has_data=False,
+            raw_records=[record],
+        )
+
+        result = await entity.async_image()
+
+        assert result == b"local-render-bytes"
+        data.cloud_coordinator.api.get_pmap_umf.assert_not_awaited()
+
+
+class TestCloudCoverageErrorHandling:
+    @pytest.mark.asyncio
+    async def test_mission_map_unavailable_falls_back_to_local(self):
+        entity, data = _make_entity_m(
+            vacuum_state=_pose_less_state(),
+            has_data=False,
+            raw_records=[_NEWEST_RECORD],
+        )
+        data.cloud_coordinator.api.get_pmap_umf = AsyncMock(
+            side_effect=MissionMapUnavailable("no coverage layer")
+        )
+
+        result = await entity.async_image()
+
+        assert result == b"local-render-bytes"
+
+    @pytest.mark.asyncio
+    async def test_mission_map_mismatch_falls_back_to_local(self):
+        entity, data = _make_entity_m(
+            vacuum_state=_pose_less_state(),
+            has_data=False,
+            raw_records=[_NEWEST_RECORD],
+        )
+        # nmssn in the UMF header disagrees with the record's nMssn.
+        mismatched_umf = json.loads(json.dumps(_MISSION_UMF))
+        mismatched_umf["maps"][0]["map_header"]["nmssn"] = 999
+        data.cloud_coordinator.api.get_pmap_umf = AsyncMock(
+            return_value=mismatched_umf
+        )
+
+        result = await entity.async_image()
+
+        assert result == b"local-render-bytes"
+
+    @pytest.mark.asyncio
+    async def test_generic_exception_does_not_propagate(self):
+        entity, data = _make_entity_m(
+            vacuum_state=_pose_less_state(),
+            has_data=False,
+            raw_records=[_NEWEST_RECORD],
+        )
+        data.cloud_coordinator.api.get_pmap_umf = AsyncMock(
+            side_effect=RuntimeError("cloud transport exploded")
+        )
+
+        result = await entity.async_image()
+
+        assert result == b"local-render-bytes"
+
+    @pytest.mark.asyncio
+    async def test_empty_coverage_mm_falls_back_to_local(self):
+        entity, data = _make_entity_m(
+            vacuum_state=_pose_less_state(),
+            has_data=False,
+            raw_records=[_NEWEST_RECORD],
+        )
+        empty_coverage_umf = json.loads(json.dumps(_MISSION_UMF))
+        for layer in empty_coverage_umf["maps"][0]["layers"]:
+            if layer.get("layer_type") == "coverage":
+                layer["geometry"]["coordinates"] = []
+        data.cloud_coordinator.api.get_pmap_umf = AsyncMock(
+            return_value=empty_coverage_umf
+        )
+
+        result = await entity.async_image()
+
+        assert result == b"local-render-bytes"
+
+
+class TestCloudCoverageCaching:
+    @pytest.mark.asyncio
+    async def test_two_calls_for_same_mission_render_only_once(self):
+        entity, data = _make_entity_m(
+            vacuum_state=_pose_less_state(),
+            has_data=False,
+            raw_records=[_NEWEST_RECORD],
+        )
+
+        first = await entity.async_image()
+        second = await entity.async_image()
+
+        assert first == second
+        data.cloud_coordinator.api.get_pmap_umf.assert_awaited_once()
+        assert entity._cloud_coverage_png_for == (
+            f"c_{int(_NEWEST_RECORD['startTime'])}"
+        )
+        assert entity._cloud_coverage_png == first
+
+    @pytest.mark.asyncio
+    async def test_new_newest_record_invalidates_cache_and_rerenders(self):
+        entity, data = _make_entity_m(
+            vacuum_state=_pose_less_state(),
+            has_data=False,
+            raw_records=[_NEWEST_RECORD],
+        )
+
+        first = await entity.async_image()
+        assert data.cloud_coordinator.api.get_pmap_umf.await_count == 1
+
+        newer_record = {**_NEWEST_RECORD, "startTime": _NEWEST_RECORD["startTime"] + 100}
+        data.cloud_coordinator.raw_records = [newer_record]
+
+        second = await entity.async_image()
+
+        assert data.cloud_coordinator.api.get_pmap_umf.await_count == 2
+        assert entity._cloud_coverage_png_for == f"c_{int(newer_record['startTime'])}"
+        assert second == first  # same UMF fixture -> identical render, different cache key
+
+
+class TestCloudCoverageSkipsOverlays:
+    """When the cloud path returns a PNG, async_image() must return it
+    unchanged — the keepout/observed-zone overlay code (which projects
+    pose-space mm through the local renderer's transform) must not run,
+    since it has no meaning for the cloud-composited canvas."""
+
+    @pytest.mark.asyncio
+    async def test_keepout_zones_present_but_never_drawn(self):
+        entity, data = _make_entity_m(
+            vacuum_state=_pose_less_state(),
+            has_data=False,
+            raw_records=[_NEWEST_RECORD],
+        )
+        # Configure keepout data that WOULD be drawn if the overlay code
+        # ran — an aligned aligner plus non-empty keepout_zones.
+        aligner = MagicMock()
+        aligner.aligned = True
+        aligner.keepout_polygon_umf.return_value = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0)]
+        aligner.umf_to_pose.side_effect = lambda x, y: (x, y)
+        data.umf_aligner = aligner
+        data.cloud_coordinator.keepout_zones = [{"id": "z1"}]
+
+        result = await entity.async_image()
+
+        # render_keepout_zones is only reachable via self._renderer, and
+        # the renderer here is a bare MagicMock with has_data=False — if
+        # the overlay branch ran it would call render_keepout_zones() on
+        # it and that call's return value (a MagicMock, not real PNG
+        # bytes) would replace the result. Getting real PNG bytes back
+        # proves the overlay branch was skipped.
+        assert result[:8] == b"\x89PNG\r\n\x1a\n"
+        entity._renderer.render_keepout_zones.assert_not_called()
+        entity._renderer.render.assert_not_called()
+
+
+class TestARobotThatPromisesPoseAndNeverSendsOne:
+    """@pk-1966 asked whether the cleaning path would simply never work
+    on his model. It would not have, and his asking is what found it.
+
+    The fallback was gated on `cap.pose`. His i7 declares `pose: 2` and
+    never sends one, so the gate stood aside on the robot that promises
+    pose and does not deliver.
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_fallback_is_not_blocked_by_the_flag(self):
+        entity, data = _make_entity_m(
+            vacuum_state=_promises_pose_but_never_sends(),
+            has_data=False,
+            raw_records=[_NEWEST_RECORD],
+        )
+
+        result = await entity.async_image()
+
+        assert result[:8] == b"\x89PNG\r\n\x1a\n"
+        data.cloud_coordinator.api.get_pmap_umf.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_a_robot_that_did_send_a_pose_is_untouched(self):
+        """The rule the gate exists for: an empty renderer on a
+        pose-reporting robot means the mission has not started yet."""
+        entity, data = _make_entity_m(
+            vacuum_state=_pose_capable_state(),
+            has_data=False,
+            raw_records=[_NEWEST_RECORD],
+        )
+
+        result = await entity.async_image()
+
+        data.cloud_coordinator.api.get_pmap_umf.assert_not_awaited()
+        assert result == b"local-render-bytes"

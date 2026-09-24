@@ -87,6 +87,13 @@ from custom_components.roomba_plus.sensor_rooms import (  # noqa: E402
     RoombaRoomAreasSensor,
     RoombaRoomCleaningHistorySensor,
 )
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+import pytest
+from custom_components.roomba_plus import sensor_rooms as sr
+import inspect
+from homeassistant.components.sensor import SensorEntity
+from custom_components.roomba_plus.entity import IRobotEntity
 
 
 def _store_with(*records) -> MissionStore:
@@ -1541,3 +1548,320 @@ class TestEveryEstimateLookupReadsOurMeasurements:
         source = inspect.getsource(_compute_room_time_estimates)
 
         assert "if _cloud:" in source
+
+
+# ── formerly tests/test_coverage_sensor_rooms.py ────────────────────────────────
+#
+# sensor_rooms.py — quality scale, test-coverage.
+#
+# Mission progress and the per-room estimates. Progress must never go
+# backwards mid-mission, must reach 100 % when the robot docks, and must
+# say plainly why it has no estimates rather than showing a made-up number.
+
+def _entry(*, cloud=True, reported=None, estimates=None, mts=None, rps=None, planned=None):
+    entry = MagicMock()
+    data = entry.runtime_data
+    data.cloud_coordinator = MagicMock() if cloud else None
+    data.roomba = MagicMock() if reported is not None else None
+    if reported is not None:
+        data.roomba.master_state = {"state": {"reported": reported}}
+    data.prime_time_estimates = estimates
+    data.mission_timer_store = mts
+    data.robot_profile_store = rps
+    if planned is not None:
+        data.mission_timer_store = mts or SimpleNamespace(
+            mission_id="m1", planned_rooms=planned, run_sec=0, last_phase_ts=0,
+            effective_elapsed_min=None, current_room_idx=0)
+    return entry
+
+
+def _progress(entry, *, last=None, last_mission=None):
+    s = sr.RoombaMissionProgress.__new__(sr.RoombaMissionProgress)
+    s._config_entry = entry
+    s._last_progress = last
+    s._last_mission_id = last_mission
+    return s
+
+
+def _mts(**kw):
+    base = dict(mission_id="m1", run_sec=0, last_phase_ts=0, effective_elapsed_min=None,
+                planned_rooms=[], current_room_idx=0)
+    base.update(kw)
+    return SimpleNamespace(**base)
+
+
+def _room_classes():
+    return sorted(
+        (c for n, c in inspect.getmembers(sr, inspect.isclass)
+         if c.__module__ == sr.__name__ and issubclass(c, SensorEntity)
+         and issubclass(c, IRobotEntity) and not n.startswith("_")),
+        key=lambda c: c.__name__,
+    )
+
+
+ROOM_CLASSES = _room_classes()
+
+
+def _bare(cls, *, cloud=None):
+    e = cls.__new__(cls)
+    e._config_entry = MagicMock()
+    e._config_entry.options = {}
+    e._entry = e._config_entry          # some classes use the shorter name
+    e._config_entry.runtime_data.cloud_coordinator = cloud
+    e._blid = "ROOMSENS01"
+    e.hass = MagicMock()
+    e.async_on_remove = MagicMock()
+    e.async_write_ha_state = MagicMock()
+    e.schedule_update_ha_state = MagicMock()
+    e._last_progress = None
+    e._last_mission_id = None
+    data = e._config_entry.runtime_data
+    data.roomba_reported_state.return_value = {}
+    for name in ("mission_timer_store", "robot_profile_store", "grid_store", "umf_aligner",
+                 "prime_time_estimates", "geometry_store", "mission_store", "mission_archive"):
+        setattr(data, name, None)
+    return e
+
+
+def _mts_full(**kw):
+    """The real store, so every field the code reads is the real one."""
+    from custom_components.roomba_plus.mission_timer_store import MissionTimerStore
+
+    m = MissionTimerStore()
+    m.mission_id = "m1"
+    m.planned_rooms = ["Kitchen", "Hall", "Bath"]
+    m.room_progress_observed = True
+    berechnet = {k: v for k, v in kw.items()
+                 if isinstance(getattr(type(m), k, None), property)}
+    for k, v in kw.items():
+        if k not in berechnet:
+            setattr(m, k, v)
+    if berechnet:
+        # Computed properties: override them on a per-instance subclass.
+        m.__class__ = type("_TimerStore", (type(m),),
+                           {k: property(lambda _s, v=v: v) for k, v in berechnet.items()})
+    return m
+
+
+def _running(mts, estimates, rps_mean=0):
+    e = _entry(mts=mts, reported={}, rps=SimpleNamespace(mission_duration_mean_sec=rps_mean))
+    reported = {"cleanMissionStatus": {"phase": "run", "mssnM": 0}}
+    e.runtime_data.roomba.master_state = {"state": {"reported": reported}}
+    e.runtime_data.roomba_reported_state.return_value = reported
+    s = _progress(e, last_mission="m1")
+    s._room_estimates = lambda _p: list(estimates)
+    return s
+
+
+class TestWhyNoRoomEstimates:
+    """The text a user sees instead of an estimate; each branch names a
+    different cause, so a support question can be answered from it."""
+
+    def test_classic_auto_pass_mode(self):
+        reported = {"lastCommand": {"regions": [{"region_id": "3", "params": {"noAutoPasses": False}}]}}
+        assert "auto pass mode" in sr.why_no_room_estimates(_entry(reported=reported))
+
+    def test_classic_fixed_passes_but_no_estimate_yet(self):
+        reported = {"lastCommand": {"regions": [{"region_id": "3", "params": {"noAutoPasses": True}}]}}
+        assert sr.why_no_room_estimates(_entry(reported=reported)) == \
+            "no confident estimate for these rooms yet"
+
+    def test_classic_without_regions_in_the_last_command(self):
+        assert "no regions" in sr.why_no_room_estimates(_entry(reported={"lastCommand": {}}))
+
+    @pytest.mark.parametrize("estimates,text", [
+        (None, "no time-estimates response cached"),
+        (SimpleNamespace(by_region="odd"), "no time-estimates response cached"),
+        (SimpleNamespace(by_region={}), "response was empty"),
+        (SimpleNamespace(by_region={"3": 600}), "no confident estimate"),
+    ])
+    def test_prime_reasons(self, estimates, text):
+        assert text in sr.why_no_room_estimates(_entry(cloud=False, estimates=estimates))
+
+
+class TestMissionProgress:
+
+    def _entry_for(self, phase, **kw):
+        e = _entry(**kw)
+        reported = {"cleanMissionStatus": {"phase": phase, "mssnM": 0}}
+        e.runtime_data.roomba.master_state = {"state": {"reported": reported}}
+        e.runtime_data.roomba_reported_state.return_value = reported
+        return e
+
+    def test_docking_completes_the_progress(self):
+        e = self._entry_for("hmPostMsn", reported={}, mts=_mts())
+        s = _progress(e, last=60)
+        assert s.native_value == 100
+
+    def test_charging_after_a_mission_also_completes_it(self):
+        """Docking and charging both end a mission; progress reads 100
+        rather than freezing at the last computed value."""
+        e = self._entry_for("charge", reported={}, mts=None)
+        assert _progress(e, last=42).native_value == 100
+
+    def test_before_the_first_mission_there_is_no_progress(self):
+        e = self._entry_for("charge", reported={}, mts=None)
+        assert _progress(e, last=None).native_value is None
+
+    def test_a_new_mission_starts_from_nothing(self):
+        mts = _mts(mission_id="m2", run_sec=60)
+        e = self._entry_for("run", reported={}, mts=mts)
+        s = _progress(e, last=80, last_mission="m1")
+        s._room_estimates = lambda _p: []
+        assert s.native_value is None or s.native_value <= 100
+        assert s._last_mission_id == "m2"
+
+    def test_without_planned_rooms_the_mean_duration_carries_it(self):
+        mts = _mts(run_sec=1800)
+        rps = SimpleNamespace(mission_duration_mean_sec=3600)
+        e = self._entry_for("run", reported={}, mts=mts, rps=rps)
+        assert _progress(e).native_value == 50
+
+    def test_without_rooms_or_a_mean_there_is_no_progress(self):
+        mts = _mts(run_sec=600)
+        rps = SimpleNamespace(mission_duration_mean_sec=0)
+        e = self._entry_for("run", reported={}, mts=mts, rps=rps)
+        assert _progress(e).native_value is None
+
+    def test_a_live_run_adds_the_time_since_the_phase_began(self):
+        import time
+
+        mts = _mts(run_sec=100, last_phase_ts=time.monotonic() - 50)
+        assert sr.RoombaMissionProgress._elapsed_sec(mts, "run") == pytest.approx(150, abs=2)
+
+    def test_a_phase_stamp_older_than_two_hours_is_ignored(self):
+        """A stamp that old is a leftover, not a running phase."""
+        import time
+
+        mts = _mts(run_sec=100, last_phase_ts=time.monotonic() - 8000)
+        assert sr.RoombaMissionProgress._elapsed_sec(mts, "run") == 100
+
+
+def test_the_room_sensor_classes_were_found():
+    assert len(ROOM_CLASSES) >= 8
+
+
+@pytest.mark.parametrize("cls", ROOM_CLASSES, ids=lambda c: c.__name__)
+@pytest.mark.asyncio
+async def test_it_detaches_everything_it_attaches(cls, monkeypatch):
+    monkeypatch.setattr(IRobotEntity, "async_added_to_hass", AsyncMock())
+    e = _bare(cls, cloud=MagicMock())
+    await e.async_added_to_hass()
+    data = e._config_entry.runtime_data
+    attached = sum(getattr(data, n).async_add_listener.call_count
+                   for n in ("cloud_coordinator", "prime_coordinator", "prime_status_coordinator"))
+    assert e.async_on_remove.call_count >= attached, f"{cls.__name__} attaches without detaching"
+
+
+@pytest.mark.parametrize("cls", ROOM_CLASSES, ids=lambda c: c.__name__)
+def test_without_data_it_shows_nothing_rather_than_guessing(cls):
+    e = _bare(cls)
+    value = e.native_value
+    assert value is None or isinstance(value, (int, float, str))
+    attrs = e.extra_state_attributes
+    assert attrs is None or isinstance(attrs, dict)
+
+
+class TestProgressWithEstimates:
+
+    def test_the_second_of_three_rooms_is_about_half_way(self):
+        mts = _mts_full(run_sec=600, current_room_idx=1, time_in_current_room_sec=300,
+                        expected_room_sec=600)
+        assert _running(mts, [600, 600, 600]).native_value == 50
+
+    def test_progress_never_goes_backwards(self):
+        """A room estimate that grows mid-mission must not pull the bar
+        back; users read that as the robot losing work."""
+        mts = _mts_full(run_sec=60, current_room_idx=0)
+        s = _running(mts, [600, 600, 600])
+        s._last_progress = 70
+        assert s.native_value == 70
+
+    def test_unknown_estimates_fall_back_to_the_average(self):
+        mts = _mts_full(run_sec=900, current_room_idx=1, time_in_current_room_sec=300)
+        assert _running(mts, [600, None, 600]).native_value is not None
+
+    def test_unknown_estimates_and_no_average_use_the_mean_mission(self):
+        mts = _mts_full(run_sec=1800, current_room_idx=0)
+        assert _running(mts, [None, None, None], rps_mean=3600).native_value == 50
+
+    def test_nothing_to_go_on_gives_nothing(self):
+        mts = _mts_full(run_sec=100)
+        assert _running(mts, [None, None, None]).native_value is None
+
+    def test_zero_estimates_give_nothing(self):
+        mts = _mts_full(run_sec=100)
+        assert _running(mts, [0, 0, 0]).native_value is None
+
+
+class TestSmartTierRoomState:
+
+    def _entry_with(self, monkeypatch, mts, estimates):
+        e = _entry(mts=mts, reported={})
+        reported = {"cleanMissionStatus": {"phase": "run", "mssnM": 0}}
+        e.runtime_data.roomba.master_state = {"state": {"reported": reported}}
+        e.runtime_data.roomba_reported_state.return_value = reported
+        monkeypatch.setattr(sr, "_compute_room_time_estimates", lambda *_a: list(estimates))
+        monkeypatch.setattr(sr, "_get_planned_room_order", lambda _d: list(mts.planned_rooms))
+        return e
+
+    def test_no_mission_no_state(self, monkeypatch):
+        assert sr._resolve_smart_tier_room_state(self._entry_with(monkeypatch, _mts_full(mission_id=None), [])) == {}
+
+    def test_the_current_and_next_room_follow_the_elapsed_time(self, monkeypatch):
+        mts = _mts_full(effective_elapsed_min=11)      # 660 s: into the second room
+        state = sr._resolve_smart_tier_room_state(self._entry_with(monkeypatch, mts, [600, 600, 600]))
+        assert state.get("current_room") == "Hall"
+        assert state.get("next_room") == "Bath"
+        # 540 s left of Hall plus 600 s for Bath
+        assert state.get("estimated_remaining_min") == 19
+
+    def test_past_every_estimate_the_reported_room_index_decides(self, monkeypatch):
+        """Longer than estimated: the robot's own room index is believed
+        rather than the estimate, and the last room has no next one."""
+        mts = _mts_full(effective_elapsed_min=60, current_room_idx=2)
+        state = sr._resolve_smart_tier_room_state(self._entry_with(monkeypatch, mts, [600, 600, 600]))
+        assert state.get("current_room") == "Bath"
+        assert state.get("next_room") is None
+
+
+class TestEdgeCoverageAndRelocalisation:
+
+    def _edge(self, grid, rps=None):
+        e = sr.RoombaEdgeCoverageSensor.__new__(sr.RoombaEdgeCoverageSensor)
+        e._config_entry = MagicMock()
+        e._config_entry.runtime_data.grid_store = grid
+        e._config_entry.runtime_data.robot_profile_store = rps
+        return e
+
+    def test_edge_coverage_compares_against_the_learned_baseline(self):
+        grid = SimpleNamespace(edge_coverage_ratio=lambda: 0.8, cell_count=1200)
+        rps = SimpleNamespace(coverage_ratio=lambda current: 0.95 if current == 0.8 else None)
+        attrs = self._edge(grid, rps).extra_state_attributes
+        assert attrs["total_cells"] == 1200
+        assert attrs["coverage_vs_baseline"] == 0.95
+
+    def test_without_a_baseline_only_the_plain_figures(self):
+        grid = SimpleNamespace(edge_coverage_ratio=lambda: 0.8, cell_count=1200)
+        rps = SimpleNamespace(coverage_ratio=lambda _c: None)
+        assert "coverage_vs_baseline" not in self._edge(grid, rps).extra_state_attributes
+
+    def _reloc(self, rps):
+        e = sr.RoombaRelocalisationRateSensor.__new__(sr.RoombaRelocalisationRateSensor)
+        e._config_entry = MagicMock()
+        e._entry = e._config_entry      # the name this class uses
+        e._config_entry.runtime_data.robot_profile_store = rps
+        return e
+
+    @pytest.mark.parametrize("rps,erwartet", [
+        (None, None),
+        (SimpleNamespace(reloc_baseline_ready=False, recent_relocs=[3, 4]), None),
+        (SimpleNamespace(reloc_baseline_ready=True, recent_relocs=[]), None),
+        (SimpleNamespace(reloc_baseline_ready=True, recent_relocs=[3, 4]), 3.5),
+    ])
+    def test_the_rate_needs_a_baseline_and_recent_missions(self, rps, erwartet):
+        assert self._reloc(rps).native_value == erwartet
+
+    def test_without_a_profile_the_attributes_are_empty_but_present(self):
+        attrs = self._reloc(None).extra_state_attributes
+        assert attrs["baseline"] is None and attrs["recent_window"] == []

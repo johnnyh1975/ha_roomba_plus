@@ -8,6 +8,14 @@ yet referenced anywhere else to piggyback tests onto."""
 from __future__ import annotations
 
 from custom_components.roomba_plus.models import ConnectionType, MapCapability
+from unittest.mock import AsyncMock
+from unittest.mock import MagicMock
+import pytest
+from custom_components.roomba_plus import mission_archive as ma
+from datetime import timedelta
+from unittest.mock import MagicMock as _MM
+from custom_components.roomba_plus import mission_store as ms_mod
+from custom_components.roomba_plus.mission_store import MissionStore
 
 
 class TestConnectionType:
@@ -157,3 +165,39 @@ class TestBatteryContactStateStaysContained:
         source = inspect.getsource(models)
 
         assert "ONE STATE MACHINE" in source
+
+
+# ── formerly tests/test_coverage_mission_archive.py ─────────────────────────────
+#
+# mission_archive.py — quality scale, test-coverage.
+#
+# The archive is filled once from the cloud's mission history, page by page
+# backwards, and then grows mission by mission. It must stop cleanly on a
+# failing or empty page, never store a mission twice, and classify every
+# mission from the record's own fields.
+
+class TestModelAccessors:
+
+    def test_silence_reference_falls_back_to_setup(self):
+        from custom_components.roomba_plus.models import RoombaData
+
+        d = RoombaData.__new__(RoombaData)
+        d.last_mqtt_message_ts, d.setup_ts = None, 123.0
+        assert d.silence_reference_ts == 123.0
+        d.last_mqtt_message_ts = 456.0
+        assert d.silence_reference_ts == 456.0
+
+    def test_no_local_robot_has_no_reported_state(self):
+        from custom_components.roomba_plus.models import RoombaData
+
+        d = RoombaData.__new__(RoombaData)
+        d.roomba = None
+        assert d.roomba_reported_state() == {}
+
+    def test_asking_for_a_cloud_that_is_not_there_is_a_bug_not_none(self):
+        from custom_components.roomba_plus.models import RoombaData
+
+        d = RoombaData.__new__(RoombaData)
+        d.cloud_coordinator = None
+        with pytest.raises(RuntimeError, match="has_cloud"):
+            _ = d.cloud

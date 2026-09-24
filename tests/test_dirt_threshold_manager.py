@@ -29,6 +29,7 @@ import statistics
 from custom_components.roomba_plus.maintenance_store import MaintenanceStore
 from custom_components.roomba_plus.mission_store import MissionStore
 from custom_components.roomba_plus.const import SQFT_TO_M2
+from types import SimpleNamespace
 
 
 def _make_record(dirt: float, sqft: float) -> dict:
@@ -695,3 +696,137 @@ class TestExplainMissionRecordOverride:
     def test_none_when_override_is_none_and_no_match(self):
         store = _make_store_with_records([])
         assert store.explain_mission(mission_id="c_nonexistent") is None
+
+
+# ── formerly tests/test_coverage_mid_gaps_2.py ──────────────────────────────────
+#
+# Mid-sized coverage gaps, second batch — quality scale, test-coverage.
+#
+# The cloud map bundle is GeoJSON-ish and not always shaped the same: a bare
+# Feature where a collection is expected, rings that are not rings, a dock
+# point without numbers. The parser must take what it can and skip the
+# rest, never crash and never invent geometry.
+
+def _dtm(hass, options=None, **runtime):
+    from custom_components.roomba_plus.dirt_threshold_manager import DirtThresholdManager
+
+    entry = MagicMock()
+    entry.options = options or {}
+    for k, v in runtime.items():
+        setattr(entry.runtime_data, k, v)
+    return DirtThresholdManager(hass, entry)
+
+
+def _enabled():
+    from custom_components.roomba_plus.const import CONF_DEMAND_CLEANING_ENABLED
+
+    return {CONF_DEMAND_CLEANING_ENABLED: True}
+
+
+class TestDirtThresholdBasics:
+
+    def test_a_non_positive_area_has_no_density(self):
+        from custom_components.roomba_plus.dirt_threshold_manager import _compute_dirt_density
+
+        assert _compute_dirt_density({"dirt": 5, "sqft": -3}) is None
+
+    def test_the_store_is_created_once(self, hass):
+        m = _dtm(hass)
+        assert m._get_store("e1") is m._get_store("e1")
+
+    @pytest.mark.asyncio
+    async def test_an_invalid_stored_timestamp_is_reset_not_raised(self, hass, caplog):
+        m = _dtm(hass)
+        backing = MagicMock()
+        backing.async_load = AsyncMock(return_value={"last_trigger_time": "yesterday-ish"})
+        m._get_store = lambda _e: backing
+        await m.async_load("e1")
+        assert m.last_trigger_time is None
+        assert "invalid stored timestamp" in caplog.text
+
+
+class TestDirtThresholdGate:
+
+    def test_someone_at_home_blocks_demand_cleaning(self, hass):
+        from custom_components.roomba_plus.const import CONF_PRESENCE_ENTITIES
+
+        hass.states.async_set("person.anna", "home")
+        m = _dtm(hass, {**_enabled(), CONF_PRESENCE_ENTITIES: ["person.anna"]},
+                 presence_manager=MagicMock(), blocking_manager=None)
+        assert m.gate_blocked() == (True, "not_all_away")
+
+    @pytest.mark.asyncio
+    async def test_a_blocked_gate_stops_the_classic_evaluation(self, hass):
+        m = _dtm(hass)   # disabled
+        coordinator = MagicMock()
+        await m._async_evaluate_inner(coordinator, "e1")
+        coordinator.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_an_error_inside_the_evaluation_is_logged_not_raised(self, hass, caplog):
+        m = _dtm(hass)
+        m._async_evaluate_inner = AsyncMock(side_effect=RuntimeError("bad record"))
+        await m.async_evaluate(MagicMock(), "e1")
+        assert "unexpected error in async_evaluate" in caplog.text
+
+
+class TestDirtThresholdPrime:
+    """Each test also checks the log line of its own branch: with a mocked
+    runtime, `prime_mission_cycle` reported the robot busy and every test
+    stopped at the gate — passing for the wrong reason."""
+
+    @pytest.fixture(autouse=True)
+    def _robot_idle(self, monkeypatch, caplog):
+        import logging
+
+        from custom_components.roomba_plus import dirt_threshold_manager as dtm
+
+        monkeypatch.setattr(dtm, "prime_mission_cycle", lambda _d: None)
+        caplog.set_level(logging.DEBUG)
+
+    @pytest.mark.asyncio
+    async def test_no_robot_does_nothing(self, hass):
+        m = _dtm(hass, _enabled(), presence_manager=None, blocking_manager=None, prime_robot=None)
+        assert m.gate_blocked() == (False, ""), "the gate must be open for this test to mean anything"
+        await m.async_evaluate_prime("e1")   # must not raise
+
+    @pytest.mark.asyncio
+    async def test_no_backend_does_nothing(self, hass, monkeypatch, caplog):
+        from custom_components.roomba_plus import dirt_threshold_manager as dtm
+
+        robot = MagicMock()
+        robot.get_clean_score_raw = AsyncMock()
+        m = _dtm(hass, _enabled(), presence_manager=None, blocking_manager=None, prime_robot=robot)
+        monkeypatch.setattr(dtm, "async_get_room_cleaning_backend", lambda *_a: None)
+        await m.async_evaluate_prime("e1")
+        robot.get_clean_score_raw.assert_not_awaited()
+        assert "no room cleaning backend" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_no_resolvable_map_does_nothing(self, hass, monkeypatch, caplog):
+        from custom_components.roomba_plus import dirt_threshold_manager as dtm
+
+        robot = MagicMock()
+        robot.get_clean_score_raw = AsyncMock()
+        backend = MagicMock()
+        backend._current_map_id = AsyncMock(side_effect=RuntimeError("no map"))
+        m = _dtm(hass, _enabled(), presence_manager=None, blocking_manager=None,
+                 prime_robot=robot, prime_selected_map_id=None)
+        monkeypatch.setattr(dtm, "async_get_room_cleaning_backend", lambda *_a: backend)
+        await m.async_evaluate_prime("e1")
+        robot.get_clean_score_raw.assert_not_awaited()
+        assert "no active map yet" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_a_failing_clean_score_is_recorded(self, hass, monkeypatch):
+        from custom_components.roomba_plus import dirt_threshold_manager as dtm
+
+        robot = MagicMock()
+        robot.get_clean_score_raw = AsyncMock(side_effect=RuntimeError("cloud down"))
+        m = _dtm(hass, _enabled(), presence_manager=None, blocking_manager=None,
+                 prime_robot=robot, prime_selected_map_id="m1")
+        monkeypatch.setattr(dtm, "async_get_room_cleaning_backend", lambda *_a: MagicMock())
+        failures = []
+        monkeypatch.setattr(dtm, "record_failure", lambda *a: failures.append(a))
+        await m.async_evaluate_prime("e1")
+        assert failures and failures[0][0] == "prime clean score"

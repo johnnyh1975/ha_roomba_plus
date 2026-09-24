@@ -742,6 +742,12 @@ class TestTsOrNone:
 
 from custom_components.roomba_plus.sensor import _mission_elapsed_value
 import time
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+import pytest
+from custom_components.roomba_plus import switch as sw
+import datetime as _dt
+from custom_components.roomba_plus import sensor_helpers as sh
 
 
 class TestMissionElapsedValue:
@@ -924,3 +930,146 @@ class TestSixtyEightIsSettledThreeWaysOver:
         )
 
         assert 40 not in READINESS_WIRE_TO_INDEX
+
+
+# ── formerly tests/test_coverage_mid_gaps_4.py ──────────────────────────────────
+#
+# Coverage gaps, fourth batch — quality scale, test-coverage.
+#
+# switch.py: the Classic setting switches only react to their own key, and
+# the Prime switches read cloud shadows that may be absent. A switch whose
+# source is missing shows unknown, never a guessed on/off.
+
+def _ent(state=None, *, mission_store="unset", maintenance_store="unset", hr=100, options=None, **rt):
+    e = SimpleNamespace(vacuum_state=state or {}, run_stats={"hr": hr})
+    e._config_entry = MagicMock()
+    e._config_entry.options = options or {}
+    runtime = e._config_entry.runtime_data
+    if mission_store != "unset":
+        runtime.mission_store = mission_store
+    if maintenance_store != "unset":
+        runtime.maintenance_store = maintenance_store
+    for k, v in rt.items():
+        setattr(runtime, k, v)
+    return e
+
+
+class TestModeLabels:
+
+    @pytest.mark.parametrize("state,label", [
+        ({}, "n-a"),
+        ({"vacHigh": False, "carpetBoost": True}, "auto"),
+        ({"vacHigh": True, "carpetBoost": False}, "performance"),
+        ({"vacHigh": False, "carpetBoost": False}, "eco"),
+    ])
+    def test_carpet_boost(self, state, label):
+        assert sh._carpet_boost_mode(_ent(state)) == sh.CARPET_BOOST_LABELS[label]
+
+    @pytest.mark.parametrize("state,label", [
+        ({}, "n-a"),
+        ({"noAutoPasses": True, "twoPass": True}, "two"),
+        ({"noAutoPasses": True, "twoPass": False}, "one"),
+        ({"noAutoPasses": False, "twoPass": False}, "auto"),
+    ])
+    def test_clean_mode(self, state, label):
+        assert sh._clean_mode(_ent(state)) == sh.CLEAN_MODE_LABELS[label]
+
+    @pytest.mark.parametrize("raw,mode", [({"disposable": "x"}, "unknown"), ({}, "unknown"), (1, "dry")])
+    def test_mop_mode_without_a_readable_level_is_unknown(self, raw, mode):
+        assert sh._mop_clean_mode(_ent({"padWetness": raw})) == mode
+
+
+class TestTimeHelpers:
+
+    def test_an_impossible_timestamp_is_none(self):
+        assert sh._ts_or_none(10**20) is None
+        assert sh._ts_or_none(0) is None
+
+    def test_a_naive_start_time_is_read_as_utc(self):
+        store = MagicMock()
+        store.latest.return_value = {"started_at": "2026-09-21T07:00:00"}
+        value = sh._mission_store_last_started_at(_ent(mission_store=store))
+        assert value.tzinfo is not None and value.hour == 7
+
+    def test_an_unparseable_start_time_is_none(self):
+        store = MagicMock()
+        store.latest.return_value = {"started_at": object()}
+        assert sh._mission_store_last_started_at(_ent(mission_store=store)) is None
+
+    def test_no_last_error_time_is_none(self):
+        assert sh._last_error_at_value(_ent(last_error_at="")) is None
+        assert sh._last_error_at_value(_ent(last_error_at="2026-09-21T07:00:00+00:00")).year == 2026
+
+
+class TestConsumableHelpers:
+
+    def test_without_stores_there_is_no_rate_or_life(self):
+        e = _ent(mission_store=None, maintenance_store=None)
+        assert sh._consumable_wear_rate(e, "filter") is None
+        assert sh._consumable_max_hours(e, "filter") is None
+
+    def test_days_until_due_falls_back_to_local_hours(self):
+        """Without a cloud figure the local remaining hours decide."""
+        maint = MagicMock()
+        maint.cloud_remaining_hours.return_value = None
+        maint.threshold_hours.return_value = 60
+        maint.remaining_hours.return_value = 20
+        maint.reset_baseline_for_role.return_value = (0, None)
+        store = MagicMock()
+        store.wear_rate_since_reset.return_value = 2.0
+        e = _ent(mission_store=store, maintenance_store=maint)
+        assert sh._filter_days_until_due(e) == 10
+        assert sh._brush_days_until_due(e) == 10
+
+    def test_no_wear_yet_means_no_due_date(self):
+        store = MagicMock()
+        store.wear_rate_since_reset.return_value = 0
+        maint = MagicMock()
+        maint.reset_baseline_for_role.return_value = (0, None)
+        assert sh._consumable_days_until_due(_ent(mission_store=store, maintenance_store=maint), "filter") is None
+
+
+class TestStoreBackedHelpers:
+
+    def test_a_failing_store_reader_gives_none(self):
+        assert sh._mission_store_value(_ent(mission_store=MagicMock()), MagicMock(side_effect=KeyError)) is None
+        assert sh._mission_store_value(_ent(mission_store=None), lambda s: 1) is None
+
+    def test_no_presence_windows_means_no_utilisation(self):
+        store = MagicMock()
+        store.presence_windows.return_value = []
+        assert sh._presence_utilisation(_ent(mission_store=store), 14) is None
+
+    def test_too_few_windows_give_no_likely_window(self):
+        store = MagicMock()
+        store.presence_windows.return_value = [SimpleNamespace(started_at=_dt.datetime(2026, 9, 1, 9))] * 2
+        assert sh._next_likely_clean_window(_ent(mission_store=store)) is None
+
+    def test_the_most_common_hour_is_the_likely_window(self):
+        store = MagicMock()
+        store.presence_windows.return_value = [
+            SimpleNamespace(started_at=_dt.datetime(2026, 9, d, 10)) for d in (1, 2, 3)
+        ] + [SimpleNamespace(started_at=_dt.datetime(2026, 9, 4, 18))]
+        assert sh._next_likely_clean_window(_ent(mission_store=store)).hour == 10
+
+
+class TestNetinfoAddress:
+
+    @pytest.mark.parametrize("addr,erwartet", [
+        (None, None), ("", None), ("10.0.0.9", "10.0.0.9"),
+        (0x0A000009, "10.0.0.9"),
+        (-1, None), (2**40, None),       # outside an IPv4 address
+        (True, None), ([10, 0, 0, 9], None),
+    ])
+    def test_only_a_valid_address_is_shown(self, addr, erwartet):
+        assert sh._parse_netinfo_addr(addr) == erwartet
+
+
+class TestEnergyWithoutAStore:
+
+    def test_without_the_profile_store_the_raw_figure_is_shown(self, monkeypatch):
+        monkeypatch.setattr(sh, "_estcap_to_mah", lambda _e: 3000)
+        monkeypatch.setattr(sh, "active_charge_cycles", lambda _s: 100)
+        e = _ent(robot_profile=None, robot_profile_store=None)
+        e.battery_stats = {}
+        assert sh._total_energy_consumed_kwh(e) == round(3000 * 14.8 * 100 / 1_000_000, 3)

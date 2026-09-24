@@ -399,8 +399,6 @@ _FACADE_CONTRACT: dict[str, str] = {
     # sensor_cloud — cloud-derived sensors + their helpers
     "CloudHistorySensorDescription": "sensor_cloud",
     "CloudHistorySensor": "sensor_cloud",
-    "CloudRawSensorDescription": "sensor_cloud",
-    "CloudRawSensor": "sensor_cloud",
     "CLOUD_HISTORY_SENSORS": "sensor_cloud",
     "RoombaCleaningPerformanceSensor": "sensor_cloud",
     "RoombaCleaningAnalytics30dSensor": "sensor_cloud",

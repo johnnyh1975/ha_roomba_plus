@@ -27,6 +27,8 @@ from custom_components.roomba_plus.api_views import MissionHistoryView
 from custom_components.roomba_plus.const import DOMAIN
 from custom_components.roomba_plus.mission_store import MissionStore
 from custom_components.roomba_plus.maintenance_store import MaintenanceStore
+import datetime as dt
+from types import SimpleNamespace
 
 
 def _cloud_rec(
@@ -2564,3 +2566,266 @@ class TestZoneInjectionSurvivesARecharge:
         }])
 
         assert index == {ts: ["Hall"]}
+
+
+# ── formerly tests/test_coverage_api_views.py ───────────────────────────────────
+#
+# api_views.py, the mission history endpoint — quality scale, test-coverage.
+#
+# The card loads mission history through one endpoint with several
+# formats. Only `export` had tests. Each format is checked for the shape the
+# card relies on, and the guards for a missing entry, an entry still
+# starting, an unknown format and an unavailable cloud.
+
+def _req(hass, **query):
+    r = MagicMock()
+    r.app = {"hass": hass}
+    r.query = query
+    return r
+
+
+async def _get(hass, **query):
+    resp = await MissionHistoryView().get(_req(hass, **query), "abc123")
+    body = json.loads(resp.body) if resp.body else None
+    return resp.status, body
+
+
+def _hass_with(data):
+    hass, entry = _make_hass_with_entry()
+    entry.runtime_data = data
+    return hass
+
+
+class TestGuards:
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_entry_is_404(self):
+        hass, _ = _make_hass_with_entry(entry_present=False)
+        assert (await _get(hass))[0] == 404
+
+    @pytest.mark.asyncio
+    async def test_an_entry_still_starting_is_503(self):
+        hass, entry = _make_hass_with_entry()
+        entry.runtime_data = None
+        assert (await _get(hass))[0] == 503
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_format_is_400_and_names_the_valid_ones(self):
+        status, body = await _get(_hass_with(_make_runtime_data()), format="nonsense")
+        assert status == 400
+        assert "summary" in body["message"]
+
+    @pytest.mark.asyncio
+    async def test_an_unavailable_cloud_is_503(self):
+        data = _make_runtime_data()
+        data.cloud_coordinator.data = {"x": 1}
+        data.cloud_coordinator.last_update_success = False
+        assert (await _get(_hass_with(data), format="records"))[0] == 503
+
+
+class TestSummary:
+
+    @pytest.mark.asyncio
+    async def test_no_store_is_an_empty_list(self):
+        status, body = await _get(_hass_with(_make_runtime_data(mission_store=None)), format="summary")
+        assert (status, body) == (200, [])
+
+    @pytest.mark.parametrize("days,erwartet", [("7", 7), ("0", 1), ("999", 90), ("x", 28)])
+    @pytest.mark.asyncio
+    async def test_the_day_range_is_clamped(self, days, erwartet):
+        store = MagicMock()
+        store.query_by_day.return_value = {}
+        data = _make_runtime_data(mission_store=store)
+        data.cloud_coordinator.daily_dirt_density = {}
+        data.robot_profile_store = None
+        await _get(_hass_with(data), format="summary", days=days)
+        store.query_by_day.assert_called_once_with(erwartet)
+
+    @pytest.mark.asyncio
+    async def test_a_day_carries_its_counts(self):
+        """A real store, so the per-day fields are the ones it produces."""
+        from homeassistant.util import dt as dt_util
+
+        now = dt_util.utcnow().replace(microsecond=0)
+        recs = [
+            {"id": f"m_{i}", "started_at": (now - dt.timedelta(hours=i)).isoformat(),
+             "ended_at": (now - dt.timedelta(hours=i) + dt.timedelta(minutes=30)).isoformat(),
+             "result": result, "duration_min": 30}
+            for i, result in ((1, "completed"), (2, "completed"), (3, "cancelled"))
+        ]
+        data = _make_runtime_data(mission_store=_make_mission_store(recs))
+        data.cloud_coordinator.daily_dirt_density = {f"2026-09-{d:02d}": 1.0 for d in range(1, 8)}
+        data.robot_profile_store = None
+        status, body = await _get(_hass_with(data), format="summary")
+        assert status == 200
+        assert sum(d["total"] for d in body) == 3
+        assert sum(d["completed"] for d in body) == 2
+        assert [d["date"] for d in body] == sorted(d["date"] for d in body), "oldest day first"
+
+
+class TestOtherFormats:
+
+    @pytest.mark.asyncio
+    async def test_zone_coverage_without_a_store_is_empty(self):
+        status, body = await _get(_hass_with(_make_runtime_data(mission_store=None)),
+                                  format="zone_coverage_health")
+        assert (status, body) == (200, {})
+
+    @pytest.mark.asyncio
+    async def test_hazards_without_a_map_are_empty(self):
+        from custom_components.roomba_plus.models import MapCapability
+
+        data = _make_runtime_data(map_capability=MapCapability.NONE)
+        assert (await _get(_hass_with(data), format="hazards")) == (200, [])
+
+    @pytest.mark.asyncio
+    async def test_hazards_merge_learned_and_keepout_zones(self):
+        from custom_components.roomba_plus.models import MapCapability
+
+        grid = MagicMock()
+        grid.hotspots.return_value = [{"gx": 1, "gy": 2, "x_mm": 10.0, "y_mm": 20.0,
+                                       "source": "stuck_events", "stuck_count": 3}]
+        grid.stuck_pattern.return_value = {(1, 2): (0, 9)}
+        data = _make_runtime_data(map_capability=MapCapability.SMART, grid_store=grid,
+                                  keepout_zones=[{"cx": 5, "cy": 6}, {"name": "no centre"}])
+        data.cloud_coordinator.data = {"x": 1}
+        data.cloud_coordinator.observed_zone_centroids = [{"x": 1.0, "y": 2.0}]
+        data.umf_aligner = None
+        status, body = await _get(_hass_with(data), format="hazards")
+        assert status == 200
+        stuck = next(h for h in body if h.get("source") == "stuck_events")
+        assert (stuck["dominant_weekday"], stuck["dominant_hour"]) == (0, 9)
+        assert any(h["x_mm"] == 5.0 for h in body), "keep-out with a centre"
+        assert len(body) == 3, "keep-out without a centre is left out"
+
+
+class TestUnifiedHistory:
+
+    @pytest.mark.asyncio
+    async def test_local_only_history(self):
+        from homeassistant.util import dt as dt_util
+
+        rec = _local_rec("m_1")
+        rec["started_at"] = (dt_util.utcnow() - dt.timedelta(days=1)).isoformat()
+        rec["ended_at"] = dt_util.utcnow().isoformat()
+        store = _make_mission_store([rec])
+        data = _make_runtime_data(mission_store=store, has_cloud=False)
+        status, body = await _get(_hass_with(data), format="records")
+        assert status == 200 and len(body) == 1
+
+    @pytest.mark.asyncio
+    async def test_nothing_at_all_is_an_empty_list(self):
+        data = _make_runtime_data(mission_store=None, has_cloud=False)
+        assert await _get(_hass_with(data), format="records") == (200, [])
+
+    @pytest.mark.asyncio
+    async def test_cloud_records_newest_first_with_alignment_confidence(self):
+        data = _make_runtime_data(mission_store=None)
+        data.cloud_coordinator.data = {"x": 1}
+        data.cloud_coordinator.raw_records = [_cloud_rec(1), _cloud_rec(2)]
+        data.umf_aligner = SimpleNamespace(aligned=True, confidence=0.876)
+        status, body = await _get(_hass_with(data), format="records")
+        assert status == 200 and len(body) == 2
+        assert all(r.get("alignment_confidence") == 0.88 for r in body if r.get("source") == "cloud")
+
+
+class TestMoreHistoryBranches:
+
+    @pytest.mark.asyncio
+    async def test_summary_carries_the_room_dirt_index(self):
+        from homeassistant.util import dt as dt_util
+
+        now = dt_util.utcnow().replace(microsecond=0)
+        rec = {"id": "m_1", "started_at": (now - dt.timedelta(hours=2)).isoformat(),
+               "ended_at": (now - dt.timedelta(hours=1)).isoformat(), "result": "completed",
+               "duration_min": 60}
+        data = _make_runtime_data(mission_store=_make_mission_store([rec]))
+        data.cloud_coordinator.daily_dirt_density = {}
+        data.robot_profile_store = MagicMock(room_dirt_relative=MagicMock(return_value={"3": 1.4}))
+        status, body = await _get(_hass_with(data), format="summary")
+        assert status == 200 and body[0]["room_dirt_index"] == {"3": 1.4}
+
+    @pytest.mark.asyncio
+    async def test_hazards_are_named_by_room_when_the_map_is_aligned(self):
+        from custom_components.roomba_plus.models import MapCapability
+
+        grid = MagicMock()
+        grid.hotspots.return_value = [
+            {"gx": 1, "gy": 2, "x_mm": 10.0, "y_mm": 20.0, "source": "stuck_events"},
+            {"gx": None, "gy": None, "x_mm": 5.0, "y_mm": 6.0, "source": "keepout"},
+        ]
+        grid.stuck_pattern.return_value = {}
+        aligner = MagicMock(aligned=True)
+        aligner.pose_to_umf.return_value = (1.0, 2.0)
+        aligner.room_name_at.side_effect = lambda x, y: "Kitchen" if (x, y) == (1.0, 2.0) else "Hall"
+        data = _make_runtime_data(map_capability=MapCapability.SMART, grid_store=grid)
+        data.cloud_coordinator.data = None
+        data.umf_aligner = aligner
+        status, body = await _get(_hass_with(data), format="hazards")
+        assert [h["room_name"] for h in body] == ["Kitchen", "Hall"]
+
+    @pytest.mark.asyncio
+    async def test_a_bad_day_count_falls_back_to_ninety(self):
+        store = MagicMock()
+        store.records = []
+        store.query.return_value = []
+        data = _make_runtime_data(mission_store=store, has_cloud=False)
+        await _get(_hass_with(data), format="records", days="soon")
+        store.query.assert_called_with(90)
+
+
+class TestImportGuards:
+
+    async def _post(self, hass, body=None, error=None):
+        req = MagicMock()
+        req.app = {"hass": hass}
+        req.json = AsyncMock(side_effect=error, return_value=body)
+        resp = await MissionHistoryImportView().post(req, "abc123")
+        return resp.status, json.loads(resp.body)
+
+    @pytest.mark.asyncio
+    async def test_no_store_is_503(self):
+        assert (await self._post(_hass_with(_make_runtime_data(mission_store=None)), {}))[0] == 503
+
+    @pytest.mark.parametrize("body,error,text", [
+        (None, ValueError("x"), "Invalid JSON"),
+        (["not", "an", "object"], None, "JSON object"),
+        ({"export_version": 1, "records": "nope"}, None, "must be a list"),
+    ])
+    @pytest.mark.asyncio
+    async def test_a_malformed_body_is_400(self, body, error, text):
+        data = _make_runtime_data(mission_store=_make_mission_store([]))
+        status, resp = await self._post(_hass_with(data), body, error)
+        assert status == 400 and text in resp["message"]
+
+    @pytest.mark.asyncio
+    async def test_bad_records_are_skipped_with_a_reason(self):
+        store = _make_mission_store([])
+        data = _make_runtime_data(mission_store=store)
+        body = {"export_version": 1, "records": ["junk", {"id": "x", "started_at": "2026-09-21T07:00:00+00:00",
+                                     "duration_min": "long"}]}
+        status, resp = await self._post(_hass_with(data), body)
+        assert status == 200
+        text = json.dumps(resp)
+        assert "not a dict" in text and "must be a number" in text
+
+
+class TestHouseholdSummary:
+    """One view across every robot: entries still starting or without a
+    store are skipped, not counted as zero."""
+
+    @pytest.mark.asyncio
+    async def test_unready_entries_are_skipped_and_days_clamped(self):
+        from custom_components.roomba_plus.api_views import HouseholdSummaryView
+
+        starting = SimpleNamespace(runtime_data=None)
+        no_store = SimpleNamespace(runtime_data=SimpleNamespace(mission_store=None))
+        hass = MagicMock()
+        hass.config_entries.async_entries.return_value = [starting, no_store]
+        req = MagicMock()
+        req.app = {"hass": hass}
+        req.query = {"days": "lots"}
+        resp = await HouseholdSummaryView().get(req)
+        body = json.loads(resp.body)
+        assert resp.status == 200
+        assert body.get("robots") == []

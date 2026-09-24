@@ -12,6 +12,15 @@ parametrized case tells you which value did.
 """
 
 import pytest
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+from unittest.mock import MagicMock
+from custom_components.roomba_plus import room_cleaning
+from custom_components.roomba_plus import select_prime as sp
+from custom_components.roomba_plus.entity import IRobotEntity
+from homeassistant.exceptions import ServiceValidationError
+import inspect
+from homeassistant.components.select import SelectEntity
 
 class TestTheSixControlsFromIssue46:
     """Six rw-settings pickers, built from the vendor's own enums rather
@@ -1512,3 +1521,331 @@ class TestChoosingAMapRefreshesWhatDependsOnIt:
         source = inspect.getsource(PrimeMapSelect.async_select_option)
 
         assert "contextlib.suppress" in source
+
+
+# ── formerly tests/test_coverage_select_prime.py ────────────────────────────────
+#
+# select_prime.py — quality scale, test-coverage.
+#
+# The Prime room picker loads its rooms through the room-cleaning backend.
+# A cloud error while loading must not wipe the rooms already known, and a
+# failing map lookup must not take the room list with it.
+
+def _zone(segments=None, selected=None):
+    z = sp.PrimeZoneSelect.__new__(sp.PrimeZoneSelect)
+    z._config_entry = MagicMock()
+    z._config_entry.entry_id = "e1"
+    z.hass = MagicMock()
+    z._blid = "PRIMESEL01"
+    z._live_state = False
+    z._segments = dict(segments or {})
+    z._selected = selected
+    z._segment_maps, z._robot_on_map, z._robot_map_is_live = {}, None, False
+    z.async_write_ha_state = MagicMock()
+    z.async_on_remove = MagicMock()
+    return z
+
+
+def _backend(*, segments=(), maps=None, where=("m1", True), seg_error=None, map_error=None):
+    b = MagicMock()
+    b.get_segments = AsyncMock(side_effect=seg_error, return_value=list(segments))
+    b.map_names = AsyncMock(side_effect=map_error, return_value=maps or {})
+    b.where_the_robot_is = AsyncMock(return_value=where)
+    return b
+
+
+SEGS = [SimpleNamespace(name="Kitchen", id="rid_m1/3"), SimpleNamespace(name="Hall", id="rid_m2/5")]
+
+
+def _status(data):
+    return SimpleNamespace(data=data)
+
+
+def _select_classes():
+    return sorted(
+        (c for n, c in inspect.getmembers(sp, inspect.isclass)
+         if c.__module__ == sp.__name__ and issubclass(c, SelectEntity)
+         and issubclass(c, IRobotEntity) and not n.startswith("_")),
+        key=lambda c: c.__name__,
+    )
+
+
+class TestZoneLoading:
+
+    @pytest.mark.asyncio
+    async def test_no_backend_changes_nothing(self, monkeypatch):
+        monkeypatch.setattr(room_cleaning, "async_get_room_cleaning_backend", lambda *_a: None)
+        z = _zone({"Kitchen": "m1/3"})
+        await z._async_load_segments()
+        assert z._segments == {"Kitchen": "m1/3"}
+
+    @pytest.mark.asyncio
+    async def test_a_cloud_error_keeps_the_known_rooms(self, monkeypatch):
+        monkeypatch.setattr(room_cleaning, "async_get_room_cleaning_backend",
+                            lambda *_a: _backend(seg_error=RuntimeError("cloud")))
+        z = _zone({"Kitchen": "m1/3"})
+        await z._async_load_segments()
+        assert z._segments == {"Kitchen": "m1/3"}
+
+    @pytest.mark.asyncio
+    async def test_rooms_and_their_floors_are_loaded(self, monkeypatch):
+        monkeypatch.setattr(room_cleaning, "async_get_room_cleaning_backend",
+                            lambda *_a: _backend(segments=SEGS, maps={"m1": "Ground", "m2": "Upstairs"}))
+        z = _zone()
+        await z._async_load_segments()
+        assert z._segments == {"Kitchen": "rid_m1/3", "Hall": "rid_m2/5"}
+        assert z._segment_maps == {"Kitchen": "Ground", "Hall": "Upstairs"}
+        assert (z._robot_on_map, z._robot_map_is_live) == ("Ground", True)
+
+    @pytest.mark.asyncio
+    async def test_a_failing_map_lookup_keeps_the_rooms(self, monkeypatch):
+        monkeypatch.setattr(room_cleaning, "async_get_room_cleaning_backend",
+                            lambda *_a: _backend(segments=SEGS, map_error=RuntimeError("cloud")))
+        z = _zone()
+        await z._async_load_segments()
+        assert set(z._segments) == {"Kitchen", "Hall"}
+        assert z._segment_maps == {} and z._robot_on_map is None
+
+    @pytest.mark.asyncio
+    async def test_a_reload_writes_state_only_when_rooms_changed(self, monkeypatch):
+        backend = _backend(segments=SEGS)
+        monkeypatch.setattr(room_cleaning, "async_get_room_cleaning_backend", lambda *_a: backend)
+        z = _zone({"Kitchen": "rid_m1/3", "Hall": "rid_m2/5"})
+        await z._async_reload_segments()
+        z.async_write_ha_state.assert_not_called()
+        backend.get_segments = AsyncMock(return_value=SEGS[:1])
+        await z._async_reload_segments()
+        z.async_write_ha_state.assert_called_once()
+
+
+class TestZoneChoice:
+
+    def test_a_stale_choice_falls_back_to_the_first_room(self):
+        z = _zone({"Kitchen": "m1/3", "Hall": "m2/5"}, selected="Gone")
+        assert z.current_option == "Hall"
+        assert z.selected_segment_id == "m2/5"
+
+    def test_no_rooms_no_choice(self):
+        z = _zone({}, selected=None)
+        assert z.current_option is None and z.selected_segment_id is None
+
+    @pytest.mark.asyncio
+    async def test_choosing_a_room_is_remembered(self):
+        z = _zone({"Kitchen": "m1/3"})
+        await z.async_select_option("Kitchen")
+        assert z.current_option == "Kitchen"
+        z.async_write_ha_state.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_it_follows_room_name_changes_and_the_robot(self, monkeypatch):
+        monkeypatch.setattr(IRobotEntity, "async_added_to_hass", AsyncMock())
+        monkeypatch.setattr(room_cleaning, "async_get_room_cleaning_backend", lambda *_a: None)
+        z = _zone()
+        await z.async_added_to_hass()
+        assert z.async_on_remove.call_count == 2, "the room-name signal and the status coordinator"
+
+    def test_attributes_name_the_floors(self):
+        z = _zone({"Kitchen": "m1/3"}, selected="Kitchen")
+        z._segment_maps = {"Kitchen": "Ground"}
+        z._robot_on_map, z._robot_map_is_live = "Ground", True
+        attrs = z.extra_state_attributes
+        assert isinstance(attrs, dict) and "Ground" in str(attrs)
+
+
+class TestReportedWetness:
+
+    @pytest.mark.parametrize("shadow,erwartet", [
+        (None, None),
+        ({"rw-settings": "odd"}, None),
+        ({"rw-settings": {"state": {"reported": "odd"}}}, None),
+        ({"rw-settings": {"padWetness": "odd"}}, None),
+        ({"rw-settings": {"state": {"reported": {"padWetness": {"padPlate": 2}}}}}, 2),
+        ({"rw-settings": {"padWetness": {"padPlate": 3}}}, 3),
+    ])
+    def test_only_a_readable_plate_value_counts(self, shadow, erwartet):
+        entry = SimpleNamespace(runtime_data=SimpleNamespace(
+            prime_status_coordinator=None if shadow is None else _status(shadow)))
+        assert sp._reported_wetness(entry) == erwartet
+
+
+class TestSettingSelect:
+
+    def _s(self, robot):
+        s = sp.PrimeSettingSelect.__new__(sp.PrimeSettingSelect)
+        s._config_entry = MagicMock()
+        s._config_entry.runtime_data.prime_robot = robot
+        s.entity_description = SimpleNamespace(key="clean_mode", wire_key="cleanMode", model_attr="clean_mode")
+        s._values = {1: "quiet", 2: "max"}
+        s.async_write_ha_state = MagicMock()
+        return s
+
+    @pytest.mark.asyncio
+    async def test_a_known_option_is_written_as_its_wire_value(self):
+        robot = MagicMock(set_setting=AsyncMock())
+        s = self._s(robot)
+        await s.async_select_option("max")
+        robot.set_setting.assert_awaited_once_with("cleanMode", 2)
+        assert s._attr_current_option == "max"
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_option_or_no_robot_writes_nothing(self):
+        robot = MagicMock(set_setting=AsyncMock())
+        await self._s(robot).async_select_option("turbo")
+        robot.set_setting.assert_not_awaited()
+        await self._s(None).async_select_option("max")   # must not raise
+
+
+class TestCleaningModeSelect:
+
+    def _s(self, *, shadows=None, vacuum_state=None, restored=None):
+        s = sp.PrimeCleaningModeSelect.__new__(sp.PrimeCleaningModeSelect)
+        s._config_entry = MagicMock()
+        s._config_entry.runtime_data.prime_status_coordinator = (
+            None if shadows is None else _status(shadows))
+        s._config_entry.runtime_data.roomba = None
+        s.vacuum_state = vacuum_state
+        s._restored = restored
+        s.async_write_ha_state = MagicMock()
+        return s
+
+    def test_the_capability_comes_from_local_state_first(self):
+        assert self._s(vacuum_state={"cap": {"oMode": 7}})._robot_o_mode() == 7
+
+    def test_then_from_any_cloud_shadow(self):
+        s = self._s(shadows={"junk": "x", "rw-caps": {"cap": {"oMode": 5}}})
+        assert s._robot_o_mode() == 5
+        assert self._s(shadows=None)._robot_o_mode() is None
+
+    def test_the_mode_of_the_last_start_is_shown(self):
+        name, value = next(iter(sp.PrimeCleaningModeSelect.MODES.items()))
+        shadows = {"rw-software": {"lastCommand": {"command": "start",
+                                                   "regions": ["junk", {"params": {"operatingMode": value}}]}}}
+        assert self._s(shadows=shadows).current_option == name
+
+    @pytest.mark.parametrize("last", [None, {"command": "dock"},
+                                      {"command": "start", "regions": [{"params": {"operatingMode": 999}}]}])
+    def test_otherwise_the_restored_choice(self, last):
+        s = self._s(shadows={"rw-software": {"lastCommand": last}}, restored="restored")
+        assert s.current_option == "restored"
+
+    @pytest.mark.asyncio
+    async def test_an_impossible_mode_is_refused_with_what_is_possible(self):
+        s = self._s()
+        s.__class__ = type("_M", (sp.PrimeCleaningModeSelect,),
+                           {"options": property(lambda _s: [next(iter(sp.PrimeCleaningModeSelect.MODES))])})
+        with pytest.raises(ServiceValidationError):
+            await s.async_select_option("not_a_mode")
+        other = [m for m in sp.PrimeCleaningModeSelect.MODES if m not in s.options]
+        if other:
+            with pytest.raises(ServiceValidationError, match="It can"):
+                await s.async_select_option(other[0])
+        await s.async_select_option(s.options[0])
+        assert s._restored == s.options[0]
+
+
+@pytest.mark.parametrize("cls", _select_classes(), ids=lambda c: c.__name__)
+@pytest.mark.asyncio
+async def test_a_prime_select_detaches_what_it_attaches(cls, monkeypatch):
+    monkeypatch.setattr(IRobotEntity, "async_added_to_hass", AsyncMock())
+    monkeypatch.setattr(room_cleaning, "async_get_room_cleaning_backend", lambda *_a: None)
+    e = cls.__new__(cls)
+    e._config_entry = MagicMock()
+    e._config_entry.entry_id = "e1"
+    e._blid = "PRIMESEL01"
+    e.hass = MagicMock()
+    e._segments, e._selected, e._restored = {}, None, None
+    e._segment_maps, e._robot_on_map, e._robot_map_is_live = {}, None, False
+    e._names, e._maps = {}, {}
+    e.async_on_remove = MagicMock()
+    e.async_write_ha_state = MagicMock()
+    e.async_get_last_state = AsyncMock(return_value=SimpleNamespace(state="unknown"))
+    await e.async_added_to_hass()
+    rt = e._config_entry.runtime_data
+    attached = sum(getattr(rt, n).async_add_listener.call_count
+                   for n in ("prime_status_coordinator", "prime_coordinator"))
+    assert e.async_on_remove.call_count >= attached, f"{cls.__name__} attaches without detaching"
+
+
+class TestSettingShown:
+
+    def _s(self, raw):
+        s = sp.PrimeSettingSelect.__new__(sp.PrimeSettingSelect)
+        s._config_entry = MagicMock()
+        s._config_entry.runtime_data.prime_status_coordinator = _status({"rw-settings": raw} if raw is not None else {})
+        s.entity_description = SimpleNamespace(key="k", wire_key="k", model_attr="clean_mode")
+        s._values = {1: "quiet"}
+        return s
+
+    def test_no_settings_shadow_is_unknown(self):
+        assert self._s(None).current_option is None
+
+    def test_a_value_without_a_label_is_shown_as_the_number(self, monkeypatch):
+        from roombapy_prime import models
+
+        monkeypatch.setattr(models.RobotSettings, "from_json", staticmethod(lambda _r: SimpleNamespace(clean_mode=9)))
+        assert self._s({"x": 1}).current_option == "9"
+
+    def test_a_known_value_shows_its_label(self, monkeypatch):
+        from roombapy_prime import models
+
+        monkeypatch.setattr(models.RobotSettings, "from_json", staticmethod(lambda _r: SimpleNamespace(clean_mode=1)))
+        assert self._s({"x": 1}).current_option == "quiet"
+
+
+class TestSmallSelectAccessors:
+
+    def test_stable_object_ids(self):
+        assert sp.PrimeMapSelect.__new__(sp.PrimeMapSelect).suggested_object_id == "prime_map"
+        assert sp.PrimeCleaningModeSelect.__new__(sp.PrimeCleaningModeSelect).suggested_object_id == \
+            "prime_cleaning_mode"
+        s = sp.PrimeSettingSelect.__new__(sp.PrimeSettingSelect)
+        s.entity_description = SimpleNamespace(key="clean_mode")
+        assert s.suggested_object_id == "clean_mode"
+
+    def test_the_zone_picker_is_available_only_with_rooms(self):
+        z = _zone({})
+        assert z.available is False and z.options == [] and z.extra_state_attributes == {}
+        z = _zone({"Hall": "rid_m1/5", "Bath": "rid_m1/2"})
+        assert z.available is True and z.options == ["Bath", "Hall"]
+
+    def test_a_status_update_schedules_a_reload_in_the_background(self):
+        z = _zone()
+        z._config_entry.async_create_background_task = MagicMock(
+            side_effect=lambda *a, **k: [x.close() for x in a if hasattr(x, "close")])
+        z._schedule_segment_reload()
+        z._config_entry.async_create_background_task.assert_called_once()
+
+    @pytest.mark.parametrize("sid", ["m1/3", "rid_m1", "zid_m2/4"])
+    def test_map_of(self, sid):
+        assert sp._map_of(sid) == {"m1/3": "", "rid_m1": "", "zid_m2/4": "m2"}[sid]
+
+    @pytest.mark.parametrize("shadow,profile,sku", [
+        (None, None, None),
+        ({"state": {"state": {"reported": {"sku": "G185020"}}}}, None, "G185020"),   # the whole shadow
+        ({"thing": {"sku": "G186020"}}, None, "G186020"),                         # the named shadow
+        ({"state": "odd"}, SimpleNamespace(sku="G181"), "G181"),                  # fall back to the profile
+    ])
+    def test_robot_sku(self, shadow, profile, sku):
+        entry = SimpleNamespace(runtime_data=SimpleNamespace(
+            prime_status_coordinator=None if shadow is None else _status(shadow), robot_profile=profile))
+        assert sp._robot_sku(entry) == sku
+
+
+class TestPrimeDueForEveryCounterType:
+    """A replacement part is due at zero remaining whatever it counts --
+    hours, evacuations or combo missions. Combo robots were thought to get
+    no due signal; the rule never looked at the unit."""
+
+    @pytest.mark.parametrize("count_type", ["hr", "evacs", "combo_missions"])
+    def test_a_used_up_replacement_part_is_due(self, count_type):
+        from custom_components.roomba_plus.todo_prime import _needs_attention
+
+        part = SimpleNamespace(counter_category="replacement", count_type=count_type, count_remaining=0)
+        assert _needs_attention(part) is True
+        part.count_remaining = 12
+        assert _needs_attention(part) is False
+
+    def test_a_maintenance_counter_at_zero_means_just_done(self):
+        from custom_components.roomba_plus.todo_prime import _needs_attention
+
+        assert _needs_attention(SimpleNamespace(counter_category="maintenance", count_remaining=0)) is False

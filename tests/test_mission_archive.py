@@ -24,6 +24,10 @@ from custom_components.roomba_plus.mission_archive import _extract_rid
 from custom_components.roomba_plus.mission_archive import _ts_to_iso
 from custom_components.roomba_plus.mission_archive import _wl_floor
 from custom_components.roomba_plus.mission_archive import _wl_stability
+from custom_components.roomba_plus import mission_archive as ma
+from unittest.mock import MagicMock as _MM
+from custom_components.roomba_plus import mission_store as ms_mod
+from custom_components.roomba_plus.mission_store import MissionStore
 
 
 _NOW_TS = int(datetime(2026, 6, 1, 10, 0, 0, tzinfo=UTC).timestamp())
@@ -1229,3 +1233,142 @@ class TestMissionArchiveCorruptionResilience:
     def test_null_derived_list(self):
         ma = self._load_with({"derived": None, "timeline": None, "raw": None})
         assert ma._derived == []
+
+
+# ── formerly tests/test_coverage_mission_archive.py ─────────────────────────────
+#
+# mission_archive.py — quality scale, test-coverage.
+#
+# The archive is filled once from the cloud's mission history, page by page
+# backwards, and then grows mission by mission. It must stop cleanly on a
+# failing or empty page, never store a mission twice, and classify every
+# mission from the record's own fields.
+
+def _raw_m(n, ts, **extra):
+    return {"nMssn": n, "startTime": ts, "done": "ok", "durationM": 30, **extra}
+
+
+def _archive():
+    a = ma.MissionArchive()
+    a.async_save = AsyncMock()
+    return a
+
+
+class TestInitialLoad:
+
+    @pytest.fixture(autouse=True)
+    def _no_wait(self, monkeypatch):
+        monkeypatch.setattr(ma.asyncio, "sleep", AsyncMock())
+
+    @pytest.mark.asyncio
+    async def test_pages_backwards_and_stores_oldest_first(self):
+        api = MagicMock()
+        api.get_mission_history = AsyncMock(side_effect=[
+            [_raw_m(3, 300), _raw_m(2, 200)], [_raw_m(1, 100)], [],
+        ])
+        a = _archive()
+        await a.async_initial_load(api, "B", MagicMock(), "e1")
+        befores = [c.kwargs.get("before_ts") for c in api.get_mission_history.await_args_list]
+        assert befores == [None, 200, 100], "each page continues before the last one's oldest"
+        # The archive keeps the NEWEST first (each mission is inserted at
+        # the front). Reversing the fetched pages before appending is what
+        # makes the initial load end in that same order.
+        assert [d["nMssn"] for d in a._derived] == [3, 2, 1]
+        a.async_save.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_a_failing_page_keeps_what_was_fetched(self):
+        api = MagicMock()
+        api.get_mission_history = AsyncMock(side_effect=[[_raw_m(2, 200)], RuntimeError("cloud")])
+        a = _archive()
+        await a.async_initial_load(api, "B", MagicMock(), "e1")
+        assert [d["nMssn"] for d in a._derived] == [2]
+
+    @pytest.mark.asyncio
+    async def test_already_archived_missions_are_not_stored_twice(self):
+        api = MagicMock()
+        api.get_mission_history = AsyncMock(side_effect=[[_raw_m(2, 200), _raw_m(1, 100)], []])
+        a = _archive()
+        a._archived_nmssns = {1}
+        await a.async_initial_load(api, "B", MagicMock(), "e1")
+        assert [d["nMssn"] for d in a._derived] == [2]
+
+    @pytest.mark.parametrize("pages", [
+        [["junk", 42]],                 # nothing that is a record
+        [[_raw_m(1, 0)]],                 # no timestamp to page on
+        ["not a list"],
+    ])
+    @pytest.mark.asyncio
+    async def test_it_stops_on_a_page_it_cannot_continue_from(self, pages):
+        api = MagicMock()
+        api.get_mission_history = AsyncMock(side_effect=pages + [[_raw_m(9, 900)]])
+        a = _archive()
+        await a.async_initial_load(api, "B", MagicMock(), "e1")
+        assert api.get_mission_history.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_a_second_run_does_nothing(self):
+        api = MagicMock()
+        api.get_mission_history = AsyncMock()
+        a = _archive()
+        a._initial_load_done, a._derived = True, [{"nMssn": 1}]
+        await a.async_initial_load(api, "B", MagicMock(), "e1")
+        api.get_mission_history.assert_not_awaited()
+
+
+class TestClassification:
+
+    @pytest.mark.parametrize("record,result", [
+        ({"done": "stuck", "pauseId": 0}, "stuck"),
+        ({"done": "stuck", "pauseId": 17}, "error_17"),
+        ({"done": "inc", "pauseId": 0}, "cancelled"),
+        ({"done": "schErr", "pauseId": 3}, "error_3"),
+    ])
+    def test_results(self, record, result):
+        assert ma._classify_result(record) == result
+
+    def test_wifi_bars_with_no_signal_have_no_floor_or_stability(self):
+        assert ma._wl_floor([0, 0, 0, 0, 0]) is None
+        assert ma._wl_stability([0, 0, 0, 0, 0]) is None
+        assert ma._wl_floor([1, 1, 1, 1, 10]) == 4
+
+    @pytest.mark.parametrize("derived,anomalous", [
+        ({"result": "completed", "disc_count": 2}, True),
+        ({"result": "completed", "disc_count": 1}, False),
+    ])
+    def test_repeated_disconnects_make_a_mission_anomalous(self, derived, anomalous):
+        assert ma.MissionArchive._is_anomalous(derived) is anomalous
+
+
+class TestEventCounting:
+
+    def test_events_are_counted_and_unknown_types_do_not_break_parsing(self):
+        raw = _raw_m(5, 500, timeline={"finEvents": [
+            "junk",
+            {"type": "evac"}, {"type": "reloc"}, {"type": "disc"},
+            {"type": "brandNewEvent"},
+            {"type": "room", "room": {"rid": "3", "status": 5}},
+            {"type": "room", "room": {"rid": "3", "status": 5}},
+        ]})
+        d = _archive()._parse_derived(raw)
+        assert (d["evac_count"], d["reloc_count"], d["disc_count"]) == (1, 1, 1)
+        assert d["rooms_interrupted"] == ["3"], "a room interrupted twice is listed once"
+
+    def test_the_timeline_marks_entered_rooms_and_robot_events(self):
+        raw = _raw_m(6, 600, timeline={"finEvents": [
+            "junk",
+            {"type": "room", "ts": 610, "room": {"rid": "3", "status": 1}},
+            {"type": "kidnap", "ts": 620},
+        ]})
+        assert _archive()._parse_timeline(raw) == [["room_enter", {"rid": "3"}], ["kidnap", {}]]
+
+
+class TestRecentDerived:
+
+    def test_undated_and_unreadable_records_are_skipped(self):
+        from homeassistant.util import dt as dt_util
+
+        a = _archive()
+        now = dt_util.utcnow().replace(tzinfo=None).isoformat()
+        a._derived = [{"start_ts": None}, {"start_ts": "garbage"}, {"start_ts": now}]
+        assert len(a.recent_derived(30)) == 1, "a naive timestamp is read as UTC"

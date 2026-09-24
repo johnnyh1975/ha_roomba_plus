@@ -44,6 +44,8 @@ from custom_components.roomba_plus.cloud_coordinator import IrobotCloudCoordinat
 from custom_components.roomba_plus.cloud_coordinator import _MIN_UNAVAILABLE
 from homeassistant.helpers.update_coordinator import UpdateFailed
 from custom_components.roomba_plus.cloud_coordinator import _CLOUD_POLL_IDLE
+import time
+from types import SimpleNamespace
 
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
@@ -675,3 +677,108 @@ class TestCredentialsNeverReachTheLog:
         source = inspect.getsource(cloud_api)
 
         assert "sorted(_first)" in source
+
+
+# ── formerly tests/test_coverage_mid_gaps.py ────────────────────────────────────
+#
+# Mid-sized coverage gaps — quality scale, test-coverage (Silver).
+#
+# Error branches and fallbacks: bad cloud values, missing fields, foreign
+# entities. Each test pins what the branch protects against.
+
+def _cloud_api():
+    from tests.test_cloud_api import TestIrobotCloudApiEndpoints
+
+    return TestIrobotCloudApiEndpoints()._authed_api()
+
+
+class TestAwsPost:
+    """The signed POST path had no test at all; it carries every cloud
+    write the integration makes."""
+
+    @pytest.mark.asyncio
+    async def test_without_credentials_it_refuses(self):
+        from custom_components.roomba_plus.cloud_api import AuthenticationError, IrobotCloudApi
+
+        api = IrobotCloudApi("u", "p", MagicMock())
+        with pytest.raises(AuthenticationError):
+            await api._aws_post("https://auth.example.com/v1/x", {"a": 1})
+
+    @pytest.mark.asyncio
+    async def test_a_200_returns_the_json(self):
+        from tests.test_cloud_api import _make_resp
+
+        api = _cloud_api()
+        api._session = MagicMock()
+        api._session.post = MagicMock(return_value=_make_resp(status=200, json_data={"ok": True}))
+        assert await api._aws_post("https://auth.example.com/v1/x", {"a": 1}) == {"ok": True}
+        sent = api._session.post.call_args
+        assert sent.kwargs["data"] == '{"a":1}'
+        assert "Authorization" in sent.kwargs["headers"]
+
+    @pytest.mark.asyncio
+    async def test_a_403_reauthenticates_once_and_retries(self):
+        from tests.test_cloud_api import _make_resp
+
+        api = _cloud_api()
+        api._session = MagicMock()
+        api._session.post = MagicMock(side_effect=[_make_resp(status=403),
+                                                   _make_resp(status=200, json_data={"ok": 1})])
+        api.authenticate = AsyncMock()
+        assert await api._aws_post("https://auth.example.com/v1/x", {}) == {"ok": 1}
+        api.authenticate.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_another_error_status_raises_with_the_status(self):
+        from custom_components.roomba_plus.cloud_api import CloudApiError
+        from tests.test_cloud_api import _make_resp
+
+        api = _cloud_api()
+        api._session = MagicMock()
+        api._session.post = MagicMock(return_value=_make_resp(status=500, text_data="boom"))
+        with pytest.raises(CloudApiError, match="500"):
+            await api._aws_post("https://auth.example.com/v1/x", {}, _retry=False)
+
+    @pytest.mark.asyncio
+    async def test_a_non_json_answer_is_a_cloud_error(self):
+        import aiohttp
+
+        from custom_components.roomba_plus.cloud_api import CloudApiError
+        from tests.test_cloud_api import _make_resp
+
+        api = _cloud_api()
+        resp = _make_resp(status=200)
+        inner = resp.__aenter__.return_value if hasattr(resp, "__aenter__") else resp
+        inner.json = AsyncMock(side_effect=aiohttp.ContentTypeError(MagicMock(), ()))
+        api._session = MagicMock()
+        api._session.post = MagicMock(return_value=resp)
+        with pytest.raises(CloudApiError, match="Non-JSON"):
+            await api._aws_post("https://auth.example.com/v1/x", {})
+
+
+class TestCloudEndpointsSmall:
+
+    @pytest.mark.asyncio
+    async def test_mission_history_pages_backwards_with_before(self):
+        api = _cloud_api()
+        api._aws_get = AsyncMock(return_value=[])
+        await api.get_mission_history("BLID", count=5, before_ts=1789975662)
+        params = api._aws_get.await_args.args[1] if len(api._aws_get.await_args.args) > 1 else api._aws_get.await_args.kwargs.get("params")
+        assert params["before"] == "1789975662"
+
+    @pytest.mark.asyncio
+    async def test_robot_parts_of_an_odd_shape_are_empty(self):
+        api = _cloud_api()
+        api._aws_get = AsyncMock(return_value=["not", "a", "dict"])
+        assert await api.get_robot_parts("BLID") == {}
+
+    @pytest.mark.asyncio
+    async def test_get_with_params_encodes_them_into_the_url(self):
+        from tests.test_cloud_api import _make_resp
+
+        api = _cloud_api()
+        api._session = MagicMock()
+        api._session.get = MagicMock(return_value=_make_resp(status=200, json_data={}))
+        await api._aws_get("https://auth.example.com/v1/x", {"a": "1", "b": "x y"})
+        url = api._session.get.call_args.args[0]
+        assert url.endswith("?a=1&b=x+y")

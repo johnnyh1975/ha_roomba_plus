@@ -852,7 +852,7 @@ class TestMissionStartWiringTypeSafety:
         hass.loop = MagicMock()
 
         with patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            "asyncio.run_coroutine_threadsafe",
             side_effect=lambda c, l: c.close(),
         ), patch(
             "custom_components.roomba_plus.sensor._compute_room_time_estimates",
@@ -881,7 +881,7 @@ class TestMissionStartWiringTypeSafety:
         hass.loop = MagicMock()
 
         with patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            "asyncio.run_coroutine_threadsafe",
             side_effect=lambda c, l: c.close(),
         ), patch(
             "custom_components.roomba_plus.sensor._compute_room_time_estimates",
@@ -910,7 +910,7 @@ class TestMissionStartWiringTypeSafety:
         hass.loop = MagicMock()
 
         with patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            "asyncio.run_coroutine_threadsafe",
             side_effect=lambda c, l: c.close(),
         ), patch(
             "custom_components.roomba_plus.sensor._compute_room_time_estimates",
@@ -995,7 +995,7 @@ class TestEstimateFailureIsolation:
         hass.loop = MagicMock()
 
         with patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            "asyncio.run_coroutine_threadsafe",
             side_effect=lambda c, l: c.close(),
         ), patch(
             "custom_components.roomba_plus.sensor._compute_room_time_estimates",
@@ -1033,7 +1033,7 @@ class TestEstimateFailureIsolation:
         hass.loop = MagicMock()
 
         with patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            "asyncio.run_coroutine_threadsafe",
             side_effect=lambda c, l: c.close(),
         ), patch(
             "custom_components.roomba_plus.sensor._compute_room_time_estimates",
@@ -1066,7 +1066,7 @@ class TestEstimateFailureIsolation:
         hass.loop = MagicMock()
 
         with patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            "asyncio.run_coroutine_threadsafe",
             side_effect=lambda c, l: c.close(),
         ), patch(
             "custom_components.roomba_plus.sensor._compute_room_time_estimates",
@@ -1183,7 +1183,7 @@ class TestCallbacksLastCommandNoneGuard:
         hass.loop = MagicMock()
 
         with patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            "asyncio.run_coroutine_threadsafe",
             side_effect=lambda c, l: c.close(),
         ):
             cb = make_mission_callback(hass, entry)
@@ -1234,7 +1234,7 @@ class TestCallbacksLastCommandNoneGuard:
         # old None + patched run_coroutine_threadsafe).
         hass.loop = MagicMock()
         with patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            "asyncio.run_coroutine_threadsafe",
             side_effect=lambda c, l: c.close(),
         ):
             cb = make_mission_callback(hass, entry)
@@ -1285,7 +1285,7 @@ class TestCallbacksLastCommandNoneGuard:
             "custom_components.roomba_plus.callbacks.CONF_SMART_ZONE_DATA",
             "smart_zone_data",
         ), patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe",
+            "asyncio.run_coroutine_threadsafe",
             side_effect=lambda c, l: c.close(),
         ):
             cb = make_mission_callback(hass, entry)

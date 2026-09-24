@@ -12,6 +12,13 @@ decorator and cannot be imported inside a method.
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
+import ast
+import pathlib
+from custom_components.roomba_plus.sensor_core import RoombaSensor
+from types import SimpleNamespace
+from custom_components.roomba_plus import sensor_core as sc
+from custom_components.roomba_plus.const import CONSUMABLE_ROLES
+from custom_components.roomba_plus.entity import IRobotEntity
 
 class TestAreaSensorsCanBeConverted:
     """@chairstacker (#69): his Home Assistant is on imperial and his
@@ -232,7 +239,12 @@ class TestRoombaSensorNativeValue:
         entry.runtime_data.maintenance_store = store
         sensor._config_entry = entry
         sensor.entity_description = next(d for d in SENSORS if d.key == key)
-        type(sensor).run_stats = PropertyMock(return_value=run_stats or {})
+        # A PER-INSTANCE subclass, not `type(sensor).run_stats = ...`: that
+        # replaced RoombaSensor.run_stats for every later test in the run.
+        _rs = run_stats or {}
+        sensor.__class__ = type(
+            "_RunStatsSensor", (type(sensor),), {"run_stats": property(lambda s: _rs)},
+        )
         return sensor
 
     def test_filter_hours_fall_back_to_plain_arithmetic_without_a_store(self):
@@ -575,9 +587,11 @@ class TestClassicStatusReportsTheSameTwoStates:
         entity = MagicMock()
         entity.clean_mission_status = {"phase": phase, "cycle": cycle}
         entity.vacuum_state = {"batPct": battery}
-        entity._config_entry.runtime_data.last_mqtt_message_ts = (
-            time.time() if last_ts is None else last_ts
-        )
+        _ts = time.time() if last_ts is None else last_ts
+        entity._config_entry.runtime_data.last_mqtt_message_ts = _ts
+        # Derived on RoombaData: a MagicMock would answer with a
+        # MagicMock, not a number.
+        entity._config_entry.runtime_data.silence_reference_ts = _ts
         return _phase_value(entity)
 
     def test_charging_mid_mission(self):
@@ -774,3 +788,311 @@ class TestPoseCapabilityVersusActualPose:
         assert nav.filter_fn is not None
         assert not nav.filter_fn({"cap": {"pose": 1}})
         assert nav.filter_fn({"mssnNavStats": {"l_squal": 50}})
+
+
+class TestLiveMissionSensorsAreUnknownNotUnavailableWhenIdle:
+    """A docked robot is reachable, so "no mission running" must reach the
+    user as `unknown`, not `unavailable`.
+
+    `unavailable` made Home Assistant's orphan-entity tooling (Orphan
+    Entity Cleaner, reported by naveso) list these as broken entities
+    every time a mission finished. HA reserves `unavailable` for "cannot
+    reach the device"; the value simply not existing yet is `unknown`.
+
+    The two assertions below are deliberately different in kind:
+      * available_fn is None      -> HA never marks the entity unavailable
+      * value_fn(idle) is None    -> HA renders `unknown`
+    Both are needed: dropping only the guard while the value_fn invented
+    a value would freeze a stale duration into long-term statistics.
+    """
+
+    IDLE = {"phase": "charge", "cycle": "none"}
+
+    def test_neither_sensor_declares_an_availability_guard(self):
+        for key in ("mission_start_time", "mission_elapsed_time"):
+            assert _descriptor(key).available_fn is None, (
+                f"{key} must not gate availability on the mission phase -- "
+                "that turns a correct 'unknown' into a misleading "
+                "'unavailable' and trips orphan-entity checks."
+            )
+
+    def test_both_sensors_yield_no_value_while_idle(self):
+        for key in ("mission_start_time", "mission_elapsed_time"):
+            value = _descriptor(key).value_fn(
+                _FakeEntity(clean_mission_status=dict(self.IDLE))
+            )
+            assert value is None, (
+                f"{key} returned {value!r} while idle; the completed-mission "
+                "values belong to 'Missions - Last' / '- Last duration', and "
+                "a retained MEASUREMENT would corrupt long-term statistics."
+            )
+
+
+# ── formerly tests/test_coverage_sensor_core.py ─────────────────────────────────
+#
+# sensor_core.py — quality scale, test-coverage.
+#
+# `RoombaSensor.new_state_filter` decides, per sensor, which fields of a
+# robot message make it re-render. The robot sends many messages; a sensor
+# reacting to all of them writes state for nothing, one that misses its
+# field stays stale. The table is read from the source, so every entry is
+# checked — including entries added later.
+
+_SIGNAL_KEYS = {"rssi", "snr", "signal_noise"}
+
+
+def _filter_table() -> list[tuple[str, list[str]]]:
+    src = pathlib.Path("custom_components/roomba_plus/sensor_core.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "new_state_filter")
+    table = []
+    for node in fn.body:
+        if not isinstance(node, ast.If):
+            continue
+        comp = node.test
+        rhs = comp.comparators[0]
+        keys = ([rhs.value] if isinstance(rhs, ast.Constant)
+                else [e.value for e in rhs.elts])
+        ret = node.body[0].value
+        fields = [c.value for c in ast.walk(ret)
+                  if isinstance(c, ast.Constant) and isinstance(c.value, str)]
+        for key in keys:
+            table.append((key, fields))
+    return table
+
+
+TABLE = _filter_table()
+
+
+def _sensor(key):
+    s = RoombaSensor.__new__(RoombaSensor)
+    s.entity_description = type("D", (), {"key": key})()
+    return s
+
+
+def _full_sensor(key, *, value=None, role=None, extra_fn=None, threshold=None, max_hours=None, **runtime):
+    s = RoombaSensor.__new__(RoombaSensor)
+    s.entity_description = SimpleNamespace(
+        key=key, role=role, extra_attributes_fn=extra_fn,
+        threshold_fn=lambda _s: threshold, max_hours_fn=lambda _s: max_hours,
+    )
+    s._config_entry = MagicMock()
+    for k, v in runtime.items():
+        setattr(s._config_entry.runtime_data, k, v)
+    s.hass = MagicMock()
+    s.hass.config.language = "de"
+    type(s)  # keep linters quiet
+    s.__dict__["_value_for_test"] = value
+    return s
+
+
+@pytest.fixture(autouse=False)
+def _value(monkeypatch):
+    monkeypatch.setattr(RoombaSensor, "native_value",
+                        property(lambda s: s.__dict__.get("_value_for_test")))
+
+
+@pytest.mark.usefixtures('_value')
+def test_the_table_was_read():
+    assert len(TABLE) >= 60
+
+
+@pytest.mark.usefixtures('_value')
+@pytest.mark.parametrize("key,fields", TABLE, ids=[k for k, _ in TABLE])
+def test_each_trigger_field_re_renders_its_sensor(key, fields):
+    s = _sensor(key)
+    for field in fields:
+        assert s.new_state_filter({field: 1}) is True, (key, field)
+
+
+@pytest.mark.usefixtures('_value')
+@pytest.mark.parametrize("key,fields", TABLE, ids=[k for k, _ in TABLE])
+def test_wifi_chatter_does_not_re_render_other_sensors(key, fields):
+    """The robot reports signal strength constantly; only the signal
+    sensors should redraw for it."""
+    expected = key in _SIGNAL_KEYS
+    assert _sensor(key).new_state_filter({"signal": {"rssi": -60}}) is expected
+
+
+@pytest.mark.usefixtures('_value')
+@pytest.mark.parametrize("key,fields", TABLE, ids=[k for k, _ in TABLE])
+def test_an_unrelated_field_does_not_re_render(key, fields):
+    assert _sensor(key).new_state_filter({"someUnrelatedField": 1}) is False
+
+
+@pytest.mark.usefixtures('_value')
+def test_an_unlisted_sensor_ignores_only_pure_signal_messages():
+    s = _sensor("a_key_not_in_the_table")
+    assert s.new_state_filter({"signal": {}}) is False
+    assert s.new_state_filter({"batPct": 90}) is True
+    assert s.new_state_filter({"signal": {}, "batPct": 90}) is True
+
+
+@pytest.mark.usefixtures('_value')
+class TestSensorAttributes:
+
+    def test_a_description_function_wins(self):
+        s = _full_sensor("anything", extra_fn=lambda _s: {"from": "description"})
+        assert s.extra_state_attributes == {"from": "description"}
+
+    def test_consumables_show_threshold_and_max_hours(self):
+        s = _full_sensor("filter_remaining_hours", threshold=60, max_hours=150)
+        assert s.extra_state_attributes == {"threshold_hours": 60, "max_hours": 150}
+
+    def test_an_error_code_carries_its_localised_text(self, monkeypatch):
+        monkeypatch.setattr(sc, "get_localized_error_entry",
+                            lambda code, lang: {"description": f"Fehler {code}", "action": "Rad reinigen"})
+        attrs = _full_sensor("last_error_code", value=17).extra_state_attributes
+        assert attrs == {"description": "Fehler 17", "action": "Rad reinigen"}
+
+    def test_no_error_code_has_no_text(self):
+        assert _full_sensor("last_error_code", value=None).extra_state_attributes == {}
+
+    @pytest.mark.parametrize("maint,role,erwartet", [
+        (None, "filter", "Maintenance store not available"),
+        ("reset_never", "filter", "Press the replacement confirmation button to start tracking"),
+        ("reset_done", "filter", "Collecting data — available after 3 days"),
+    ])
+    def test_a_wear_sensor_without_a_value_says_why(self, maint, role, erwartet):
+        store = None
+        if maint is not None:
+            store = MagicMock()
+            store.reset_baseline_for_role.return_value = (0, None if maint == "reset_never" else "2026-09-01")
+        s = _full_sensor("filter_wear_rate", value=None, role=role, maintenance_store=store)
+        assert s.extra_state_attributes == {"status": erwartet}
+
+    def test_a_wear_sensor_without_a_role_has_no_status(self):
+        s = _full_sensor("filter_wear_rate", value=None, role=None, maintenance_store=MagicMock())
+        assert s.extra_state_attributes == {}
+
+    @pytest.mark.parametrize("value", [None, 0])
+    def test_no_mission_yet_is_said(self, value):
+        assert _full_sensor("last_mission_duration", value=value).extra_state_attributes == {
+            "status": "No mission recorded yet"}
+
+    def test_presence_utilisation_shows_its_parts(self, monkeypatch):
+        monkeypatch.setattr(sc, "_presence_opportunities", lambda _s, _d: 4)
+        store = MagicMock()
+        store.presence_windows.return_value = [SimpleNamespace(resulted_in_clean=True),
+                                               SimpleNamespace(resulted_in_clean=False)]
+        s = _full_sensor("presence_clean_utilisation_7d", mission_store=store)
+        assert s.extra_state_attributes == {"cleans_7d": 1, "opportunities_7d": 4}
+
+
+# ── formerly tests/test_coverage_sensor_core_2.py ───────────────────────────────
+#
+# sensor_core.py, lifecycle and values — quality scale, test-coverage.
+
+def _s(key, **desc):
+    s = RoombaSensor.__new__(RoombaSensor)
+    base = dict(key=key, role=None, remaining=None, available_fn=None)
+    base.update(desc)
+    s.entity_description = SimpleNamespace(**base)
+    s._config_entry = MagicMock()
+    s._config_entry.options = {}
+    s.hass = MagicMock()
+    s.vacuum_state = {"bbrun": {"hr": 100}}   # run_stats reads it
+    return s
+
+
+def _role():
+    return next(r for r, spec in CONSUMABLE_ROLES.items() if spec.conf_key is not None)
+
+
+class TestSmallAccessors:
+
+    def test_no_role_has_no_threshold(self):
+        assert sc._consumable_threshold(_s("x", role=None)) is None
+
+    def test_the_object_id_is_the_key(self):
+        assert _s("battery").suggested_object_id == "battery"
+
+    def test_an_availability_rule_can_hide_the_sensor(self, monkeypatch):
+        monkeypatch.setattr(IRobotEntity, "available", property(lambda _s: True))
+        assert _s("x", available_fn=lambda _s: False).available is False
+        assert _s("x", available_fn=lambda _s: True).available is True
+
+
+class TestLifecycle:
+
+    @pytest.mark.asyncio
+    async def test_it_listens_to_what_its_key_needs(self, monkeypatch):
+        monkeypatch.setattr(IRobotEntity, "async_added_to_hass", AsyncMock())
+        monkeypatch.setattr(sc, "async_track_time_interval", MagicMock(return_value="tick"))
+        monkeypatch.setattr(sc, "async_track_time_change", MagicMock(return_value="midnight"))
+        for key in (next(iter(sc._MISSION_STORE_SENSORS)),
+                    next(iter(RoombaSensor._TICK_SENSORS)),
+                    next(iter(RoombaSensor._MIDNIGHT_SENSORS))):
+            s = _s(key)
+            s.async_on_remove = MagicMock()
+            s._unsub_tick = None
+            await s.async_added_to_hass()
+            assert s.async_on_remove.called or s._unsub_tick == "tick", key
+
+    def test_only_its_own_entrys_mission_triggers_a_refresh(self):
+        s = _s("total_missions")
+        s._config_entry.entry_id = "e1"
+        s.schedule_update_ha_state = MagicMock()
+        s._async_mission_completed(SimpleNamespace(data={"entry_id": "other"}))
+        s.schedule_update_ha_state.assert_not_called()
+        s._async_mission_completed(SimpleNamespace(data={"entry_id": "e1"}))
+        s.schedule_update_ha_state.assert_called_once_with(force_refresh=True)
+
+    def test_midnight_rewrites_the_state(self):
+        s = _s("area_cleaned_today")
+        s.async_write_ha_state = MagicMock()
+        s._async_day_rolled_over(None)
+        s.async_write_ha_state.assert_called_once()
+
+
+class TestRemainingHours:
+
+    def test_a_cloud_figure_wins(self):
+        s = _s("filter_remaining_hours", role=_role(), remaining=True)
+        store = MagicMock()
+        store.cloud_remaining_hours.return_value = 42
+        s._config_entry.runtime_data.maintenance_store = store
+        assert s.native_value == 42
+
+    def test_without_a_store_the_budget_minus_runtime(self):
+        role = _role()
+        s = _s("filter_remaining_hours", role=role, remaining=True)
+        s._config_entry.runtime_data.maintenance_store = None
+        spec = CONSUMABLE_ROLES[role]
+        assert s.native_value == max(0, spec.default_hours - 100)
+
+
+class TestNextClean:
+
+    def test_the_next_future_occurrence(self, monkeypatch):
+        from homeassistant.util import dt as dt_util
+
+        now = dt_util.now()
+        later = now + sc.dt_stdlib.timedelta(hours=5)
+        monkeypatch.setattr(sc, "parse_schedule_occurrences",
+                            lambda *_a: [(now - sc.dt_stdlib.timedelta(hours=1), None), (later, None)])
+        assert _s("next_clean")._calc_next_clean() == later
+
+    def test_no_future_occurrence_is_none(self, monkeypatch):
+        monkeypatch.setattr(sc, "parse_schedule_occurrences", lambda *_a: [])
+        assert _s("next_clean")._calc_next_clean() is None
+
+
+class TestNoTestLeaksIntoTheSensorClasses:
+    """Guard: tests must not overwrite attributes of the real entity
+    classes. `type(sensor).run_stats = ...` in two tests replaced
+    RoombaSensor.run_stats for the whole run — every later test read hr=30
+    from them. Found when a test that needed the real property failed only
+    in the randomised full run."""
+
+    def test_no_test_assigns_to_a_real_class(self):
+        import pathlib
+        import re
+
+        pattern = re.compile(r"^\s+type\((sensor|entity|e|s|b|button|switch)\)\.[a-z_]+\s*=", re.M)
+        offenders = []
+        for f in sorted(pathlib.Path("tests").glob("test_*.py")):
+            for m in pattern.finditer(f.read_text(encoding="utf-8")):
+                offenders.append(f"{f.name}: {m.group(0).strip()}")
+        assert not offenders, offenders

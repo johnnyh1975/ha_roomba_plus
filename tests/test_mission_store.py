@@ -54,6 +54,11 @@ from custom_components.roomba_plus.const import DOMAIN
 import time
 import statistics
 from custom_components.roomba_plus.mission_archive import MissionArchive
+from custom_components.roomba_plus import mission_archive as ma
+from datetime import timedelta
+from unittest.mock import MagicMock as _MM
+from custom_components.roomba_plus import mission_store as ms_mod
+from custom_components.roomba_plus.const import SQFT_TO_M2
 
 
 _make_record_counter = 0
@@ -2646,7 +2651,7 @@ class TestRechargeAccumulation:
         hass.loop = None
 
         with patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe"
+            "asyncio.run_coroutine_threadsafe"
         ) as mock_rct:
             import asyncio
 
@@ -2688,7 +2693,7 @@ class TestRechargeAccumulation:
         hass = MagicMock()
 
         with patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe"
+            "asyncio.run_coroutine_threadsafe"
         ) as mock_rct:
             mock_rct.side_effect = lambda coro, loop: None
 
@@ -2738,7 +2743,7 @@ class TestRechargeAccumulationDoubleCountingFix:
 
         hass = MagicMock()
         patcher = patch(
-            "custom_components.roomba_plus.callbacks.asyncio.run_coroutine_threadsafe"
+            "asyncio.run_coroutine_threadsafe"
         )
         mock_rct = patcher.start()
         import asyncio
@@ -2856,14 +2861,39 @@ class TestLatestCleanedRooms:
         result = ms.latest_cleaned_rooms({"23": "Bathroom"})
         assert result == ["Bathroom"]
 
-    def test_status_5_excluded(self):
-        # status=5 = interrupted by user/app (Mission 799: pause+dock by rmtApp)
+    def test_status_5_with_cleaned_floor_now_counts(self):
+        """Mission 799: paused and docked from the app, status 5, 40 of 251
+        area units cleaned. Excluded until 4.2.11 — the test asserted it.
+
+        CHANGED DELIBERATELY. The iRobot app does not evaluate `status`
+        (APK 7.18.0) and shows this room as cleaned; @Thonno's Kitchen was
+        missing from the history for the same reason. Room history now
+        asks "did the robot clean floor here", and it did.
+
+        THE COST, stated: a room cleaned 16 % now resets its last-cleaned
+        time. Room COVERAGE still excludes it — see
+        test_status_5_excluded_from_coverage — because coverage is a
+        measurement and a partial pass would understate it.
+        """
         ms = _ms_with_timeline({
             "plan": {"upcoming": []},
             "finEvents": [
                 {"type": "room", "room": {
                     "rid": "26", "passCount": 1, "status": 5,
                     "area": 251, "passArea": 40,
+                }},
+            ],
+        })
+        assert ms.latest_cleaned_rooms(REGION_MAP) is not None
+
+    def test_status_5_with_no_cleaned_floor_still_excluded(self):
+        """The line the new rule draws: an early end WITHOUT cleaned floor
+        is not a clean. This is what keeps a skipped room out."""
+        ms = _ms_with_timeline({
+            "plan": {"upcoming": []},
+            "finEvents": [
+                {"type": "room", "room": {
+                    "rid": "26", "passCount": 1, "status": 5, "area": 251,
                 }},
             ],
         })
@@ -3056,20 +3086,57 @@ class TestLatestRoomCoverage:
         assert result is not None
         assert pytest.approx(result["Bathroom"], abs=0.01) == 50 / 76
 
-    def test_status_6_without_totalArea_skipped(self):
-        # status=6 without totalArea — gracefully skipped (coverage shows None for room)
+    def test_a_single_pass_room_is_covered_by_its_pass_area(self):
+        """Thonno's lewis 22.52.10 data: status 6, no totalArea, passArea
+        16 of 37. This test used to assert the room is SKIPPED, and
+        explained the missing totalArea by status 6.
+
+        The firmware says otherwise (`end_given_room_or_zone_event`, lewis
+        and ruby): `totalArea` is written only from the SECOND pass on,
+        whatever the status. This was a single pass. Its covered area is
+        `passArea`, and skipping it hid coverage for every one-pass room.
+        """
         ms = _ms_with_timeline({
             "plan": {"upcoming": ["23"]},
             "finEvents": [
                 {"type": "room", "room": {
-                    "rid": "23", "status": 6,
+                    "rid": "23", "status": 6, "passCount": 1,
                     "area": 37, "passArea": 16,
-                    # totalArea absent — confirmed on Thonno's lewis 22.52.10 robot
                 }},
             ],
         })
-        # No qualifying events with totalArea → returns None
-        assert ms.latest_room_coverage({"23": "Bathroom"}) is None
+        cov = ms.latest_room_coverage({"23": "Bathroom"})
+        assert cov == {"Bathroom": pytest.approx(16 / 37)}
+
+    def test_a_status_0_single_pass_room_is_covered_too(self):
+        """PyRoomba capture, real Classic data: status 0, one pass, no
+        totalArea. Not a status-6 quirk — the common case."""
+        ms = _ms_with_timeline({
+            "plan": {"upcoming": ["2"]},
+            "finEvents": [
+                {"type": "room", "room": {
+                    "rid": "2", "status": 0, "passCount": 1,
+                    "area": 173, "passArea": 96,
+                }},
+            ],
+        })
+        cov = ms.latest_room_coverage({"2": "Kitchen"})
+        assert cov == {"Kitchen": pytest.approx(96 / 173)}
+
+    def test_a_multi_pass_room_uses_the_union_not_the_last_pass(self):
+        """From the second pass on, `totalArea` is the union over passes;
+        `passArea` is only the last pass. The registry's own example."""
+        ms = _ms_with_timeline({
+            "plan": {"upcoming": ["19"]},
+            "finEvents": [
+                {"type": "room", "room": {
+                    "rid": "19", "status": 0, "passCount": 2,
+                    "area": 72, "passArea": 40, "totalArea": 42,
+                }},
+            ],
+        })
+        cov = ms.latest_room_coverage({"19": "Hall"})
+        assert cov == {"Hall": pytest.approx(42 / 72)}
 
     def test_status_5_excluded_from_coverage(self):
         ms = _ms_with_timeline({
@@ -4232,8 +4299,10 @@ class TestStuckRecoveryReadsTheRecord:
     finished after the stuck, or a real dock finish.
     """
 
+    STUCK = 1_789_000_000   # wall clock of the stuck, Unix seconds
+
     @staticmethod
-    def _verdict(events, mission_id="M1", record_id=None):
+    def _verdict(events, mission_id="M1", record_id=None, stuck_at=STUCK):
         from types import SimpleNamespace
 
         from custom_components.roomba_plus.callbacks import (
@@ -4250,18 +4319,21 @@ class TestStuckRecoveryReadsTheRecord:
                 )
             )
         )
-        return _mission_recovered_after_stuck(entry, {"missionId": mission_id})
+        return _mission_recovered_after_stuck(entry, {"missionId": mission_id}, stuck_at)
+
+    @classmethod
+    def _room(cls, status, rid, ends_after_stuck_by):
+        end = cls.STUCK + ends_after_stuck_by
+        return {"type": "room", "ts": end - 300, "ets": end, "room": {"status": status, "rid": rid}}
+
+    @classmethod
+    def _dock(cls, after_stuck_by):
+        return {"type": "travel", "ts": cls.STUCK + after_stuck_by, "travel": {"dest": "dock"}}
 
     def test_his_mission_reads_as_resumed(self):
-        """Four rooms finished and a dock finish — both signals present."""
-        events = [
-            {"type": "room", "room": {"status": 0, "rid": "1"}},
-            {"type": "room", "room": {"status": 0, "rid": "2"}},
-            {"type": "room", "room": {"status": 6, "rid": "3"}},
-            {"type": "room", "room": {"status": 0, "rid": "4"}},
-            {"type": "travel", "travel": {"dest": "dock"}},
-        ]
-
+        """Freed after 16 minutes, four rooms and a dock finish afterwards."""
+        events = [self._room(0, "1", 1500), self._room(0, "2", 2500),
+                  self._room(0, "3", 3500), self._room(0, "4", 4500), self._dock(4600)]
         assert self._verdict(events) is True
 
     def test_a_genuine_abandon_reads_as_abandoned(self):
@@ -4269,22 +4341,48 @@ class TestStuckRecoveryReadsTheRecord:
         assert self._verdict([]) is False
 
     def test_dock_finish_alone_is_enough(self):
-        """It drove home under its own power."""
-        events = [{"type": "travel", "travel": {"dest": "dock"}}]
-
-        assert self._verdict(events) is True
+        """It drove home under its own power after the stuck."""
+        assert self._verdict([self._dock(600)]) is True
 
     def test_rooms_alone_are_enough(self):
-        """Finished rooms after being freed, then ran out of battery —
+        """Finished a pass after being freed, then ran out of battery --
         it did not abandon, whatever the ending."""
-        events = [{"type": "room", "room": {"status": 0, "rid": "1"}}]
+        assert self._verdict([self._room(0, "1", 900)]) is True
 
-        assert self._verdict(events) is True
+    def test_a_pass_with_more_to_follow_also_shows_it_worked_on(self):
+        assert self._verdict([self._room(1, "1", 900)]) is True
+
+    def test_rooms_finished_before_the_stuck_do_not_count(self):
+        """Two rooms done, stuck in the third, gave up. Counted as resumed --
+        and so as a completed mission -- because every finished room of
+        the mission counted, not just those after the stuck."""
+        events = [self._room(0, "1", -2000), self._room(0, "2", -800), self._room(6, "3", 1200)]
+        assert self._verdict(events) is False
+
+    def test_a_room_closed_at_mission_end_does_not_count(self):
+        """5 and 6 are closed by the firmware at mission END. The room the
+        robot gave up in carries one; it is not evidence of work."""
+        for status in (5, 6):
+            assert self._verdict([self._room(status, "1", 1200)]) is False
+
+    def test_a_dock_trip_before_the_stuck_does_not_count(self):
+        """A recharge trip earlier in the mission is not a finish."""
+        assert self._verdict([self._dock(-3000)]) is False
 
     def test_no_record_means_no_verdict(self):
         """None, not False. A Prime robot or a local-only setup has no
         cloud record, and the caller falls back rather than guessing."""
         assert self._verdict([], record_id="A_DIFFERENT_MISSION") is None
+
+    def test_an_event_with_an_unreadable_time_is_not_counted(self):
+        """No telling whether it came after the stuck, so it cannot prove
+        the robot worked on."""
+        event = {"type": "room", "ets": "later", "room": {"status": 0, "rid": "1"}}
+        assert self._verdict([event]) is False
+
+    def test_an_unknown_stuck_time_means_no_verdict(self):
+        """Without it there is no telling before from after."""
+        assert self._verdict([self._room(0, "1", 900)], stuck_at=0.0) is None
 
 
 class TestABatteryAbortIsNotAnEntrapment:
@@ -4371,3 +4469,223 @@ class TestThePickCounterIsNotALiftWitness:
         source = inspect.getsource(callbacks)
 
         assert '"robot picked up off\n    # the floor" events' not in source
+
+
+# ── formerly tests/test_coverage_mission_archive.py ─────────────────────────────
+#
+# mission_archive.py — quality scale, test-coverage.
+#
+# The archive is filled once from the cloud's mission history, page by page
+# backwards, and then grows mission by mission. It must stop cleanly on a
+# failing or empty page, never store a mission twice, and classify every
+# mission from the record's own fields.
+
+class TestMissionStorePersistence:
+
+    def _with(self, monkeypatch, data):
+        backing = _MM()
+        backing.async_load = AsyncMock(return_value=data)
+        monkeypatch.setattr(ms_mod, "Store", lambda *a, **k: backing)
+        return MissionStore()
+
+    @pytest.mark.asyncio
+    async def test_a_newer_payload_is_not_misread(self, hass, monkeypatch, caplog):
+        s = self._with(monkeypatch, {"payload_version": ms_mod.PAYLOAD_VERSION + 1,
+                                     "records": [{"id": "x"}]})
+        await s.async_load(hass, "e1")
+        assert s._records == []
+        assert "not" in caplog.text.lower()
+
+    @pytest.mark.asyncio
+    async def test_a_corrupt_record_list_starts_empty(self, hass, monkeypatch, caplog):
+        s = self._with(monkeypatch, {"records": 12345})
+        await s.async_load(hass, "e1")
+        assert s._records == []
+        assert "starting empty" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_saving_without_hass_is_a_no_op(self):
+        await MissionStore().async_save(None, "e1")   # must not raise
+
+
+class TestMissionStoreEdges:
+
+    @pytest.mark.parametrize("existing,incoming", [
+        ({"ended_at": "2026-09-21T09:00:00+00:00"}, {"ended_at": None}),
+        ({"ended_at": None}, {"ended_at": "2026-09-21T09:00:00+00:00"}),
+        ({"ended_at": "garbage"}, {"ended_at": "2026-09-21T09:00:00+00:00"}),
+    ])
+    def test_a_replay_needs_two_readable_end_times(self, existing, incoming):
+        assert MissionStore._is_replay_window(existing, incoming) is False
+
+    def test_a_naive_reset_time_is_read_as_utc(self):
+        from homeassistant.util import dt as dt_util
+
+        reset = (dt_util.utcnow() - timedelta(days=10)).replace(tzinfo=None).isoformat()
+        assert MissionStore().wear_rate_since_reset(100, reset, 150) == pytest.approx(5.0, abs=0.1)
+
+    def test_an_unreadable_reset_time_gives_no_rate(self):
+        assert MissionStore().wear_rate_since_reset(100, "not a date", 150) is None
+
+    def test_too_few_missions_give_no_rolling_stats(self):
+        assert MissionStore().compute_rolling_stats(30) is None
+
+    def test_a_naive_start_time_is_found_by_query(self):
+        from homeassistant.util import dt as dt_util
+
+        s = MissionStore()
+        now = dt_util.utcnow().replace(tzinfo=None, microsecond=0).isoformat()
+        s._records.append({"id": "n", "started_at": now, "ended_at": now})
+        assert [r["id"] for r in s.query(days=1)] == ["n"]
+
+
+class TestMissionStoreRegionsAndWindows:
+
+    def test_region_ids_skip_non_rooms_and_fall_back_to_durations(self):
+        rec = {"timeline": {"finEvents": ["junk", {"type": "travel"},
+                                          {"type": "room", "room": {"rid": "3"}}]},   # no status, no area
+               "room_durations_sec": {"7": 300, "": 5}}
+        assert MissionStore.record_region_ids(rec) == ["7"]
+        assert MissionStore.record_region_ids({}) == []
+
+    def test_windows_between_missions_with_naive_and_overlapping_times(self):
+        """A naive time is UTC; a mission starting before the previous one
+        ended is no window; an unreadable time is skipped."""
+        from homeassistant.util import dt as dt_util
+
+        base = dt_util.utcnow().replace(microsecond=0, tzinfo=None) - timedelta(days=1)
+        iso = lambda d: d.isoformat()
+        s = MissionStore()
+        s._records.extend([
+            {"id": "a", "started_at": iso(base), "ended_at": iso(base + timedelta(minutes=30)), "result": "completed"},
+            {"id": "b", "started_at": iso(base + timedelta(hours=3)), "ended_at": iso(base + timedelta(hours=4)), "result": "completed"},
+            {"id": "c", "started_at": iso(base + timedelta(hours=3, minutes=30)), "ended_at": "garbage", "result": "completed"},
+            {"id": "d", "started_at": iso(base + timedelta(hours=6)), "ended_at": iso(base + timedelta(hours=7)), "result": "completed"},
+        ])
+        windows = s.presence_windows(days=3)
+        assert [w.duration_min for w in windows] == [150]
+
+
+class TestMissionStoreCompletedCount:
+
+    def test_counts_only_completed_missions(self):
+        s = MissionStore()
+        s._records.extend([{"result": "completed"}, {"result": "cancelled"}, {"result": "completed"}])
+        assert s.completed_count == 2
+
+
+class TestPlannedOrderWithoutMissions:
+
+    def test_no_mission_yet_has_no_planned_order(self):
+        assert MissionStore().latest_planned_order({"3": "Kitchen"}) is None
+
+    def test_a_plan_whose_entries_carry_no_room_id_has_no_order(self):
+        """The plan exists, but none of its entries names a room."""
+        s = MissionStore()
+        s._records.append({"id": "m", "started_at": "2026-09-21T07:00:00+00:00",
+                           "ended_at": "2026-09-21T08:00:00+00:00",
+                           "timeline": {"plan": {"upcoming": [{}, {"rid": ""}]}}})
+        assert s.latest_planned_order({"3": "Kitchen"}) is None
+
+
+class TestDuplicateMissionsAreDroppedOnLoad:
+    """4.2.10 and earlier could store a Prime mission twice (the duplicate
+    check saw only the last five records) and count it twice in the
+    statistics, which are rebuilt from these records at setup."""
+
+    @pytest.mark.asyncio
+    async def test_the_first_of_each_id_is_kept_in_order(self, hass, monkeypatch):
+        from custom_components.roomba_plus import mission_store as ms_mod
+
+        records = [{"id": "a", "n": 1}, {"id": "b"}, {"id": "a", "n": 2}, {"n": "no id"}, {"n": "no id"}, {"id": "c"}]
+        backing = _MM()
+        backing.async_load = AsyncMock(return_value={"payload_version": ms_mod.PAYLOAD_VERSION, "records": records})
+        monkeypatch.setattr(ms_mod, "Store", lambda *a, **k: backing)
+        store = MissionStore()
+        await store.async_load(hass, "e1")
+        assert [r.get("id") for r in store.records] == ["a", "b", None, None, "c"]
+        assert store.records[0]["n"] == 1
+
+
+# ── formerly tests/test_statistics_backfill_cumulative.py ───────────────────────
+#
+# The mission statistics are cumulative, one entry per hour.
+#
+# Home Assistant reads `sum` of a `has_sum` statistic as a running total and
+# shows each period's change as `sum - previous sum`. Writing each mission's
+# own value there made a 20 m² mission followed by a 15 m² one read as a
+# change of -5 m², and two missions in one hour collided on one start time.
+
+def _rec(started, sqft=None, minutes=30, result="completed"):
+    r = {"id": started, "started_at": started, "ended_at": started,
+         "duration_min": minutes, "result": result}
+    if sqft is not None:
+        r["area_sqft"] = sqft
+    return r
+
+
+async def _import(hass, monkeypatch, records):
+    from homeassistant.components.recorder import statistics as rs
+
+    captured: dict[str, list] = {}
+
+    def _capture(_hass, meta, stats):
+        captured[meta["statistic_id"].rsplit("_", 2)[-2] if False else meta["statistic_id"]] = list(stats)
+
+    monkeypatch.setattr(rs, "async_add_external_statistics", _capture)
+    store = MissionStore()
+    store._records.extend(records)
+    await store.async_backfill_statistics(hass, "E1", "Robbie")
+    by_kind = {}
+    for sid, stats in captured.items():
+        kind = "area" if "area" in sid else "duration" if "duration" in sid else "completed"
+        by_kind[kind] = stats
+    return by_kind
+
+
+@pytest.mark.asyncio
+async def test_two_missions_in_one_hour_are_one_entry(hass, monkeypatch):
+    stats = await _import(hass, monkeypatch, [
+        _rec("2026-09-21T09:05:00+00:00", sqft=100),
+        _rec("2026-09-21T09:40:00+00:00", sqft=50),
+    ])
+    assert len(stats["area"]) == 1
+    assert stats["area"][0]["sum"] == pytest.approx(round(100 * SQFT_TO_M2, 2) + round(50 * SQFT_TO_M2, 2))
+    assert stats["completed"][0]["sum"] == 2
+
+
+@pytest.mark.asyncio
+async def test_the_sum_only_ever_grows(hass, monkeypatch):
+    """A smaller mission after a larger one must not show as negative."""
+    stats = await _import(hass, monkeypatch, [
+        _rec("2026-09-21T09:00:00+00:00", sqft=200, minutes=40),
+        _rec("2026-09-22T09:00:00+00:00", sqft=100, minutes=20, result="cancelled"),
+        _rec("2026-09-23T09:00:00+00:00", sqft=150, minutes=30),
+    ])
+    for kind in ("area", "duration", "completed"):
+        sums = [s["sum"] for s in stats[kind]]
+        assert sums == sorted(sums), f"{kind} went down: {sums}"
+    assert [s["sum"] for s in stats["duration"]] == [40, 60, 90]
+    assert [s["sum"] for s in stats["completed"]] == [1, 1, 2]
+    assert [s["state"] for s in stats["duration"]] == [40, 20, 30], "state is the hour's own value"
+
+
+@pytest.mark.asyncio
+async def test_records_are_accumulated_in_time_order(hass, monkeypatch):
+    stats = await _import(hass, monkeypatch, [
+        _rec("2026-09-23T09:00:00+00:00", minutes=30),
+        _rec("2026-09-21T09:00:00+00:00", minutes=10),
+    ])
+    starts = [s["start"] for s in stats["duration"]]
+    assert starts == sorted(starts)
+    assert [s["sum"] for s in stats["duration"]] == [10, 40]
+
+
+@pytest.mark.asyncio
+async def test_a_mission_without_area_counts_for_duration_only(hass, monkeypatch):
+    stats = await _import(hass, monkeypatch, [
+        _rec("2026-09-21T09:00:00+00:00", sqft=None, minutes=25),
+        _rec("2026-09-22T09:00:00+00:00", sqft=80, minutes=35),
+    ])
+    assert len(stats["area"]) == 1
+    assert [s["sum"] for s in stats["duration"]] == [25, 60]

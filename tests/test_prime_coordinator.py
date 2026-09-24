@@ -25,6 +25,10 @@ from custom_components.roomba_plus.prime_coordinator import (
 )
 from roombapy_prime import ShadowConnectionError, ShadowError, ShadowSSLError
 from roombapy_prime.mqtt_client import ShadowResponse
+from types import SimpleNamespace
+from homeassistant.helpers.update_coordinator import UpdateFailed
+from custom_components.roomba_plus import prime_coordinator as pc
+from custom_components.roomba_plus.prime_coordinator import add_prime_entities_when_available
 
 
 def _make_coordinator() -> tuple[PrimeCoordinator, MagicMock, MagicMock]:
@@ -534,6 +538,9 @@ class TestPrimePushFeedsTheFreshnessSignal:
 
         entry = MagicMock()
         entry.runtime_data.last_mqtt_message_ts = 0.0
+        # Derived on RoombaData: a MagicMock would answer with a
+        # MagicMock, not a number.
+        entry.runtime_data.silence_reference_ts = 0.0
         return entry
 
     @pytest.mark.asyncio
@@ -1032,3 +1039,449 @@ class TestPrimeAdvancesFromItsOwnTimeline:
             "_room_transition_confidence_ok", "cached_room_seconds",
         ):
             assert forbidden not in read, forbidden
+
+
+# ── formerly tests/test_coverage_prime_coordinator.py ───────────────────────────
+#
+# prime_coordinator.py — quality scale, test-coverage.
+#
+# The Prime coordinators poll or stream from the cloud. A failing part of a
+# refresh must not take the rest with it, the rejected-command stream must
+# back off and reconnect rather than spin, and nothing half-read replaces
+# good data.
+
+def _sched(hass, **runtime):
+    c = pc.PrimeScheduleCoordinator.__new__(pc.PrimeScheduleCoordinator)
+    c.hass = hass
+    c.entry = MagicMock()
+    c.prime_robot = MagicMock()
+    c.blid = "PRIMECOORD"
+    c.weekday_names, c.room_names, c.quiet_hours = {}, {}, None
+    for k, v in runtime.items():
+        setattr(c.entry.runtime_data, k, v)
+    return c
+
+
+def _status(hass):
+    c = pc.PrimeStatusCoordinator.__new__(pc.PrimeStatusCoordinator)
+    c.hass = hass
+    c.blid = "PRIMECOORD"
+    c.prime_robot = MagicMock()
+    c.entry = MagicMock()
+    c.config_entry = MagicMock()
+    c.async_set_updated_data = MagicMock()
+    return c
+
+
+class TestRejectedCommandWatch:
+
+    def _coord(self, streams):
+        c = pc.PrimeCoordinator.__new__(pc.PrimeCoordinator)
+        c.prime_robot = MagicMock()
+        it = iter(streams)
+
+        def _watch():
+            s = next(it)
+            if isinstance(s, BaseException):
+                raise s
+
+            async def _gen():
+                for m in s:
+                    yield m
+            return _gen()
+
+        c.prime_robot.watch_rejected_commands = _watch
+        c.blid = "PRIMECOORD"
+        return c
+
+    @pytest.mark.asyncio
+    async def test_a_library_without_the_stream_ends_the_watch(self):
+        c = self._coord([ValueError("not supported")])
+        await c._async_watch_rejected_commands()   # returns, no loop
+
+    @pytest.mark.asyncio
+    async def test_failures_back_off_exponentially_up_to_five_minutes(self, monkeypatch):
+        waits = []
+
+        async def _sleep(s):
+            waits.append(s)
+            if len(waits) >= 8:
+                raise asyncio.CancelledError
+
+        monkeypatch.setattr(pc.asyncio, "sleep", _sleep)
+        c = self._coord([RuntimeError("down")] * 10)
+        with pytest.raises(asyncio.CancelledError):
+            await c._async_watch_rejected_commands()
+        assert waits[:5] == [5.0, 10.0, 20.0, 40.0, 80.0]
+        assert max(waits) == 300.0
+
+    @pytest.mark.asyncio
+    async def test_a_message_resets_the_backoff(self, monkeypatch):
+        waits = []
+
+        async def _sleep(s):
+            waits.append(s)
+            if len(waits) >= 3:
+                raise asyncio.CancelledError
+
+        monkeypatch.setattr(pc.asyncio, "sleep", _sleep)
+        c = self._coord([RuntimeError("down"), [SimpleNamespace(cmd="x")], RuntimeError("down")])
+        with pytest.raises(asyncio.CancelledError):
+            await c._async_watch_rejected_commands()
+        assert waits[0] == 5.0 and waits[1] == 5.0, "the stream delivered: back to the start"
+
+
+class TestPartsCoordinator:
+
+    def _coord(self, parts=None, error=None, entry=True):
+        c = pc.PrimePartsCoordinator.__new__(pc.PrimePartsCoordinator)
+        c.prime_robot = MagicMock()
+        c.prime_robot.get_robot_parts = AsyncMock(side_effect=error,
+                                                  return_value=SimpleNamespace(parts=parts or []))
+        c.config_entry = MagicMock() if entry else None
+        return c
+
+    @pytest.mark.asyncio
+    async def test_a_cloud_error_is_an_update_failure(self):
+        with pytest.raises(UpdateFailed):
+            await self._coord(error=RuntimeError("down"))._async_update_data()
+
+    @pytest.mark.asyncio
+    async def test_parts_without_an_id_are_dropped_and_history_is_synced(self, monkeypatch):
+        from custom_components.roomba_plus import prime_mission_sync
+
+        sync = AsyncMock()
+        monkeypatch.setattr(prime_mission_sync, "async_sync_prime_missions", sync)
+        parts = [SimpleNamespace(part_id="filter"), SimpleNamespace(part_id=None)]
+        result = await self._coord(parts)._async_update_data()
+        assert list(result) == ["filter"]
+        sync.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_a_failing_history_sync_does_not_lose_the_parts(self, monkeypatch):
+        from custom_components.roomba_plus import prime_mission_sync
+
+        monkeypatch.setattr(prime_mission_sync, "async_sync_prime_missions",
+                            AsyncMock(side_effect=RuntimeError("history")))
+        result = await self._coord([SimpleNamespace(part_id="filter")])._async_update_data()
+        assert list(result) == ["filter"]
+
+
+class TestScheduleCoordinator:
+
+    @pytest.mark.asyncio
+    async def test_no_schedules_readable_is_an_update_failure(self, hass, monkeypatch):
+        from custom_components.roomba_plus import prime_schedule_switch
+
+        c = _sched(hass, prime_robot=None, prime_household_id=None)
+        c._async_load_weekday_names = AsyncMock()
+        c._async_refresh_room_names = AsyncMock()
+        monkeypatch.setattr(prime_schedule_switch, "async_read_schedule_containers", AsyncMock(return_value=None))
+        with pytest.raises(UpdateFailed):
+            await c._async_update_data()
+
+    @pytest.mark.asyncio
+    async def test_weekday_names_load_once_and_only_complete(self, hass, monkeypatch):
+        from homeassistant.helpers import translation
+
+        table = {f"component.roomba_plus.common.weekday_{i}": f"Tag{i}" for i in range(7)}
+        get = AsyncMock(return_value=table)
+        monkeypatch.setattr(translation, "async_get_translations", get)
+        c = _sched(hass)
+        await c._async_load_weekday_names()
+        await c._async_load_weekday_names()
+        assert c.weekday_names[0] == "Tag0" and get.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_an_incomplete_weekday_table_is_not_used(self, hass, monkeypatch):
+        from homeassistant.helpers import translation
+
+        monkeypatch.setattr(translation, "async_get_translations",
+                            AsyncMock(return_value={"component.roomba_plus.common.weekday_0": "Mo"}))
+        c = _sched(hass)
+        await c._async_load_weekday_names()
+        assert c.weekday_names == {}
+
+    @pytest.mark.asyncio
+    async def test_a_failing_translation_leaves_the_names_empty(self, hass, monkeypatch):
+        from homeassistant.helpers import translation
+
+        monkeypatch.setattr(translation, "async_get_translations", AsyncMock(side_effect=RuntimeError()))
+        c = _sched(hass)
+        await c._async_load_weekday_names()
+        assert c.weekday_names == {}
+
+    @pytest.mark.asyncio
+    async def test_room_names_are_kept_when_a_refresh_fails_or_is_empty(self, hass, monkeypatch):
+        from roombapy_prime import models
+
+        c = _sched(hass)
+        c.room_names = {"3": "Kitchen"}
+        c.prime_robot.get_active_map_versions = AsyncMock(side_effect=RuntimeError())
+        await c._async_refresh_room_names()
+        assert c.room_names == {"3": "Kitchen"}
+        c.prime_robot.get_active_map_versions = AsyncMock(return_value=[])
+        monkeypatch.setattr(models, "build_room_name_map", lambda *_a, **_k: {})
+        monkeypatch.setattr(models, "parse_active_map_versions", lambda r: r)
+        await c._async_refresh_room_names()
+        assert c.room_names == {"3": "Kitchen"}
+
+    @pytest.mark.asyncio
+    async def test_favourites_are_replaced_in_place(self, hass, monkeypatch):
+        from custom_components.roomba_plus import button_prime
+
+        shared = ["old"]
+        c = _sched(hass, prime_robot=MagicMock(), prime_favorites=shared)
+        monkeypatch.setattr(button_prime, "async_favorites_attribute", AsyncMock(return_value=["a", "b"]))
+        await c._async_refresh_favourites()
+        assert shared == ["a", "b"], "the same list object other code holds"
+
+    @pytest.mark.asyncio
+    async def test_a_failing_favourites_read_keeps_them(self, hass, monkeypatch):
+        from custom_components.roomba_plus import button_prime
+
+        shared = ["old"]
+        c = _sched(hass, prime_robot=MagicMock(), prime_favorites=shared)
+        monkeypatch.setattr(button_prime, "async_favorites_attribute", AsyncMock(side_effect=RuntimeError()))
+        await c._async_refresh_favourites()
+        assert shared == ["old"]
+
+    @pytest.mark.asyncio
+    async def test_quiet_hours_need_a_robot_and_a_household(self, hass):
+        assert await _sched(hass, prime_robot=None, prime_household_id="h")._async_read_quiet_hours() is None
+        robot = MagicMock(get_dnd_settings=AsyncMock(side_effect=RuntimeError()))
+        assert await _sched(hass, prime_robot=robot, prime_household_id="h")._async_read_quiet_hours() is None
+        robot = MagicMock(get_dnd_settings=AsyncMock(return_value="dnd"))
+        assert await _sched(hass, prime_robot=robot, prime_household_id="h")._async_read_quiet_hours() == "dnd"
+
+
+class TestStatusStart:
+
+    @pytest.mark.asyncio
+    async def test_no_shadow_readable_at_all_is_not_ready(self, hass):
+        from homeassistant.exceptions import ConfigEntryNotReady
+
+        c = _status(hass)
+        c.prime_robot.get_named_shadow = AsyncMock(side_effect=ShadowConnectionError("down"))
+        with pytest.raises(ConfigEntryNotReady):
+            await c.async_start()
+
+    @pytest.mark.asyncio
+    async def test_one_readable_shadow_is_enough_to_start(self, hass):
+        """A partial seed beats no robot at all; the stream fills the rest."""
+        c = _status(hass)
+        calls = {"n": 0}
+
+        async def _named(name):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return SimpleNamespace(payload={"state": {"reported": {"x": 1}}})
+            raise ShadowConnectionError("down")
+
+        c.prime_robot.get_named_shadow = _named
+        c.prime_robot.get_state = AsyncMock(side_effect=ShadowConnectionError("down"))
+        c.entry.async_create_background_task = MagicMock(side_effect=lambda _h, coro, **k: coro.close())
+        await c.async_start()
+        seeded = c.async_set_updated_data.call_args.args[0]
+        assert len(seeded) == 1 and list(seeded.values())[0] == {"x": 1}
+
+
+class TestHistorySyncAfterMission:
+
+    @pytest.mark.asyncio
+    async def test_it_runs_once_and_clears_its_flag_even_on_error(self, hass, monkeypatch):
+        from custom_components.roomba_plus import prime_mission_sync
+
+        sync = AsyncMock(side_effect=[2, RuntimeError("cloud")])
+        monkeypatch.setattr(prime_mission_sync, "async_sync_prime_missions", sync)
+        c = _status(hass)
+        c._history_sync_running = False
+        c._schedule_mission_history_sync()
+        await hass.async_block_till_done()
+        c._schedule_mission_history_sync()
+        await hass.async_block_till_done()
+        assert sync.await_count == 2
+        assert c._history_sync_running is False
+
+    def test_a_running_sync_is_not_started_twice(self, hass):
+        c = _status(hass)
+        c._history_sync_running = True
+        c.hass = MagicMock()
+        c._schedule_mission_history_sync()
+        c.hass.async_create_task.assert_not_called()
+
+    @pytest.mark.parametrize("entry", [None, SimpleNamespace(runtime_data=None)])
+    def test_no_loaded_entry_no_sync(self, hass, entry):
+        c = _status(hass)
+        c._history_sync_running = False
+        c.config_entry = entry
+        c.hass = MagicMock()
+        c._schedule_mission_history_sync()
+        c.hass.async_create_task.assert_not_called()
+
+
+class TestSmallHelpers:
+
+    def _pc(self, names):
+        c = pc.PrimeCoordinator.__new__(pc.PrimeCoordinator)
+        c.entry = SimpleNamespace(runtime_data=SimpleNamespace(prime_room_names=names))
+        return c
+
+    @pytest.mark.parametrize("names,rid,erwartet", [
+        (None, "3", None), ({"3": "Kitchen"}, 3, "Kitchen"), ({"3": ""}, "3", None), ({}, "9", None)])
+    def test_room_name(self, names, rid, erwartet):
+        assert self._pc(names)._room_name(rid) == erwartet
+
+    @pytest.mark.parametrize("positions,dock", [
+        (None, None), ([], None), ([(1,)], None), ([("x", "y")], None), ([(0, 0), (1.5, -2)], (1.5, -2.0)),
+    ])
+    def test_the_last_position_becomes_the_dock_only_when_readable(self, hass, positions, dock):
+        c = _status(hass)
+        data = SimpleNamespace(prime_positions=positions, prime_observed_dock=None)
+        c.entry = SimpleNamespace(runtime_data=data)
+        c._note_dock_position()
+        assert data.prime_observed_dock == dock
+
+
+# ── formerly tests/test_prime_dock_entity_timing.py ───────────────────
+#
+# The dock gate is re-read on every shadow, and never removes.
+#
+# WHY THIS EXISTS. Dock-derived entities were created once, in
+# `async_setup_entry`, from whatever `ro-currentstate.dock` happened to say
+# at that instant. The gate reads `dock.known`, and @AlakazipLabs showed
+# that field is not stable: across 24,900 telemetry messages they logged 15
+# true-to-false flips, 11 of them within seconds of a user `dock` command
+# (median 4 s), returning on their own after 95 s, 18 min and 34 min with
+# no dock contact. 0 of 35 self-docks flipped it.
+#
+# So a restart or config-entry reload landing inside one of those windows
+# cost a robot with a real dock its pad-wash and pad-dry entities until the
+# next reload happened to fall elsewhere.
+#
+# THE GATE RULE IS NOT WHAT CHANGED -- an evidence-based rule was tried and
+# withdrawn, because no capture in this repo shows `pwState`/`pdState`
+# arriving at rest and it would have removed the sensors from every dock
+# that had not washed yet. What changed is that the question is asked again
+# on every shadow, and that the answer can only ever ADD.
+#
+# NEGATIVE CONTROLS INCLUDED. Each test here was run against the old
+# setup-only code path first; the recovery tests fail there, which is what
+# makes them worth keeping.
+
+class _Coordinator:
+    """Minimal stand-in that records its listener and can fire it."""
+
+    def __init__(self, data):
+        self.data = data
+        self._listeners = []
+
+    def async_add_listener(self, callback):
+        self._listeners.append(callback)
+        return lambda: self._listeners.remove(callback)
+
+    def fire(self):
+        for callback in list(self._listeners):
+            callback()
+
+
+def _entry(dock: dict | None):
+    entry = MagicMock()
+    entry.runtime_data.prime_status_coordinator = _Coordinator(
+        {"ro-currentstate": {"dock": dock}} if dock is not None else {}
+    )
+    entry.async_on_unload = MagicMock()
+    return entry
+
+
+def _entity(unique_id: str):
+    entity = MagicMock()
+    entity.unique_id = unique_id
+    return entity
+
+
+class TestDockEntitiesArriveLate:
+    def test_a_dock_that_reports_nothing_yet_gets_nothing(self):
+        entry = _entry(None)
+        added: list = []
+
+        add_prime_entities_when_available(
+            entry, added.extend, lambda: []
+        )
+
+        assert added == []
+
+    def test_the_entity_appears_when_the_shadow_says_so(self):
+        """The reload-timing bug, directly. Setup sees an empty dock;
+        the next shadow carries it."""
+        entry = _entry(None)
+        added: list = []
+        wanted: list = []
+
+        add_prime_entities_when_available(
+            entry, added.extend, lambda: list(wanted)
+        )
+        assert added == []
+
+        wanted.append(_entity("pad_wash"))
+        entry.runtime_data.prime_status_coordinator.fire()
+
+        assert [e.unique_id for e in added] == ["pad_wash"]
+
+
+class TestNothingIsEverRemoved:
+    def test_a_dip_to_unknown_takes_no_entity_away(self):
+        """`known` flipping false is exactly @AlakazipLabs' case, and it
+        must cost nothing. Add-only is what makes an unstable source
+        survivable without changing what the source means."""
+        entry = _entry({"known": True})
+        added: list = []
+        wanted = [_entity("pad_wash")]
+
+        add_prime_entities_when_available(
+            entry, added.extend, lambda: list(wanted)
+        )
+        assert len(added) == 1
+
+        wanted.clear()
+        entry.runtime_data.prime_status_coordinator.fire()
+
+        assert [e.unique_id for e in added] == ["pad_wash"]
+
+    def test_the_same_entity_is_not_added_twice(self):
+        """The builder returns a fresh object each call, so identity is
+        no guard -- the unique_id is."""
+        entry = _entry({"known": True})
+        added: list = []
+
+        add_prime_entities_when_available(
+            entry, added.extend, lambda: [_entity("pad_wash")]
+        )
+        for _ in range(3):
+            entry.runtime_data.prime_status_coordinator.fire()
+
+        assert len(added) == 1
+
+
+class TestTheListenerIsCleanedUp:
+    def test_it_registers_for_unload(self):
+        """A listener that outlives the config entry keeps a dead
+        builder alive and fires it against torn-down runtime_data."""
+        entry = _entry({"known": True})
+
+        add_prime_entities_when_available(entry, lambda _: None, lambda: [])
+
+        assert entry.async_on_unload.called
+
+    def test_no_coordinator_is_survivable(self):
+        """A Prime entry whose status coordinator never came up still
+        sets up; it simply gets the one static pass."""
+        entry = MagicMock()
+        entry.runtime_data.prime_status_coordinator = None
+        added: list = []
+
+        add_prime_entities_when_available(
+            entry, added.extend, lambda: [_entity("pad_wash")]
+        )
+
+        assert len(added) == 1

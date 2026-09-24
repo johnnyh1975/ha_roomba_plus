@@ -26,6 +26,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from roombapy_prime.models.schedules_dnd import SchedulesResponse
+from types import SimpleNamespace
+from homeassistant.exceptions import HomeAssistantError
 
 
 def _schedule_json(schedule_id="s1", name="Weekdays", enabled=True, deleted=False,
@@ -1275,3 +1277,129 @@ class TestQuietHoursAreNotCleaningSchedules:
 
         source = inspect.getsource(prime_schedule_switch.build_prime_schedule_switches)
         assert "options.end is not None or options.end_commands" in source
+
+
+# ── formerly tests/test_coverage_mid_gaps_3.py ──────────────────────────────────
+#
+# Mid-sized coverage gaps, third batch — quality scale, test-coverage.
+#
+# Prime schedules come from the cloud as nested, loosely typed structures.
+# The readers must skip what they cannot read, never guess a day or a time,
+# and never crash the switch that shows them.
+
+class TestScheduleReaders:
+
+    def test_region_ids_skip_what_is_not_a_command(self):
+        from custom_components.roomba_plus.prime_schedule_switch import _schedule_region_ids
+
+        options = SimpleNamespace(commands=[
+            "junk",
+            {"command": "not a dict either"},
+            {"command": {"regions": ["junk", {"region_id": 3}, {"region_id": 3}, {"region_id": 7}]}},
+            {"regions": [{"region_id": 9}]},          # command given flat
+        ])
+        assert _schedule_region_ids(options) == ["3", "7", "9"]
+
+    @pytest.mark.parametrize("days,erwartet", [
+        ([0, 1, 2], "Mon-Wed"),        # a run of three collapses
+        ([0, 2], "Mon, Wed"),
+        (["x"], ""),                    # unreadable day
+        ([0, 9], ""),                   # a day without a label: no guess
+    ])
+    def test_days_are_labelled_only_when_certain(self, days, erwartet):
+        from custom_components.roomba_plus.prime_schedule_switch import _schedule_days
+
+        names = {0: "Mon", 1: "Tue", 2: "Wed"}
+        options = SimpleNamespace(start=SimpleNamespace(day=days))
+        assert _schedule_days(options, names) == erwartet
+
+    @pytest.mark.parametrize("value,erwartet", [
+        (None, None),
+        ("07:30", "07:30"),
+        (SimpleNamespace(hour=7, min=5), "07:05"),
+        (SimpleNamespace(hour=22, minute=0), "22:00"),
+        (SimpleNamespace(minute=10), None),     # no hour: no time
+    ])
+    def test_clock_formatting(self, value, erwartet):
+        from custom_components.roomba_plus.prime_schedule_switch import _clock
+
+        assert _clock(value) == erwartet
+
+    def test_quiet_hours_are_windows_with_an_end(self):
+        from custom_components.roomba_plus.prime_schedule_switch import quiet_hours_windows
+
+        def sched(**opts):
+            return SimpleNamespace(options=SimpleNamespace(**opts) if opts else None)
+
+        schedules = [
+            sched(),                                               # no options
+            sched(deleted=True, end="08:00", start="22:00"),
+            sched(deleted=False, end=None, end_commands=None, start="10:00"),  # no end
+            sched(deleted=False, end=SimpleNamespace(hour=7, min=0),
+                  start=SimpleNamespace(hour=22, min=30), enabled=True),
+        ]
+        windows = quiet_hours_windows([("c1", schedules)])
+        assert len(windows) == 1
+        assert windows[0]["start"] == "22:30" and windows[0]["end"] == "07:00"
+
+
+class TestScheduleContainers:
+
+    @pytest.mark.asyncio
+    async def test_a_container_without_an_id_is_skipped(self, monkeypatch):
+        from roombapy_prime.models import schedules_dnd
+
+        from custom_components.roomba_plus import prime_schedule_switch as pss
+
+        monkeypatch.setattr(schedules_dnd.HouseholdSchedule, "from_json",
+                            staticmethod(lambda raw: ("parsed", raw)))
+        robot = MagicMock()
+        robot.get_schedules = AsyncMock(return_value=SimpleNamespace(household_schedules=[
+            SimpleNamespace(household_schedule_id=None, schedules=[{"x": 1}]),
+            SimpleNamespace(household_schedule_id="c1", schedules=[{"y": 2}]),
+        ]))
+        entry = SimpleNamespace(runtime_data=SimpleNamespace(prime_robot=robot, prime_household_id="h1"))
+        containers = await pss.async_read_schedule_containers(entry)
+        assert [cid for cid, _ in containers] == ["c1"]
+
+
+class TestScheduleSwitchEntity:
+
+    def _switch(self, coordinator):
+        from custom_components.roomba_plus.prime_schedule_switch import PrimeScheduleSwitch
+
+        s = PrimeScheduleSwitch.__new__(PrimeScheduleSwitch)
+        s._config_entry = MagicMock()
+        s._config_entry.runtime_data.prime_schedule_coordinator = coordinator
+        s._container_id, s._schedule_id = "c1", "s1"
+        s._refresh_label = MagicMock()
+        s.async_write_ha_state = MagicMock()
+        s.async_on_remove = MagicMock()
+        return s
+
+    def _data(self, enabled):
+        return [("c1", [SimpleNamespace(schedule_id="s1", options=SimpleNamespace(enabled=enabled))])]
+
+    @pytest.mark.asyncio
+    async def test_it_starts_from_the_coordinators_data(self, monkeypatch):
+        from custom_components.roomba_plus.entity import IRobotEntity
+
+        monkeypatch.setattr(IRobotEntity, "async_added_to_hass", AsyncMock())
+        coordinator = MagicMock(data=self._data(True))
+        s = self._switch(coordinator)
+        s.async_update = AsyncMock()
+        await s.async_added_to_hass()
+        assert s._attr_is_on is True
+        s.async_update.assert_not_awaited(), "no extra cloud read when data is there"
+
+    def test_a_coordinator_update_is_applied_and_written(self):
+        coordinator = MagicMock(data=self._data(False))
+        s = self._switch(coordinator)
+        s._handle_coordinator_update()
+        assert s._attr_is_on is False
+        s.async_write_ha_state.assert_called_once()
+
+    def test_a_schedule_that_vanished_is_unknown(self):
+        s = self._switch(MagicMock(data=[("other", [])]))
+        s._apply([("other", [])])
+        assert s._attr_is_on is None

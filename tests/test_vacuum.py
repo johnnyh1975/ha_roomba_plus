@@ -27,6 +27,11 @@ from custom_components.roomba_plus.models import ConnectionType, MapCapability
 from homeassistant.components.vacuum import VacuumEntityFeature
 from homeassistant.exceptions import ServiceValidationError
 import asyncio
+import time
+from types import SimpleNamespace
+from custom_components.roomba_plus import vacuum as vac
+from custom_components.roomba_plus.const import POSE_POINT_CM_TO_MM
+from homeassistant.components.vacuum import VacuumActivity
 
 
 _ROOT = Path(__file__).parent.parent / "custom_components" / "roomba_plus"
@@ -1219,6 +1224,7 @@ def _make_prime_vacuum_entity() -> IRobotVacuum:
     v._prime_robot = MagicMock()
     v._prime_robot.send_simple_command = AsyncMock()
     v._prime_robot.poll_echo_value = AsyncMock()
+    v._blid = "PRIMEBLID"   # set by IRobotEntity.__init__, which __new__ skips
     return v
 
 
@@ -3018,3 +3024,281 @@ class TestClassicRobotsGetTheFavouritesAttribute:
         )
 
         assert out == [{"id": "4", "name": ""}]
+
+
+# ── formerly tests/test_coverage_vacuum.py ──────────────────────────────────────
+#
+# vacuum.py — quality scale, test-coverage.
+#
+# The vacuum entity's attributes carry most of what a dashboard shows:
+# error text, position, mission time, the planned room order. Built with
+# the existing Classic helper from test_vacuum.
+
+def _attrs(state, **kw):
+    v = _make_vacuum_entity(state, **kw)
+    v.hass = MagicMock()
+    return v, v.extra_state_attributes
+
+
+def _braava():
+    b = vac.BraavaJet.__new__(vac.BraavaJet)
+    b.vacuum = MagicMock(set_preference=AsyncMock())
+    b.vacuum_state = {}
+    return b
+
+
+class TestVacuumAttributes:
+
+    def test_an_error_carries_its_message_and_code(self):
+        v = _make_vacuum_entity({"cleanMissionStatus": {"phase": "stuck", "error": 17}})
+        v.hass = MagicMock()
+        v.vacuum.error_code, v.vacuum.error_message = 17, "Wheel stuck"
+        attrs = v.extra_state_attributes
+        assert attrs[vac.ATTR_ERROR] == "Wheel stuck" and attrs[vac.ATTR_ERROR_CODE] == 17
+
+    def test_the_position_is_given_in_millimetres(self):
+        v = _make_vacuum_entity({"pose": {"point": {"x": 10, "y": -5}, "theta": 90}})
+        v.hass = MagicMock()
+        v._cap_position = True
+        attrs = v.extra_state_attributes
+        assert attrs[vac.ATTR_POSITION] == f"({10 * POSE_POINT_CM_TO_MM}, {-5 * POSE_POINT_CM_TO_MM}, 90)"
+
+    def test_elapsed_minutes_come_from_the_start_time_when_the_robot_reports_zero(self):
+        start = int(time.time()) - 25 * 60
+        _v, attrs = _attrs({"cleanMissionStatus": {"phase": "run", "mssnM": 0, "mssnStrtTm": start}})
+        assert attrs["mission_elapsed_min"] in (24, 25)
+
+    def test_outside_a_cleaning_phase_no_time_is_invented(self):
+        start = int(time.time()) - 25 * 60
+        _v, attrs = _attrs({"cleanMissionStatus": {"phase": "charge", "mssnM": 0, "mssnStrtTm": start}})
+        assert attrs["mission_elapsed_min"] is None
+
+    def test_the_planned_room_order_follows_the_command(self):
+        data = _make_smart_data(regions=[{"id": "3", "name": "Kitchen"}, {"id": "5", "name": "Hall"}])
+        state = {"cleanMissionStatus": {"phase": "run", "cmd": {
+            "regions": [{"region_id": "5"}, {"region_id": "3"}]}}}
+        _v, attrs = _attrs(state, runtime_data=data)
+        assert attrs.get("planned_room_order") == ["Hall", "Kitchen"]
+        assert attrs.get("mission_destination") == "Kitchen"
+
+
+class TestRegionCommand:
+
+    def test_the_first_map_and_its_version_are_used_when_none_given(self, monkeypatch):
+        from custom_components.roomba_plus import room_cleaning
+
+        monkeypatch.setattr(room_cleaning, "_resolve_pmapv_id", lambda _s, _p: None)
+        v = _make_vacuum_entity({"pmaps": [{"p1": "v1"}]})
+        cmd = v._build_region_command({"regions": ["3", {"region_id": "5", "type": "zid"}, "junk"]})
+        assert (cmd["pmap_id"], cmd["user_pmapv_id"]) == ("p1", "v1")
+        assert cmd["regions"] == [{"region_id": "3", "type": "rid"}, {"region_id": "5", "type": "zid"}]
+
+    def test_a_fresh_version_from_the_robot_wins(self, monkeypatch):
+        """A retrained map gets a new version; the stale one in the params
+        would send the robot to rooms that no longer exist."""
+        from custom_components.roomba_plus import room_cleaning
+
+        monkeypatch.setattr(room_cleaning, "_resolve_pmapv_id", lambda _s, _p: "v9")
+        v = _make_vacuum_entity({"pmaps": [{"p1": "v1"}]})
+        cmd = v._build_region_command({"pmap_id": "p1", "user_pmapv_id": "v1", "regions": []})
+        assert cmd["user_pmapv_id"] == "v9"
+
+
+class TestBraavaFanSpeed:
+    """On a Braava, 'fan speed' is mopping behaviour plus spray amount,
+    e.g. 'Deep-2'. Anything unparseable must write nothing."""
+
+    @pytest.mark.parametrize("behaviour", [vac.MOP_STANDARD, vac.MOP_DEEP, vac.MOP_EXTENDED])
+    @pytest.mark.asyncio
+    async def test_a_valid_setting_writes_overlap_and_spray(self, behaviour):
+        b = _braava()
+        spray = next(iter(vac.BRAAVA_SPRAY_AMOUNT))
+        await b.async_set_fan_speed(f"{behaviour.lower()}-{spray}")
+        calls = [c.args[0] for c in b.vacuum.set_preference.await_args_list]
+        assert calls == ["rankOverlap", "padWetness"]
+        assert b.vacuum.set_preference.await_args_list[1].args[1] == {"disposable": spray, "reusable": spray}
+
+    @pytest.mark.parametrize("value", ["nonsense", "Deep-x", "Turbo-1", "Deep-99"])
+    @pytest.mark.asyncio
+    async def test_anything_else_writes_nothing(self, value):
+        b = _braava()
+        await b.async_set_fan_speed(value)
+        b.vacuum.set_preference.assert_not_awaited()
+
+
+class TestReturnToBase:
+
+    def _v(self, activities, monkeypatch):
+        v = _make_vacuum_entity({})
+        seq = iter(activities)
+        monkeypatch.setattr(type(v), "activity", property(lambda _s: next(seq)))
+        v.async_pause = AsyncMock()
+        v.vacuum.send_command = AsyncMock()
+        monkeypatch.setattr(vac.asyncio, "sleep", AsyncMock())
+        return v
+
+    @pytest.mark.asyncio
+    async def test_mid_clean_it_pauses_first_then_docks(self, monkeypatch):
+        v = self._v([VacuumActivity.CLEANING, VacuumActivity.CLEANING, VacuumActivity.PAUSED], monkeypatch)
+        await v.async_return_to_base()
+        v.async_pause.assert_awaited_once()
+        assert [c.args[0] for c in v.vacuum.send_command.await_args_list] == ["dock"]
+
+    @pytest.mark.asyncio
+    async def test_a_robot_that_will_not_pause_is_stopped_before_docking(self, monkeypatch):
+        v = self._v([VacuumActivity.CLEANING] + [VacuumActivity.CLEANING] * 10, monkeypatch)
+        await v.async_return_to_base()
+        assert [c.args[0] for c in v.vacuum.send_command.await_args_list] == ["stop", "dock"]
+
+    @pytest.mark.asyncio
+    async def test_an_idle_robot_just_docks(self, monkeypatch):
+        v = self._v([VacuumActivity.IDLE], monkeypatch)
+        await v.async_return_to_base()
+        v.async_pause.assert_not_awaited()
+        assert [c.args[0] for c in v.vacuum.send_command.await_args_list] == ["dock"]
+
+
+class TestCleaningStatus:
+
+    def _v(self, metric=True):
+        from homeassistant.util.unit_system import METRIC_SYSTEM, US_CUSTOMARY_SYSTEM
+
+        v = _make_vacuum_entity({})
+        v.hass = SimpleNamespace(config=SimpleNamespace(units=METRIC_SYSTEM if metric else US_CUSTOMARY_SYSTEM))
+        return v
+
+    def test_no_mission_is_zero(self):
+        assert self._v()._get_cleaning_status({}) == (0, 0)
+
+    def test_area_is_converted_for_metric_users(self):
+        from custom_components.roomba_plus.const import SQFT_TO_M2
+
+        t, area = self._v()._get_cleaning_status({"cleanMissionStatus": {"mssnM": 12, "sqft": 100}})
+        assert (t, area) == (12, round(100 * SQFT_TO_M2))
+        assert self._v(metric=False)._get_cleaning_status({"cleanMissionStatus": {"mssnM": 12, "sqft": 100}}) == (12, 100)
+
+    def test_time_from_the_start_when_minutes_are_zero(self):
+        start = int(time.time()) - 10 * 60
+        t, _a = self._v()._get_cleaning_status({"cleanMissionStatus": {"mssnM": 0, "mssnStrtTm": start}})
+        assert t in (9, 10)
+
+
+class TestCarpetBoostSpeed:
+
+    @pytest.mark.parametrize("boost,high,speed", [
+        (None, False, None), (True, False, vac.FAN_SPEED_AUTOMATIC),
+        (False, True, vac.FAN_SPEED_PERFORMANCE), (False, False, vac.FAN_SPEED_ECO)])
+    def test_the_two_flags_give_the_speed(self, boost, high, speed):
+        v = vac.RoombaVacuumCarpetBoost.__new__(vac.RoombaVacuumCarpetBoost)
+        v.vacuum_state = {"carpetBoost": boost, "vacHigh": high}
+        assert v.fan_speed == speed
+
+
+class TestBraavaAttributes:
+
+    def test_pad_tank_and_bin_are_reported(self, monkeypatch):
+        b = _braava()
+        monkeypatch.setattr(vac.IRobotVacuum, "extra_state_attributes", property(lambda _s: {}))
+        b.vacuum_state = {"detectedPad": "reusableWet", "mopReady": {"lidClosed": True},
+                          "tankPresent": True, "tankLvl": 80, "bin": {"present": True, "full": False}}
+        attrs = b.extra_state_attributes
+        assert attrs[vac.ATTR_DETECTED_PAD] == "reusableWet"
+        assert attrs[vac.ATTR_TANK_PRESENT] is True and attrs[vac.ATTR_TANK_LEVEL] == 80
+        assert attrs[vac.ATTR_BIN_FULL] is False
+
+
+class TestSendCommand:
+
+    @pytest.mark.asyncio
+    async def test_a_start_with_regions_is_built_into_a_region_command(self, monkeypatch):
+        v = _make_vacuum_entity({})
+        v.vacuum.send_command = AsyncMock()
+        monkeypatch.setattr(v, "_build_region_command", lambda p: {"built": p["regions"]})
+        await v.async_send_command("start", {"regions": ["3"]})
+        v.vacuum.send_command.assert_awaited_once_with("start", {"built": ["3"]})
+
+    @pytest.mark.asyncio
+    async def test_any_other_command_passes_through(self):
+        v = _make_vacuum_entity({})
+        v.vacuum.send_command = AsyncMock()
+        await v.async_send_command("evac")
+        v.vacuum.send_command.assert_awaited_once_with("evac", {})
+
+
+class TestMessages:
+
+    def test_a_relevant_message_refreshes_and_rewrites(self):
+        v = _make_vacuum_entity({})
+        v.new_state_filter = lambda _s: True
+        v.schedule_update_ha_state = MagicMock()
+        v.vacuum.master_state = {"state": {"reported": {"batPct": 80}}}
+        v.on_message({"state": {"reported": {"batPct": 80}}})
+        assert v.vacuum_state == {"batPct": 80}
+        v.schedule_update_ha_state.assert_called_once()
+
+    def test_an_irrelevant_message_changes_nothing(self):
+        v = _make_vacuum_entity({"batPct": 90})
+        v.new_state_filter = lambda _s: False
+        v.schedule_update_ha_state = MagicMock()
+        v.on_message({"state": {"reported": {"signal": {}}}})
+        v.schedule_update_ha_state.assert_not_called()
+
+
+class TestRoombaBinAttributes:
+
+    def test_the_bin_state_is_reported(self, monkeypatch):
+        v = vac.RoombaVacuum.__new__(vac.RoombaVacuum)
+        v.vacuum_state = {"bin": {"present": True, "full": True}}
+        monkeypatch.setattr(vac.IRobotVacuum, "extra_state_attributes", property(lambda _s: {}))
+        attrs = v.extra_state_attributes
+        assert attrs[vac.ATTR_BIN_PRESENT] is True and attrs[vac.ATTR_BIN_FULL] is True
+
+    def test_an_unreported_bin_is_left_out(self, monkeypatch):
+        v = vac.RoombaVacuum.__new__(vac.RoombaVacuum)
+        v.vacuum_state = {}
+        monkeypatch.setattr(vac.IRobotVacuum, "extra_state_attributes", property(lambda _s: {}))
+        assert vac.ATTR_BIN_FULL not in v.extra_state_attributes
+
+
+class TestPausedResume:
+
+    @pytest.mark.asyncio
+    async def test_starting_a_paused_robot_resumes_it(self, monkeypatch):
+        v = _make_vacuum_entity({"cleanMissionStatus": {"phase": "stop", "cycle": "clean"}})
+        monkeypatch.setattr(type(v), "activity", property(lambda _s: VacuumActivity.PAUSED))
+        v.vacuum.send_command = AsyncMock()
+        await v.async_start()
+        v.vacuum.send_command.assert_awaited_once_with("resume")
+
+
+class TestWhichVacuumClass:
+
+    @pytest.mark.parametrize("braava,boost,cls", [
+        (True, False, "BraavaJet"), (False, True, "RoombaVacuumCarpetBoost"), (False, False, "RoombaVacuum")])
+    @pytest.mark.asyncio
+    async def test_the_robot_type_picks_the_entity_class(self, hass, monkeypatch, braava, boost, cls):
+        from custom_components.roomba_plus.models import ConnectionType
+
+        monkeypatch.setattr(vac, "is_braava", lambda _s: braava)
+        monkeypatch.setattr(vac, "has_carpet_boost", lambda _s: boost)
+        roomba = MagicMock()
+        roomba.master_state = {"state": {"reported": {}}}
+        entry = MagicMock()
+        entry.options = {}
+        entry.runtime_data.connection_type = ConnectionType.LOCAL_PUSH
+        entry.runtime_data.roomba = roomba
+        entry.runtime_data.blid = "B"
+        entry.data = {"blid": "B"}
+        added = []
+        await vac.async_setup_entry(hass, entry, lambda ents, *a, **k: added.extend(ents))
+        assert [type(e).__name__ for e in added] == [cls]
+
+
+class TestBraavaMopMode:
+
+    @pytest.mark.parametrize("overlap,spray,mode", [
+        (vac.OVERLAP_DEEP, 2, f"{vac.MOP_DEEP}-2"), (None, 2, None), (vac.OVERLAP_STANDARD, None, None)])
+    def test_the_mode_combines_behaviour_and_spray(self, overlap, spray, mode):
+        b = _braava()
+        b.vacuum_state = {"rankOverlap": overlap, "padWetness": {"disposable": spray}}
+        assert b.fan_speed == mode

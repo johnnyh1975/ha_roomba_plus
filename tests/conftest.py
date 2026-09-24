@@ -223,8 +223,19 @@ def hass_mock(**attrs: object) -> "MagicMock":
     return mock
 
 
-def entry_mock(**attrs: object) -> "MagicMock":
+def entry_mock(schedule_on: object = None, **attrs: object) -> "MagicMock":
     """A config-entry stand-in that does not leak unawaited coroutines.
+
+    Pass `schedule_on=hass` when the test needs the coroutine to actually
+    RUN -- `async_create_task` then schedules it on `hass.loop`, and the
+    test drains it as before with
+    `hass.loop.run_until_complete(asyncio.sleep(0))`.
+
+    Without it the coroutine is closed instead, which is right for tests
+    that only care that scheduling happened. Getting this backwards is
+    silent in one direction and loud in the other: a closed coroutine
+    makes an assertion on its side effects fail with an empty list, which
+    reads like the production code not scheduling at all.
 
     The sibling of `hass_mock()`, for the other half of the same
     problem: production also launches background work through the config
@@ -246,8 +257,26 @@ def entry_mock(**attrs: object) -> "MagicMock":
                 arg.close()
         return MagicMock()
 
-    mock.async_create_background_task = MagicMock(side_effect=_close_coroutines)
-    mock.async_create_task = MagicMock(side_effect=_close_coroutines)
+    def _schedule(*args: object, **kwargs: object) -> MagicMock:
+        # A real loop only. `hass_mock()` has a MagicMock `.loop`, which
+        # would accept ensure_future() and then never run anything, leaving
+        # the coroutine unawaited -- the exact warning this helper exists
+        # to prevent. Tests that want the coroutine to RUN must pass a hass
+        # carrying a genuine event loop.
+        loop = getattr(schedule_on, "loop", None)
+        if not isinstance(loop, asyncio.AbstractEventLoop):
+            loop = None
+        for arg in args:
+            if asyncio.iscoroutine(arg):
+                if loop is not None:
+                    asyncio.ensure_future(arg, loop=loop)
+                else:
+                    arg.close()
+        return MagicMock()
+
+    _handler = _schedule if schedule_on is not None else _close_coroutines
+    mock.async_create_background_task = MagicMock(side_effect=_handler)
+    mock.async_create_task = MagicMock(side_effect=_handler)
     for name, value in attrs.items():
         setattr(mock, name, value)
     return mock
@@ -289,3 +318,38 @@ def _close_coroutines_handed_to_a_mock_loop():
 
     with patch("asyncio.run_coroutine_threadsafe", _guarded):
         yield
+
+
+
+@pytest.fixture(autouse=True)
+def _isolate_mission_timer_store(monkeypatch: pytest.MonkeyPatch):
+    """Every test gets a mock HA Store behind MissionTimerStore.
+
+    WHY HERE AND NOT IN ONE TEST FILE. `schedule_save` used to reach the
+    store through `hass.loop.call_soon_threadsafe`, and every test with a
+    MagicMock `hass` got silent isolation from it for free: the mock loop
+    recorded the save and never ran it. Once that obsolete hand-off was
+    removed, the save ran for real — and not only in
+    test_mission_timer_store.py. test_edge_cases.py drives the mission
+    callbacks, which save through the same path, and failed with a
+    MagicMock-against-MagicMock comparison inside HA's Store.
+
+    So the seam was never local to one file. It belongs here.
+
+    Async-safe on purpose: MissionTimerStore.async_load awaits
+    `Store.async_load()`, and a bare MagicMock there would hand back
+    something unawaitable. Tests that inject `mts._ha_store` directly
+    still take precedence, because `_get_ha_store` only builds a Store
+    when none is cached.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from custom_components.roomba_plus import mission_timer_store as _mts
+
+    def _fake_store(*_args, **_kwargs):
+        store = MagicMock()
+        store.async_load = AsyncMock(return_value=None)
+        store.async_save = AsyncMock()
+        return store
+
+    monkeypatch.setattr(_mts, "Store", _fake_store)

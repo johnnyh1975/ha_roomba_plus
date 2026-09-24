@@ -902,6 +902,9 @@ def _iso(days_ago: float = 0, hour: int = 10) -> str:
 
 
 import time as _time_mod
+from custom_components.roomba_plus import mission_archive as ma
+from unittest.mock import MagicMock as _MM
+from custom_components.roomba_plus import mission_store as ms_mod
 __make_record_seq = 0
 
 def _make_unique_id(days_ago):
@@ -2146,3 +2149,26 @@ class TestCrossCorrelation:
         # Constant sensor (zero variance) → None, not StatisticsError
         rps.correlation_samples["sensor.const"] = [[5.0, float(i)] for i in range(30)]
         assert rps.correlation_results()["sensor.const"]["r"] is None
+
+
+# ── formerly tests/test_coverage_mission_archive.py ─────────────────────────────
+#
+# mission_archive.py — quality scale, test-coverage.
+#
+# The archive is filled once from the cloud's mission history, page by page
+# backwards, and then grows mission by mission. It must stop cleanly on a
+# failing or empty page, never store a mission twice, and classify every
+# mission from the record's own fields.
+
+class TestRobotProfileStorePersistence:
+
+    @pytest.mark.asyncio
+    async def test_a_newer_payload_is_not_misread(self, hass, monkeypatch, caplog):
+        from custom_components.roomba_plus import robot_profile_store as rps
+
+        backing = _MM()
+        backing.async_load = AsyncMock(return_value={"payload_version": rps.PAYLOAD_VERSION + 1})
+        monkeypatch.setattr(rps, "Store", lambda *a, **k: backing)
+        store = rps.RobotProfileStore()
+        await store.async_load(hass, "e1")
+        assert "not loading it" in caplog.text

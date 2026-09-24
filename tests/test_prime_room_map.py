@@ -2630,3 +2630,103 @@ class TestZonesAreActuallyDrawn:
         img = self._rendered({})
 
         assert (120, 190, 255) not in set(img.getdata())
+
+
+# ── formerly tests/test_coverage_mid_gaps_2.py ──────────────────────────────────
+#
+# Mid-sized coverage gaps, second batch — quality scale, test-coverage.
+#
+# The cloud map bundle is GeoJSON-ish and not always shaped the same: a bare
+# Feature where a collection is expected, rings that are not rings, a dock
+# point without numbers. The parser must take what it can and skip the
+# rest, never crash and never invent geometry.
+
+def _sq(x=0.0, y=0.0, s=1.0):
+    return [[[x, y], [x + s, y], [x + s, y + s], [x, y + s], [x, y]]]
+
+
+def _feature(fid, name=None, coords=None, kind="Polygon", props=None):
+    p = dict(props or {})
+    if name:
+        p["name"] = name
+    return {"type": "Feature", "id": fid, "properties": p,
+            "geometry": {"type": kind, "coordinates": coords if coords is not None else _sq()}}
+
+
+class TestMapBundleParsing:
+
+    def test_a_ring_that_is_not_coordinates_is_empty(self):
+        from custom_components.roomba_plus.prime_room_map import _ring_mm
+
+        assert _ring_mm(SimpleNamespace(coordinates=[["a", "b"]])) == []
+        assert _ring_mm(SimpleNamespace(coordinates=[[1, 2, 3]])) == []
+
+    def test_a_bare_feature_is_read_like_a_collection(self):
+        from custom_components.roomba_plus import prime_room_map as prm
+
+        f = _feature("3", "Kitchen")
+        assert prm._room_names_from_bundle(f) == {"3": "Kitchen"}
+        assert "3" in prm._room_polygons_from_bundle(f)
+        assert len(prm.rings_mm(f)) == 1
+
+    def test_a_room_without_an_id_has_no_polygon(self):
+        from custom_components.roomba_plus.prime_room_map import _room_polygons_from_bundle
+
+        f = _feature(None, "Nameless")
+        assert _room_polygons_from_bundle({"features": [f]}) == {}
+
+    def test_zone_layers_skip_what_is_not_a_feature(self):
+        from custom_components.roomba_plus.prime_room_map import _zone_names_from_bundle
+
+        layers = {"cleanZones": {"features": ["junk", {"properties": {"id": "z1", "name": "Rug"}}]}}
+        assert _zone_names_from_bundle(layers) == {"z1": "Rug"}
+
+    def test_a_broken_ring_is_skipped_and_the_rest_kept(self):
+        from custom_components.roomba_plus.prime_room_map import rings_mm
+
+        bad = _feature("1", coords=[[["x", "y"], [1, 1], [2, 2]]])
+        good = _feature("2")
+        assert len(rings_mm({"features": [bad, good]})) == 1
+
+    @pytest.mark.parametrize("kind,coords,erwartet", [
+        ("LineString", [[0, 0], [1, 0]], 1),
+        ("MultiLineString", [[[0, 0], [1, 0]], [[0, 1], [1, 1]]], 2),
+        ("Polygon", _sq(), 1),
+        ("MultiPolygon", [_sq(), _sq(5, 5)], 2),
+    ])
+    def test_lines_of_every_geometry_kind(self, kind, coords, erwartet):
+        from custom_components.roomba_plus.prime_room_map import lines_mm
+
+        assert len(lines_mm(_feature("b", coords=coords, kind=kind))) == erwartet
+
+    def test_a_dock_point_without_numbers_is_skipped(self):
+        from custom_components.roomba_plus.prime_room_map import METRES_TO_MM, _dock_from
+
+        features = {"features": [
+            {"geometry": {"coordinates": [1]}},                    # too short
+            {"geometry": {"coordinates": ["a", "b"]}},             # not numbers
+            {"geometry": {"coordinates": [1.0, 2.0]}, "properties": {"orientation": 90}},
+        ]}
+        assert _dock_from(features) == (1.0 * METRES_TO_MM, 2.0 * METRES_TO_MM, 90.0)
+
+
+class TestFloorPlanBuild:
+
+    @pytest.mark.asyncio
+    async def test_no_robot_gives_an_empty_plan(self):
+        from custom_components.roomba_plus.prime_room_map import async_build_prime_floor_plan
+
+        entry = SimpleNamespace(runtime_data=SimpleNamespace(prime_robot=None))
+        plan = await async_build_prime_floor_plan(entry, "m", "v")
+        assert plan.room_names == {} and plan.floor_plan == []
+
+    @pytest.mark.asyncio
+    async def test_a_link_without_a_url_gives_an_empty_plan(self):
+        from custom_components.roomba_plus.prime_room_map import async_build_prime_floor_plan
+
+        robot = MagicMock()
+        robot.get_map_geojson_link = AsyncMock(return_value={"expires": 3600})
+        entry = SimpleNamespace(runtime_data=SimpleNamespace(prime_robot=robot))
+        plan = await async_build_prime_floor_plan(entry, "m", "v")
+        assert plan.room_polygons == {}
+        robot.download_map_bundle.assert_not_called()

@@ -23,7 +23,7 @@ here should be readable without knowing what a Roomba is.
 
 from __future__ import annotations
 
-# ── from test_manifest_requirements.py ──────────────────────────────────
+# ── formerly tests/test_manifest_requirements.py ──────────────────────────────────
 
 
 import json
@@ -79,7 +79,7 @@ def test_roombapy_prime_requirement_is_pinned_to_a_tag() -> None:
         )
 
 
-# ── from test_store_encapsulation_guard.py ──────────────────────────────
+# ── formerly tests/test_store_encapsulation_guard.py ──────────────────────────────
 
 
 import ast
@@ -154,7 +154,7 @@ class TestStoreEncapsulationGuard:
         assert len(hits) == 1 and "._records" in hits[0]
 
 
-# ── from test_sensor_module_split.py ────────────────────────────────────
+# ── formerly tests/test_sensor_module_split.py ────────────────────────────────────
 
 
 import importlib
@@ -171,8 +171,6 @@ _FACADE_CONTRACT: dict[str, str] = {
     # sensor_cloud — cloud-derived sensors + their helpers
     "CloudHistorySensorDescription": "sensor_cloud",
     "CloudHistorySensor": "sensor_cloud",
-    "CloudRawSensorDescription": "sensor_cloud",
-    "CloudRawSensor": "sensor_cloud",
     "CLOUD_HISTORY_SENSORS": "sensor_cloud",
     "RoombaCleaningPerformanceSensor": "sensor_cloud",
     "RoombaCleaningAnalytics30dSensor": "sensor_cloud",
@@ -292,12 +290,18 @@ def test_facade_contract_is_exhaustive_for_known_consumers() -> None:
         assert hasattr(facade, name), f"expected HA passthrough '{name}' missing from facade"
 
 
-# ── from test_structural_instrumentation.py ─────────────────────────────
+# ── formerly tests/test_structural_instrumentation.py ─────────────────────────────
 
 import ast
 import pathlib
 
 import pytest
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+from unittest.mock import MagicMock
+from custom_components.roomba_plus import switch as sw
+import datetime as _dt
+from custom_components.roomba_plus import sensor_helpers as sh
 
 _SRC = pathlib.Path("custom_components/roomba_plus")
 
@@ -455,13 +459,134 @@ class TestHomeAssistantCanFindOurHooks:
         assert params == ["hass", "config_entry", "device_entry"]
 
     @pytest.mark.asyncio
-    async def test_a_stale_device_may_be_removed(self):
-        """One config entry is one physical robot -- there are no child
-        devices, so anything offered for removal is safe to remove."""
-        from unittest.mock import MagicMock
+    async def test_the_current_robot_is_protected_a_stale_device_is_not(self, hass):
+        """Home Assistant offers "Delete" on EVERY device of the entry once
+        this hook exists, not only on devices without entities. The robot
+        still configured must be refused; a replaced one may go."""
+        from homeassistant.helpers import device_registry as dr
+        from pytest_homeassistant_custom_component.common import MockConfigEntry
 
         import custom_components.roomba_plus as init
+        from custom_components.roomba_plus.const import DOMAIN
 
-        assert await init.async_remove_config_entry_device(
-            MagicMock(), MagicMock(), MagicMock()
-        ) is True
+        entry = MockConfigEntry(domain=DOMAIN, data={"blid": "CURRENT"})
+        entry.add_to_hass(hass)
+        reg = dr.async_get(hass)
+        current = reg.async_get_or_create(config_entry_id=entry.entry_id,
+                                          identifiers={(DOMAIN, "roomba_plus_CURRENT")})
+        replaced = reg.async_get_or_create(config_entry_id=entry.entry_id,
+                                           identifiers={(DOMAIN, "roomba_plus_OLDROBOT")})
+        assert await init.async_remove_config_entry_device(hass, entry, current) is False
+        assert await init.async_remove_config_entry_device(hass, entry, replaced) is True
+
+    @pytest.mark.asyncio
+    async def test_an_entry_without_a_blid_protects_nothing(self, hass):
+        """No current robot to identify: every device of the entry is stale."""
+        from types import SimpleNamespace
+
+        from homeassistant.helpers import device_registry as dr
+        from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+        import custom_components.roomba_plus as init
+        from custom_components.roomba_plus.const import DOMAIN
+
+        entry = MockConfigEntry(domain=DOMAIN, data={})
+        entry.add_to_hass(hass)
+        entry.runtime_data = SimpleNamespace(blid=None)
+        dev = dr.async_get(hass).async_get_or_create(config_entry_id=entry.entry_id,
+                                                     identifiers={(DOMAIN, "roomba_plus_ANY")})
+        assert await init.async_remove_config_entry_device(hass, entry, dev) is True
+
+
+# ── formerly tests/test_coverage_mid_gaps_4.py ──────────────────────────────────
+#
+# Coverage gaps, fourth batch — quality scale, test-coverage.
+#
+# switch.py: the Classic setting switches only react to their own key, and
+# the Prime switches read cloud shadows that may be absent. A switch whose
+# source is missing shows unknown, never a guessed on/off.
+
+class TestTimestampConversionsCatchOverflow:
+    """`datetime.fromtimestamp` raises OverflowError for values beyond the
+    platform's time_t — a corrupt timestamp from the robot or the cloud.
+    Five conversions caught TypeError/ValueError/OSError and let this one
+    through, so a bad value crashed the sensor update instead of reading
+    as unknown. Found by the coverage work for the quality scale."""
+
+    def test_the_helper_survives_an_overflow(self):
+        assert sh._ts_or_none(10**20) is None
+
+    def test_every_guarded_conversion_catches_overflow(self):
+        import ast
+        import pathlib
+
+        luecken = []
+        for f in sorted(pathlib.Path("custom_components/roomba_plus").glob("*.py")):
+            tree = ast.parse(f.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Try):
+                    continue
+                body = ast.unparse(ast.Module(body=node.body, type_ignores=[]))
+                if "fromtimestamp" not in body and "utc_from_timestamp" not in body:
+                    continue
+                for h in node.handlers:
+                    names = ast.unparse(h.type) if h.type else "BaseException"
+                    if "Exception" in names or "OverflowError" in names:
+                        continue
+                    luecken.append(f"{f.name}:{h.lineno} except {names}")
+        assert not luecken, f"timestamp conversions that let OverflowError through: {luecken}"
+
+
+# ── formerly tests/test_guard_empty_string_is_none.py ───────────────────────────
+#
+# Guard: a variable set to "" must not then be tested with `is None`.
+#
+# The v20 → v21 migration set `new_eid = ""` and checked `new_eid is None`
+# three times. None of the checks ever held; every ordinary entity reached
+# `async_update_entity(eid, new_entity_id="")`, Home Assistant raised, and
+# the migration aborted for anyone on schema 20 or older. The likely origin:
+# a type-checker complaint about reusing a `str` name, silenced with "".
+#
+# Checked per function across the whole package.
+
+PKG = pathlib.Path("custom_components/roomba_plus")
+
+
+def _findings(source: str, filename: str) -> list[str]:
+    tree = ast.parse(source)
+    out = []
+    for fn in ast.walk(tree):
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        empty = set()
+        for n in ast.walk(fn):
+            if isinstance(n, ast.Assign) and isinstance(n.value, ast.Constant) and n.value.value == "":
+                empty |= {t.id for t in n.targets if isinstance(t, ast.Name)}
+            if (isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name)
+                    and isinstance(n.value, ast.Constant) and n.value.value == ""):
+                empty.add(n.target.id)
+        for n in ast.walk(fn):
+            if (isinstance(n, ast.Compare) and isinstance(n.left, ast.Name) and n.left.id in empty
+                    and any(isinstance(op, (ast.Is, ast.IsNot)) for op in n.ops)
+                    and any(isinstance(c, ast.Constant) and c.value is None for c in n.comparators)):
+                out.append(f"{filename}:{n.lineno} {fn.name}: '{n.left.id}' is set to \"\" "
+                           f"but tested with `is None`")
+    return out
+
+
+def test_no_empty_string_is_tested_with_is_none():
+    findings = []
+    for f in sorted(PKG.glob("*.py")):
+        findings += _findings(f.read_text(encoding="utf-8"), f.name)
+    assert not findings, findings
+
+
+def test_the_guard_catches_the_original_fault():
+    fault = (
+        "def step(eids):\n"
+        "    for eid in eids:\n"
+        "        new_eid = ''\n"
+        "        if new_eid is None and eid.endswith('_battery'):\n"
+        "            new_eid = eid + '_level'\n"
+    )
+    assert _findings(fault, "fault.py")

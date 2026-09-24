@@ -33,6 +33,9 @@ from custom_components.roomba_plus.dirt_threshold_manager import DirtThresholdMa
 from datetime import datetime as datetime_v260_learning
 from datetime import timezone
 from homeassistant.util import dt as dt_util
+import time
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 
 _ep = sys.modules.get('homeassistant.helpers.entity_platform')
@@ -1943,3 +1946,130 @@ class TestSeedingSurvivesASlowMqttStart:
         source = inspect.getsource(_seed_maintenance_baselines)
 
         assert "async_create_task" in source
+
+
+# ── formerly tests/test_coverage_mid_gaps.py ────────────────────────────────────
+#
+# Mid-sized coverage gaps — quality scale, test-coverage (Silver).
+#
+# Error branches and fallbacks: bad cloud values, missing fields, foreign
+# entities. Each test pins what the branch protects against.
+
+def _store():
+    from custom_components.roomba_plus.maintenance_store import MaintenanceStore
+
+    return MaintenanceStore()
+
+
+def _role():
+    """A real role from the table, not a guessed name."""
+    from custom_components.roomba_plus.const import CONSUMABLE_ROLES
+
+    return next(r for r, spec in CONSUMABLE_ROLES.items() if spec.conf_key is not None)
+
+
+class TestMaintenanceCloudValues:
+
+    def test_epoch_conversion_rejects_garbage_and_zero(self):
+        from custom_components.roomba_plus.maintenance_store import _iso_from_epoch
+
+        assert _iso_from_epoch("abc") is None
+        assert _iso_from_epoch(0) is None
+
+    @pytest.mark.parametrize("record,erwartet", [
+        ({"count_type": "minutes", "minutes_remaining": 600}, 10),   # older field name
+        ({"count_type": "minutes"}, None),                           # neither field
+        ({"count_type": "minutes", "count_remaining": "abc"}, None),  # garbage
+    ])
+    def test_remaining_hours(self, record, erwartet):
+        s = _store()
+        s.cloud_parts = {"p": {"role": "r", **record}}
+        assert s.cloud_remaining_hours("r") == erwartet
+
+    @pytest.mark.parametrize("record,erwartet", [
+        ({"count_type": "minutes", "count_used": 60, "minutes_remaining": 540}, 10),
+        ({"count_type": "minutes", "count_used": 60}, None),
+        ({"count_type": "minutes", "count_used": "x", "count_remaining": 1}, None),
+    ])
+    def test_full_life_hours(self, record, erwartet):
+        s = _store()
+        s.cloud_parts = {"p": {"role": "r", **record}}
+        assert s.cloud_full_life_hours("r") == erwartet
+
+    @pytest.mark.parametrize("record,erwartet", [
+        ({"count_type": "minutes", "minutes_remaining": 0}, True),
+        ({"count_type": "minutes"}, None),
+        ({"count_type": "minutes", "count_remaining": "x"}, None),
+    ])
+    def test_exhaustion_state(self, record, erwartet):
+        s = _store()
+        s.cloud_parts = {"p": {"role": "r", **record}}
+        assert s._cloud_exhaustion_state("r") is erwartet
+
+
+class TestMaintenanceThresholds:
+
+    def test_a_garbage_option_falls_back_to_the_default(self):
+        from custom_components.roomba_plus.const import CONSUMABLE_ROLES
+
+        role = _role()
+        spec = CONSUMABLE_ROLES[role]
+        assert _store().threshold_hours(role, {spec.conf_key: "soon"}) == spec.default_hours
+
+    def test_an_unreadable_reset_hour_gives_the_full_budget(self):
+        s = _store()
+        s.filter_reset_hr = "corrupt"
+        assert s._local_remaining("filter", 500, 60) == 60
+
+    def test_learned_brush_hours_reads_the_main_brush(self, monkeypatch):
+        s = _store()
+        monkeypatch.setattr(s, "learned_hours", lambda role: 99 if role == "main_brush" else None)
+        assert s.learned_brush_hours == 99
+
+
+class TestMaintenanceHydration:
+    """Cloud part records map onto local slots only when they are
+    understood; anything else is recorded verbatim and nothing more."""
+
+    def test_unusable_records_do_not_touch_a_slot(self, monkeypatch):
+        from custom_components.roomba_plus import maintenance_store as ms
+
+        role = _role()
+        monkeypatch.setattr(ms, "part_role", lambda key: {"known": role, "odd": "no_such_role"}.get(key))
+        s = _store()
+        before = s.filter_reset_hr
+        s.hydrate_from_cloud_parts([
+            {"count_used": 60},                                   # no part_id
+            {"part_id": "odd", "count_type": "minutes", "count_used": 60},
+            {"part_id": "known", "count_type": "evacs", "count_used": 3},
+            {"part_id": "known", "count_type": "minutes", "count_used": "x"},
+        ], current_hr=500)
+        assert "odd" in s.cloud_parts, "an unknown id is still recorded verbatim"
+        assert s.filter_reset_hr == before
+
+
+class TestMaintenanceLoad:
+
+    def _with(self, monkeypatch, data):
+        from custom_components.roomba_plus import maintenance_store as ms
+
+        backing = MagicMock()
+        backing.async_load = AsyncMock(return_value=data)
+        monkeypatch.setattr(ms, "Store", lambda *a, **k: backing)
+        return _store()
+
+    @pytest.mark.asyncio
+    async def test_a_newer_payload_is_not_misread(self, hass, monkeypatch, caplog):
+        from custom_components.roomba_plus import maintenance_store as ms
+
+        s = self._with(monkeypatch, {"payload_version": ms.PAYLOAD_VERSION + 1,
+                                     "filter_reset_hr": 999})
+        await s.async_load(hass, "e1")
+        assert s.filter_reset_hr != 999
+        assert "Not loading it" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_a_corrupt_payload_is_logged(self, hass, monkeypatch, caplog):
+        s = self._with(monkeypatch, {"filter_reset_hr": "not a number"})
+        await s.async_load(hass, "e1")
+        assert "failed to load data" in caplog.text

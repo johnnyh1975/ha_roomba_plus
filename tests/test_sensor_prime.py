@@ -23,6 +23,11 @@ from custom_components.roomba_plus.sensor_prime import (
     PrimeSuctionLevelSensor,
     _dock_state_label,
 )
+import inspect
+from types import SimpleNamespace
+from homeassistant.components.sensor import SensorEntity
+from custom_components.roomba_plus import sensor_prime as sp
+from custom_components.roomba_plus.entity import IRobotEntity
 
 
 def _make_settings_config_entry(rw_settings: dict | None = None) -> MagicMock:
@@ -2287,7 +2292,11 @@ class TestBothGenerationsReportTheSameStates:
         status.cycle = cycle
         state = MagicMock()
         state.clean_mission_status = status
-        type(sensor)._current_state = property(lambda s: state)
+        # Per-instance subclass: `type(sensor)._current_state = ...` changed
+        # the real sensor class for every later test in the run.
+        sensor.__class__ = type(
+            "_StateSensor", (type(sensor),), {"_current_state": property(lambda s: state)},
+        )
         return sensor.native_value
 
     def test_prime_charging_mid_mission(self):
@@ -2423,7 +2432,11 @@ class TestSilenceThatPredatesTheRestart:
         status.cycle = "none"
         state = MagicMock()
         state.clean_mission_status = status
-        type(sensor)._current_state = property(lambda s: state)
+        # Per-instance subclass: `type(sensor)._current_state = ...` changed
+        # the real sensor class for every later test in the run.
+        sensor.__class__ = type(
+            "_StateSensor", (type(sensor),), {"_current_state": property(lambda s: state)},
+        )
         return sensor.native_value
 
     def test_a_long_uptime_with_no_message_is_silence(self):
@@ -2448,3 +2461,91 @@ class TestSilenceThatPredatesTheRestart:
         import time
 
         assert self._phase(time.time() - 9 * 86400) == "no_contact"
+
+
+# ── formerly tests/test_coverage_sensor_prime.py ────────────────────────────────
+#
+# sensor_prime.py — quality scale, test-coverage.
+#
+# Every Prime sensor reads a cloud shadow that may not have arrived yet. The
+# rule for all of them: no data is unknown — never a stale or invented
+# value, never an exception. Walked over every concrete sensor class, so a
+# new one is held to it without anyone adding it to a list.
+
+# Classes that need constructor data to exist at all (a part id, a region).
+_NEEDS_ARGS = {"PrimeConsumablePartSensor", "PrimeRegionLastCleanedSensor"}
+
+
+def _sensor_classes():
+    return sorted(
+        (c for _n, c in inspect.getmembers(sp, inspect.isclass)
+         if c.__module__ == sp.__name__ and issubclass(c, SensorEntity)
+         and issubclass(c, IRobotEntity) and not c.__name__.startswith("_")
+         and c.__name__ not in _NEEDS_ARGS),
+        key=lambda c: c.__name__,
+    )
+
+
+def _without_data(cls):
+    e = cls.__new__(cls)
+    e._config_entry = MagicMock()
+    rt = e._config_entry.runtime_data
+    for name in ("prime_status_coordinator", "prime_coordinator", "prime_stats_coordinator",
+                 "prime_mission_coordinator", "prime_software_coordinator"):
+        setattr(rt, name, None)
+    e._blid = "PRIMESENS01"
+    e.hass = MagicMock()
+    return e
+
+
+CLASSES = _sensor_classes()
+
+
+def test_the_sensor_classes_were_found():
+    assert len(CLASSES) >= 20
+
+
+@pytest.mark.parametrize("cls", CLASSES, ids=lambda c: c.__name__)
+def test_no_data_is_unknown_not_an_exception(cls):
+    e = _without_data(cls)
+    value = e.native_value
+    assert value is None or cls.__name__ == "PrimeConnectionHealthSensor", (
+        f"{cls.__name__} shows {value!r} with no data")
+
+
+@pytest.mark.parametrize("cls", CLASSES, ids=lambda c: c.__name__)
+def test_no_data_gives_harmless_attributes(cls):
+    attrs = _without_data(cls).extra_state_attributes
+    assert attrs is None or isinstance(attrs, dict)
+
+
+@pytest.mark.parametrize("cls", CLASSES, ids=lambda c: c.__name__)
+@pytest.mark.asyncio
+async def test_it_attaches_to_its_coordinators(cls, monkeypatch):
+    """Whatever it listens to, it must register through async_on_remove,
+    so a removed entity does not keep receiving updates."""
+    monkeypatch.setattr(IRobotEntity, "async_added_to_hass", AsyncMock())
+    e = cls.__new__(cls)
+    e._config_entry = MagicMock()
+    e._blid = "PRIMESENS01"
+    e.hass = MagicMock()
+    e.async_on_remove = MagicMock()
+    e.async_write_ha_state = MagicMock()
+    e.schedule_update_ha_state = MagicMock()
+    await e.async_added_to_hass()
+    listeners = [c for c in e.async_on_remove.call_args_list]
+    registered = any(
+        getattr(e._config_entry.runtime_data, n).async_add_listener.called
+        for n in ("prime_status_coordinator", "prime_coordinator")
+    )
+    assert not registered or listeners, f"{cls.__name__} listens without unsubscribing"
+
+
+@pytest.mark.parametrize("cls", CLASSES, ids=lambda c: c.__name__)
+def test_the_object_id_is_a_stable_string(cls):
+    e = _without_data(cls)
+    try:
+        oid = e.suggested_object_id
+    except AttributeError:
+        pytest.skip("uses the platform default")
+    assert oid is None or (isinstance(oid, str) and oid)

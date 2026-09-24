@@ -314,6 +314,9 @@ class TestPushFreshnessInDiagnostics:
 
         data = MagicMock()
         data.last_mqtt_message_ts = ts
+        # Derived on RoombaData: a MagicMock would answer with a
+        # MagicMock, not a number.
+        data.silence_reference_ts = ts
         return _push_freshness(data)
 
     def test_never_having_received_anything_is_reported_without_a_verdict(self):
@@ -1681,12 +1684,42 @@ class TestBothDumpsGetWhatNeedsNoRobot:
         missing = [
             name for name in data_only
             if f"{name}(data)" not in cloud_only
+            and name not in self.CLASSIC_FORMAT_ONLY
         ]
 
         assert not missing, (
             "these need nothing but runtime data and are missing from the "
             f"cloud-only dump: {missing}"
         )
+
+    #: Helpers that take only `data` but read a CLASSIC data format, so
+    #: they have nothing to say about a cloud-only (Prime) robot. The
+    #: signature test above cannot see a format boundary, only a
+    #: parameter one -- hence a named exception, each with its reason,
+    #: rather than silencing the check. Prime and Classic records are
+    #: different shapes from different backends; a Classic reader in the
+    #: Prime dump would report "timeline missing" for a record that was
+    #: never going to have one, which is worse than saying nothing.
+    CLASSIC_FORMAT_ONLY: dict[str, str] = {
+        "_last_mission_room_events": (
+            "reads timeline.finEvents room events, which Classic records "
+            "get from the cloud catch-up. Prime records store rooms as "
+            "room_durations_sec instead and carry no timeline at all."
+        ),
+    }
+
+    def test_every_classic_only_exception_still_exists(self) -> None:
+        """An exception for a helper that has been renamed or removed is
+        dead weight that would quietly excuse its successor."""
+        import ast
+        import pathlib
+
+        tree = ast.parse(pathlib.Path(
+            "custom_components/roomba_plus/diagnostics.py"
+        ).read_text(encoding="utf-8"))
+        vorhanden = {n.name for n in tree.body if isinstance(n, ast.FunctionDef)}
+        verwaist = sorted(set(self.CLASSIC_FORMAT_ONLY) - vorhanden)
+        assert not verwaist, f"exceptions for helpers that no longer exist: {verwaist}"
 
     def test_inline_runtime_only_sections_are_in_both_too(self) -> None:
         """The helper check above misses sections built inline.
@@ -2155,3 +2188,70 @@ class TestAFalseAlignmentSaysWhatItCosts:
         assert _missions_with_traversals(
             SimpleNamespace(mission_store=None)
         ) == "no mission store"
+
+
+class TestLastMissionRoomEvents:
+    """The diagnostic section added after @Thonno's Kitchen report.
+
+    His diagnostic held no mission record, so it could not show why the
+    Kitchen was left out of the room history. This section puts the
+    room events of the newest record beside the rooms the tracker
+    stored, and states plainly which region ids were counted and which
+    were seen but not counted.
+    """
+
+    def _data(self, record):
+        data = MagicMock()
+        data.mission_store.latest.return_value = record
+        return data
+
+    def test_no_record_says_so(self):
+        from custom_components.roomba_plus.diagnostics import _last_mission_room_events
+
+        result = _last_mission_room_events(self._data(None))
+        assert result == {"available": False, "reason": "no mission record"}
+
+    def test_a_record_without_timeline_still_shows_what_was_stored(self):
+        """Before the cloud catch-up, or with no cloud account: the
+        stored rooms are the only evidence, and they are shown."""
+        from custom_components.roomba_plus.diagnostics import _last_mission_room_events
+
+        rec = {"id": "m_1", "ended_at": "2026-09-21T10:02:01", "result": "completed",
+               "last_cleaned_rooms": ["Soggiorno"], "zones": ["Cucina", "Soggiorno"]}
+        result = _last_mission_room_events(self._data(rec))
+
+        assert result["available"] is False
+        assert result["last_cleaned_rooms"] == ["Soggiorno"]
+        assert "timeline" in result["reason"]
+
+    def test_the_kitchen_shape_is_cleaned_but_not_finished(self):
+        """The shape @Thonno's report most likely had: the first room's
+        only event on a status outside ROOM_EVENT_DONE_STATUSES, with real
+        area cleaned; the other three complete. The diagnostic must name
+        region 1 as seen-but-not-counted, and show its status."""
+        from custom_components.roomba_plus.diagnostics import _last_mission_room_events
+
+        def room(rid, status, pass_area):
+            return {"type": "room", "room": {"rid": rid, "status": status,
+                                             "passCount": 1, "area": 100,
+                                             "passArea": pass_area}}
+
+        rec = {
+            "id": "m_1789975662", "ended_at": "2026-09-21T10:02:01", "result": "completed",
+            "last_cleaned_rooms": ["Soggiorno", "Camera da letto", "Cabina Armadio"],
+            "timeline": {"finEvents": [
+                room("1", 1, 58),
+                room("20", 0, 90), room("12", 0, 70), room("19", 0, 40),
+            ]},
+        }
+        result = _last_mission_room_events(self._data(rec))
+
+        assert result["available"] is True
+        # Since the history rule split from the finished rule (4.2.11):
+        # region 1 cleaned floor, so room history counts it — but its pass
+        # never finished, so the end gate and learned figures do not.
+        assert result["rids_counted_as_cleaned"] == ["1", "12", "19", "20"]
+        assert result["rids_finished"] == ["12", "19", "20"]
+        assert result["rids_seen_but_not_counted"] == []
+        eins = next(e for e in result["room_events"] if e["rid"] == "1")
+        assert eins["status"] == 1 and eins["passArea"] == 58

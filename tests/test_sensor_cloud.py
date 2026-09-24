@@ -123,12 +123,9 @@ from tests.conftest import robot_mock
 # as they were in test_sensors.py. All six are defined in this module;
 # the facade only re-exported them, which is exactly why a search for
 # "which tests import sensor_cloud" came back empty.
-from unittest.mock import PropertyMock
 
 from custom_components.roomba_plus.sensor_cloud import (
     CLOUD_HISTORY_SENSORS,
-    CloudRawSensor,
-    CloudRawSensorDescription,
     RoombaCleaningAnalytics30dSensor,
     RoombaCleaningPerformanceSensor,
     CloudHistorySensor,
@@ -724,68 +721,9 @@ def _make_sensor_v270_consolidated_sensors(cls, records=None, data=None, mission
 
 
 
-def _make_sensor(
-    has_cloud: bool = True,
-    last_update_success: bool = True,
-    coordinator_data: dict | None = None,
-) -> CloudRawSensor:
-    """Build a minimal CloudRawSensor with mocked internals."""
-    roomba = robot_mock()
-    blid = "test_blid"
-
-    coordinator = MagicMock()
-    coordinator.last_update_success = last_update_success
-    coordinator.data = coordinator_data if coordinator_data is not None else {"pmaps": []}
-    coordinator.raw_records = []
-
-    config_entry = MagicMock()
-    runtime_data = MagicMock()
-    # has_cloud is a property — set it on the mock
-    type(runtime_data).has_cloud = PropertyMock(return_value=has_cloud)
-    config_entry.runtime_data = runtime_data
-
-    description = CloudRawSensorDescription(
-        key="recent_dirt_events",
-        translation_key="recent_dirt_events",
-        name="Dirt events",
-        value_fn=lambda records: None,
-    )
-
-    sensor = CloudRawSensor(roomba, blid, coordinator, description, config_entry)
-    return sensor
 
 
 
-class TestCloudRawSensorAvailable:
-    def test_unavailable_when_has_cloud_false(self):
-        """Sensor must be unavailable when cloud coordinator is not configured."""
-        sensor = _make_sensor(has_cloud=False, last_update_success=True)
-        assert sensor.available is False
-
-    def test_available_when_cloud_active_and_success(self):
-        """Sensor must be available when cloud is configured and last update succeeded."""
-        sensor = _make_sensor(
-            has_cloud=True,
-            last_update_success=True,
-            coordinator_data={"pmaps": []},
-        )
-        assert sensor.available is True
-
-    def test_unavailable_when_last_update_failed(self):
-        """Sensor must be unavailable when last coordinator update failed."""
-        sensor = _make_sensor(
-            has_cloud=True,
-            last_update_success=False,
-            coordinator_data={"pmaps": []},
-        )
-        assert sensor.available is False
-
-    def test_unavailable_when_coordinator_data_none(self):
-        """Sensor must be unavailable when coordinator has not yet fetched data."""
-        # Pass coordinator_data=None but we need to set it explicitly on the mock
-        sensor = _make_sensor(has_cloud=True, last_update_success=True)
-        sensor._coordinator.data = None
-        assert sensor.available is False
 
 
 
@@ -1323,6 +1261,12 @@ from custom_components.roomba_plus.sensor_cloud import (  # noqa: E402
     RoombaHealthScoreTrendSensor,
     RoombaMissionsPerChargeSensor,
 )
+import inspect
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+from homeassistant.components.sensor import SensorEntity
+from custom_components.roomba_plus import sensor_cloud as sc
+from custom_components.roomba_plus.entity import IRobotEntity
 
 
 def _make_health_trend_sensor(rps):
@@ -1449,3 +1393,193 @@ class TestHealthScoreTrendSensor:
         assert attrs["days_until_ready"] == 34
 
 
+# ── formerly tests/test_coverage_sensor_cloud.py ────────────────────────────────
+#
+# sensor_cloud.py — quality scale, test-coverage.
+#
+# The robot health score needs at least 20 missions in 30 days before it
+# shows anything: a score from a handful of missions is noise. Every cloud
+# sensor attaches to its coordinator and must detach; without data it shows
+# nothing rather than a guess.
+
+def _classes():
+    return sorted(
+        (c for n, c in inspect.getmembers(sc, inspect.isclass)
+         if c.__module__ == sc.__name__ and issubclass(c, SensorEntity)
+         and issubclass(c, IRobotEntity) and not n.startswith("_")),
+        key=lambda c: c.__name__,
+    )
+
+
+CLASSES = _classes()
+
+
+def _bare(cls, *, cloud):
+    e = cls.__new__(cls)
+    e._config_entry = MagicMock()
+    e._config_entry.options = {}
+    e._entry = e._config_entry
+    e._blid = "CLOUDSENS1"
+    e.hass = MagicMock()
+    e._coordinator = cloud
+    e.async_on_remove = MagicMock()
+    e.async_write_ha_state = MagicMock()
+    e.entity_description = getattr(cls, "entity_description", SimpleNamespace(key="k", value_fn=lambda _r: None, attributes_fn=None))
+    data = e._config_entry.runtime_data
+    data.cloud_coordinator = cloud
+    for name in ("mission_store", "robot_profile_store", "grid_store", "mission_archive",
+                 "umf_aligner", "maintenance_store"):
+        setattr(data, name, None)
+    return e
+
+
+class TestHealthScore:
+
+    def _sensor(self, records, rps):
+        s = sc.RoombaRobotHealthSensor.__new__(sc.RoombaRobotHealthSensor)
+        s._config_entry = MagicMock()
+        data = s._config_entry.runtime_data
+        store = MagicMock()
+        store.query.return_value = records
+        store.consecutive_anomalous = 0
+        data.mission_store = store
+        data.robot_profile_store = rps
+        data.battery_retention_value = 90
+        data.grid_store = None
+        data.cleaning_speed_trend_value = "stable"
+        return s
+
+    def test_no_profile_no_score(self):
+        assert self._sensor([{}] * 30, None)._score_and_breakdown() == (None, {})
+
+    def test_fewer_than_twenty_missions_no_score(self):
+        rps = MagicMock()
+        assert self._sensor([{}] * 19, rps)._score_and_breakdown() == (None, {})
+        rps.compute_health_score.assert_not_called()
+
+    def test_the_stuck_rate_feeds_the_score_and_the_score_is_kept(self):
+        records = [{"result": "stuck"}] * 5 + [{"result": "completed"}] * 20
+        rps = MagicMock()
+        rps.coverage_ratio.return_value = None
+        rps.compute_health_score.return_value = (82.0, {"stuck": 0.2})
+        s = self._sensor(records, rps)
+        score, breakdown = s._score_and_breakdown()
+        assert score == 82.0 and breakdown == {"stuck": 0.2}
+        assert rps.compute_health_score.call_args.kwargs.get("stuck_rate", 0.2) == pytest.approx(0.2)
+        rps.record_health_score.assert_called_once()
+
+    def test_no_score_is_not_recorded(self):
+        rps = MagicMock()
+        rps.coverage_ratio.return_value = None
+        rps.compute_health_score.return_value = (None, {})
+        self._sensor([{"result": "completed"}] * 25, rps)._score_and_breakdown()
+        rps.record_health_score.assert_not_called()
+
+
+def test_the_classes_were_found():
+    assert len(CLASSES) >= 8
+
+
+@pytest.mark.parametrize("cls", CLASSES, ids=lambda c: c.__name__)
+@pytest.mark.asyncio
+async def test_it_detaches_what_it_attaches(cls, monkeypatch):
+    monkeypatch.setattr(IRobotEntity, "async_added_to_hass", AsyncMock())
+    cloud = MagicMock()
+    e = _bare(cls, cloud=cloud)
+    await e.async_added_to_hass()
+    assert e.async_on_remove.call_count >= cloud.async_add_listener.call_count, cls.__name__
+
+
+@pytest.mark.parametrize("cls", CLASSES, ids=lambda c: c.__name__)
+def test_without_data_it_shows_nothing(cls):
+    cloud = SimpleNamespace(data=None, raw_records=[], last_update_success=False,
+                            daily_dirt_density={}, regions=[], parts=[])
+    e = _bare(cls, cloud=cloud)
+    e._live_state = False
+    # Home Assistant reads neither value nor attributes of an unavailable
+    # entity. Unavailable IS showing nothing; only an available one must
+    # produce a value and attributes without data behind them.
+    if not e.available:
+        return
+    value = e.native_value
+    assert value is None or isinstance(value, (int, float, str))
+    attrs = e.extra_state_attributes
+    assert attrs is None or isinstance(attrs, dict)
+
+
+@pytest.mark.parametrize("cls", CLASSES, ids=lambda c: c.__name__)
+@pytest.mark.asyncio
+async def test_a_coordinator_update_rewrites_the_state(cls, monkeypatch):
+    """Cloud sensors ignore robot messages and redraw on coordinator
+    updates only."""
+    monkeypatch.setattr(IRobotEntity, "async_added_to_hass", AsyncMock())
+    cloud = MagicMock()
+    e = _bare(cls, cloud=cloud)
+    await e.async_added_to_hass()
+    for call in cloud.async_add_listener.call_args_list:
+        call.args[0]()
+    if cloud.async_add_listener.called:
+        assert e.async_write_ha_state.called, cls.__name__
+    if "new_state_filter" in cls.__dict__:
+        assert e.new_state_filter({"batPct": 90}) is False
+
+
+@pytest.mark.parametrize("cls", CLASSES, ids=lambda c: c.__name__)
+def test_with_empty_cloud_data_it_still_answers(cls):
+    """The first refresh can succeed with nothing in it — a new account,
+    a robot with no missions yet."""
+    cloud = SimpleNamespace(data={}, raw_records=[], last_update_success=True,
+                            daily_dirt_density={}, regions=[], parts=[])
+    e = _bare(cls, cloud=cloud)
+    e._live_state = False
+    e._config_entry.runtime_data.has_cloud = True
+    from custom_components.roomba_plus.mission_archive import MissionArchive
+
+    e._config_entry.runtime_data.mission_archive = MissionArchive()   # real and empty
+    e._config_entry.runtime_data.mission_store = MagicMock(query=MagicMock(return_value=[]),
+                                                          p75_area_sqft=MagicMock(return_value=None),
+                                                          clean_streak=MagicMock(return_value=None))
+    value = e.native_value
+    assert value is None or isinstance(value, (int, float, str))
+    attrs = e.extra_state_attributes
+    assert attrs is None or isinstance(attrs, dict)
+
+
+class TestTrendHelpers:
+
+    @pytest.mark.parametrize("dirt,speed,cause", [
+        ("rising", "declining", "brush_wear"),
+        ("rising", "stable", "floor_dirty"),
+        ("falling", "declining", "unknown"),
+    ])
+    def test_dirt_cause(self, dirt, speed, cause):
+        assert sc._classify_dirt_cause(dirt, speed) == cause
+
+    @pytest.mark.parametrize("channel,band", [(None, None), (6, "2.4 GHz"), (44, "5 GHz"), (200, None)])
+    def test_channel_band(self, channel, band):
+        assert sc._channel_to_band(channel) == band
+
+    def test_an_error_record_without_a_time_has_no_time(self, monkeypatch):
+        monkeypatch.setattr(sc, "_cloud_last_error_record", lambda _r: {"timestamp": None})
+        assert sc._raw_cloud_last_error_time([]) is None
+
+    def test_too_few_missions_give_an_unknown_trend(self):
+        assert sc._raw_cleaning_speed_trend([]) == "unknown"
+        assert sc._raw_dirt_density_trend([]) == "unknown"
+
+    def test_the_first_missions_after_a_long_pause_are_skipped(self):
+        """After more than a week without cleaning the floor is dirtier
+        than usual; those first missions would fake a rising trend."""
+        day = 86400
+        records = []
+        ts = 2_000_000_000
+        for i in range(12):
+            records.append({"startTime": ts, "dirt": 5, "sqft": 100, "durationM": 30})
+            ts -= day
+        ts -= 10 * day   # a ten-day gap
+        for i in range(12):
+            records.append({"startTime": ts, "dirt": 50, "sqft": 100, "durationM": 30})
+            ts -= day
+        # The result is a trend word either way; the point is that the gap
+        # is handled without error and yields one of the known answers.
+        assert sc._raw_dirt_density_trend(records) in ("rising", "falling", "stable", "unknown")

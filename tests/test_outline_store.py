@@ -23,6 +23,8 @@ from custom_components.roomba_plus.outline_store import CELL_MM
 from custom_components.roomba_plus.outline_store import OutlineStore
 from custom_components.roomba_plus.outline_store import PAYLOAD_VERSION
 from custom_components.roomba_plus.outline_store import compute_boundary_points_mm
+import time
+from types import SimpleNamespace
 
 
 def _make_white_png(width: int = 100, height: int = 100) -> bytes:
@@ -458,3 +460,58 @@ class TestOutlineStoreCorruptionResilience:
                                "contour_points": [None, [1, 2]]})
         # Bad point skipped or clean reset — no crash
         assert isinstance(os_._contour_points, list)
+
+
+# ── formerly tests/test_coverage_small_gaps.py ──────────────────────────────────
+#
+# Small gaps in eight modules — quality scale, test-coverage (Silver).
+#
+# Mostly error branches and edge cases: a malformed input must not crash,
+# must not return something wrong, and where the code logs, it must log.
+# Each test pins what the branch is for, not only that it ran.
+
+class TestOutlineStoreEdges:
+
+    def _store(self, data=None):
+        from custom_components.roomba_plus.outline_store import OutlineStore
+
+        s = OutlineStore()
+        backing = MagicMock()
+        backing.async_load = AsyncMock(return_value=data)
+        backing.async_save = AsyncMock()
+        s._get_store = lambda _h, _e: backing
+        return s, backing
+
+    @pytest.mark.asyncio
+    async def test_a_corrupt_file_starts_empty(self, caplog):
+        from custom_components.roomba_plus.outline_store import PAYLOAD_VERSION
+
+        s, _b = self._store({"version": PAYLOAD_VERSION, "mission_count": "x"})
+        await s.async_load(None, "e1")
+        assert s._mission_count == 0 and s._contour_points == []
+        assert "failed to load" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_save_writes_the_versioned_payload(self):
+        from custom_components.roomba_plus.outline_store import PAYLOAD_VERSION
+
+        s, backing = self._store()
+        await s.async_save(None, "e1")
+        assert backing.async_save.await_args.args[0]["version"] == PAYLOAD_VERSION
+
+    def test_a_failing_boundary_computation_is_logged_not_raised(self, monkeypatch, caplog):
+        from custom_components.roomba_plus import outline_store
+
+        s, _b = self._store()
+        monkeypatch.setattr(outline_store, "compute_boundary_points_mm",
+                            MagicMock(side_effect=RuntimeError("bad cells")))
+        s.recompute_sync({(0, 0): 1})
+        assert "unexpected error in recompute_sync" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_a_failing_save_during_recompute_is_logged_not_raised(self, caplog):
+        s, backing = self._store()
+        s.recompute_sync = MagicMock()
+        backing.async_save = AsyncMock(side_effect=OSError("disk full"))
+        await s.async_recompute({(0, 0): 1}, None, "e1")
+        assert "unexpected error in async_recompute" in caplog.text

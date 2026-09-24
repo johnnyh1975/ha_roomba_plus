@@ -12,6 +12,10 @@ from unittest.mock import MagicMock
 
 from custom_components.roomba_plus.const import DOMAIN, EVENT_MAINTENANCE_RESET, EVENT_MISSION_COMPLETED, EVENT_STUCK
 from custom_components.roomba_plus.logbook import async_describe_events
+import time
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+import pytest
 
 
 def _collect_describers() -> dict[str, callable]:
@@ -175,3 +179,57 @@ class TestRegistersAllEvents:
         assert EVENT_MAP_RETRAIN_IN_PROGRESS in described
         assert EVENT_CLOUD_STALE in described
         assert len(described) == 12
+
+
+# ── formerly tests/test_coverage_mid_gaps.py ────────────────────────────────────
+#
+# Mid-sized coverage gaps — quality scale, test-coverage (Silver).
+#
+# Error branches and fallbacks: bad cloud values, missing fields, foreign
+# entities. Each test pins what the branch protects against.
+
+def _describers_by_name():
+    from tests.test_logbook import _collect_describers
+
+    return {fn.__name__: fn for fn in _collect_describers().values()}
+
+
+def _ev(data):
+    return SimpleNamespace(data=data)
+
+
+class TestLogbookDescribers:
+    """Nine event types had no test. Each entry must name the robot (or
+    fall back to 'Roomba+') and carry the detail that makes it useful."""
+
+    CASES = {
+        "describe_error_recurrence": ({"label": "Wheel stuck", "count": 4, "room": "Kitchen"},
+                                      ["Wheel stuck", "4", "Kitchen"]),
+        "describe_cancellation_recurrence": ({"count": 3}, ["3"]),
+        "describe_stuck_pattern": ({"room": "Hall", "count": 5}, ["Hall"]),
+        "describe_mission_anomaly": ({"kind": "duration"}, []),
+        "describe_mixed_schedule": ({}, []),
+        "describe_schedule_suboptimal": ({"days": ["Mon", "Thu"]}, ["Mon"]),
+        "describe_map_drift_detected": ({}, []),
+        "describe_map_retrain_in_progress": ({}, []),
+        "describe_cloud_stale": ({"hours": 30}, []),
+    }
+
+    @pytest.mark.parametrize("name", sorted(CASES))
+    def test_a_named_robot_is_named(self, name):
+        data, fragments = self.CASES[name]
+        entry = _describers_by_name()[name](_ev({**data, "name": "Robbie"}))
+        assert entry["name"] == "Robbie"
+        assert isinstance(entry["message"], str) and entry["message"]
+        for frag in fragments:
+            assert frag in entry["message"], (name, entry["message"])
+
+    @pytest.mark.parametrize("name", sorted(CASES))
+    def test_an_unnamed_robot_falls_back(self, name):
+        entry = _describers_by_name()[name](_ev(dict(self.CASES[name][0])))
+        assert entry["name"] == "Roomba+"
+
+    def test_an_unknown_location_is_not_appended(self):
+        entry = _describers_by_name()["describe_error_recurrence"](
+            _ev({"label": "Cliff", "count": 2, "room": "unknown location"}))
+        assert "unknown location" not in entry["message"]

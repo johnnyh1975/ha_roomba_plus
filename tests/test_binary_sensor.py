@@ -151,6 +151,9 @@ def _mqtt_stale_sensor(
     entry = entry_mock()
     entry.entry_id = "test_entry"
     entry.runtime_data.last_mqtt_message_ts = last_mqtt_message_ts
+    # Derived on RoombaData: a MagicMock would answer with a
+    # MagicMock, not a number.
+    entry.runtime_data.silence_reference_ts = last_mqtt_message_ts
     entry.runtime_data.last_run_transition_ts = last_run_transition_ts
 
     s = RoombaMqttStale.__new__(RoombaMqttStale)
@@ -259,6 +262,9 @@ class TestMqttWatchdogRepairIssue:
              patch.object(bs_mod.ir, "async_delete_issue") as mock_delete:
             # Fresh message just arrived — no longer stale.
             s._entry.runtime_data.last_mqtt_message_ts = now
+            # Derived on RoombaData: a MagicMock would answer with a
+            # MagicMock, not a number.
+            s._entry.runtime_data.silence_reference_ts = now
             tmock.time.return_value = now
             s._async_watchdog_tick(None)
 
@@ -594,6 +600,9 @@ class TestMqttStampCallback:
     def _entry(self):
         entry = entry_mock()
         entry.runtime_data.last_mqtt_message_ts = 0.0
+        # Derived on RoombaData: a MagicMock would answer with a
+        # MagicMock, not a number.
+        entry.runtime_data.silence_reference_ts = 0.0
         entry.runtime_data.last_run_transition_ts = 0.0
         return entry
 
@@ -864,6 +873,11 @@ from custom_components.roomba_plus.button import (
     RoombaButtonDescription,
     RoombaCommandButton,
 )
+from types import SimpleNamespace
+from custom_components.roomba_plus import binary_sensor as bs
+from custom_components.roomba_plus.entity import IRobotEntity
+import inspect
+from homeassistant.components.binary_sensor import BinarySensorEntity
 
 # ── Shared state fixtures ─────────────────────────────────────────────────────
 
@@ -1141,11 +1155,12 @@ def _make_maintenance_due(
 ):
     """Build a real RoombaMaintenanceDue wired to the given MaintenanceStore."""
     from custom_components.roomba_plus.binary_sensor import RoombaMaintenanceDue
-    roomba = MagicMock()
-    # A Clean Base by default: most of these tests are about the
-    # four-role list, and a robot without one has only three parts.
-    # `clean_base=False` gives a 900-series (@liblit's R980020 reported a
-    # bag due on a plain dock).
+    roomba = robot_mock()
+    # A CLEAN BASE BY DEFAULT, because most of these tests are about the
+    # four-role list and a robot without one has only three parts. The
+    # dock shape is what `has_clean_base()` looks for; pass
+    # `clean_base=False` for a 900-series (@liblit's R980020 reported a
+    # bag due on a plain dock, which is the bug that made this explicit).
     state: dict = {"bbrun": {"hr": hr}}
     if clean_base:
         state["dock"] = {"fwVer": "1.2.3"}
@@ -2150,3 +2165,189 @@ class TestAPlainDockHasNoBag:
         )
 
         assert "clean_base_bag" in entity.extra_state_attributes["due"]
+
+
+# ── formerly tests/test_coverage_binary_sensor.py ───────────────────────────────
+#
+# binary_sensor.py — quality scale, test-coverage.
+#
+# The start-blocked sensor names which modes are blocked and why; a fault
+# that blocks vacuuming but not mopping must say exactly that. Entities
+# that listen to a coordinator must detach on removal.
+
+def _prime_blocked(monkeypatch, *, faults, state=True):
+    s = bs.PrimeStartBlockedSensor.__new__(bs.PrimeStartBlockedSensor)
+    s._config_entry = MagicMock()
+    s.hass = MagicMock()
+    s.hass.config.language = "de"
+    s.__class__ = type("_S", (bs.PrimeStartBlockedSensor,),
+                       {"_current_state": property(lambda _s: SimpleNamespace(clean_mission_status={}) if state else None)})
+    monkeypatch.setattr(bs, "_blocking_faults", lambda _cms: faults)
+    monkeypatch.setattr(bs, "get_localized_error_entry", lambda code, _l: {"label": f"Fehler {code}"})
+    return s
+
+
+def _prime_classes():
+    return sorted(
+        (c for _n, c in inspect.getmembers(bs, inspect.isclass)
+         if c.__module__ == bs.__name__ and issubclass(c, BinarySensorEntity)
+         and issubclass(c, IRobotEntity) and c.__name__.startswith("Prime")),
+        key=lambda c: c.__name__,
+    )
+
+
+def _classic_classes():
+    return sorted(
+        (c for n, c in inspect.getmembers(bs, inspect.isclass)
+         if c.__module__ == bs.__name__ and issubclass(c, BinarySensorEntity)
+         and issubclass(c, IRobotEntity) and not n.startswith(("Prime", "_"))),
+        key=lambda c: c.__name__,
+    )
+
+
+def _build(cls, reported):
+    roomba = MagicMock()
+    roomba.master_state = {"state": {"reported": reported}}
+    entry = MagicMock()
+    entry.options = {}
+    entry.runtime_data.roomba = roomba
+    # Real defaults where a manager or value is absent: a Mock would answer
+    # every attribute with another Mock, which no real entry does.
+    for name in ("dirt_threshold_manager", "blocking_manager", "presence_manager",
+                 "firmware_updated_at", "last_firmware_version"):
+        setattr(entry.runtime_data, name, None)
+    params = inspect.signature(cls.__init__).parameters
+    args = [roomba, "CLASSICBIN1"] + ([entry] if "config_entry" in params else [])
+    e = cls(*args)
+    e._config_entry = entry
+    e.hass = MagicMock()
+    return e
+
+
+CLASSIC = _classic_classes()
+
+
+class TestPrimeStartBlocked:
+
+    def test_no_state_is_unknown(self, monkeypatch):
+        assert _prime_blocked(monkeypatch, faults={}, state=False).is_on is None
+
+    def test_no_fault_is_not_blocked_and_says_nothing(self, monkeypatch):
+        s = _prime_blocked(monkeypatch, faults={})
+        assert s.is_on is False
+        assert s.extra_state_attributes == {}
+
+    def test_a_fault_that_still_allows_mopping(self, monkeypatch):
+        s = _prime_blocked(monkeypatch, faults={27: frozenset({"mop"})})
+        assert s.is_on is True
+        attrs = s.extra_state_attributes
+        assert attrs["blocked_modes"] == ["vacuum"]
+        assert attrs["available_modes"] == ["mop"]
+        assert attrs["blocked_reason"] == "Fehler 27"
+
+    def test_a_fault_that_blocks_everything(self, monkeypatch):
+        attrs = _prime_blocked(monkeypatch, faults={3: frozenset(), 9: frozenset()}).extra_state_attributes
+        assert attrs["blocked_modes"] == ["mop", "vacuum"]
+        assert attrs["available_modes"] == []
+        assert attrs["blocked_reason"] == "Fehler 3 · Fehler 9"
+
+
+class TestDemandCleanBlocked:
+
+    def _s(self, dtm):
+        s = bs.RoombaDemandCleanBlocked.__new__(bs.RoombaDemandCleanBlocked)
+        s._config_entry = MagicMock()
+        s._config_entry.runtime_data.dirt_threshold_manager = dtm
+        return s
+
+    def test_without_demand_cleaning_it_is_unknown(self):
+        assert self._s(None).is_on is None
+
+    @pytest.mark.parametrize("blocked", [True, False])
+    def test_it_mirrors_the_gate(self, blocked):
+        dtm = MagicMock()
+        dtm.gate_blocked.return_value = (blocked, "not_all_away" if blocked else "")
+        assert self._s(dtm).is_on is blocked
+
+
+@pytest.mark.parametrize("cls", _prime_classes(), ids=lambda c: c.__name__)
+@pytest.mark.asyncio
+async def test_a_prime_binary_sensor_detaches_what_it_attaches(cls, monkeypatch):
+    monkeypatch.setattr(IRobotEntity, "async_added_to_hass", AsyncMock())
+    s = cls.__new__(cls)
+    s._config_entry = MagicMock()
+    s._blid = "PRIMEBIN01"
+    s.hass = MagicMock()
+    s.async_on_remove = MagicMock()
+    s.async_write_ha_state = MagicMock()
+    s.async_get_last_state = AsyncMock(return_value=None)
+    await s.async_added_to_hass()
+    rt = s._config_entry.runtime_data
+    attached = sum(getattr(rt, n).async_add_listener.call_count
+                   for n in ("prime_status_coordinator", "prime_coordinator", "prime_schedule_coordinator"))
+    assert s.async_on_remove.call_count >= attached, f"{cls.__name__} attaches without detaching"
+
+
+def test_the_classic_classes_were_found():
+    assert len(CLASSIC) >= 15
+
+
+@pytest.mark.parametrize("cls", CLASSIC, ids=lambda c: c.__name__)
+def test_no_report_yet_never_raises(cls):
+    """A freshly set-up robot has reported nothing yet."""
+    e = _build(cls, {})
+    assert e.is_on in (True, False, None)
+    attrs = e.extra_state_attributes
+    assert attrs is None or isinstance(attrs, dict)
+
+
+@pytest.mark.parametrize("cls", CLASSIC, ids=lambda c: c.__name__)
+def test_a_typical_report_never_raises(cls):
+    reported = {"bin": {"present": True, "full": False}, "mopReady": {"tankPresent": True, "lidClosed": True},
+                "cleanMissionStatus": {"phase": "charge", "notReady": 0, "cycle": "none"},
+                "schedHold": False, "tankPresent": True, "lidOpen": False, "detectedPad": "reusableDry",
+                "dock": {"state": 301}, "batPct": 90}
+    e = _build(cls, reported)
+    assert e.is_on in (True, False, None)
+    attrs = e.extra_state_attributes
+    assert attrs is None or isinstance(attrs, dict)
+    assert e.new_state_filter(reported) in (True, False)
+    assert e.new_state_filter({"signal": {"rssi": -60}}) in (True, False)
+
+
+class TestClassicLifecycles:
+
+    @pytest.mark.asyncio
+    async def test_start_blocked_follows_the_blocking_manager(self, monkeypatch):
+        monkeypatch.setattr(IRobotEntity, "async_added_to_hass", AsyncMock())
+        e = _build(bs.RoombaStartBlocked, {})
+        bm = MagicMock()
+        bm.register_state_callback.return_value = "unsub"
+        e._entry.runtime_data.blocking_manager = bm
+        e.async_on_remove = MagicMock()
+        await e.async_added_to_hass()
+        e.async_on_remove.assert_called_once_with("unsub")
+
+    @pytest.mark.asyncio
+    async def test_the_mqtt_watchdog_ticks_and_cleans_up(self, monkeypatch):
+        from homeassistant.helpers import issue_registry as ir
+
+        monkeypatch.setattr(IRobotEntity, "async_added_to_hass", AsyncMock())
+        stop = MagicMock()
+        monkeypatch.setattr(bs, "async_track_time_interval", lambda *a, **k: stop)
+        deleted = []
+        monkeypatch.setattr(ir, "async_delete_issue", lambda _h, d, i: deleted.append(i))
+        e = _build(bs.RoombaMqttStale, {})
+        e._entry.entry_id = "e1"
+        await e.async_added_to_hass()
+        await e.async_will_remove_from_hass()
+        stop.assert_called_once()
+        assert e._unsub_tick is None
+        assert deleted == ["mqtt_watchdog_e1"], "its repair issue goes with it"
+
+
+class TestMinutesToClock:
+
+    @pytest.mark.parametrize("value,clock", [(0, "00:00"), (22 * 60 + 5, "22:05"), ("x", None), (None, None)])
+    def test_minutes_since_midnight(self, value, clock):
+        assert bs._minutes_to_clock(value) == clock

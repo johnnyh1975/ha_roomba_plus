@@ -32,6 +32,8 @@ import tests.conftest
 from custom_components.roomba_plus.robot_profile_store import RobotProfileStore
 from custom_components.roomba_plus.mission_timer_store import MissionTimerStore
 from custom_components.roomba_plus.maintenance_store import MaintenanceStore
+import time
+from types import SimpleNamespace
 
 
 _selector = types.ModuleType("homeassistant.helpers.selector")
@@ -772,32 +774,33 @@ class TestRecordCleanEventWiring:
             "Without this, F12a presence_windows() is never populated."
         )
 
-    def test_record_clean_event_called_on_mission_start_path(self):
-        """record_clean_event is called inside the mission-start detection block."""
-        import inspect
-        from custom_components.roomba_plus import callbacks
-        src = inspect.getsource(callbacks)
-        # v2.6.3: _CLEANING_PHASES guard replaced by had_cleaning_phase flag;
-        # v4.0.0b3 live-investigation fix: the guard additionally rejects
-        # post-terminal replay pulses (_mission_already_terminal), so the
-        # exact-string match anchors on the phase list membership check.
-        phase_idx = src.find('phase in _ACTIVE_CLEANING_PHASES')
-        record_idx = src.find('record_clean_event')
-        assert phase_idx != -1, "_ACTIVE_CLEANING_PHASES mission-start guard not found in callbacks.py"
-        assert record_idx != -1, "record_clean_event not found in callbacks.py"
-        # record_clean_event should come after the phase transition (within ~500 chars)
-        assert record_idx > phase_idx, (
-            "record_clean_event must be called after the mission-start phase transition"
+    def test_a_mission_start_records_a_clean_event_at_its_start_time(self):
+        """Drives a mission start and checks the presence manager hears it.
+
+        Replaces a check that measured, in characters, how far apart two
+        strings stood in callbacks.py. It had to be widened four times for
+        renames that changed no behaviour, and would have passed with the call
+        moved anywhere within reach.
+        """
+        import datetime
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.callbacks import _handle_mission_start, _MissionState
+        from tests.test_callbacks import _make_callback_env
+
+        hass, entry, _, _ = _make_callback_env()
+        pm = MagicMock()
+        entry.runtime_data.presence_manager = pm
+        entry.runtime_data.demand_triggered_ts = None
+        entry.options = {}
+        mission = {"phase": "run", "initiator": "schedule", "cycle": "clean", "mssnStrtTm": 1700000000}
+        _handle_mission_start(
+            _MissionState(), hass, entry,
+            phase="run", reported={"cleanMissionStatus": mission, "bbrun": {"nStuck": 0}},
+            mission=mission, candidate_cycle="clean", candidate_mission_start_ts=1700000000,
         )
-        # v2.9.0 — threshold bumped 800→900: F4e's current_leg_rechrgM
-        # double-counting bugfix added one legitimate reset line to this
-        # exact span (mission-start block); the v4.0.0b3 live-fix added the
-        # _mission_already_terminal replay-guard condition to the same guard
-        # (1100 now). record_clean_event's actual placement (still
-        # immediately after the phase-guard block) is unchanged — this is
-        # proximity slack, not a placement regression.
-        assert record_idx - phase_idx < 1100, (
-            "record_clean_event is too far from the mission-start transition — check placement"
+        pm.record_clean_event.assert_called_once_with(
+            datetime.datetime.fromtimestamp(1700000000, tz=datetime.timezone.utc)
         )
 
 
@@ -1347,3 +1350,102 @@ class TestPresenceOnPrimeDoesNotReachForALocalRobot:
 
         manager._set_schedules_paused.assert_awaited_once_with(True)
         assert manager._did_unfreeze is False
+
+
+# ── formerly tests/test_coverage_mid_gaps.py ────────────────────────────────────
+#
+# Mid-sized coverage gaps — quality scale, test-coverage (Silver).
+#
+# Error branches and fallbacks: bad cloud values, missing fields, foreign
+# entities. Each test pins what the branch protects against.
+
+def _presence(hass, options):
+    from custom_components.roomba_plus.presence_manager import PresenceManager
+
+    entry = MagicMock()
+    entry.options = options
+    return PresenceManager(hass, entry)
+
+
+class TestPresenceManagerFlow:
+
+    @pytest.mark.asyncio
+    async def test_a_tracked_persons_change_triggers_an_evaluation(self, hass):
+        from custom_components.roomba_plus.const import CONF_PRESENCE_ENTITIES
+
+        pm = _presence(hass, {CONF_PRESENCE_ENTITIES: ["person.anna"]})
+        pm._evaluate_presence = AsyncMock()
+        pm.start()
+        await hass.async_block_till_done()
+        pm._evaluate_presence.reset_mock()
+
+        hass.states.async_set("person.anna", "not_home")
+        hass.states.async_set("person.other", "home")   # not tracked
+        await hass.async_block_till_done()
+
+        assert pm._evaluate_presence.await_count == 1
+        pm.cancel()
+
+    @pytest.mark.asyncio
+    async def test_evaluation_without_tracked_people_does_nothing(self, hass):
+        pm = _presence(hass, {})
+        pm._handle_all_away, pm._handle_someone_home = AsyncMock(), AsyncMock()
+        await pm._evaluate_presence()
+        pm._handle_all_away.assert_not_awaited()
+        pm._handle_someone_home.assert_not_awaited()
+
+    @pytest.mark.parametrize("states,away", [(("not_home", "not_home"), True),
+                                             (("not_home", "home"), False)])
+    @pytest.mark.asyncio
+    async def test_everyone_away_versus_someone_home(self, hass, states, away):
+        from custom_components.roomba_plus.const import CONF_PRESENCE_ENTITIES
+
+        pm = _presence(hass, {CONF_PRESENCE_ENTITIES: ["person.a", "person.b"]})
+        hass.states.async_set("person.a", states[0])
+        hass.states.async_set("person.b", states[1])
+        pm._handle_all_away, pm._handle_someone_home = AsyncMock(), AsyncMock()
+        await pm._evaluate_presence()
+        assert pm._handle_all_away.await_count == (1 if away else 0)
+        assert pm._handle_someone_home.await_count == (0 if away else 1)
+
+    @pytest.mark.asyncio
+    async def test_a_running_away_delay_is_not_started_twice(self, hass):
+        import asyncio
+
+        pm = _presence(hass, {})
+        haengt = asyncio.Event()
+
+        async def _still_waiting(_seconds):
+            await haengt.wait()
+
+        pm._away_delay = _still_waiting
+        await pm._handle_all_away()
+        first = pm._away_task
+        await pm._handle_all_away()
+        assert pm._away_task is first
+        pm.cancel()
+
+    @pytest.mark.asyncio
+    async def test_a_cancelled_away_delay_ends_quietly(self, hass):
+        import asyncio
+
+        pm = _presence(hass, {})
+        pm._set_schedules_paused = AsyncMock()
+        task = hass.async_create_task(pm._away_delay(3600))
+        await asyncio.sleep(0)
+        task.cancel()
+        await asyncio.sleep(0)
+        assert task.done() and not task.cancelled(), "returns instead of propagating"
+        pm._set_schedules_paused.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_sched_hold_on_a_robot_without_local_state_is_skipped(self, hass):
+        pm = _presence(hass, {})
+        pm._entry.runtime_data.roomba = None
+        await pm._set_sched_hold(True)   # must not raise
+
+    def test_cancel_survives_a_failing_unsubscribe(self, hass):
+        pm = _presence(hass, {})
+        pm._cancel_listeners = [MagicMock(side_effect=RuntimeError("gone")), MagicMock()]
+        pm.cancel()
+        assert pm._cancel_listeners == []

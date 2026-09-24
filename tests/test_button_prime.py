@@ -6,6 +6,8 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from types import SimpleNamespace
+from homeassistant.exceptions import HomeAssistantError
 
 
 def _favorite(fav_id="f1", name="Evening", commands=None, deleted=False,
@@ -975,3 +977,176 @@ class TestTheSupersededPadDryButtons:
         source = Path(switch_mod.__file__).read_text(encoding="utf-8")
 
         assert "prime_pad_dry" in source
+
+
+# ── formerly tests/test_coverage_mid_gaps_3.py ──────────────────────────────────
+#
+# Mid-sized coverage gaps, third batch — quality scale, test-coverage.
+#
+# Prime schedules come from the cloud as nested, loosely typed structures.
+# The readers must skip what they cannot read, never guess a day or a time,
+# and never crash the switch that shows them.
+
+BLID = "PRIMEBTN01"
+
+
+def _dock_button(monkeypatch, state=None, *, ready_states=(1,), state_attr="evac_state", base_ok=True):
+    from custom_components.roomba_plus import button_prime as bp
+    from custom_components.roomba_plus.entity import IRobotEntity
+
+    b = bp.PrimeDockButton.__new__(bp.PrimeDockButton)
+    b._config_entry = MagicMock()
+    b._blid = BLID
+    b._live_state = False
+    b._command = SimpleNamespace(key="evacuate", command="evac", ready_states=ready_states,
+                                 state_attr=state_attr, deprecated_by=None)
+    monkeypatch.setattr(IRobotEntity, "available", property(lambda _s: base_ok))
+    monkeypatch.setattr(bp.PrimeDockButton, "_current_state", property(lambda _s: state))
+    return b
+
+
+def _state(*, error=None, cycle=None, evac=None):
+    return SimpleNamespace(dock=SimpleNamespace(error=error, evac_state=evac),
+                           mission=SimpleNamespace(cycle=cycle))
+
+
+class TestDockButtonAvailability:
+    """A dock command is offered only when the dock can carry it out now."""
+
+    def test_unavailable_when_the_entity_itself_is(self, monkeypatch):
+        assert _dock_button(monkeypatch, _state(), base_ok=False).available is False
+
+    def test_no_dock_state_yet_does_not_hide_it(self, monkeypatch):
+        assert _dock_button(monkeypatch, None).available is True
+
+    def test_a_dock_error_hides_it(self, monkeypatch):
+        assert _dock_button(monkeypatch, _state(error=512)).available is False
+
+    @pytest.mark.parametrize("cycle", ["clean", "spot", "dock"])
+    def test_a_running_mission_hides_it(self, monkeypatch, cycle):
+        assert _dock_button(monkeypatch, _state(cycle=cycle)).available is False
+
+    def test_a_non_numeric_dock_state_does_not_hide_it(self, monkeypatch):
+        assert _dock_button(monkeypatch, _state(evac="busy")).available is True
+
+    @pytest.mark.parametrize("evac,erwartet", [(1, True), (4, False)])
+    def test_the_ready_states_decide(self, monkeypatch, evac, erwartet):
+        assert _dock_button(monkeypatch, _state(evac=evac)).available is erwartet
+
+
+class TestDockButtonLifecycle:
+
+    def _bare(self):
+        from custom_components.roomba_plus.button_prime import PrimeDockButton
+
+        b = PrimeDockButton.__new__(PrimeDockButton)
+        b._config_entry = MagicMock()
+        b._command = SimpleNamespace(key="evacuate", command="evac")
+        return b
+
+    def test_the_current_state_is_read_from_the_status_coordinator(self):
+        b = self._bare()
+        b._config_entry.runtime_data.prime_status_coordinator.data = {"ro-currentstate": {}}
+        assert b._current_state is not None
+        b._config_entry.runtime_data.prime_status_coordinator.data = {}
+        assert b._current_state is None
+        b._config_entry.runtime_data.prime_status_coordinator = None
+        assert b._current_state is None
+
+    def test_its_object_id_is_the_command_key(self):
+        assert self._bare().suggested_object_id == "evacuate"
+
+    @pytest.mark.asyncio
+    async def test_it_listens_to_the_status_coordinator(self, monkeypatch):
+        from custom_components.roomba_plus.entity import IRobotEntity
+
+        monkeypatch.setattr(IRobotEntity, "async_added_to_hass", AsyncMock())
+        b = self._bare()
+        b.async_on_remove = MagicMock()
+        await b.async_added_to_hass()
+        b._config_entry.runtime_data.prime_status_coordinator.async_add_listener.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_pressing_without_a_robot_does_nothing(self):
+        b = self._bare()
+        b._config_entry.runtime_data.prime_robot = None
+        with pytest.raises(HomeAssistantError) as exc_info:
+            await b.async_press()
+        assert exc_info.value.translation_key == "robot_not_connected"
+
+
+class TestZoneCleanButton:
+
+    def _button(self, monkeypatch, selected):
+        from homeassistant.helpers import entity_platform as ep
+
+        from custom_components.roomba_plus import button_prime as bp
+
+        b = bp.PrimeZoneCleanButton.__new__(bp.PrimeZoneCleanButton)
+        b._config_entry = MagicMock()
+        b._blid = BLID
+        b.hass = MagicMock()
+        monkeypatch.setattr(bp.PrimeZoneCleanButton, "robot_unique_id", property(lambda _s: "u1"))
+        selector = SimpleNamespace(unique_id="u1_prime_zone_select", selected_segment_id=selected)
+        other = SimpleNamespace(unique_id="u1_something_else")
+        monkeypatch.setattr(ep, "async_get_platforms",
+                            lambda _h, _d: [SimpleNamespace(entities={"a": other, "b": selector})])
+        return b
+
+    @pytest.mark.asyncio
+    async def test_it_cleans_the_selected_room(self, monkeypatch):
+        from custom_components.roomba_plus import room_cleaning
+
+        backend = MagicMock()
+        backend.clean_segments = AsyncMock()
+        monkeypatch.setattr(room_cleaning, "async_get_room_cleaning_backend", lambda *_a: backend)
+        await self._button(monkeypatch, "map1/3").async_press()
+        backend.clean_segments.assert_awaited_once_with(["map1/3"])
+
+    @pytest.mark.asyncio
+    async def test_nothing_selected_is_a_clear_error(self, monkeypatch):
+        from homeassistant.exceptions import ServiceValidationError
+
+        with pytest.raises(ServiceValidationError):
+            await self._button(monkeypatch, None).async_press()
+
+    @pytest.mark.asyncio
+    async def test_no_room_cleaning_support_is_a_clear_error(self, monkeypatch):
+        from homeassistant.exceptions import ServiceValidationError
+
+        from custom_components.roomba_plus import room_cleaning
+
+        monkeypatch.setattr(room_cleaning, "async_get_room_cleaning_backend", lambda *_a: None)
+        with pytest.raises(ServiceValidationError):
+            await self._button(monkeypatch, "map1/3").async_press()
+
+
+class TestFavoritesAndLocate:
+
+    def test_a_favorite_button_names_its_favorite(self):
+        from custom_components.roomba_plus.button_prime import PrimeFavoriteButton
+
+        b = PrimeFavoriteButton.__new__(PrimeFavoriteButton)
+        b._favorite_id = "fav-9"
+        assert b.extra_state_attributes == {"favorite_id": "fav-9"}
+
+    def test_the_locate_button_has_a_stable_object_id(self):
+        from custom_components.roomba_plus.button_prime import PrimeLocateButton
+
+        assert PrimeLocateButton.__new__(PrimeLocateButton).suggested_object_id == "locate"
+
+    @pytest.mark.asyncio
+    async def test_running_a_favorite_without_a_robot_reports_failure(self):
+        from custom_components.roomba_plus.button_prime import async_run_favorite
+
+        entry = SimpleNamespace(runtime_data=SimpleNamespace(prime_robot=None))
+        assert await async_run_favorite(entry, "Kitchen") is False
+
+    @pytest.mark.asyncio
+    async def test_an_unreadable_favorite_list_reports_failure(self):
+        from custom_components.roomba_plus.button_prime import async_run_favorite
+
+        robot = MagicMock()
+        robot.get_favorites = AsyncMock(side_effect=RuntimeError("cloud down"))
+        entry = SimpleNamespace(runtime_data=SimpleNamespace(prime_robot=robot))
+        assert await async_run_favorite(entry, "Kitchen") is False

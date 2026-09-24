@@ -24,6 +24,10 @@ from custom_components.roomba_plus.switch import (
     PrimeCarpetBoostSwitch,
     async_setup_entry,
 )
+from types import SimpleNamespace
+from custom_components.roomba_plus import switch as sw
+import datetime as _dt
+from custom_components.roomba_plus import sensor_helpers as sh
 
 
 def _make(cls, state):
@@ -1132,3 +1136,145 @@ class TestGentleModeAnswersToTwoNames:
         source = inspect.getsource(GentleModeSwitch)
 
         assert source.count("gentle") >= 2
+
+
+# ── formerly tests/test_coverage_mid_gaps_4.py ──────────────────────────────────
+#
+# Coverage gaps, fourth batch — quality scale, test-coverage.
+#
+# switch.py: the Classic setting switches only react to their own key, and
+# the Prime switches read cloud shadows that may be absent. A switch whose
+# source is missing shows unknown, never a guessed on/off.
+
+def _bare(cls, **attrs):
+    e = cls.__new__(cls)
+    e._config_entry = MagicMock()
+    for k, v in attrs.items():
+        setattr(e, k, v)
+    return e
+
+
+def _prime(cls, data=None, robot=None):
+    e = _bare(cls)
+    rt = e._config_entry.runtime_data
+    rt.prime_status_coordinator = None if data is None else MagicMock(data=data)
+    rt.prime_robot = robot
+    e.async_write_ha_state = MagicMock()
+    e.async_on_remove = MagicMock()
+    return e
+
+
+class TestClassicSwitchFilters:
+    """Each Classic setting switch re-renders only when its own key arrives."""
+
+    @pytest.mark.parametrize("cls,key", [
+        (sw.AlwaysFinishSwitch, "binPause"),
+        (sw.ScheduleHoldSwitch, "schedHold"),
+        (sw.ChildLockSwitch, "childLock"),
+        (sw.EcoChargeSwitch, "ecoCharge"),
+    ])
+    def test_only_its_own_key_counts(self, cls, key):
+        e = _bare(cls)
+        assert e.new_state_filter({key: 1}) is True
+        assert e.new_state_filter({"batPct": 90}) is False
+
+    def test_gentle_mode_reads_its_flag(self):
+        e = _bare(sw.GentleModeSwitch, vacuum_state={"gentleMode": True})
+        assert e.is_on is True
+
+
+class TestPrimeSwitchesWithoutData:
+
+    @pytest.mark.parametrize("cls", [sw.PrimeCarpetBoostSwitch, sw.PrimePadDrySwitch])
+    def test_no_coordinator_or_shadow_is_unknown(self, cls):
+        assert _prime(cls).is_on is None
+        assert _prime(cls, data={}).is_on is None
+
+    @pytest.mark.parametrize("cls", [sw.PrimeCarpetBoostSwitch, sw.PrimePadDrySwitch])
+    @pytest.mark.asyncio
+    async def test_they_follow_the_status_coordinator(self, cls, monkeypatch):
+        from custom_components.roomba_plus.entity import IRobotEntity
+
+        monkeypatch.setattr(IRobotEntity, "async_added_to_hass", AsyncMock())
+        e = _prime(cls, data={})
+        await e.async_added_to_hass()
+        e._config_entry.runtime_data.prime_status_coordinator.async_add_listener.assert_called_once()
+
+
+class TestPrimeSettingSwitch:
+
+    def _switch(self, data=None, robot=None):
+        e = _prime(sw.PrimeSettingSwitch, data=data, robot=robot)
+        e.entity_description = SimpleNamespace(model_attr="eco_charge", wire_key="ecoCharge", key="eco")
+        return e
+
+    def test_without_settings_it_is_unknown_and_unavailable(self, monkeypatch):
+        from custom_components.roomba_plus.entity import IRobotEntity
+
+        monkeypatch.setattr(IRobotEntity, "available", property(lambda _s: True))
+        e = self._switch(data={})
+        assert e.is_on is None
+        assert e.available is False
+
+    @pytest.mark.asyncio
+    async def test_turning_writes_the_setting_and_the_state(self):
+        robot = MagicMock()
+        robot.set_setting = AsyncMock()
+        e = self._switch(data={}, robot=robot)
+        await e.async_turn_on()
+        robot.set_setting.assert_awaited_with("ecoCharge", True)
+        await e.async_turn_off()
+        robot.set_setting.assert_awaited_with("ecoCharge", False)
+        assert e._attr_is_on is False
+
+    @pytest.mark.asyncio
+    async def test_without_a_robot_nothing_is_sent(self):
+        e = self._switch(data={}, robot=None)
+        await e._async_set(True)
+        e.async_write_ha_state.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_it_follows_the_status_coordinator(self, monkeypatch):
+        from custom_components.roomba_plus.entity import IRobotEntity
+
+        monkeypatch.setattr(IRobotEntity, "async_added_to_hass", AsyncMock())
+        e = self._switch(data={})
+        await e.async_added_to_hass()
+        e._config_entry.runtime_data.prime_status_coordinator.async_add_listener.assert_called_once()
+
+
+class TestPrimeQuietHoursSwitch:
+
+    @pytest.mark.asyncio
+    async def test_on_and_off_send_the_dnd_commands(self, monkeypatch):
+        sent = []
+        monkeypatch.setattr(sw, "_send_confirmed", AsyncMock(side_effect=lambda r, c: sent.append(c)))
+        e = _prime(sw.PrimeQuietHoursSwitch, robot=MagicMock())
+        e._is_on = None
+        await e.async_turn_on()
+        assert e.is_on is True
+        await e.async_turn_off()
+        assert e.is_on is False
+        assert sent == ["start_dnd", "stop_dnd"]
+
+    @pytest.mark.asyncio
+    async def test_without_a_cloud_connection_it_says_so(self):
+        from homeassistant.exceptions import ServiceValidationError
+
+        e = _prime(sw.PrimeQuietHoursSwitch, robot=None)
+        with pytest.raises(ServiceValidationError):
+            await e.async_turn_on()
+
+    @pytest.mark.parametrize("last,erwartet", [("on", True), ("off", False), ("unavailable", None)])
+    @pytest.mark.asyncio
+    async def test_the_last_state_is_restored_after_a_restart(self, monkeypatch, last, erwartet):
+        """The robot does not report quiet hours back; without restoring,
+        the switch would read unknown after every restart."""
+        from custom_components.roomba_plus.entity import IRobotEntity
+
+        monkeypatch.setattr(IRobotEntity, "async_added_to_hass", AsyncMock())
+        e = _prime(sw.PrimeQuietHoursSwitch)
+        e._is_on = None
+        e.async_get_last_state = AsyncMock(return_value=SimpleNamespace(state=last))
+        await e.async_added_to_hass()
+        assert e.is_on is erwartet

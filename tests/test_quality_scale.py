@@ -6,6 +6,9 @@ mypy had never been installed.
 """
 
 import pytest
+import ast
+import json
+import pathlib
 
 
 class TestTheQualityScaleFileIsTrue:
@@ -433,3 +436,70 @@ class TestTheBadgeMatchesTheManifest:
                         offenders.append(f"{name}: {line.strip()[:70]}")
 
         assert not offenders, "stale tier claims: " + " | ".join(offenders)
+
+
+# ── formerly tests/test_guard_gold_entities.py ──────────────────────────────────
+#
+# Guards for three Gold rules on entities.
+#
+# icon-translations: icons live in icons.json, not in code. One documented
+# exception: the cloud room picker's icon follows the region TYPE of the
+# selected room, and the options are the household's own room names.
+#
+# entity-device-class: a sensor measuring a span of time carries the
+# DURATION device class, so Home Assistant formats it and lets users pick
+# the unit. Seventeen sensors lacked it.
+#
+# entity-translations: every entity translation key exists for its platform
+# in all eight languages.
+
+PKG = pathlib.Path("custom_components/roomba_plus")
+
+
+_ICON_IN_CODE_ALLOWED = {("select.py", "CloudSmartZoneSelect")}
+
+
+_TIME_UNITS = {"UnitOfTime.HOURS", "UnitOfTime.MINUTES", "UnitOfTime.DAYS", "UnitOfTime.SECONDS",
+               "'d'", "'h'", "'min'", "'s'"}
+
+
+def _trees():
+    for f in sorted(PKG.glob("*.py")):
+        yield f.name, ast.parse(f.read_text(encoding="utf-8"))
+
+
+def test_no_icon_is_set_in_code():
+    found = []
+    for fname, tree in _trees():
+        for cls in (n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)):
+            if (fname, cls.name) in _ICON_IN_CODE_ALLOWED:
+                continue
+            for b in cls.body:
+                if isinstance(b, (ast.Assign, ast.AnnAssign)):
+                    tg = b.target if isinstance(b, ast.AnnAssign) else b.targets[0]
+                    if getattr(tg, "id", "") == "_attr_icon" and getattr(b, "value", None) is not None:
+                        found.append(f"{fname}:{b.lineno} {cls.name}._attr_icon")
+                if isinstance(b, ast.FunctionDef) and b.name == "icon":
+                    found.append(f"{fname}:{b.lineno} {cls.name}.icon")
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Assign) and any(ast.unparse(t).endswith("._attr_icon") for t in n.targets):
+                found.append(f"{fname}:{n.lineno} self._attr_icon")
+            if isinstance(n, ast.Call) and any(k.arg == "key" for k in n.keywords) \
+               and any(k.arg == "icon" for k in n.keywords):
+                found.append(f"{fname}:{n.lineno} description icon=")
+    assert not found, found
+
+
+def test_every_time_span_sensor_is_a_duration():
+    missing = []
+    for fname, tree in _trees():
+        for n in ast.walk(tree):
+            if not isinstance(n, ast.Call):
+                continue
+            kw = {k.arg: k.value for k in n.keywords}
+            unit = kw.get("native_unit_of_measurement")
+            if "key" in kw and unit is not None and ast.unparse(unit) in _TIME_UNITS:
+                dc = kw.get("device_class")
+                if dc is None or ast.unparse(dc) != "SensorDeviceClass.DURATION":
+                    missing.append(f"{fname}:{n.lineno} {ast.unparse(kw['key'])}")
+    assert not missing, missing

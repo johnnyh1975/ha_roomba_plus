@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
+import time
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+import pytest
 
 
 class TestSegmentMappingIsRead:
@@ -239,3 +243,37 @@ class TestPrimeRoomFromTheMissionTimeline:
 
         assert "await" not in resolve_source
         assert "_prime_rooms" in resolve_source
+
+
+# ── formerly tests/test_coverage_mid_gaps.py ────────────────────────────────────
+#
+# Mid-sized coverage gaps — quality scale, test-coverage (Silver).
+#
+# Error branches and fallbacks: bad cloud values, missing fields, foreign
+# entities. Each test pins what the branch protects against.
+
+class TestAreaForSegment:
+    """Home Assistant's own vacuum segment-to-area mapping, read from the
+    vacuum entity's registry options."""
+
+    def _run(self, monkeypatch, entities, segment):
+        from custom_components.roomba_plus import area_resolver as ar
+
+        monkeypatch.setattr(ar.er, "async_get", lambda _h: MagicMock())
+        monkeypatch.setattr(ar.er, "async_entries_for_config_entry", lambda _r, _e: entities)
+        return ar.async_area_for_segment(MagicMock(), MagicMock(entry_id="e1"), segment)
+
+    def test_no_segment_is_no_area(self, monkeypatch):
+        assert self._run(monkeypatch, [], "") is None
+
+    def test_the_vacuum_entitys_mapping_gives_the_area(self, monkeypatch):
+        sensor = SimpleNamespace(domain="sensor", options={})
+        vacuum_unmapped = SimpleNamespace(domain="vacuum", options={})
+        vacuum = SimpleNamespace(domain="vacuum",
+                                 options={"vacuum": {"segment_area_mapping": {"3": "kitchen"}}})
+        assert self._run(monkeypatch, [sensor, vacuum_unmapped, vacuum], "3") == "kitchen"
+
+    def test_an_unmapped_segment_is_no_area(self, monkeypatch):
+        vacuum = SimpleNamespace(domain="vacuum",
+                                 options={"vacuum": {"segment_area_mapping": {"3": "kitchen"}}})
+        assert self._run(monkeypatch, [vacuum], "9") is None

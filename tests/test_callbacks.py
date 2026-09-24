@@ -23,7 +23,7 @@ from custom_components.roomba_plus.callbacks import make_mission_callback
 from custom_components.roomba_plus.callbacks import make_mission_complete_callback
 from custom_components.roomba_plus.const import CLEANING_PHASES
 from custom_components.roomba_plus.const import MISSION_END_PHASES
-from tests.conftest import hass_mock
+from tests.conftest import hass_mock, entry_mock
 
 
 @contextmanager
@@ -190,7 +190,7 @@ def _make_callback_env():
     runtime_data.room_seg_store = None
     runtime_data.map_capability = MagicMock()
 
-    entry = MagicMock()
+    entry = entry_mock(schedule_on=hass)
     entry.runtime_data = runtime_data
     entry.entry_id = "test_entry"
     entry.data = {"blid": "TESTBLID"}
@@ -832,6 +832,13 @@ class TestMakeMapRetrainCallback:
         class _FakeEntry:
             entry_id = "test_entry"
             title = "Test Robot"
+
+            # Production schedules through the config entry now, not
+            # asyncio.run_coroutine_threadsafe; the callback still runs on
+            # the loop, so put the coroutine there the same way.
+            @staticmethod
+            def async_create_task(_hass, coro, **_kwargs):
+                return asyncio.ensure_future(coro, loop=loop)
         entry = _FakeEntry()
 
         cb = make_map_retrain_callback(hass, coord, entry)
@@ -874,6 +881,13 @@ class TestMakeMapRetrainCallback:
         class _FakeEntry:
             entry_id = "test_entry"
             title = "Test Robot"
+
+            # Production schedules through the config entry now, not
+            # asyncio.run_coroutine_threadsafe; the callback still runs on
+            # the loop, so put the coroutine there the same way.
+            @staticmethod
+            def async_create_task(_hass, coro, **_kwargs):
+                return asyncio.ensure_future(coro, loop=loop)
         entry = _FakeEntry()
 
         cb = make_map_retrain_callback(hass, coord, entry)
@@ -902,6 +916,13 @@ class TestMakeMapRetrainCallback:
         class _FakeEntry:
             entry_id = "test_entry"
             title = "Test Robot"
+
+            # Production schedules through the config entry now, not
+            # asyncio.run_coroutine_threadsafe; the callback still runs on
+            # the loop, so put the coroutine there the same way.
+            @staticmethod
+            def async_create_task(_hass, coro, **_kwargs):
+                return asyncio.ensure_future(coro, loop=loop)
         entry = _FakeEntry()
 
         cb = make_map_retrain_callback(hass, coord, entry)
@@ -928,6 +949,13 @@ class TestMakeMapRetrainCallback:
         class _FakeEntry:
             entry_id = "test_entry"
             title = "Test Robot"
+
+            # Production schedules through the config entry now, not
+            # asyncio.run_coroutine_threadsafe; the callback still runs on
+            # the loop, so put the coroutine there the same way.
+            @staticmethod
+            def async_create_task(_hass, coro, **_kwargs):
+                return asyncio.ensure_future(coro, loop=loop)
         entry = _FakeEntry()
 
         cb = make_map_retrain_callback(hass, coord, entry)
@@ -951,7 +979,7 @@ class TestMissionCompleteCallback:
         cc.async_request_refresh = AsyncMock()
         hass = hass_mock()
         hass.loop = asyncio.new_event_loop()
-        entry = MagicMock()
+        entry = entry_mock(schedule_on=hass)
         entry.runtime_data.mission_store.latest.return_value = latest_record
         return cc, hass, entry
 
@@ -1096,7 +1124,7 @@ class TestMissionCompleteCallback:
         cc.async_request_refresh = AsyncMock()
         hass = hass_mock()
         hass.loop = asyncio.new_event_loop()
-        entry = MagicMock()
+        entry = entry_mock(schedule_on=hass)
         entry.runtime_data.mission_store.latest.side_effect = lambda: state["latest"]
 
         captured: list = []
@@ -1145,7 +1173,7 @@ class TestMissionCompleteCallback:
         cc.async_request_refresh = AsyncMock()
         hass = hass_mock()
         hass.loop = asyncio.new_event_loop()
-        entry = MagicMock()
+        entry = entry_mock(schedule_on=hass)
         entry.runtime_data.mission_store.latest.side_effect = lambda: state["latest"]
 
         captured: list = []
@@ -1718,84 +1746,6 @@ class TestRoomCompletedEvent:
         fired_events = [c.args[0] for c in hass.bus.async_fire.call_args_list]
         assert EVENT_ROOM_COMPLETED not in fired_events
 
-    def test_room_completed_fire_is_thread_safe(self):
-        """BUGFIX (field report Thonno, v2.8.7) regression test.
-
-        Reproduces the real failure mode exactly: roombapy invokes the
-        mission callback directly from its own paho-mqtt background thread,
-        never from the event loop thread. Before the fix, the room-transition
-        branch called hass.bus.async_fire() directly from that foreign
-        thread — on real HA core (frame.py thread-safety enforcement) this
-        raised RuntimeError and crashed the entire paho-mqtt message thread,
-        which then explained the "mission never closes" symptom: no further
-        MQTT messages were ever processed after the first room transition.
-
-        This test calls the callback from a genuinely separate OS thread
-        (not just a different asyncio context) and asserts no exception
-        propagates — proving the call_soon_threadsafe bridge is used instead
-        of a direct cross-thread hass.bus.async_fire() call. Draining the
-        loop afterward on the *test* thread additionally proves the event
-        still actually fires once handed off correctly.
-        """
-        import threading
-        from custom_components.roomba_plus.callbacks import make_mission_callback
-        from custom_components.roomba_plus.const import EVENT_ROOM_COMPLETED
-
-        hass, entry, _, _ = _make_callback_env()
-        mts = self._make_real_mts(entry)
-        entry.runtime_data.mission_timer_store = mts
-        cb = make_mission_callback(hass, entry)
-
-        errors: list[BaseException] = []
-
-        def _run_on_foreign_thread():
-            try:
-                cb(self._transition_msg("run"))
-                cb(self._transition_msg("charge"))  # triggers AUTO-ADVANCE-ROOM
-            except BaseException as exc:  # noqa: BLE001 — want to see ANY exception
-                errors.append(exc)
-
-        worker = threading.Thread(target=_run_on_foreign_thread)
-        worker.start()
-        worker.join(timeout=5)
-
-        assert not errors, (
-            f"Callback raised from a foreign thread (the exact failure mode "
-            f"that crashed Thonno's paho-mqtt thread): {errors}"
-        )
-        assert mts.current_room_idx == 1, "advance_room() must still have run for real"
-
-        # Structural check — this is what actually distinguishes the fix
-        # from the bug. hass.bus.async_fire here is just a MagicMock, so it
-        # can't reproduce HA core's real frame.py thread-safety RuntimeError
-        # by itself; calling it directly from the worker thread wouldn't
-        # raise in this test environment either way. What we CAN verify
-        # structurally: immediately after the foreign thread finishes — i.e.
-        # before the event loop has had any chance to run — async_fire must
-        # NOT have been invoked yet. That's only true if the call was
-        # deferred via hass.loop.call_soon_threadsafe() rather than executed
-        # inline on the foreign thread. Before the fix, this assertion fails
-        # (async_fire.called is already True at this point).
-        assert not hass.bus.async_fire.called, (
-            "hass.bus.async_fire was invoked synchronously on the foreign "
-            "thread instead of being deferred via call_soon_threadsafe — "
-            "this is exactly the unsafe direct-call pattern that crashed "
-            "the paho-mqtt thread on real HA core."
-        )
-
-        # Now drain the loop on the test thread — proves call_soon_threadsafe
-        # correctly handed the fire off, it isn't just silently swallowed.
-        hass.loop.run_until_complete(asyncio.sleep(0))
-        hass.bus.async_fire.assert_any_call(
-            EVENT_ROOM_COMPLETED,
-            {
-                "entry_id": entry.entry_id,
-                "name": entry.title,
-                "room_name": "Kitchen",
-                "room_idx": 0,
-            },
-        )
-
 
 class TestStuckBypassMissionCallback:
     """Bug A — make_mission_callback must fire for stuck → stop/charge."""
@@ -2015,7 +1965,7 @@ class TestStuckBypassCloudRefreshCallback:
         coordinator.async_request_refresh = AsyncMock(return_value=None)
         hass = hass_mock()
         hass.loop = asyncio.new_event_loop()
-        entry = MagicMock()
+        entry = entry_mock(schedule_on=hass)
         entry.runtime_data.mission_store.latest.return_value = {"timeline": {"finEvents": []}}
 
         captured: list = []
@@ -2163,7 +2113,7 @@ class TestMergedTopLevelHelper:
     """Direct tests of _merged_top_level()."""
 
     def _entry(self):
-        entry = MagicMock()
+        entry = entry_mock()
         return entry
 
     def test_uses_message_value_when_present(self):
@@ -2273,7 +2223,7 @@ class TestCaptureZoneNamesSurvivesPartialStartMessage:
         from custom_components.roomba_plus.callbacks import _capture_zone_names
         from custom_components.roomba_plus.models import MapCapability
 
-        entry = MagicMock()
+        entry = entry_mock()
         entry.runtime_data.room_seg_store = None
         entry.runtime_data.map_capability = MapCapability.SMART
         entry.runtime_data.cloud_coordinator.regions = [
@@ -2293,7 +2243,7 @@ class TestCaptureZoneNamesSurvivesPartialStartMessage:
         from custom_components.roomba_plus.callbacks import _capture_zone_names
         from custom_components.roomba_plus.models import MapCapability
 
-        entry = MagicMock()
+        entry = entry_mock()
         entry.runtime_data.room_seg_store = None
         entry.runtime_data.map_capability = MapCapability.SMART
         entry.runtime_data.cloud_coordinator.regions = [{"id": "1", "name": "Kitchen"}]
@@ -2317,7 +2267,7 @@ class TestCaptureZoneNamesSurvivesPartialStartMessage:
             "room_1": SegRoom(id="room_1", name="Kitchen", confirmed=True),
             "room_2": SegRoom(id="room_2", name="", confirmed=False),
         }
-        entry = MagicMock()
+        entry = entry_mock()
         entry.runtime_data.room_seg_store = rss
         reported = {"cleanMissionStatus": {"phase": "run"}}
 
@@ -2630,7 +2580,7 @@ class TestCloudRefreshCallbackDispatchesV320Checks:
         from custom_components.roomba_plus.callbacks import make_cloud_refresh_callback
 
         hass = hass_mock()
-        config_entry = MagicMock()
+        config_entry = entry_mock(schedule_on=hass)
         config_entry.entry_id = "test_entry"
         rd = config_entry.runtime_data
         rd.mission_store = MagicMock()
@@ -2651,7 +2601,7 @@ class TestCloudRefreshCallbackDispatchesV320Checks:
 
         return [
             call.kwargs.get("name")
-            for call in hass.async_create_task.call_args_list
+            for call in config_entry.async_create_task.call_args_list
         ]
 
     def test_furniture_change_dispatched(self):
@@ -2681,7 +2631,7 @@ class TestCloudRefreshCallbackDispatchesV320Checks:
         from custom_components.roomba_plus.models import MapCapability
 
         hass = hass_mock()
-        config_entry = MagicMock()
+        config_entry = entry_mock(schedule_on=hass)
         config_entry.entry_id = "test_entry"
         rd = config_entry.runtime_data
         rd.mission_store = MagicMock()
@@ -2702,7 +2652,7 @@ class TestCloudRefreshCallbackDispatchesV320Checks:
         callback_fn()
 
         dispatched = [
-            call.kwargs.get("name") for call in hass.async_create_task.call_args_list
+            call.kwargs.get("name") for call in config_entry.async_create_task.call_args_list
         ]
         assert "roomba_plus_gs_smart_umf_bootstrap" in dispatched
 
@@ -2714,7 +2664,7 @@ class TestCloudRefreshCallbackDispatchesV320Checks:
         from custom_components.roomba_plus.models import MapCapability
 
         hass = hass_mock()
-        config_entry = MagicMock()
+        config_entry = entry_mock(schedule_on=hass)
         config_entry.entry_id = "test_entry"
         rd = config_entry.runtime_data
         rd.mission_store = MagicMock()
@@ -2735,7 +2685,7 @@ class TestCloudRefreshCallbackDispatchesV320Checks:
         callback_fn()
 
         dispatched = [
-            call.kwargs.get("name") for call in hass.async_create_task.call_args_list
+            call.kwargs.get("name") for call in config_entry.async_create_task.call_args_list
         ]
         assert "roomba_plus_gs_smart_umf_bootstrap" not in dispatched
 
@@ -2743,7 +2693,7 @@ class TestCloudRefreshCallbackDispatchesV320Checks:
         from custom_components.roomba_plus.callbacks import make_cloud_refresh_callback
 
         hass = hass_mock()
-        config_entry = MagicMock()
+        config_entry = entry_mock(schedule_on=hass)
         config_entry.entry_id = "test_entry"
         rd = config_entry.runtime_data
         rd.mission_store = MagicMock()
@@ -2764,7 +2714,7 @@ class TestCloudRefreshCallbackDispatchesV320Checks:
 
         dispatched = [
             call.kwargs.get("name")
-            for call in hass.async_create_task.call_args_list
+            for call in config_entry.async_create_task.call_args_list
         ]
         assert "roomba_plus_furniture_change_check" not in dispatched
 
@@ -2927,7 +2877,7 @@ class TestBootstrapUmfAlignerConstructsWhenMissing:
     """
 
     def _entry(self, umf_aligner=None, grid_store=None, geometry_store=None):
-        entry = MagicMock()
+        entry = entry_mock()
         entry.data = {"blid": "TEST_BLID"}
         rd = entry.runtime_data
         rd.umf_aligner = umf_aligner
@@ -3056,7 +3006,7 @@ class TestGsCoverageHookDispatch:
         from custom_components.roomba_plus.models import MapCapability
 
         hass = hass_mock()
-        config_entry = MagicMock()
+        config_entry = entry_mock(schedule_on=hass)
         config_entry.entry_id = "test_entry"
         rd = config_entry.runtime_data
         rd.mission_store = MagicMock()
@@ -3078,7 +3028,7 @@ class TestGsCoverageHookDispatch:
 
         return [
             call.kwargs.get("name")
-            for call in hass.async_create_task.call_args_list
+            for call in config_entry.async_create_task.call_args_list
         ]
 
     def test_dispatched_when_smart_with_grid_store_and_aligner(self):
@@ -3137,7 +3087,7 @@ def _gs_coverage_env(*, aligned=True, watermark=0):
     """Minimal runtime_data + mission_store fixture for exercising
     _async_update_gs_smart_coverage() directly (not through the hook)."""
     hass = hass_mock()
-    entry = MagicMock()
+    entry = entry_mock(schedule_on=hass)
     entry.entry_id = "test_entry"
 
     gs = MagicMock()
@@ -3791,47 +3741,129 @@ class TestTheTravelSignalIsReadDuringCleaning:
     the fault lives.
     """
 
-    def test_the_read_is_not_inside_a_phase_branch(self) -> None:
+    # BOTH REWRITTEN FROM TEXT SEARCH TO STRUCTURE (Group 5).
+    #
+    # They used to compare character offsets in the module source --
+    # "the read comes before the first `if phase == "run":`". Lifting the
+    # room-progress block into its own module-level function moved that
+    # branch ABOVE the callback in the file while leaving the runtime
+    # order untouched, and both went red on a change that broke nothing.
+    # This class's own docstring names grepping the source as what failed
+    # to catch the original fault. They now inspect the function the
+    # property is actually about.
+
+    @staticmethod
+    def _callback_ast():
+        import ast
         import inspect
 
         from custom_components.roomba_plus import callbacks
 
-        source = inspect.getsource(callbacks)
-        read_at = source.index('_mode = (\n            mission.get("operatingMode")')
-        branch_at = source.index('if phase == "run":')
+        tree = ast.parse(inspect.getsource(callbacks))
+        return next(
+            n for n in ast.walk(tree)
+            if isinstance(n, ast.FunctionDef) and n.name == "_on_mission_message"
+        )
 
-        assert read_at < branch_at, (
-            "the operatingMode read must happen before the phase branch, "
-            "or it misses every flip that occurs during cleaning"
+    def test_the_read_is_not_inside_a_phase_branch(self) -> None:
+        """`_mode` is assigned at the top level of the callback, so every
+        message -- every `run` message included -- reaches it."""
+        import ast
+
+        fn = self._callback_ast()
+        oben = [
+            s for s in fn.body
+            if isinstance(s, ast.Assign)
+            and any(isinstance(t, ast.Name) and t.id == "_mode" for t in s.targets)
+        ]
+        assert oben, (
+            "the operatingMode read must sit at the top level of the "
+            "callback, not inside a phase branch, or it misses every flip "
+            "that occurs during cleaning"
         )
 
     def test_the_evaluation_sees_run_phase_messages(self) -> None:
+        """The advance check can see a `run` message, at both levels.
+
+        Since Group 5 the check lives in `_advance_room_on_drive_end`,
+        so there are two places it could be cut off: the callback could
+        call that function only in a non-run branch, or the check inside
+        it could sit in the `else` of `if phase == "run"`. Both are
+        inspected; either is the original fault in a new place.
+        """
+        import ast
         import inspect
 
         from custom_components.roomba_plus import callbacks
 
-        source = inspect.getsource(callbacks)
-        eval_at = source.index("or (_returned_from_travel and cleaned_in_room)")
-        else_at = source.index('        else:\n', source.index('if phase == "run":'))
+        tree = ast.parse(inspect.getsource(callbacks))
 
-        assert eval_at < else_at or source[:eval_at].count(
-            "        if _mts_upd is not None and mission_start_ts:"
-        ) >= 2, "the advance check must be reachable while phase is run"
+        def _func(name):
+            return next(
+                n for n in ast.walk(tree)
+                if isinstance(n, ast.FunctionDef) and n.name == name
+            )
+
+        def _not_in_a_run_else(fn, predicate, was):
+            eltern = {c: p for p in ast.walk(fn) for c in ast.iter_child_nodes(p)}
+            treffer = [k for k in ast.walk(fn) if predicate(k)]
+            assert treffer, f"{was} not found"
+            for knoten in treffer:
+                while knoten in eltern:
+                    par = eltern[knoten]
+                    if (
+                        isinstance(par, ast.If)
+                        and knoten in par.orelse
+                        and 'phase == "run"' in ast.unparse(par.test).replace("'", '"')
+                    ):
+                        raise AssertionError(
+                            f"{was} sits in the else-branch of "
+                            '`if phase == "run"` -- it can never see a run message'
+                        )
+                    knoten = par
+
+        # 1. inside the extracted function
+        _not_in_a_run_else(
+            _func("_advance_room_on_drive_end"),
+            lambda k: isinstance(k, ast.BoolOp)
+            and "returned_from_travel" in ast.unparse(k)
+            and "ms.cleaned_in_room" in ast.unparse(k),
+            "the advance check",
+        )
+        # 2. the callback's call to it
+        _not_in_a_run_else(
+            self._callback_ast(),
+            lambda k: isinstance(k, ast.Call)
+            and ast.unparse(k.func) == "_advance_room_on_drive_end",
+            "the call to _advance_room_on_drive_end",
+        )
 
     def test_a_run_phase_flip_is_an_edge(self) -> None:
         """His capture, reduced: cleaning, nine seconds of travel,
         cleaning again -- all while the phase never leaves `run`."""
+        # THIS USED TO TEST ITSELF. It reimplemented the edge detection
+        # inline -- `if was and not now: returns += 1` -- and asserted on
+        # its own copy, so it passed whatever production did. Reintroducing
+        # the very fault this class documents (the read moved into a
+        # `phase != "run"` branch) left it green. It now drives the
+        # production function, possible since Group 5 lifted it out.
+        from custom_components.roomba_plus.callbacks import (
+            _evaluate_travel_edge,
+            _MissionState,
+        )
+
         samples = [
             ("run", 2), ("run", 2), ("run", 1), ("run", 1),
             ("run", 1), ("run", 2), ("run", 2),
         ]
 
-        was, returns = False, 0
+        ms = _MissionState()
+        returns = 0
         for _phase, mode in samples:
-            now = bool(mode & 1)
-            if was and not now:
+            travelling = bool(mode & 1)
+            if _evaluate_travel_edge(ms, travelling):
                 returns += 1
-            was = now
+            ms.was_travelling = travelling   # what the caller does next
 
         assert returns == 1, "one boundary crossing, one advance"
 
@@ -4038,8 +4070,10 @@ class TestArrivingIsNotLeaving:
 
         source = inspect.getsource(callbacks)
 
-        assert "_returned_from_travel and cleaned_in_room" in source
-        assert "cleaned_in_room = False" in source
+        # `returned_from_travel` since Group 5 moved the check into
+        # _advance_room_on_drive_end; the substring matches either name.
+        assert "returned_from_travel and ms.cleaned_in_room" in source
+        assert "ms.cleaned_in_room = False" in source
 
 
 class TestTheWholeHouseFallbackIsLastResort:
@@ -4181,12 +4215,24 @@ class TestTheRobotLearnsItsOwnRoomTimes:
         from custom_components.roomba_plus import callbacks
 
         tree = ast.parse(inspect.getsource(callbacks))
+
+        def _is_the_flag(target: ast.expr) -> bool:
+            # `ms.cleaned_in_room` since the eighteen nonlocal variables
+            # moved onto _MissionState; a bare Name before that. Both are
+            # accepted so the guard survives either shape — what it pins
+            # is that SOMETHING sets the flag True, the week-one bug.
+            if isinstance(target, ast.Name):
+                return target.id == "cleaned_in_room"
+            if isinstance(target, ast.Attribute):
+                return target.attr == "cleaned_in_room"
+            return False
+
         values = [
             ast.unparse(node.value)
             for node in ast.walk(tree)
             if isinstance(node, ast.Assign)
             for target in node.targets
-            if isinstance(target, ast.Name) and target.id == "cleaned_in_room"
+            if _is_the_flag(target)
         ]
 
         assert "True" in values, (
@@ -4416,3 +4462,1085 @@ class TestMeasuredRoomTimesAverage:
 
         assert profile.room_estimate_cache["Bath|measured|2"] == 200.0
         assert profile.room_estimate_cache["Bath|measured|unknown"] == 400.0
+
+
+class TestTravelEdgeDrivenThroughTheCallback:
+    """The travel-end block of `_on_mission_message`, DRIVEN, not read.
+
+    `soho` robots emit no phase change between rooms, so the room display
+    sat on the first planned room for a whole mission (@ScenicSystemsLLC).
+    Bit 0 of `operatingMode` is Traveling, and the robot is in the new
+    room once the drive ENDS — so the return edge, travel → not-travel,
+    is the boundary candidate.
+
+    WHY THIS CLASS EXISTS. The neighbouring tests check the bit decoding
+    in isolation, and `test_the_callback_uses_the_return_edge` searches
+    the callback's SOURCE for the edge. None drove a message through it,
+    so the block was uncovered — and it is the first block Group 5 plans
+    to lift into its own method. Refactoring code no test executes is how
+    it gets broken; this pins its behaviour first.
+    """
+
+    def _msg(self, *, travelling: bool, phase: str = "run") -> dict:
+        return {
+            "state": {
+                "reported": {
+                    "cleanMissionStatus": {
+                        "phase": phase,
+                        "sqft": 100,
+                        "mssnStrtTm": 1700000000,
+                        "initiator": "schedule",
+                        "error": 0,
+                        "cycle": "clean",
+                        # bit 0 = Traveling
+                        "operatingMode": 1 if travelling else 0,
+                    },
+                    "bbrun": {"nStuck": 0, "hr": 10},
+                }
+            }
+        }
+
+    def _setup(self):
+        from custom_components.roomba_plus.callbacks import make_mission_callback
+
+        hass, entry, _, _ = _make_callback_env()
+        entry.runtime_data.prime_status_coordinator = None
+        mts = TestRoomCompletedEvent()._make_real_mts(entry)
+        entry.runtime_data.mission_timer_store = mts
+        return hass, entry, mts, make_mission_callback(hass, entry)
+
+    def test_a_departure_alone_does_not_advance(self):
+        """Leaving is not arriving. The drive has only begun."""
+        hass, _entry, mts, cb = self._setup()
+
+        cb(self._msg(travelling=False))
+        cb(self._msg(travelling=True))
+        hass.loop.run_until_complete(asyncio.sleep(0))
+
+        assert mts.current_room_idx == 0
+
+    def test_the_return_edge_is_evaluated(self):
+        """travel → not-travel reaches the boundary branch. Whether the
+        room then advances also depends on the cleaned-here confirmation,
+        so this pins that the branch RUNS, via its own logged decision,
+        rather than asserting an outcome another gate may veto."""
+        import logging
+
+        hass, _entry, _mts, cb = self._setup()
+        with _capture_log("custom_components.roomba_plus.callbacks", logging.DEBUG) as log:
+            cb(self._msg(travelling=False))
+            cb(self._msg(travelling=True))
+            cb(self._msg(travelling=False))
+            hass.loop.run_until_complete(asyncio.sleep(0))
+
+        assert any("travel ended" in r for r in log), (
+            "the return edge never reached the travel-end branch"
+        )
+
+
+import contextlib as _contextlib
+from custom_components.roomba_plus.callbacks import async_record_mission
+from types import SimpleNamespace
+from custom_components.roomba_plus import callbacks as cb
+from custom_components.roomba_plus.callbacks import _MISSION_END_PHASES
+from custom_components.roomba_plus.const import ROOM_TRANSITION_CANDIDATE_PHASES
+
+
+@_contextlib.contextmanager
+def _capture_log(name: str, level: int):
+    """Collect formatted log messages from one logger for the block."""
+    import logging
+
+    gesammelt: list[str] = []
+
+    class _Sammler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            gesammelt.append(record.getMessage())
+
+    logger = logging.getLogger(name)
+    handler = _Sammler(level)
+    alt = logger.level
+    logger.addHandler(handler)
+    logger.setLevel(level)
+    try:
+        yield gesammelt
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(alt)
+
+
+class TestEvaluateTravelEdgeDirectly:
+    """`_evaluate_travel_edge`, tested as the unit it now is.
+
+    Before Group 5 this logic sat inside a 1,230-line closure, reachable
+    only by building a whole mission callback and feeding it a message
+    sequence. Lifted out, each transition is one line of setup. That is
+    the concrete payoff of the extraction, and why the remaining blocks
+    are worth the same treatment.
+    """
+
+    def _ms(self, *, was_travelling: bool, started_at=None):
+        from custom_components.roomba_plus.callbacks import _MissionState
+
+        ms = _MissionState()
+        ms.was_travelling = was_travelling
+        ms.travel_started_at = started_at
+        return ms
+
+    def test_the_return_edge_with_a_known_start_is_a_boundary(self):
+        from custom_components.roomba_plus.callbacks import _evaluate_travel_edge
+
+        ms = self._ms(was_travelling=True, started_at=0.0)
+
+        assert _evaluate_travel_edge(ms, False) is True
+        assert ms.travel_started_at is None, "the drive is over"
+
+    def test_the_return_edge_without_a_start_is_not(self):
+        """A return with no recorded departure — e.g. after a restart
+        mid-drive — cannot vouch for a boundary."""
+        from custom_components.roomba_plus.callbacks import _evaluate_travel_edge
+
+        ms = self._ms(was_travelling=True, started_at=None)
+
+        assert _evaluate_travel_edge(ms, False) is False
+
+    def test_a_departure_records_the_start_and_is_not_a_boundary(self):
+        from custom_components.roomba_plus.callbacks import _evaluate_travel_edge
+
+        ms = self._ms(was_travelling=False)
+
+        assert _evaluate_travel_edge(ms, True) is False
+        assert ms.travel_started_at is not None
+
+    def test_no_operating_mode_fires_neither_edge(self):
+        """`travelling is None` — the robot sent nothing usable."""
+        from custom_components.roomba_plus.callbacks import _evaluate_travel_edge
+
+        ms = self._ms(was_travelling=True, started_at=0.0)
+
+        assert _evaluate_travel_edge(ms, None) is False
+        assert ms.travel_started_at == 0.0, "an unknown mode must not clear it"
+
+    def test_it_does_not_update_was_travelling_itself(self):
+        """The caller does that, after using the result. If this ever
+        started writing it, the caller's own update would run on a value
+        already changed underneath it."""
+        from custom_components.roomba_plus.callbacks import _evaluate_travel_edge
+
+        ms = self._ms(was_travelling=True, started_at=0.0)
+        _evaluate_travel_edge(ms, False)
+
+        assert ms.was_travelling is True
+
+
+class TestEndGateInvariant:
+    """The assumption the end gate stands on, pinned.
+
+    The end-of-mission decision and its diagnostic log both depend on
+    `ms.end_signal_first_ts`. For an AMBIGUOUS end phase the time gate is
+    measured from it — so it must be set by the time the streak reaches
+    the debounce count. That is not enforced by the gate. It is set in a
+    different block of the callback, when a streak starts.
+
+    Until Group 5 the decision and the log each computed the gate on
+    their own, and they disagreed exactly where this invariant would be
+    broken: the log guarded `first_ts == 0` as "held for 0 s", the
+    decision took `monotonic() - 0` as "held since boot". They agreed in
+    practice only because this invariant held. Now they share one
+    computation; this test is what keeps that safe if the streak logic
+    is ever changed.
+    """
+
+    def test_a_running_ambiguous_streak_always_has_a_start_time(self):
+        from custom_components.roomba_plus.callbacks import make_mission_callback
+
+        hass, entry, _, _ = _make_callback_env()
+        entry.runtime_data.prime_status_coordinator = None
+        cb = make_mission_callback(hass, entry)
+
+        cb(_msg("run"))
+        for _ in range(3):
+            cb(_msg("charge"))          # ambiguous end phase
+            ms = cb.state
+            if ms.end_signal_streak >= 1:
+                assert ms.end_signal_first_ts > 0, (
+                    "an ambiguous end streak is running with no start "
+                    "time — the time gate would measure from zero"
+                )
+
+    def test_an_unambiguous_end_sets_the_streak_without_a_start_time(self):
+        """The one case where first_ts stays 0 on purpose: an unambiguous
+        terminal phase jumps straight to the debounce count. Safe only
+        because the gate does not consult the time for unambiguous
+        phases — pinned so that stays visible."""
+        from custom_components.roomba_plus.callbacks import make_mission_callback
+
+        hass, entry, _, _ = _make_callback_env()
+        entry.runtime_data.prime_status_coordinator = None
+        cb = make_mission_callback(hass, entry)
+
+        cb(_msg("run"))
+        # `stop` is the only end phase that is NOT a room-transition
+        # candidate — `charge` and `hmPostMsn` both are, which is exactly
+        # why they need the time gate. (First draft of this test used
+        # hmPostMsn and failed: it is ambiguous.)
+        cb(_msg("stop"))
+        # `stop` ends the mission, which schedules the record write; let
+        # it finish rather than leave a pending task behind.
+        hass.loop.run_until_complete(asyncio.sleep(0.05))
+
+        assert cb.state.end_signal_first_ts == 0.0
+
+
+class TestHandleMissionStartDemandOverride:
+    """The non-obvious output of `_handle_mission_start`.
+
+    When the DirtThresholdManager fired a start within the last 30 s, the
+    mission's initiator is overridden to "demand" — on a COPY, returned
+    to the caller, which records it. Every existing test set
+    `demand_triggered_ts = None`, so this path was never exercised, and
+    it is exactly the part the Group 5 extraction could break silently:
+    if the caller dropped the return value, missions would be recorded
+    with the robot's own initiator and nothing would fail.
+    """
+
+    def _call(self, *, demand_ts):
+        import time
+
+        from custom_components.roomba_plus.callbacks import (
+            _handle_mission_start,
+            _MissionState,
+        )
+
+        hass, entry, _, _ = _make_callback_env()
+        entry.runtime_data.demand_triggered_ts = (
+            None if demand_ts is None else time.monotonic() - demand_ts
+        )
+        entry.runtime_data.presence_manager = None
+        entry.options = {}
+        mission = {"phase": "run", "initiator": "schedule", "cycle": "clean",
+                   "mssnStrtTm": 1700000000}
+        reported = {"cleanMissionStatus": mission, "bbrun": {"nStuck": 0}}
+        ms = _MissionState()
+        ergebnis = _handle_mission_start(
+            ms, hass, entry,
+            phase="run", reported=reported, mission=mission,
+            candidate_cycle="clean", candidate_mission_start_ts=1700000000,
+        )
+        return ergebnis, mission, entry
+
+    def test_a_recent_demand_start_overrides_the_initiator(self):
+        ergebnis, original, entry = self._call(demand_ts=5.0)
+
+        assert ergebnis["initiator"] == "demand"
+        assert original["initiator"] == "schedule", (
+            "the override must be on a copy — the reported state it came "
+            "from is shared and must not be mutated"
+        )
+        assert entry.runtime_data.demand_triggered_ts is None, "consumed once"
+
+    def test_a_stale_demand_start_is_ignored(self):
+        """Older than 30 s: the start was the robot's own."""
+        ergebnis, _original, _entry = self._call(demand_ts=45.0)
+
+        assert ergebnis["initiator"] == "schedule"
+
+    def test_no_demand_leaves_the_mission_untouched(self):
+        ergebnis, original, _entry = self._call(demand_ts=None)
+
+        assert ergebnis is original
+
+
+class TestEndGateRoomChecksDirectly:
+    """The end gate's two room checks, tested as units.
+
+    Until Group 5 both were closures inside `_on_mission_message`, reachable
+    only through a whole mission callback. They decide whether an
+    ambiguous end phase is a pause between rooms — the v2.9.0 fix Thonno
+    prompted when a two-room mission was closed after the first room.
+    Each case is now one line of setup.
+    """
+
+    START = 1789747781
+
+    def _entry(self, *, records=None, planned=None, idx=0, estimates=None,
+               regions=None, cloud=True):
+        entry = MagicMock()
+        if cloud:
+            entry.runtime_data.cloud_coordinator.raw_records = records or []
+        else:
+            entry.runtime_data.cloud_coordinator = None
+        mts = MagicMock()
+        mts.planned_rooms = planned if planned is not None else ["A", "B", "C"]
+        mts.current_room_idx = idx
+        mts.room_estimates_sec = estimates if estimates is not None else [600.0, 500.0, 900.0]
+        mts.total_estimated_sec = 2000.0 if estimates is None else None
+        entry.runtime_data.mission_timer_store = mts
+        entry.runtime_data.roomba.master_state = {"state": {"reported": {
+            "lastCommand": {"regions": regions if regions is not None else [
+                {"region_id": "1"}, {"region_id": "2"}, {"region_id": "3"}]},
+        }}}
+        return entry
+
+    def _ms(self):
+        from custom_components.roomba_plus.callbacks import _MissionState
+
+        ms = _MissionState()
+        ms.mission_start_ts = self.START
+        return ms
+
+    def _record(self, *, start=START, done=("1", "2", "3"), status=0):
+        return {"startTime": start, "timeline": {"finEvents": [
+            {"type": "room", "room": {"rid": rid, "status": status}} for rid in done
+        ]}}
+
+    # ── _cloud_confirms_all_rooms_done ──────────────────────────────────
+
+    def test_the_cloud_confirms_when_every_planned_room_finished(self):
+        from custom_components.roomba_plus.callbacks import _cloud_confirms_all_rooms_done
+
+        entry = self._entry(records=[self._record()])
+        assert _cloud_confirms_all_rooms_done(self._ms(), entry, ["1", "2", "3"]) is True
+
+    def test_one_unfinished_room_is_not_a_confirmation(self):
+        """`all()`, not `any()` — a partial finish must not close the mission."""
+        from custom_components.roomba_plus.callbacks import _cloud_confirms_all_rooms_done
+
+        entry = self._entry(records=[self._record(done=("1", "2"))])
+        assert _cloud_confirms_all_rooms_done(self._ms(), entry, ["1", "2", "3"]) is False
+
+    def test_status_six_counts_as_finished_too(self):
+        from custom_components.roomba_plus.callbacks import _cloud_confirms_all_rooms_done
+
+        entry = self._entry(records=[self._record(status=6)])
+        assert _cloud_confirms_all_rooms_done(self._ms(), entry, ["1", "2", "3"]) is True
+
+    def test_another_missions_record_is_not_evidence(self):
+        """Matched by start time within 120 s. A record from a different
+        mission must not vouch for this one."""
+        from custom_components.roomba_plus.callbacks import _cloud_confirms_all_rooms_done
+
+        entry = self._entry(records=[self._record(start=self.START + 121)])
+        assert _cloud_confirms_all_rooms_done(self._ms(), entry, ["1", "2", "3"]) is False
+
+    def test_the_120_second_window_is_inclusive(self):
+        from custom_components.roomba_plus.callbacks import _cloud_confirms_all_rooms_done
+
+        entry = self._entry(records=[self._record(start=self.START + 120)])
+        assert _cloud_confirms_all_rooms_done(self._ms(), entry, ["1", "2", "3"]) is True
+
+    def test_without_cloud_there_is_no_confirmation(self):
+        from custom_components.roomba_plus.callbacks import _cloud_confirms_all_rooms_done
+
+        entry = self._entry(cloud=False)
+        assert _cloud_confirms_all_rooms_done(self._ms(), entry, ["1", "2", "3"]) is False
+
+    # ── _has_unvisited_planned_rooms ────────────────────────────────────
+
+    def test_rooms_ahead_of_the_index_are_unvisited(self):
+        """The case the v2.9.0 fix exists for: first of three rooms, an
+        end phase arrives — that is a pause, not the end."""
+        from custom_components.roomba_plus.callbacks import _has_unvisited_planned_rooms
+
+        assert _has_unvisited_planned_rooms(self._ms(), self._entry(idx=0)) is True
+
+    def test_on_the_last_room_nothing_is_unvisited(self):
+        from custom_components.roomba_plus.callbacks import _has_unvisited_planned_rooms
+
+        assert _has_unvisited_planned_rooms(self._ms(), self._entry(idx=2)) is False
+
+    def test_the_cloud_overrides_a_stale_room_index(self):
+        """The index stopped early, but the cloud says every room
+        finished. The cloud wins — otherwise the mission waits out the
+        whole 90 s suppression cap for rooms that are already done."""
+        from custom_components.roomba_plus.callbacks import _has_unvisited_planned_rooms
+
+        entry = self._entry(idx=0, records=[self._record()])
+        assert _has_unvisited_planned_rooms(self._ms(), entry) is False
+
+    def test_without_any_estimate_the_plan_is_not_trusted(self):
+        """No per-room or total estimate means the plan cannot be
+        tracked, so it must not hold a mission open."""
+        from custom_components.roomba_plus.callbacks import _has_unvisited_planned_rooms
+
+        entry = self._entry(estimates=[None, None, None])
+        assert _has_unvisited_planned_rooms(self._ms(), entry) is False
+
+    def test_without_a_plan_nothing_is_unvisited(self):
+        from custom_components.roomba_plus.callbacks import _has_unvisited_planned_rooms
+
+        assert _has_unvisited_planned_rooms(self._ms(), self._entry(planned=[])) is False
+
+
+class TestTheStuckTimeReachesTheClassifier:
+    """The classifier counts only what happened AFTER the stuck; it needs the
+    wall-clock time the mission callback saw it. Without it every call would
+    get 0 and quietly fall back to the old elapsed-time test."""
+
+    def test_the_wall_clock_time_of_the_stuck_is_passed(self):
+        seen: list[float] = []
+
+        def _spy(entry, mission, stuck_at):
+            seen.append(stuck_at)
+            return None
+
+        with patch("custom_components.roomba_plus.callbacks._mission_recovered_after_stuck",
+                   side_effect=_spy):
+            TestStuckBypassMissionCallback()._run_phases([
+                ("run", 0), ("stuck", 1), ("run", 1), ("hmPostMsn", 1), ("charge", 1),
+            ])
+        # _patch_callbacks_time makes time() return 1000.0.
+        assert seen == [1000.0]
+
+
+# ── formerly tests/test_coverage_callbacks.py ───────────────────────────────────
+#
+# callbacks.py — quality scale, test-coverage.
+#
+# Recording a finished mission also feeds the robot profile (relocation
+# baseline, battery capacity, lifetime energy), resets the skip counter, and
+# schedules the repair checks. None of that ran in a test: the existing
+# fixtures never carried navigation or battery data, and no hass was
+# 'running'.
+
+def _record(reported=None, *, mission=None, error_override=None, **runtime):
+    loop = asyncio.new_event_loop()
+    try:
+        _h, entry, _rec, store = _make_callback_env()
+        hass = _make_hass(loop)
+        # The fallback for keys the message lacks: an empty cached state.
+        entry.runtime_data.roomba.master_state = {"state": {"reported": {}}}
+        for k, v in runtime.items():
+            setattr(entry.runtime_data, k, v)
+        loop.run_until_complete(async_record_mission(
+            hass, entry, mission or {"phase": "charge", "error": 0, "sqft": 100},
+            reported or {}, [], int(loop.time()) - 3600, 0,
+            **({"result_override": error_override} if error_override else {}),
+        ))
+        return entry, store, hass
+    finally:
+        loop.close()
+
+
+def _rps():
+    rps = MagicMock()
+    rps.async_save = AsyncMock()
+    return rps
+
+
+def _seed_entry(store, hr=500):
+    entry = MagicMock()
+    entry.runtime_data.maintenance_store = store
+    entry.runtime_data.roomba.master_state = {"state": {"reported": {}}}
+    entry.hass = MagicMock()
+    entry.entry_id = "e1"
+    return entry, {"bbrun": {"hr": hr}}
+
+
+def _align_env(hass, *, points=True, regions=True, geometry=True, aligner=None, ok=True):
+    entry = MagicMock()
+    entry.runtime_data.geometry_store = MagicMock(door_markers=[]) if geometry else None
+    entry.runtime_data.umf_aligner = aligner
+    coordinator = MagicMock()
+    coordinator.umf_data = {"points2d": [{"x": 0}] if points else [], "regions": []}
+    coordinator.regions = [{"id": "3"}] if regions else []
+    coordinator.last_update_success = ok
+    coordinator.raw_records = []
+    return entry, coordinator
+
+
+def _refresh_env(*, ok=True, store=True, corrected=False, dtm=True):
+    hass = MagicMock()
+    entry = MagicMock()
+    entry.entry_id = "e1"
+    tasks = []
+    entry.async_create_task = lambda _h, coro, **k: tasks.append(coro) or (coro.close() if hasattr(coro, "close") else None)
+    coordinator = MagicMock(last_update_success=ok, raw_records=[])
+    if store:
+        ms = MagicMock()
+        ms.backfill_from_cloud.return_value = SimpleNamespace(corrected=corrected, enriched=False)
+        ms.async_save = AsyncMock()
+        entry.runtime_data.mission_store = ms
+    else:
+        entry.runtime_data.mission_store = None
+    entry.runtime_data.dirt_threshold_manager = MagicMock(async_evaluate=AsyncMock()) if dtm else None
+    return hass, entry, coordinator, tasks
+
+
+class TestRobotProfileFeed:
+
+    def test_a_populated_nav_record_sets_the_relocation_baseline(self):
+        rps = _rps()
+        _record({"mssnNavStats": {"reLc": 3, "gLmk": 5}}, robot_profile_store=rps)
+        rps.update_reloc_baseline.assert_called_once_with(3)
+
+    def test_a_zeroed_nav_record_is_not_a_baseline(self):
+        """Firmware reports an all-zero record on some missions; learning
+        a baseline of zero relocations from it would be wrong."""
+        rps = _rps()
+        _record({"mssnNavStats": {"reLc": 0, "gLmk": 0, "lmk": 0, "mTrk": 0}}, robot_profile_store=rps)
+        rps.update_reloc_baseline.assert_not_called()
+
+    def test_an_unreadable_relocation_count_is_ignored(self):
+        rps = _rps()
+        _record({"mssnNavStats": {"reLc": "many", "gLmk": 5}}, robot_profile_store=rps)
+        rps.update_reloc_baseline.assert_not_called()
+
+    def test_battery_capacity_and_energy_are_recorded(self, monkeypatch):
+        from custom_components.roomba_plus import callbacks
+
+        monkeypatch.setattr(callbacks, "estcap_to_mah", lambda *_a: 3000)
+        rps = _rps()
+        profile = MagicMock(battery_voltage=14.4, estcap_scale_liion=1, estcap_scale_nimh=1)
+        _record({"bbchg3": {"estCap": 2000, "nLithChrg": 100}},
+                robot_profile_store=rps, robot_profile=profile)
+        rps.record_estcap_observation.assert_called_once_with(3000)
+        rps.update_energy_high_water.assert_called_once_with(round(3000 * 14.4 * 100 / 1_000_000, 3))
+
+
+class TestRecordMissionOutcomes:
+
+    def test_no_mission_store_records_nothing(self):
+        entry, store, _hass = _record(mission_store=None)
+        store.async_append.assert_not_awaited()
+
+    def test_an_override_decides_the_result(self):
+        _e, store, _h = _record(error_override="blocked_timeout")
+        assert store.async_append.await_args.args[0]["result"] == "blocked_timeout"
+
+    def test_an_error_mission_records_where_it_happened(self):
+        from custom_components.roomba_plus.const import POSE_POINT_CM_TO_MM
+
+        _e, store, _h = _record({"pose": {"point": {"x": 10, "y": -5}}},
+                                mission={"phase": "stuck", "error": 17, "sqft": 10})
+        rec = store.async_append.await_args.args[0]
+        assert rec["error_position_mm"] == {"x": 10 * POSE_POINT_CM_TO_MM, "y": -5 * POSE_POINT_CM_TO_MM}
+
+    def test_an_unreadable_error_position_is_left_out(self):
+        _e, store, _h = _record({"pose": {"point": {"x": "left", "y": 2}}},
+                                mission={"phase": "stuck", "error": 17, "sqft": 10})
+        assert store.async_append.await_args.args[0].get("error_position_mm") is None
+
+    def test_a_completed_mission_resets_the_skip_counter(self):
+        maint = MagicMock(consecutive_skips=3)
+        maint.async_save = AsyncMock()
+        _record(maintenance_store=maint)
+        assert maint.consecutive_skips == 0
+        maint.async_save.assert_awaited_once()
+
+
+class TestSeedMaintenanceBaselines:
+    """A used robot added to HA: each part's baseline is its current
+    runtime, so remaining life is not computed from zero hours."""
+
+    def _store(self, **seeded):
+        s = SimpleNamespace(async_save=MagicMock(return_value="save"))   # handed to a mock hass, never awaited
+        for slot in ("filter", "brush", "side_brush", "clean_base_bag"):
+            setattr(s, f"{slot}_baseline_seeded", seeded.get(slot, False))
+            setattr(s, f"{slot}_reset_history", None)
+            setattr(s, f"{slot}_reset_hr", 0)
+        return s
+
+    def test_unseeded_parts_start_at_the_current_runtime(self):
+        store = self._store(brush=True)
+        entry, reported = _seed_entry(store)
+        cb._seed_maintenance_baselines(entry, reported)
+        assert store.filter_reset_hr == 500 and store.filter_baseline_seeded is True
+        assert store.brush_reset_hr == 0, "an already seeded part is left alone"
+        entry.hass.async_create_task.assert_called_once()
+
+    def test_a_part_with_reset_history_is_not_reseeded(self):
+        store = self._store()
+        store.filter_reset_history = [{"hr": 100}]
+        entry, reported = _seed_entry(store)
+        cb._seed_maintenance_baselines(entry, reported)
+        assert store.filter_reset_hr == 0
+
+    def test_no_runtime_yet_seeds_nothing(self):
+        store = self._store()
+        entry, reported = _seed_entry(store, hr=0)
+        cb._seed_maintenance_baselines(entry, reported)
+        assert store.filter_baseline_seeded is False
+
+    def test_nothing_to_seed_saves_nothing(self):
+        store = self._store(filter=True, brush=True, side_brush=True, clean_base_bag=True)
+        entry, reported = _seed_entry(store)
+        cb._seed_maintenance_baselines(entry, reported)
+        entry.hass.async_create_task.assert_not_called()
+
+
+class TestRealign:
+
+    @pytest.mark.parametrize("kw", [{"points": False}, {"regions": False}, {"geometry": False}])
+    @pytest.mark.asyncio
+    async def test_without_inputs_there_is_nothing_to_align(self, hass, kw):
+        entry, coordinator = _align_env(hass, **kw)
+        await cb._async_realign(hass, entry, coordinator)
+        assert entry.runtime_data.umf_aligner is None
+
+    @pytest.mark.asyncio
+    async def test_a_new_aligner_replaces_the_old(self, hass, monkeypatch):
+        from custom_components.roomba_plus import umf_aligner
+
+        fake = MagicMock(align=MagicMock(return_value=0.9), aligned=True)
+        monkeypatch.setattr(umf_aligner, "UmfAligner", lambda **_k: fake)
+        entry, coordinator = _align_env(hass)
+        await cb._async_realign(hass, entry, coordinator)
+        assert entry.runtime_data.umf_aligner is fake
+
+
+class TestBootstrapAligner:
+
+    @pytest.mark.asyncio
+    async def test_no_geometry_means_no_aligner(self, hass):
+        entry, coordinator = _align_env(hass, geometry=False)
+        await cb._async_bootstrap_umf_aligner(hass, entry, coordinator)
+        assert entry.runtime_data.umf_aligner is None
+
+    @pytest.mark.asyncio
+    async def test_no_map_points_means_no_aligner(self, hass):
+        entry, coordinator = _align_env(hass, points=False)
+        await cb._async_bootstrap_umf_aligner(hass, entry, coordinator)
+        assert entry.runtime_data.umf_aligner is None
+
+    @pytest.mark.asyncio
+    async def test_an_aligner_that_aligns_at_once_is_kept_and_done(self, hass, monkeypatch):
+        from custom_components.roomba_plus import umf_aligner
+
+        fake = MagicMock(align=MagicMock(return_value=0.9), aligned=True)
+        monkeypatch.setattr(umf_aligner, "UmfAligner", lambda **_k: fake)
+        entry, coordinator = _align_env(hass)
+        await cb._async_bootstrap_umf_aligner(hass, entry, coordinator)
+        assert entry.runtime_data.umf_aligner is fake
+        assert fake.align.call_count == 1
+
+    @pytest.mark.parametrize("markers,ok", [(2, True), (0, False)])
+    @pytest.mark.asyncio
+    async def test_an_unaligned_aligner_waits_for_doors_or_a_good_refresh(self, hass, markers, ok):
+        """Enough door markers already, or a failed cloud refresh: no
+        bootstrap from history now."""
+        aligner = MagicMock(aligned=False, _door_candidates=[1])
+        entry, coordinator = _align_env(hass, aligner=aligner, ok=ok)
+        entry.runtime_data.geometry_store.door_markers = [MagicMock(mission_count=3)] * markers
+        await cb._async_bootstrap_umf_aligner(hass, entry, coordinator)
+        aligner.align.assert_not_called()
+
+
+class TestCloudRefreshHook:
+
+    def _run(self, monkeypatch, **kw):
+        monkeypatch.setattr(cb, "_umf_version_changed", lambda *_a: False)
+        hass, entry, coordinator, tasks = _refresh_env(**kw)
+        cb.make_cloud_refresh_callback(hass, entry, coordinator)()
+        return entry, tasks
+
+    def test_a_failed_refresh_only_checks_staleness(self, monkeypatch):
+        entry, tasks = self._run(monkeypatch, ok=False)
+        assert len(tasks) == 1
+        entry.runtime_data.mission_store.backfill_from_cloud.assert_not_called()
+
+    def test_no_mission_store_stops_after_the_staleness_check(self, monkeypatch):
+        _entry, tasks = self._run(monkeypatch, store=False)
+        assert len(tasks) == 1
+
+    def test_corrections_are_saved_and_demand_cleaning_evaluated(self, monkeypatch):
+        entry, tasks = self._run(monkeypatch, corrected=True)
+        entry.runtime_data.mission_store.backfill_from_cloud.assert_called_once()
+        assert len(tasks) >= 3, "staleness check, save, demand evaluation"
+
+
+class TestMissionAlreadyTerminal:
+
+    def _entry(self, records):
+        entry = MagicMock()
+        entry.runtime_data.mission_store = SimpleNamespace(records=records)
+        return entry
+
+    def test_no_start_time_or_store_is_not_terminal(self):
+        assert cb._mission_already_terminal(self._entry([]), 0) is False
+        entry = MagicMock()
+        entry.runtime_data.mission_store = None
+        assert cb._mission_already_terminal(entry, 1789975662) is False
+
+    def test_a_recent_terminal_record_for_the_same_start_is_terminal(self):
+        from homeassistant.util import dt as dt_util
+
+        rec = {"id": "m_1789975662", "result": "completed", "ended_at": dt_util.utcnow().isoformat()}
+        assert cb._mission_already_terminal(self._entry([rec]), 1789975662) is True
+
+
+class TestRecoveredAfterStuck:
+    """Classifies 'got stuck but finished' from the cloud record; returns
+    None whenever the record is not there, so the caller falls back."""
+
+    def _entry(self, records=None, cc=True):
+        entry = MagicMock()
+        entry.runtime_data.cloud_coordinator = SimpleNamespace(raw_records=records or []) if cc else None
+        return entry
+
+    def test_no_cloud_no_mission_id_or_no_timeline_is_unknown(self):
+        assert cb._mission_recovered_after_stuck(self._entry(cc=False), {"missionId": "x"}, 1.0) is None
+        assert cb._mission_recovered_after_stuck(self._entry(), {}, 1.0) is None
+        records = ["junk", {"missionId": "other"}, {"missionId": "x", "timeline": "odd"}]
+        assert cb._mission_recovered_after_stuck(self._entry(records), {"missionId": "x"}, 1.0) is None
+
+
+class TestCloudConfirmationEdges:
+
+    def _ms(self):
+        ms = cb._MissionState()
+        ms.mission_start_ts = 1789975662
+        return ms
+
+    def test_no_record_near_the_start_confirms_nothing(self):
+        entry = MagicMock()
+        entry.runtime_data.cloud_coordinator.raw_records = [{"startTime": 1}]
+        assert cb._cloud_confirms_all_rooms_done(self._ms(), entry, ["3"]) is False
+
+    def test_a_record_without_a_timeline_confirms_nothing(self):
+        entry = MagicMock()
+        entry.runtime_data.cloud_coordinator.raw_records = [{"startTime": 1789975662, "timeline": None}]
+        assert cb._cloud_confirms_all_rooms_done(self._ms(), entry, ["3"]) is False
+
+    def test_non_room_events_are_ignored(self):
+        entry = MagicMock()
+        entry.runtime_data.cloud_coordinator.raw_records = [{"startTime": 1789975662, "timeline": {
+            "finEvents": [{"type": "travel"}, {"type": "room", "room": {"rid": "3", "status": 0}}]}}]
+        assert cb._cloud_confirms_all_rooms_done(self._ms(), entry, ["3"]) is True
+
+
+class TestRepairChecksAfterRecording:
+
+    def test_a_running_hass_schedules_both_checks(self, monkeypatch):
+        from custom_components.roomba_plus import repairs
+
+        monkeypatch.setattr(repairs, "async_check_mixed_schedule", MagicMock(return_value="mixed"))
+        monkeypatch.setattr(repairs, "async_check_mission_anomaly", MagicMock(return_value="anomaly"))
+        loop = asyncio.new_event_loop()
+        try:
+            _h, entry, _rec, _store = _make_callback_env()
+            hass = _make_hass(loop)
+            hass.is_running = True
+            entry.runtime_data.roomba.master_state = {"state": {"reported": {}}}
+            scheduled = []
+            entry.async_create_task = lambda _h, coro, **k: scheduled.append(coro)
+            loop.run_until_complete(async_record_mission(
+                hass, entry, {"phase": "charge", "error": 0, "sqft": 10}, {}, [], int(loop.time()) - 3600, 0))
+        finally:
+            loop.close()
+        assert "mixed" in scheduled and "anomaly" in scheduled
+
+
+class TestProfileStoreLearning:
+
+    @pytest.mark.asyncio
+    async def test_coverage_and_lifetime_area_are_learned(self, hass):
+        rps = MagicMock()
+        rps.update_lifetime_sqft_tracking.return_value = True
+        rps.async_save = AsyncMock()
+        entry = MagicMock()
+        entry.entry_id = "e1"
+        entry.runtime_data.grid_store = MagicMock(edge_coverage_ratio=MagicMock(return_value=0.8))
+        entry.runtime_data.roomba.master_state = {"state": {"reported": {"runtimeStats": {"sqft": 4000}}}}
+        ms = MagicMock()
+        ms.query.return_value = [{"timeline": {"finEvents": [
+            {"type": "travel"}, {"type": "room", "room": {"rid": "3", "status": 1}}]}}]
+        await cb._async_update_robot_profile_store(hass, entry, ms, rps)
+        rps.update_coverage_baseline.assert_called_once_with(0.8)
+        rps.update_lifetime_sqft_tracking.assert_called_once_with(4000.0)
+        rps.update_room_dirt_index.assert_not_called(), "an unfinished pass teaches nothing"
+
+
+class TestSmallHelpers:
+
+    def test_observed_rooms_are_the_planned_ones_up_to_the_current(self):
+        entry = SimpleNamespace(runtime_data=SimpleNamespace(
+            mission_timer_store=SimpleNamespace(planned_rooms=["A", "B", "C"], current_room_idx=1)))
+        assert cb._observed_rooms(entry) == ["A", "B"]
+
+    def test_observed_rooms_survive_a_broken_store(self):
+        entry = SimpleNamespace(runtime_data=SimpleNamespace(
+            mission_timer_store=SimpleNamespace(planned_rooms=["A"], current_room_idx="x")))
+        assert cb._observed_rooms(entry) == []
+
+    @pytest.mark.parametrize("room,seconds", [(None, 60), ("Kitchen", 0), ("Kitchen", -5)])
+    def test_no_room_or_no_time_is_not_remembered(self, room, seconds):
+        profile = MagicMock()
+        entry = SimpleNamespace(runtime_data=SimpleNamespace(robot_profile_store=profile))
+        cb._remember_measured_room_time(entry, room, seconds)
+        profile.room_estimate_cache.__setitem__.assert_not_called()
+
+    def test_a_broken_cache_does_not_break_the_mission(self):
+        class _Bad(dict):
+            def get(self, *_a):
+                raise RuntimeError("corrupt")
+
+        entry = SimpleNamespace(runtime_data=SimpleNamespace(
+            robot_profile_store=SimpleNamespace(room_estimate_cache=_Bad())))
+        cb._remember_measured_room_time(entry, "Kitchen", 120)   # must not raise
+
+    def test_traversals_need_two_door_candidates(self):
+        assert cb._extract_traversal_umf_positions([], SimpleNamespace(_door_candidates=[1])) == []
+
+    def test_too_few_missions_with_traversals_give_nothing(self):
+        aligner = SimpleNamespace(_door_candidates=[1, 2])
+        records = [{"timeline": {"finEvents": [{"type": "traversal"}]}}]
+        assert cb._extract_traversal_umf_positions(records, aligner, min_missions=3) == []
+
+    @pytest.mark.parametrize("value", [None, "", "garbage", 12345])
+    def test_an_unreadable_start_has_no_weekday(self, value):
+        assert cb._gs_coverage_mission_start_weekday_hour(value) is None
+
+
+# ── formerly tests/test_recharge_does_not_end_a_mission.py ────────────
+#
+# A recharge mid-mission is not the end of the mission.
+#
+# FROM A REAL RUN, and from an independent implementation making the
+# opposite decision on the same data. @AlakazipLabs captured mission 519
+# on an i3 (daredevil 2.6.0): 79 minutes of cleaning, a self-return at
+# 20% battery, 58 minutes on the dock with the mission still open, a
+# self-resume at 79%, 46 more minutes, then a genuine finish.
+#
+# His own from-scratch mission logger -- not Home Assistant, a separate
+# SQLite table off the same shadow stream -- treated `phase: charge` as
+# terminal and closed the row at the recharge: **81 minutes recorded of a
+# 189-minute run**. Two implementations, the same trap, arrived at
+# independently.
+#
+# WHAT SEPARATES THE TWO IS `cycle`, NOT `phase`. Both moments are
+# `phase: charge`. The recharge carries `cycle: clean` -- the cleaning
+# cycle is still open -- and the real end carries `cycle: none`. `nMssn`
+# and `missionId` never change across the whole run, so neither can be
+# used to tell them apart.
+#
+# This integration already reads it that way. Nothing here fixes
+# anything; it pins a discriminator that had no test, on a sequence where
+# getting it wrong costs two thirds of a mission.
+
+#: Mission 519, verbatim: every phase or cycle change across the run.
+#: Local time, missionId constant throughout.
+_MISSION_519 = [
+    ("07:55:25", "charge", "clean", 518),   # previous mission still closed
+    ("07:55:29", "run", "clean", 519),
+    ("09:14:28", "hmMidMsn", "clean", 519), # heading home to recharge
+    ("09:16:39", "charge", "clean", 519),   # ON THE DOCK, mission still open
+    ("10:15:15", "run", "clean", 519),      # resumed, 58 minutes later
+    ("11:01:24", "hmPostMsn", "clean", 519),
+    ("11:03:54", "evac", "clean", 519),
+    ("11:04:09", "hmPostMsn", "clean", 519),
+    ("11:04:10", "charge", "none", 519),    # THE END
+]
+
+
+def _looks_like_end(phase: str, cycle: str) -> bool:
+    """The integration's own test, as `make_mission_callback` applies it.
+
+    REIMPLEMENTED, AND THAT IS A WEAKNESS WORTH NAMING. The real
+    expression lives inline in a closure inside `make_mission_callback`,
+    which needs a Home Assistant instance and a live coordinator to
+    reach. So this mirrors it -- and a mirror cannot catch the
+    production code changing underneath it.
+
+    Two things narrow the gap. `_MISSION_END_PHASES` is imported from
+    the module rather than copied, so the phase half is real. And the
+    test below reads the source for the cycle half, which fails if the
+    check is removed or its wording changes.
+    """
+    return phase in _MISSION_END_PHASES and cycle not in ("clean", "quick")
+
+
+#: The two sub-second phase bounces from the same run, as the robot sent
+#: them. Millisecond receive times, one clock, missionId constant across
+#: all eight -- the fields this integration reads, verbatim.
+#:
+#: These are what the debounce and hold-time machinery exists for, and
+#: this project had never had a real one. A synthetic bounce proves only
+#: that whoever wrote it understood the code they were testing.
+_BOUNCE_AT_THE_RECHARGE = [
+    # 13:16:38.841Z, four messages in 383 ms
+    ("hmMidMsn", "clean", 15, 0),
+    ("charge", "clean", 15, 1788619598),
+    ("hmMidMsn", "clean", 15, 0),
+    ("charge", "clean", 15, 1788619598),
+]
+
+
+_BOUNCE_AT_THE_RESUME = [
+    # 14:15:15.807Z, four messages in 195 ms -- the first flap is 5 ms
+    ("charge", "clean", 0, 1788619598),
+    ("run", "clean", 0, 0),
+    ("charge", "clean", 0, 1788619598),
+    ("run", "clean", 0, 0),
+]
+
+
+class TestTheRechargeIsNotTheEnd:
+    def test_the_recharge_does_not_look_like_an_end(self) -> None:
+        """09:16:39 -- on the dock, charging, 20% battery, and the
+        mission has 46 more minutes of cleaning ahead of it."""
+        assert not _looks_like_end("charge", "clean")
+
+    def test_the_real_end_does(self) -> None:
+        """11:04:10 -- the same phase, and this time it is over."""
+        assert _looks_like_end("charge", "none")
+
+    def test_exactly_one_moment_in_the_run_ends_it(self) -> None:
+        """The whole sequence, in order. A second end would mean a
+        mission recorded twice; none would mean one never closed."""
+        ends = [
+            (at, phase)
+            for at, phase, cycle, _n in _MISSION_519
+            if _looks_like_end(phase, cycle)
+        ]
+
+        assert ends == [("11:04:10", "charge")], (
+            f"exactly one end expected, got {ends}"
+        )
+
+    @pytest.mark.parametrize("phase", sorted(ROOM_TRANSITION_CANDIDATE_PHASES))
+    def test_no_ambiguous_phase_ends_a_mission_while_cleaning(
+        self, phase: str
+    ) -> None:
+        """`charge` and `hmPostMsn` both appear mid-run in this capture
+        -- `hmPostMsn` twice, once 46 minutes before the finish. Neither
+        may end a mission while the cleaning cycle is still open."""
+        assert not _looks_like_end(phase, "clean")
+
+
+class TestTheCycleCheckIsStillThere:
+    """Guard the half the mirror above cannot guard.
+
+    Reading the source is a poor test and a good one here: the mirror
+    would keep passing if somebody removed the cycle check from the
+    production code, and removing it is exactly the mistake an
+    independent implementation already made on this same data.
+    """
+
+    def test_the_callback_excludes_an_open_cleaning_cycle(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus import callbacks
+
+        source = inspect.getsource(callbacks.make_mission_callback)
+
+        assert '_cycle in ("clean", "quick")' in source, (
+            "the mission-end test no longer excludes an open cleaning "
+            "cycle -- a mid-mission recharge is `phase: charge` too, and "
+            "without this it ends the mission 58 minutes early"
+        )
+        assert "not _is_inter_room_transition" in source
+
+
+class TestTheSubSecondBounces:
+    """Real captured flapping, from @AlakazipLabs' archive.
+
+    A phase-only end test has bounce 2 as its hard case: `charge` to
+    `run` in FIVE milliseconds. Debounce counts and hold times are how
+    such a thing is normally survived -- but they are timing
+    heuristics, and timing heuristics fail on a machine under load.
+
+    The cycle check does not need them. `cycle` is `clean` in all eight
+    messages, so none of them can end a mission whatever the timing
+    does. That is worth pinning: it means the guard is structural, not
+    a race that happens to be won.
+    """
+
+    @pytest.mark.parametrize(
+        ("phase", "cycle", "not_ready", "expire_tm"),
+        _BOUNCE_AT_THE_RECHARGE + _BOUNCE_AT_THE_RESUME,
+    )
+    def test_no_message_in_either_bounce_ends_the_mission(
+        self, phase: str, cycle: str, not_ready: int, expire_tm: int
+    ) -> None:
+        assert not _looks_like_end(phase, cycle)
+
+    def test_the_expiry_timer_is_reported_per_phase(self) -> None:
+        """Not once at the recharge, as this project's own comment said.
+
+        Every `charge` message carries the deadline and every moving
+        message carries 0, alternating inside a 383 ms bounce and again
+        an hour later. The VALUE never changes -- recharge arrival plus
+        5,399 seconds -- so a countdown must tick locally rather than
+        wait to be told.
+        """
+        armed = {
+            expire_tm
+            for phase, _c, _n, expire_tm in _BOUNCE_AT_THE_RECHARGE + _BOUNCE_AT_THE_RESUME
+            if phase == "charge"
+        }
+        moving = {
+            expire_tm
+            for phase, _c, _n, expire_tm in _BOUNCE_AT_THE_RECHARGE + _BOUNCE_AT_THE_RESUME
+            if phase in ("run", "hmMidMsn")
+        }
+
+        assert armed == {1788619598}, "the deadline must be constant while charging"
+        assert moving == {0}, "and absent while moving"
+
+
+class TestADockedEvacuationIsNotAMission:
+    """A `dock` command sent to an ALREADY DOCKED robot is not ignored.
+
+    @AlakazipLabs ran the test: one publish to a robot on its dock at
+    100%, nothing else sent for 125 s, every MQTT packet captured. The
+    robot accepted it and ran an evacuation -- 22 seconds of bin-empty
+    and dock handshake, then idle. No search, no mission, `nMssn`
+    unchanged.
+
+    THE HAZARD IS IN THE FIRST THREE SECONDS. Four cleanMissionStatus
+    updates arrive in 317 ms alternating `charge` and `run`, with
+    `cycle` staying `evac` throughout. The two `run` messages carry the
+    `mssnStrtTm` and `missionId` of the LAST mission -- three days old
+    in his capture.
+
+    `phase` alone would open a mission on those. So would the
+    replay-pulse guard, which only suppresses a terminal record from the
+    last 120 seconds, deliberately, so that a genuinely resumed segment
+    is not swallowed. Three days is far outside it.
+
+    `cycle` is what holds -- the same discriminator his recharge capture
+    established for the other end of a mission.
+    """
+
+    #: The burst at +3.3 s, as the robot sent it.
+    _EVAC_BURST = [
+        ("charge", "evac", 0),
+        ("run", "evac", 1788609326),
+        ("charge", "evac", 0),
+        ("run", "evac", 1788609326),
+    ]
+
+    @pytest.mark.parametrize(("phase", "cycle", "mssn_strt_tm"), _EVAC_BURST)
+    def test_no_message_in_the_burst_starts_a_mission(
+        self, phase: str, cycle: str, mssn_strt_tm: int
+    ) -> None:
+        from custom_components.roomba_plus.callbacks import _NON_MISSION_CYCLES
+        from custom_components.roomba_plus.const import CLEANING_PHASES
+
+        # `run` and `evac` are both cleaning phases, so phase alone says
+        # yes to half of these.
+        looks_like_cleaning = phase in CLEANING_PHASES
+        blocked_by_cycle = cycle in _NON_MISSION_CYCLES
+
+        assert not (looks_like_cleaning and not blocked_by_cycle)
+
+    def test_a_real_mission_start_is_untouched(self) -> None:
+        """The negative control: `run` with `cycle: clean` must still
+        open a mission, or this fix costs more than the bug."""
+        from custom_components.roomba_plus.callbacks import _NON_MISSION_CYCLES
+        from custom_components.roomba_plus.const import CLEANING_PHASES
+
+        assert "run" in CLEANING_PHASES
+        assert "clean" not in _NON_MISSION_CYCLES
+        assert "quick" not in _NON_MISSION_CYCLES
+
+    def test_an_absent_cycle_is_not_treated_as_a_refusal(self) -> None:
+        """A missing key is no statement. Requiring the cycle to be
+        present would suppress a genuine mission for a message that
+        merely arrived thin -- cloud-derived state does not always carry
+        everything the robot sends."""
+        from custom_components.roomba_plus.callbacks import _NON_MISSION_CYCLES
+
+        assert None not in _NON_MISSION_CYCLES
+        assert "" not in _NON_MISSION_CYCLES

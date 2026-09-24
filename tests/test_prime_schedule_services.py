@@ -15,6 +15,12 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from homeassistant.exceptions import ServiceValidationError
+from custom_components.roomba_plus import prime_schedule_services as pss
+import datetime as dt
+import copy
+import json
+import pathlib
 
 
 def _options(schedule_id="S1", *, name="Regular Schedule", enabled=True,
@@ -537,3 +543,536 @@ class TestASingleDayScheduleMovesWithTheEdit:
 
     def test_no_stored_days_falls_back_to_the_edit(self):
         assert self._days([], 3) == ["wed"]
+
+
+class TestReshapedOptions:
+    """`_reshaped_options` lays the requested changes over a template.
+
+    It serves both create (template = an existing schedule) and update
+    (template = the schedule being changed), so every field is optional
+    and absence must mean "leave alone" rather than "clear". A branch
+    that treats a missing key as an empty value silently wipes a setting
+    the user never mentioned.
+    """
+
+    def _template(self, **kw):
+        from roombapy_prime.models.schedules_dnd import (
+            ScheduleFrequency,
+            ScheduleOptions,
+            ScheduleTime,
+        )
+
+        basis = {
+            "name": "Morning",
+            "enabled": True,
+            "frequency": ScheduleFrequency.WEEKLY,
+            # `day` is a LIST of weekday numbers, not one day.
+            "start": ScheduleTime(day=[1], hour=9, min=30),
+        }
+        basis.update(kw)
+        return ScheduleOptions(**basis)
+
+    def _reshape(self, call_data, template=None):
+        from custom_components.roomba_plus.prime_schedule_services import (
+            _reshaped_options,
+        )
+
+        return _reshaped_options(
+            template or self._template(), call_data, [], MagicMock()
+        )
+
+    def test_an_absent_key_leaves_the_field_alone(self):
+        """The whole contract in one assertion."""
+        result = self._reshape({"name": "Evening"})
+
+        assert result.name == "Evening"
+        assert result.enabled is True
+        assert result.start.hour == 9
+
+    def test_the_name_is_replaced_when_given(self):
+        assert self._reshape({"name": "Evening"}).name == "Evening"
+
+    def test_disabling_is_not_the_same_as_omitting(self):
+        """`enabled: False` must land — a falsy value is still a value."""
+        assert self._reshape({"enabled": False}).enabled is False
+
+    def test_a_time_change_keeps_the_day(self):
+        """`time` arrives as a datetime.time from the service schema,
+        not as a string — voluptuous has already parsed it."""
+        import datetime
+
+        result = self._reshape({"time": datetime.time(7, 15)})
+
+        assert result.start.hour == 7
+        assert result.start.min == 15
+        assert result.start.day == [1]
+
+    def test_a_day_change_keeps_the_time(self):
+        result = self._reshape({"days": ["tue"]})
+
+        assert result.start.hour == 9
+        assert result.start.min == 30
+
+
+class TestDaysForUpdate:
+    """`_days_for_update` decides which weekdays a schedule keeps.
+
+    THREE RULES, AND THEY FIGHT EACH OTHER. An explicit recurrence wins.
+    A multi-day schedule keeps its days, because editing one occurrence
+    of a Mon/Wed/Fri clean must not silently drop the other two. But a
+    SINGLE-day schedule moves with the edit — @chairstacker reported
+    twice (#71) that he still could not change a weekday, because the
+    preservation rule that is right for three days is wrong for one.
+    """
+
+    def _days(self, existing, weekday, explicit=None):
+        from custom_components.roomba_plus.prime_schedule_services import (
+            _days_for_update,
+        )
+
+        return _days_for_update(existing, weekday, explicit)
+
+    def test_an_explicit_recurrence_wins(self):
+        """`explicit` carries weekday NUMBERS — _WEEKDAY_TO_WIRE maps
+        numbers to wire names, not the other way round."""
+        assert self._days([1, 3, 5], 2, [6]) == self._days([], 5, [6])
+
+    def test_a_multi_day_schedule_keeps_its_days(self):
+        """Moving Wednesday's clean must not cancel Monday's."""
+        result = self._days([1, 3, 5], 2)
+        assert len(result) == 3
+
+    def test_a_single_day_schedule_moves_with_the_edit(self):
+        """@chairstacker's case. The rule above, applied here, is what
+        made a weekday change impossible."""
+        result = self._days([1], 4)
+        assert len(result) == 1
+        assert result != self._days([1], 1)
+
+    def test_a_schedule_with_no_days_takes_the_edited_weekday(self):
+        """What a brand-new entry looks like."""
+        assert len(self._days([], 3)) == 1
+
+
+class TestResolveRooms:
+    """`_resolve_rooms` turns what a user typed into region entries.
+
+    Names resolve through the coordinator's own `room_names` map — the
+    same source the schedule switches are labelled from, so whatever a
+    label shows is accepted here. Raw region ids pass through for rooms
+    the map has not named.
+
+    AN UNKNOWN NAME MUST RAISE. Dropping it silently would schedule a
+    clean of the rooms it did recognise, and the user would believe the
+    one they cared about was included.
+    """
+
+    def _entry(self, room_names=None):
+        entry = MagicMock()
+        coordinator = MagicMock()
+        coordinator.room_names = room_names or {}
+        entry.runtime_data.prime_schedule_coordinator = coordinator
+        return entry
+
+    def _resolve(self, rooms, *, room_names=None, containers=None):
+        from custom_components.roomba_plus.prime_schedule_services import (
+            _resolve_rooms,
+        )
+
+        return _resolve_rooms(
+            self._entry(room_names), rooms, containers or []
+        )
+
+    def test_a_known_name_resolves_to_its_region(self):
+        result = self._resolve(["Kitchen"], room_names={"3": "Kitchen"})
+        assert result and str(result[0].get("region_id")) == "3"
+
+    def test_the_match_ignores_case_and_padding(self):
+        """The label a user reads may not be what they type."""
+        result = self._resolve(["  kitchen "], room_names={"3": "Kitchen"})
+        assert result and str(result[0].get("region_id")) == "3"
+
+    def test_a_raw_region_id_passes_through(self):
+        """Rooms the map has never named are addressable by number."""
+        result = self._resolve(["7"], room_names={})
+        assert result and str(result[0].get("region_id")) == "7"
+
+    def test_an_unknown_name_raises_rather_than_being_dropped(self):
+        from homeassistant.exceptions import ServiceValidationError
+
+        with pytest.raises(ServiceValidationError):
+            self._resolve(["Conservatory"], room_names={"3": "Kitchen"})
+
+
+# ── formerly tests/test_coverage_prime_schedule_services.py ─────────────────────
+#
+# prime_schedule_services.py — quality scale, test-coverage.
+#
+# Creating a Prime schedule from the calendar derives from an existing
+# schedule, because the API needs full options; with none to derive from
+# there is a clear message. Deleting the last schedule of a container
+# deletes the container instead of writing an empty list. Real parsed
+# schedules throughout (tests.test_prime_schedule_services._options).
+
+def _entry(containers):
+    robot = MagicMock()
+    robot.create_schedules = AsyncMock()
+    robot.update_schedules = AsyncMock()
+    robot.delete_schedule = AsyncMock()
+    entry = MagicMock()
+    entry.entry_id = "e1"
+    entry.runtime_data = SimpleNamespace(prime_robot=robot, prime_household_id="h1",
+                                         prime_room_names={"11": "Kitchen", "13": "Hall"},
+                                         prime_schedule_coordinator=None)
+    return entry, robot
+
+
+@pytest.fixture(autouse=False)
+def _io(monkeypatch):
+    monkeypatch.setattr(pss, "_refresh", AsyncMock())
+
+
+def _containers(monkeypatch, containers):
+    monkeypatch.setattr(pss, "_read_containers_or_error", AsyncMock(return_value=containers))
+
+
+def _call_m(**data):
+    return SimpleNamespace(data={"entity_id": "switch.robbie_schedule", **data})
+
+
+def _wire(monkeypatch, containers_seq):
+    entry, robot = _entry(None)
+    entry.runtime_data.blid = "BLID"
+    monkeypatch.setattr(pss, "_prime_entry_for", lambda _h, _e: (entry, SimpleNamespace()))
+    monkeypatch.setattr(pss, "_schedule_id_from", lambda _e, _b: "S1")
+    reads = iter(containers_seq)
+    monkeypatch.setattr(pss, "_read_containers_or_error", AsyncMock(side_effect=lambda _e: next(reads)))
+    return entry, robot
+
+
+@pytest.mark.usefixtures('_io')
+class TestCreateFromCalendar:
+
+    @pytest.mark.asyncio
+    async def test_a_new_schedule_is_derived_from_an_existing_one(self, hass, monkeypatch):
+        _containers(monkeypatch, [("c1", [_options("S1")])])
+        entry, robot = _entry(None)
+        await pss.async_create_schedule_from_calendar(
+            hass, entry, name="Morning", weekday=1, hour=7, minute=30,
+            frequency="WEEKLY", room_ids=["11"], note=None)
+        household, options = robot.create_schedules.await_args.args
+        assert household == "h1" and len(options) == 1
+        assert options[0].name == "Morning"
+
+    @pytest.mark.asyncio
+    async def test_without_a_name_it_gets_one_from_its_time(self, hass, monkeypatch):
+        _containers(monkeypatch, [("c1", [_options("S1")])])
+        entry, robot = _entry(None)
+        await pss.async_create_schedule_from_calendar(
+            hass, entry, name=None, weekday=1, hour=7, minute=5, frequency="WEEKLY", room_ids=None, note=None)
+        assert robot.create_schedules.await_args.args[1][0].name == "HA 07:05"
+
+    @pytest.mark.asyncio
+    async def test_no_schedule_to_derive_from_is_a_clear_error(self, hass, monkeypatch):
+        _containers(monkeypatch, [])
+        entry, robot = _entry(None)
+        with pytest.raises(ServiceValidationError, match="no existing schedule"):
+            await pss.async_create_schedule_from_calendar(
+                hass, entry, name="x", weekday=1, hour=7, minute=0, frequency="WEEKLY", room_ids=None, note=None)
+        robot.create_schedules.assert_not_awaited()
+
+
+@pytest.mark.usefixtures('_io')
+class TestDeleteById:
+
+    @pytest.mark.asyncio
+    async def test_the_last_schedule_of_a_container_deletes_the_container(self, hass, monkeypatch):
+        _containers(monkeypatch, [("c1", [_options("S1")])])
+        entry, robot = _entry(None)
+        await pss.async_delete_schedule_by_id(hass, entry, "S1")
+        robot.delete_schedule.assert_awaited_once_with("h1", "c1")
+        robot.update_schedules.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_other_schedules_in_the_container_are_kept(self, hass, monkeypatch):
+        _containers(monkeypatch, [("c1", [_options("S1"), _options("S2")])])
+        entry, robot = _entry(None)
+        await pss.async_delete_schedule_by_id(hass, entry, "S1")
+        _h, cid, remaining = robot.update_schedules.await_args.args
+        assert cid == "c1" and [s.schedule_id for s in remaining] == ["S2"]
+
+    @pytest.mark.asyncio
+    async def test_a_schedule_already_gone_is_a_clear_error(self, hass, monkeypatch):
+        _containers(monkeypatch, [("c1", [_options("S1")])])
+        entry, robot = _entry(None)
+        with pytest.raises(ServiceValidationError, match="no longer exists"):
+            await pss.async_delete_schedule_by_id(hass, entry, "S9")
+        robot.delete_schedule.assert_not_awaited()
+
+
+@pytest.mark.usefixtures('_io')
+class TestPrimeEntryFor:
+
+    def _hass(self, reg_entry, config_entry):
+        from homeassistant.helpers import entity_registry as er
+
+        hass = MagicMock()
+        hass.config_entries.async_get_entry.return_value = config_entry
+        return hass, reg_entry
+
+    @pytest.mark.parametrize("case", ["unknown", "foreign", "classic"])
+    def test_only_a_prime_robot_is_accepted(self, monkeypatch, case):
+        from homeassistant.helpers import entity_registry as er
+
+        reg_entry = None if case == "unknown" else SimpleNamespace(config_entry_id="e1")
+        cfg = SimpleNamespace(domain="hue" if case == "foreign" else pss.DOMAIN,
+                              runtime_data=SimpleNamespace(prime_robot=None, prime_household_id=None))
+        monkeypatch.setattr(er, "async_get", lambda _h: MagicMock(async_get=lambda _e: reg_entry))
+        hass = MagicMock()
+        hass.config_entries.async_get_entry.return_value = cfg
+        with pytest.raises(ServiceValidationError):
+            pss._prime_entry_for(hass, "vacuum.robbie")
+
+
+@pytest.mark.usefixtures('_io')
+class TestCreateService:
+
+    @pytest.mark.asyncio
+    async def test_it_returns_the_new_id_and_names_it_by_time(self, hass, monkeypatch):
+        entry, robot = _wire(monkeypatch, [[("c1", [_options("S1")])]])
+        robot.create_schedules = AsyncMock(return_value={"household_schedule_id": "c9"})
+        result = await pss._async_create(hass, _call_m(days=["mon"], time=dt.time(8, 15)))
+        assert result == {"household_schedule_id": "c9"}
+        assert robot.create_schedules.await_args.args[1][0].name == "HA 08:15"
+
+    @pytest.mark.asyncio
+    async def test_no_template_is_a_clear_error(self, hass, monkeypatch):
+        _wire(monkeypatch, [[]])
+        with pytest.raises(ServiceValidationError, match="no existing schedule"):
+            await pss._async_create(hass, _call_m(days=["mon"], time=dt.time(8, 0)))
+
+
+@pytest.mark.usefixtures('_io')
+class TestUpdateService:
+
+    @pytest.mark.asyncio
+    async def test_only_the_target_schedule_changes(self, hass, monkeypatch):
+        both = [("c1", [_options("S1"), _options("S2", name="Evening")])]
+        entry, robot = _wire(monkeypatch, [both, both])
+        result = await pss._async_update(hass, _call_m(name="Renamed"))
+        assert result == {"updated": "S1"}
+        _h, cid, written = robot.update_schedules.await_args.args
+        names = {s.schedule_id: s.options.name for s in written}
+        assert names == {"S1": "Renamed", "S2": "Evening"}
+
+    @pytest.mark.asyncio
+    async def test_a_schedule_gone_before_the_first_read(self, hass, monkeypatch):
+        _wire(monkeypatch, [[("c1", [_options("S2")])]])
+        with pytest.raises(ServiceValidationError, match="no longer exists"):
+            await pss._async_update(hass, _call_m(name="x"))
+
+    @pytest.mark.asyncio
+    async def test_a_schedule_that_vanished_between_reads_is_not_overwritten(self, hass, monkeypatch):
+        """Another client deleted it while we held the old list: writing
+        that list back would resurrect or clobber schedules."""
+        entry, robot = _wire(monkeypatch, [[("c1", [_options("S1")])], [("c1", [_options("S2")])]])
+        with pytest.raises(ServiceValidationError, match="vanished"):
+            await pss._async_update(hass, _call_m(name="x"))
+        robot.update_schedules.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_container_gone_between_reads(self, hass, monkeypatch):
+        entry, robot = _wire(monkeypatch, [[("c1", [_options("S1")])], [("c2", [_options("S1")])]])
+        with pytest.raises(ServiceValidationError, match="not found"):
+            await pss._async_update(hass, _call_m(name="x"))
+        robot.update_schedules.assert_not_awaited()
+
+
+@pytest.mark.usefixtures('_io')
+class TestCommandShaping:
+
+    def _cmds(self):
+        return [{"command": {"regions": [{"region_id": "11", "params": {}}]}},
+                {"regions": [{"region_id": "13"}]},      # flat form
+                "junk"]
+
+    def test_regions_are_replaced_on_a_copy(self):
+        original = self._cmds()
+        out = pss._set_regions(original, [{"region_id": "99"}])
+        assert [c.get("command", c)["regions"][0]["region_id"] for c in out] == ["99", "99"]
+        assert original[0]["command"]["regions"][0]["region_id"] == "11", "the template is untouched"
+        assert len(out) == 2, "what is not a command is dropped"
+
+    def test_wetness_is_set_on_every_region_of_a_copy(self):
+        original = self._cmds()
+        out = pss._apply_wetness(original, 3)
+        plates = [r["params"]["padWetness"]["padPlate"] for c in out for r in pss._regions_of(c)]
+        assert plates == [3, 3]
+        assert "padWetness" not in original[0]["command"]["regions"][0]["params"]
+
+
+@pytest.mark.usefixtures('_io')
+class TestResolveRoomsCoverage:
+
+    def _entry(self):
+        entry = MagicMock()
+        entry.runtime_data.prime_schedule_coordinator = SimpleNamespace(
+            room_names={"11": "Kitchen", "13": "Hall"})
+        return entry
+
+    def test_rooms_by_name_ignoring_case_and_by_id(self):
+        containers = [("c1", [_options("S1", regions=("11", "13"))])]
+        out = pss._resolve_rooms(self._entry(), [" kitchen ", "13"], containers)
+        assert [r["region_id"] for r in out] == ["11", "13"]
+
+    def test_an_unknown_room_is_a_clear_error(self):
+        containers = [("c1", [_options("S1", regions=("11",))])]
+        with pytest.raises(ServiceValidationError):
+            pss._resolve_rooms(self._entry(), ["Attic"], containers)
+
+
+@pytest.mark.usefixtures('_io')
+class TestOneTemplatePath:
+
+    @pytest.mark.asyncio
+    async def test_an_empty_name_gets_the_default_like_a_missing_one(self, hass, monkeypatch):
+        """The action and the calendar shared their template logic as two
+        copies, with different ideas of a missing name. One path now."""
+        entry, robot = _wire(monkeypatch, [[("c1", [_options("S1")])]])
+        robot.create_schedules = AsyncMock(return_value={"household_schedule_id": "c9"})
+        await pss._async_create(hass, _call_m(days=["mon"], time=dt.time(9, 40), name=""))
+        assert robot.create_schedules.await_args.args[1][0].name == "HA 09:40"
+
+
+# ── formerly tests/test_schedule_create_shape.py ──────────────────────
+#
+# The confirmed shape of a schedule-create payload, pinned.
+#
+# WHERE IT COMES FROM. @utkjmitch created a schedule through the library,
+# read it back and deleted it -- three full cycles on a real account
+# (issue #49). This fixture is what crossed the wire, with ids redacted
+# and nothing else altered.
+#
+# WHY IT IS PINNED RATHER THAN DESCRIBED. Getting this shape wrong cost
+# four field rounds against an HTTP 500 with no field named: `initiator`
+# was ruled out, `is_smart_clean_fav` was ruled out, `created_time` was
+# dropped, and the actual cause turned out to be a missing `options`
+# level. A payload that once worked is worth more than any description of
+# one.
+#
+# WHAT IT PROVES BEYOND THE ENVELOPE. Per-region `padWetness` is stored,
+# which was open: this server accepts-and-ignores elsewhere (`schedHold`),
+# so a 200 proves nothing on its own. He wrote 1 where the global setting
+# is 3 and the stored per-region value was 2 -- a value distinctive enough
+# that the read-back cannot be confused with what was already there. That
+# is the method this project asks for and it was followed without being
+# asked.
+
+_FIXTURE = pathlib.Path(__file__).parent / "fixtures" / "schedule_create_confirmed.json"
+
+
+def _payload() -> dict:
+    return json.loads(_FIXTURE.read_text())
+
+
+class TestOurModelRoundTripsTheConfirmedPayload:
+    def test_nothing_is_lost_or_added(self):
+        """The one property that matters for building a create service:
+        what we parse and re-serialise has to equal what the server
+        accepted."""
+        from roombapy_prime.models.schedules_dnd import ScheduleOptions
+
+        sent = _payload()["sent"]
+        assert ScheduleOptions.from_json(sent).to_json() == sent
+
+    def test_the_wrapper_key_and_the_verb_share_a_name(self):
+        """A trap worth pinning. `commands` entries arrive wrapped as
+        `{"command": {...}}`, and the object inside ALSO has a `command`
+        key -- holding the verb `"start"`.
+
+        So after unwrapping, `commands[0]["command"]` still exists and is
+        a string. Anything deciding "is this wrapped?" has to check the
+        TYPE, not the presence of the key. `_schedule_region_ids` reads
+        the wrapper form and the unwrapped form for exactly this reason,
+        and got it wrong the first time -- room labels silently fell back
+        to bare times for a whole release.
+        """
+        from roombapy_prime.models.schedules_dnd import ScheduleOptions
+
+        options = ScheduleOptions.from_json(_payload()["sent"])
+        inner = options.commands[0]
+
+        assert inner["command"] == "start"
+        assert isinstance(options.to_json()["commands"][0]["command"], dict)
+
+
+class TestWhatTheServerSuppliesItself:
+    def test_the_fields_we_must_not_send(self):
+        """Each of these was once suspected of causing the 500.
+        `created_time` really is server-assigned -- the response carried
+        a fresh stamp, not the copied one."""
+        assert set(_payload()["server_added"]) == {
+            "created_time", "is_smart_clean_fav", "schedule_id"
+        }
+
+    def test_the_schedule_id_is_derived_from_the_container(self):
+        """Third independent confirmation: container id plus a
+        four-character suffix."""
+        data = _payload()
+
+        assert data["schedule_id_returned"].startswith(data["container_id"] + "_")
+
+
+class TestPerRegionWetnessIsStorable:
+    """Open until this run. The AutoWash work established that regions
+    override the global setting, but not whether a per-region write
+    sticks -- and this server accepts-and-ignores in at least one other
+    place.
+    """
+
+    def _regions(self) -> list[dict]:
+        return _payload()["sent"]["commands"][0]["command"]["regions"]
+
+    def test_every_region_carries_its_own_wetness(self):
+        regions = self._regions()
+
+        assert len(regions) == 5
+        for region in regions:
+            assert region["params"]["padWetness"] == {"padPlate": 1}
+
+    def test_the_value_was_chosen_to_be_distinguishable(self):
+        """1 against a global of 3 and a stored per-region 2. A round
+        number matching what was already there would have proved
+        nothing."""
+        assert {r["params"]["padWetness"]["padPlate"] for r in self._regions()} == {1}
+
+    def test_the_region_parameter_set(self):
+        """Four keys, and this is the full confirmed set -- anything a
+        service offers beyond them would be invented."""
+        for region in self._regions():
+            assert set(region["params"]) == {
+                "operatingMode", "suctionLevel", "twoPass", "padWetness"
+            }
+
+
+class TestTheCommandLevelFields:
+    def _command(self) -> dict:
+        return _payload()["sent"]["commands"][0]["command"]
+
+    def test_only_routine_modified_is_passed_as_a_command_param(self):
+        """Matches the app's own `onlyUserModifiableParams()`, which
+        keeps exactly this one key. Everything else about the job lives
+        on the regions."""
+        assert self._command()["params"] == {"routine_modified": True}
+
+    def test_the_map_is_named_twice_and_both_are_needed(self):
+        command = self._command()
+
+        assert command["p2map_id"]
+        assert command["user_p2mapv_id"]
+
+    def test_select_all_is_false_when_regions_are_listed(self):
+        command = self._command()
+
+        assert command["select_all"] is False
+        assert command["regions"]

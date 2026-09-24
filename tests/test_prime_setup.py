@@ -495,11 +495,15 @@ class TestNothingWasFetchingTheTimeEstimates:
         #       feature-flag combinations from before VacuumEntityFeature.
         #   _AUTO_CONFIRM_CONFIDENCE        threshold for a path not
         #       currently taken.
+        #   CONFIG_SCHEMA                   read BY NAME by Home Assistant's
+        #       loader, never by our code — required once an integration
+        #       defines async_setup (quality scale: action-setup).
         #
         # CYCLE_LABELS IS DELIBERATELY NOT LISTED. It is the one this
         # guard was written for, and it stays visible until something
         # reads it.
         known = {
+            "__init__.py:CONFIG_SCHEMA",
             "const.py:CONF_CERT",
             "const.py:DEFAULT_CERT",
             "const.py:ROOMBA_CLEAN_WIDTH_MM",

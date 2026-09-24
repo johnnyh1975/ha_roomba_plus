@@ -268,7 +268,13 @@ class TestSensorsPreferCloud:
         entry.runtime_data.maintenance_store = store
         sensor._config_entry = entry
         sensor._attr_run_stats = run_stats or {}
-        type(sensor).run_stats = property(lambda s: run_stats or {})
+        # A PER-INSTANCE subclass, not `type(sensor).run_stats = ...`: that
+        # replaced RoombaSensor.run_stats for every test that ran after this
+        # one, which then read hr=30 from here instead of their own state.
+        sensor.__class__ = type(
+            "_RunStatsSensor", (type(sensor),),
+            {"run_stats": property(lambda s: run_stats or {})},
+        )
         return sensor
 
     def test_filter_sensor_reports_the_cloud_hours(self):

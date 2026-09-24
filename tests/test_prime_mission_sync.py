@@ -177,7 +177,8 @@ class TestReconciliation:
             return_value=list(history)
         )
         store = MagicMock()
-        store.query = MagicMock(return_value=[{"id": i} for i in existing])
+        # Known ids come from store.records now, not a date query.
+        store.records = [{"id": i} for i in existing]
         store.async_append = AsyncMock()
         entry.runtime_data.mission_store = store
         return entry, store
@@ -941,18 +942,36 @@ class TestQueryIsCalledWithItsRequiredArgument:
 
             assert not re.search(r"\.query\(\s*\)", code), path.name
 
-    def test_the_sync_uses_a_window_wide_enough_to_dedupe(self):
-        """A narrow window would let a mission older than the window be
-        re-added on every run -- the duplicate check would stop seeing
-        it."""
-        import inspect
+    @pytest.mark.asyncio
+    async def test_every_stored_record_counts_as_known_however_old(self):
+        """Replaces a test that grepped the source for `days=3650`.
 
-        from custom_components.roomba_plus import prime_mission_sync
+        Its concern was right -- a mission missing from the known set is
+        re-added on every run -- but it only thought of the DATE side of
+        the filter. `store.query()` also skips any record without a
+        parseable `started_at`, and that is what re-added @1lyra's
+        mission every hour while this test stayed green. Known ids now
+        come from every stored record, so neither age nor a missing
+        start can hide one.
+        """
+        from unittest.mock import AsyncMock as _AsyncMock
 
-        source = inspect.getsource(prime_mission_sync.async_sync_prime_missions)
-        source += inspect.getsource(prime_mission_sync._async_sync_locked)
+        from custom_components.roomba_plus import prime_mission_sync as pms
+        from custom_components.roomba_plus.mission_store import MissionStore
 
-        assert "days=3650" in source
+        alt = datetime(2012, 1, 1, tzinfo=timezone.utc)
+        store = MissionStore()
+        store._records.append({"id": "p_old", "started_at": pms._as_iso(alt),
+                               "ended_at": pms._as_iso(alt)})
+        store.async_save = _AsyncMock()
+        entry = MagicMock()
+        entry.runtime_data.mission_store = store
+        entry.runtime_data.prime_robot.get_mission_history = _AsyncMock(
+            return_value=[_entry(mission_id="old", timestamp=alt, done_code="ok")]
+        )
+
+        assert await pms.async_sync_prime_missions(entry) == 0
+        assert [r["id"] for r in store._records] == ["p_old"]
 
 
 class TestTheFirstSyncRunsWhenItCanSucceed:
@@ -1011,7 +1030,10 @@ class TestTheFirstSyncRunsWhenItCanSucceed:
         body = source[start:start + 1200]
 
         assert "except Exception" in body
-        assert "hass.async_create_task" in source[start:start + 1600]
+        # "async_create_task" without an owner prefix: the task moved from
+        # hass to the config entry, so it is cancelled on unload. What
+        # this guards is that the sync is scheduled at all.
+        assert "async_create_task" in source[start:start + 1600]
 
 
 class TestTheHistoryIsParsedBeforeItIsConverted:
@@ -1246,3 +1268,128 @@ class TestSensorsRefreshAfterSync:
         source = inspect.getsource(prime_mission_sync)
 
         assert '"entry_id": config_entry.entry_id' in source
+
+
+class TestALegacyRecordIsNotReAddedEveryHour:
+    """@1lyra: "finished cleaning" in the Activity log every hour, robot idle.
+
+        MissionStore: duplicate record p_01M2B4… dropped (MQTT re-delivery)
+        roomba_plus: added 1 mission record(s) from Prime history
+
+    A Prime record written before `started_at` fell back to the end time
+    has no `started_at`. `store.query()` skips such records, so the sync's
+    `known` set never contained its id and every poll rebuilt it as new.
+    `async_append` then recognised the duplicate and dropped it -- but
+    returned nothing, so the sync counted it as added anyway, saved,
+    backfilled statistics and fired EVENT_MISSION_COMPLETED.
+
+    WHY NO TEST CAUGHT IT. Every reconciliation test replaced
+    `store.query` with a mock returning ready-made ids -- exactly the
+    filter that caused this never ran. These use a real MissionStore.
+    """
+
+    MISSION = "01M2B4YPD1CQ7ZMVMM2MMV3FCJ"
+    ENDED = datetime(2026, 9, 20, 9, 30, tzinfo=timezone.utc)
+
+    def _setup(self, legacy_record):
+        from custom_components.roomba_plus.mission_store import MissionStore
+
+        store = MissionStore()
+        store._records.append(legacy_record)
+        store.async_save = AsyncMock()
+        store.async_backfill_statistics = AsyncMock()
+
+        entry = MagicMock()
+        entry.entry_id = "e1"
+        entry.title = "Roomba"
+        entry.runtime_data.mission_store = store
+        entry.runtime_data.prime_robot.get_mission_history = AsyncMock(
+            return_value=[_entry(mission_id=self.MISSION, timestamp=self.ENDED,
+                                 done_code="ok")]
+        )
+        bus = MagicMock()
+        entry.runtime_data.hass_ref.bus = bus
+        return entry, store, bus
+
+    def _legacy(self):
+        """Shaped as the store holds it: id and end, no start."""
+        from custom_components.roomba_plus.prime_mission_sync import _as_iso
+
+        return {"id": f"p_{self.MISSION}", "ended_at": _as_iso(self.ENDED),
+                "result": "completed"}
+
+    @pytest.mark.asyncio
+    async def test_a_stored_legacy_record_is_recognised_as_known(self):
+        from custom_components.roomba_plus import prime_mission_sync as pms
+
+        entry, store, bus = self._setup(self._legacy())
+
+        added = await pms.async_sync_prime_missions(entry)
+
+        assert added == 0, "an already-stored mission is not a new one"
+        assert len(store._records) == 1, "and it must not be stored twice"
+        bus.async_fire.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_a_legacy_record_beyond_the_duplicate_window_is_not_copied(self):
+        """The worse variant. `async_append` only compares against the
+        last five records; a legacy record further back was not dropped
+        but APPENDED a second time, and the mission counted twice."""
+        from custom_components.roomba_plus import prime_mission_sync as pms
+
+        entry, store, _bus = self._setup(self._legacy())
+        for i in range(6):   # push the legacy record out of the 5-record window
+            store._records.append({"id": f"p_other_{i}",
+                                   "started_at": "2026-09-21T08:00:00+00:00",
+                                   "ended_at": f"2026-09-21T0{i}:30:00+00:00"})
+
+        await pms.async_sync_prime_missions(entry)
+
+        ids = [r["id"] for r in store._records]
+        assert ids.count(f"p_{self.MISSION}") == 1
+
+
+class TestOnlyStoredRecordsCount:
+    """The second layer of the @1lyra fix, tested on its own.
+
+    With the known-id fix in place the sync no longer reaches a dropped
+    duplicate, so nothing above would notice if the counting went back to
+    ignoring what `async_append` reports. These pin that contract."""
+
+    @pytest.mark.asyncio
+    async def test_async_append_reports_a_dropped_duplicate(self):
+        from custom_components.roomba_plus.mission_store import MissionStore
+
+        store = MissionStore()
+        rec = {"id": "p_x", "started_at": "2026-09-20T09:00:00+00:00",
+               "ended_at": "2026-09-20T09:30:00+00:00"}
+
+        assert await store.async_append(dict(rec)) is True
+        assert await store.async_append(dict(rec)) is False
+        assert len(store._records) == 1
+
+    @pytest.mark.asyncio
+    async def test_a_dropped_record_is_neither_counted_nor_announced(self):
+        """Whatever the reason a record is dropped, the sync must not
+        save, backfill or fire EVENT_MISSION_COMPLETED for it."""
+        from unittest.mock import AsyncMock as _AsyncMock
+
+        from custom_components.roomba_plus import prime_mission_sync as pms
+
+        store = MagicMock()
+        store.records = []
+        store.async_append = _AsyncMock(return_value=False)
+        store.async_save = _AsyncMock()
+        entry = MagicMock()
+        entry.runtime_data.mission_store = store
+        entry.runtime_data.prime_robot.get_mission_history = _AsyncMock(
+            return_value=[_entry(mission_id="z",
+                                 timestamp=datetime(2026, 9, 20, tzinfo=timezone.utc),
+                                 done_code="ok")]
+        )
+        bus = MagicMock()
+        entry.runtime_data.hass_ref.bus = bus
+
+        assert await pms.async_sync_prime_missions(entry) == 0
+        store.async_save.assert_not_awaited()
+        bus.async_fire.assert_not_called()

@@ -17,6 +17,9 @@ from unittest.mock import MagicMock, patch
 
 from custom_components.roomba_plus.entity import IRobotEntity
 from types import SimpleNamespace
+import time
+from unittest.mock import AsyncMock
+import pytest
 
 
 def _make_roomba(reported: dict) -> MagicMock:
@@ -527,3 +530,82 @@ class TestTheEntityUsesItsOwnDeviceEntry:
             f"supported Home Assistant; calling it broke 4.1.3: {offenders}"
         )
 
+
+# ── formerly tests/test_coverage_small_gaps.py ──────────────────────────────────
+#
+# Small gaps in eight modules — quality scale, test-coverage (Silver).
+#
+# Mostly error branches and edge cases: a malformed input must not crash,
+# must not return something wrong, and where the code logs, it must log.
+# Each test pins what the branch is for, not only that it ran.
+
+BLID = "SMALLGAPS01"
+
+
+def _bare_entity(vacuum_state=None, mission=None):
+    from custom_components.roomba_plus.entity import IRobotEntity
+
+    e = IRobotEntity.__new__(IRobotEntity)
+    e.vacuum = MagicMock()
+    e.vacuum_state = vacuum_state or {}
+    e._blid = BLID
+    if mission is not None:
+        e.vacuum_state["cleanMissionStatus"] = mission
+    return e
+
+
+class TestEntityEdges:
+
+    def test_battery_stats_and_tank_level_read_the_reported_state(self):
+        e = _bare_entity({"bbchg3": {"nAvail": 12}, "tankLvl": 80})
+        stats = e.battery_stats
+        assert stats == {"nAvail": 12}
+        stats["nAvail"] = 0
+        assert e.battery_stats == {"nAvail": 12}, "a copy, not the live state"
+        assert e.tank_level == 80
+
+    @pytest.mark.parametrize("ts,erwartet", [(0, None), (None, None)])
+    def test_no_mission_start_is_no_last_mission(self, ts, erwartet):
+        """900-series firmware reports mssnStrtTm 0 while docked."""
+        e = _bare_entity(mission={"mssnStrtTm": ts} if ts is not None else {})
+        assert e.last_mission is erwartet
+
+    def test_a_mission_start_becomes_a_utc_time(self):
+        import datetime
+
+        e = _bare_entity(mission={"mssnStrtTm": 1789975662})
+        assert e.last_mission == datetime.datetime.fromtimestamp(1789975662, datetime.timezone.utc)
+
+    def test_an_entity_the_platform_marks_unavailable_stays_unavailable(self):
+        e = _bare_entity()
+        e._attr_available = False
+        e._live_state = False
+        assert e.available is False
+
+    @pytest.mark.parametrize("state,schreiben", [
+        ({"signal": {"rssi": -60}}, False),          # WiFi-only chatter
+        ({"signal": {"rssi": -60}, "batPct": 90}, True),
+        ({"batPct": 90}, True),
+    ])
+    def test_pure_signal_updates_are_not_written(self, state, schreiben):
+        assert _bare_entity().new_state_filter(state) is schreiben
+
+    @pytest.mark.asyncio
+    async def test_a_device_the_user_renamed_keeps_its_name(self, hass, monkeypatch):
+        """The iRobot app name must never overwrite a name set in HA."""
+        from custom_components.roomba_plus import entity as entity_mod
+
+        e = _bare_entity({"name": "Robbie"})
+        e.hass = hass
+        e._attr_device_info = {}
+        e.registry_entry = None
+        device = SimpleNamespace(id="d1", name="Roomba X", name_by_user="Mein Sauger")
+        registry = MagicMock()
+        registry.async_get_device.return_value = device
+        monkeypatch.setattr(entity_mod.dr, "async_get", lambda _h: registry)
+        monkeypatch.setattr(type(e), "device_entry", property(lambda _s: None))
+        monkeypatch.setattr(type(e), "robot_unique_id", property(lambda _s: "roomba_" + BLID))
+
+        await e._async_update_device_name()
+
+        registry.async_update_device.assert_not_called()
