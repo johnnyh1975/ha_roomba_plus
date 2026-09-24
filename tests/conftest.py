@@ -353,3 +353,24 @@ def _isolate_mission_timer_store(monkeypatch: pytest.MonkeyPatch):
         return store
 
     monkeypatch.setattr(_mts, "Store", _fake_store)
+
+
+# ── Home Assistant 2026 semantics for OptionsFlow.config_entry ────────────
+#
+# 2025.5 (the local and minimum version) still returns `self._config_entry`
+# when a test sets it -- a compatibility path marked "to be removed in
+# 2025.12". 2026 removed it: `config_entry` is looked up through `handler`
+# on hass, and there is no setter. Tests that only set `_config_entry` pass
+# here and fail in the 2026 CI job, which is how four of them went unseen.
+# Every run now resolves the entry the way 2026 does.
+
+@pytest.fixture(autouse=True)
+def _options_flow_config_entry_as_in_ha_2026(monkeypatch):
+    from homeassistant import config_entries as _ce
+
+    def _get(self):
+        if self.hass is None:
+            raise ValueError("The config entry is not available during initialisation")
+        return self.hass.config_entries.async_get_known_entry(self._config_entry_id)
+
+    monkeypatch.setattr(_ce.OptionsFlow, "config_entry", property(_get))

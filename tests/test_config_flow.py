@@ -1783,8 +1783,12 @@ class TestCloudConnectionTestStep:
         entry.entry_id = "test_entry"
         from unittest.mock import AsyncMock as _AsyncMock
 
-        flow._config_entry = entry
         flow.hass = MagicMock()
+        # How Home Assistant hands a flow its entry: `handler` is the entry
+        # id and the entry is looked up on hass. Setting `_config_entry`
+        # alone worked only through a compatibility path 2026 removed.
+        flow.handler = entry.entry_id
+        flow.hass.config_entries.async_get_known_entry.return_value = entry
         flow.hass.config.country = "DE"
         # The step reloads the entry after writing the credentials.
         flow.hass.config_entries.async_reload = _AsyncMock()
@@ -2448,8 +2452,9 @@ class TestCloudCredentialsOptions:
 
     def _flow(self):
         flow = _make_options_flow()
-        flow._config_entry.data = {CONF_IROBOT_USERNAME: "old@example.com"}
-        flow.hass = MagicMock()
+        flow.config_entry.data = {CONF_IROBOT_USERNAME: "old@example.com"}
+        # Extend the hass _make_options_flow set up, do not replace it: the
+        # flow finds its entry there, and a fresh mock hands back a stranger.
         flow.hass.config.country = "DE"
         flow.hass.config_entries.async_reload = AsyncMock()
         return flow
@@ -2489,7 +2494,7 @@ class TestCloudCredentialsOptions:
     async def test_clearing_both_fields_removes_the_credentials(self):
         """Empty username and password is how a user turns the cloud off."""
         flow = self._flow()
-        flow._config_entry.data = {CONF_IROBOT_USERNAME: "u", CONF_IROBOT_PASSWORD: "p", "blid": "B"}
+        flow.config_entry.data = {CONF_IROBOT_USERNAME: "u", CONF_IROBOT_PASSWORD: "p", "blid": "B"}
         flow._pending_cloud_creds = {"username": "", "password": ""}
         geschrieben: dict = {}
         flow.hass.config_entries.async_update_entry = lambda e, **kw: geschrieben.update(kw)
@@ -3441,3 +3446,20 @@ class TestRest980MigrateMenuVisibility:
         ):
             result = await flow.async_step_init()
         assert "rest980_migrate" not in result["menu_options"]
+
+
+class TestFlowsResolveTheirEntryAsHa2026Does:
+    """conftest makes OptionsFlow.config_entry behave as in Home Assistant
+    2026 on every version. On 2025.5 a flow given only `_config_entry`
+    still worked through a compatibility path; the 2026 CI job then failed
+    four tests nobody could reproduce locally."""
+
+    def test_a_flow_given_only_its_entry_attribute_fails(self):
+        from custom_components.roomba_plus.config_flow import RoombaPlusOptionsFlow
+
+        flow = RoombaPlusOptionsFlow.__new__(RoombaPlusOptionsFlow)
+        flow._config_entry = MagicMock()
+        flow.hass = MagicMock()
+        flow.handler = None
+        with pytest.raises(ValueError):
+            flow.config_entry
