@@ -164,6 +164,37 @@ jobs:
         run: |
           pip install "roombapy==2.0.2" "roombapy-prime[map]==0.3.4"
 
+      # THESE THREE NEED THE LIBRARIES. They ran in the markdown job, which
+      # installs nothing: one failed on `import yaml`, and the other two
+      # skipped and passed without checking anything. Here the manifest's
+      # own pins are installed, and with CI set a missing library fails
+      # them rather than skipping.
+
+      # A field the UI offers and the schema refuses is worse than an
+      # undocumented one: Home Assistant validates before any handler
+      # runs, so the user is told a field we documented is invalid.
+      # Happened three times before this check existed.
+      - name: Documented service fields are accepted by their schemas
+        run: python3 scripts/check_service_schemas.py
+
+      # The other half of the same blind spot: the client is typed `Any`
+      # on the entity base, so mypy checks no attribute read off it.
+      # Two renamed attributes survived the 4.2 migration that way.
+      - name: Check attributes read off the robot client exist
+        run: python3 scripts/check_client_attributes.py
+
+      # This one had drifted: three entries named tables that had since
+      # been renamed -- `CLEAN_BASE_LABELS` to `CLEAN_BASE_STATUS_SLUGS`
+      # and so on, when the values became translation slugs. The guard
+      # reported them as missing and the renamed tables as
+      # undocumented, and exited non-zero.
+      #
+      # Nobody noticed because its own test reads the script's source
+      # rather than running it. Wiring it up here is what makes a rename
+      # like that show up next time.
+      - name: Check vendor value tables
+        run: python3 scripts/check_vendor_value_tables.py
+
       - name: Run full test suite with coverage
         run: |
           python -m pytest tests/ --cov=custom_components/roomba_plus \
@@ -328,13 +359,6 @@ jobs:
       - name: Check command path parity
         run: python3 scripts/check_command_path_parity.py
 
-      # A field the UI offers and the schema refuses is worse than an
-      # undocumented one: Home Assistant validates before any handler
-      # runs, so the user is told a field we documented is invalid.
-      # Happened three times before this check existed.
-      - name: Documented service fields are accepted by their schemas
-        run: python3 scripts/check_service_schemas.py
-
       # An attribute created empty and never filled is a feature that
       # silently does nothing, and the suite passes either way -- tests
       # check what a function does with its input, not whether it is
@@ -349,12 +373,6 @@ jobs:
       # robot.
       - name: Check no roombapy coroutine runs in an executor
         run: python3 scripts/check_no_executor_coroutines.py
-
-      # The other half of the same blind spot: the client is typed `Any`
-      # on the entity base, so mypy checks no attribute read off it.
-      # Two renamed attributes survived the 4.2 migration that way.
-      - name: Check attributes read off the robot client exist
-        run: python3 scripts/check_client_attributes.py
 
       # The manifest is the only pin users get. A workflow installing a
       # different version tests a build nobody runs -- and passes.
@@ -385,18 +403,6 @@ jobs:
 
       - name: Check runtime data reads are declared
         run: python3 scripts/check_runtime_data_reads.py
-
-      # This one had drifted: three entries named tables that had since
-      # been renamed -- `CLEAN_BASE_LABELS` to `CLEAN_BASE_STATUS_SLUGS`
-      # and so on, when the values became translation slugs. The guard
-      # reported them as missing and the renamed tables as
-      # undocumented, and exited non-zero.
-      #
-      # Nobody noticed because its own test reads the script's source
-      # rather than running it. Wiring it up here is what makes a rename
-      # like that show up next time.
-      - name: Check vendor value tables
-        run: python3 scripts/check_vendor_value_tables.py
 
       # An inventory rather than a gate: prints which tests assert on
       # values nobody has confirmed. Fails only if a marker carries no
