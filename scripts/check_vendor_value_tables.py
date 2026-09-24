@@ -24,6 +24,7 @@ Nothing caught it because nothing asked.
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -245,7 +246,9 @@ def main() -> int:
             "extract is unavailable.",
             file=sys.stderr,
         )
-        return 0
+        # In CI a skip would pass without checking anything -- which is what
+        # happened while this ran in a job that never installed the library.
+        return 1 if os.environ.get("CI") else 0
 
     tables = _tables()
     problems: list[str] = []

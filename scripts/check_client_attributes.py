@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import ast
 import pathlib
+import os
 import sys
 
 COMPONENT = (
@@ -57,6 +58,12 @@ def main() -> int:
     try:
         from roombapy import RoombaClient
     except ImportError:
+        # In CI a skip would pass without checking anything -- which is what
+        # happened while this ran in a job that never installed roombapy.
+        if os.environ.get("CI"):
+            print("::error::roombapy is not installed, so this check cannot run. "
+                  "Run it in a job that installs the manifest requirements.")
+            return 1
         print("roombapy is not installed; skipping the client attribute check.")
         return 0
 
