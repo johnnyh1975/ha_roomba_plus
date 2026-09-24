@@ -30,7 +30,10 @@ import datetime
 import logging
 from typing import TYPE_CHECKING, Any
 
+from http import HTTPStatus
+
 from aiohttp import web
+from aiohttp.typedefs import LooseHeaders
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
@@ -45,6 +48,42 @@ _LOGGER = logging.getLogger(__name__)
 
 # F7o -- valid format values; unknown values return 400
 _VALID_FORMATS = {"summary", "records", "hazards", "export", "zone_coverage_health"}
+
+
+#: Version of the REST surface under /api/roomba_plus/. Raise it when a
+#: response shape changes in a way that would break an existing reader.
+#:
+#: WHY IT EXISTS BEFORE ANYTHING READS IT. The Lovelace card consumes
+#: these endpoints and ships separately — HACS updates the two on
+#: independent schedules, so a card can be newer or older than the
+#: integration it talks to. A card cannot check a version that is not
+#: being sent, so this has to land first and be present in the field for
+#: a while before any card can rely on it. It is deliberately useless
+#: today.
+#:
+#: Carried as a header rather than a body field: two endpoints return a
+#: bare JSON array, which has nowhere to put one, and a header changes no
+#: response shape at all.
+ROOMBA_PLUS_API_VERSION = 1
+API_VERSION_HEADER = "X-Roomba-Plus-Api-Version"
+
+
+class RoombaPlusView(HomeAssistantView):
+    """Base for every Roomba+ REST view: stamps the API version.
+
+    Overrides `json()` rather than each call site — there are sixteen of
+    those, and one of them would eventually be missed.
+    """
+
+    def json(  # type: ignore[override]
+        self,
+        result: Any,
+        status_code: HTTPStatus | int = HTTPStatus.OK,
+        headers: LooseHeaders | None = None,
+    ) -> web.Response:
+        merged: dict[str, str] = dict(headers or {})  # type: ignore[arg-type]
+        merged.setdefault(API_VERSION_HEADER, str(ROOMBA_PLUS_API_VERSION))
+        return super().json(result, status_code, merged)
 
 
 def _build_local_zones_index(mission_store_records: list[dict[str, Any]]) -> dict[int, list[str]]:
@@ -363,7 +402,7 @@ def _local_record_has_cloud_merge_signal(record: dict[str, Any]) -> bool:
     return any(record.get(f) is not None for f in ("dirt", "chrgM", "wlBars"))
 
 
-class MissionHistoryView(HomeAssistantView):
+class MissionHistoryView(RoombaPlusView):
     """GET /api/roomba_plus/{entry_id}/mission_history"""
 
     url = "/api/roomba_plus/{entry_id}/mission_history"
@@ -642,7 +681,7 @@ class MissionHistoryView(HomeAssistantView):
         return self.json(records)
 
 
-class ExplainMissionView(HomeAssistantView):
+class ExplainMissionView(RoombaPlusView):
     """GET /api/roomba_plus/{entry_id}/mission/{mission_id}/explain
 
     v3.2.0 ANOMALY-EXPLAIN — REST counterpart to the explain_mission
@@ -698,7 +737,7 @@ class ExplainMissionView(HomeAssistantView):
         return self.json(result)
 
 
-class MissionPathView(HomeAssistantView):
+class MissionPathView(RoombaPlusView):
     """GET /api/roomba_plus/{entry_id}/mission/{nMssn}/path
 
     v3.2.0 MISSION-REPLAY — room-granular post-hoc reconstruction of a
@@ -773,7 +812,7 @@ class MissionPathView(HomeAssistantView):
         return self.json({"nMssn": n_mssn_int, "path": timeline})
 
 
-class MissionHistoryImportView(HomeAssistantView):
+class MissionHistoryImportView(RoombaPlusView):
     """POST /api/roomba_plus/{entry_id}/mission_history/import
 
     F16 — import a v1 export bundle produced by format=export.
@@ -899,7 +938,7 @@ class MissionHistoryImportView(HomeAssistantView):
         })
 
 
-class HouseholdSummaryView(HomeAssistantView):
+class HouseholdSummaryView(RoombaPlusView):
     """GET /api/roomba_plus/household?days=28
 
     F10b — aggregates all roomba_plus config entries. Returns per-robot
@@ -1039,7 +1078,7 @@ class HouseholdSummaryView(HomeAssistantView):
         return self.json(result)
 
 
-class DailyDigestView(HomeAssistantView):
+class DailyDigestView(RoombaPlusView):
     """GET /api/roomba_plus/{entry_id}/digest?date=2026-06-16
 
     v2.9.0 DAILY-DIGEST — compact one-day summary for the card's "Today"
@@ -1179,7 +1218,7 @@ class DailyDigestView(HomeAssistantView):
         return max(0.0, on_day - before_day)
 
 
-class MissionMapJsonView(HomeAssistantView):
+class MissionMapJsonView(RoombaPlusView):
     """GET /api/roomba_plus/{entry_id}/missions/{record_id}/map.json
 
     v3.3.0 MISSION-MAP — coordinate-level coverage of ONE finished
@@ -1215,7 +1254,7 @@ class MissionMapJsonView(HomeAssistantView):
         return self.json({**payload, "rooms": rooms})
 
 
-class MissionMapPngView(HomeAssistantView):
+class MissionMapPngView(RoombaPlusView):
     """GET /api/roomba_plus/{entry_id}/missions/{record_id}/map.png
 
     v3.3.0 MISSION-MAP — server-rendered coverage image: room outlines

@@ -25,12 +25,20 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
+from .const import ROOM_EVENT_DONE_STATUSES, room_event_was_cleaned
 from .const import extract_region_id, SQFT_TO_M2
 
 _LOGGER = logging.getLogger(__name__)
 
 STORAGE_KEY_PREFIX = "roomba_plus_missions"
 STORAGE_VERSION = 1
+
+#: Our own payload format version, separate from STORAGE_VERSION above
+#: (Home Assistant's, pinned at 1 forever). Nothing branches on it yet;
+#: it is recorded so a future format change is RECOGNISED instead of
+#: read as if it were the current one. This store's contents cannot be
+#: rebuilt from anywhere else.
+PAYLOAD_VERSION = 1
 MAX_RECORDS = 365
 
 _SEGMENT_SUFFIX_RE = re.compile(r"_r\d+$")
@@ -109,6 +117,26 @@ class MissionWindow:
     resulted_in_clean: bool   # True if a completed mission started within this window
 
 
+def _without_duplicate_ids(records: list[Any]) -> tuple[list[Any], int]:
+    """Drop records whose id was already seen, keeping the first and the order.
+
+    Records without an id are kept: without one there is nothing to compare.
+    """
+    seen: set[Any] = set()
+    kept: list[Any] = []
+    dropped = 0
+    for record in records:
+        rid = record.get("id") if isinstance(record, dict) else None
+        if rid is not None:
+            if rid in seen:
+                dropped += 1
+                continue
+            seen.add(rid)
+        kept.append(record)
+    return kept, dropped
+
+
+
 class MissionStore:
     """Append-only mission log — max 365 records FIFO.
 
@@ -174,8 +202,32 @@ class MissionStore:
         if not data:
             _LOGGER.debug("MissionStore: no persisted data for %s", entry_id)
             return
+        # Absent means version 1: files written before this field
+        # existed are in the current format, so a missing key must not
+        # read as a mismatch.
+        stored_version = int(data.get("payload_version", 1) or 1)
+        if stored_version > PAYLOAD_VERSION:
+            _LOGGER.warning(
+                "MissionStore: stored payload is version %d, this release "
+                "understands %d — not loading it. Mission history starts empty. The file is "
+                "left intact for a newer release to read.",
+                stored_version, PAYLOAD_VERSION,
+            )
+            return
         try:
             self._records = list(data.get("records", []))
+            # DUPLICATES FROM 4.2.10 AND EARLIER. The Prime history sync
+            # re-stored older missions whose ids it failed to recognise, and
+            # the duplicate check compared only the last five records, so a
+            # mission could be saved twice and counted twice in statistics.
+            # The cause is fixed; this cleans what it left behind. The
+            # statistics are rebuilt from these records at every setup, so
+            # the double counts disappear with it.
+            self._records, _dropped = _without_duplicate_ids(self._records)
+            if _dropped:
+                _LOGGER.info(
+                    "MissionStore: removed %d duplicate mission record(s) on load", _dropped
+                )
             _LOGGER.debug("MissionStore: loaded %d record(s) for %s", len(self._records), entry_id)
         except (TypeError, ValueError) as exc:
             _LOGGER.warning("MissionStore: failed to load — %s; starting empty", exc)
@@ -194,11 +246,13 @@ class MissionStore:
         if hass is None:
             return
         store: Store[dict[str, Any]] = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
-        await store.async_save({"records": self._records})
+        await store.async_save(
+            {"payload_version": PAYLOAD_VERSION, "records": self._records}
+        )
 
     # ── Write ─────────────────────────────────────────────────────────────────
 
-    async def async_append(self, record: dict[str, Any]) -> None:
+    async def async_append(self, record: dict[str, Any]) -> bool:
         """Append a record and trim to MAX_RECORDS FIFO.
 
         F4c — duplicate guard: drops records whose id matches a recent record
@@ -211,6 +265,12 @@ class MissionStore:
         id AND ended_at match (true duplicate).  When only the id matches (same
         start_ts, different end = subsequent segment), assign a unique id by
         appending "_r<N>" before storing.
+
+        RETURNS whether the record was stored. It returned nothing, so a
+        caller could not tell a dropped duplicate from a new record:
+        @1lyra's Prime sync counted every dropped duplicate as added,
+        saved, backfilled statistics and fired EVENT_MISSION_COMPLETED —
+        "finished cleaning" in the Activity log every hour, robot idle.
         """
         record_id = record.get("id")
         if record_id:
@@ -222,7 +282,7 @@ class MissionStore:
                             "MissionStore: duplicate record %s dropped (MQTT re-delivery)",
                             record_id,
                         )
-                        return
+                        return False
                     # Same start_ts, different end = subsequent recharge segment.
                     # Give it a unique id so it is stored alongside segment 1.
                     seg_n = sum(
@@ -239,6 +299,7 @@ class MissionStore:
         if self._record_ids is not None and record.get("id"):
             self._record_ids.add(record["id"])
         self._trim()
+        return True
 
     def update_terminal_fields(self, mission_id: str, incoming: dict[str, Any]) -> bool:
         """Merge a replay/enrichment pulse into mission_id's existing
@@ -689,7 +750,7 @@ class MissionStore:
     ) -> list[str] | None:
         """Return room names in cleaning-completion order from the most recent mission.
 
-        CR4 — uses timeline.finEvents filtered to type='room' and status in (0, 6).
+        CR4 — uses timeline.finEvents filtered to type='room' and status in ROOM_EVENT_DONE_STATUSES.
         status=0 = pass complete (normal).
         status=6 = pass complete after error recovery (lewis 22.52.10+ confirmed).
         status=1 = pass in progress — excluded.
@@ -747,11 +808,23 @@ class MissionStore:
         THAT IS NO LONGER TRUE OF LIVE RECORDS, and the assumption cost
         a release. It said live records never carry a stored
         `last_cleaned_rooms` because they carry the cloud-merged
-        `timeline` instead. The timeline is PRIME-ONLY: a Classic record
-        carried neither, so source 1 found nothing every time, source 2
+        `timeline` instead. A Classic record WITHOUT a cloud account
+        carries neither, so source 1 found nothing every time, source 2
         was assumed absent, and the vacuum attribute kept whatever it
         had last resolved — seven rooms of a whole-house run, still
         listed after two two-room missions (@ScenicSystemsLLC).
+
+        CORRECTED 4.2.11. This paragraph used to say the timeline is
+        PRIME-ONLY. It is not: `backfill_from_cloud()` runs on the
+        Classic path — at setup with a cloud account, and after every
+        cloud refresh — and `_merge_cloud_fields()` copies `timeline`
+        into the local record (it is in `_CLOUD_MERGE_ARRAY`). So a
+        Classic robot with cloud credentials DOES get finEvents, a few
+        minutes after the mission ends, and from then on source 1 below
+        decides its rooms. The wrong claim sent the analysis of @Thonno's
+        missing-Kitchen report (21 Sep 2026) the wrong way first: it
+        pointed at room tracking, when his room history was being read
+        from finEvents all along.
 
         Live records now store the rooms room tracking actually advanced
         through, under that same key. Source 1 still wins where a
@@ -763,7 +836,7 @@ class MissionStore:
         and room_coverage_health() now use.
 
         Order of sources:
-        1. timeline.finEvents room events, status in (0, 6) — live path
+        1. timeline.finEvents room events, status in ROOM_EVENT_DONE_STATUSES — live path
         2. rec["last_cleaned_rooms"] — imported records keep working
         """
         timeline = rec.get("timeline")
@@ -775,7 +848,7 @@ class MissionStore:
                 if not isinstance(ev, dict) or ev.get("type") != "room":
                     continue
                 room = ev.get("room") or {}
-                if room.get("status") not in (0, 6):   # 0=complete, 6=after-recovery
+                if not room_event_was_cleaned(room):   # history: finished OR cleaned floor
                     continue
                 rid = str(room.get("rid", ""))
                 if not rid:
@@ -847,14 +920,21 @@ class MissionStore:
     ) -> dict[str, float] | None:
         """Return per-room coverage fractions from the most recent mission.
 
-        CR4 — uses room.totalArea / room.area from status=0 and status=6 events.
-        totalArea = cumulative cleaned area across all passes (status=0/6 only).
-        area = full room size (constant across events for the same rid).
+        Covered area over room size, from finished passes (status 0 and 6).
         Values are clamped to [0.0, 1.0].
 
-        Note: status=6 (completed after error recovery) events may not carry
-        totalArea — such rooms are skipped from coverage but still appear in
-        latest_cleaned_rooms(). This is expected behaviour for v2.2.
+        WHICH FIELD IS THE COVERED AREA. The firmware (lewis and ruby,
+        `end_given_room_or_zone_event`) writes `passArea` whenever it has
+        coverage data for the room, and `totalArea` — the union over all
+        passes — ONLY FROM THE SECOND PASS ON. It is not tied to status.
+        This used to require `totalArea`, and blamed its absence on
+        status 6. So every room cleaned in one pass — the normal case —
+        was skipped, and coverage was reported only for two-pass rooms.
+        Real Classic data shows it: status 0, one pass, no totalArea,
+        passArea 96 of 173. Now: `totalArea` when present, else
+        `passArea`, which for a single pass is the same thing.
+
+        `area` is the room's size and is the same on every event.
 
         umf_regions: optional fallback for EPHEMERAL robots (see latest_cleaned_rooms).
 
@@ -873,10 +953,12 @@ class MissionStore:
             if ev.get("type") != "room":
                 continue
             room = ev.get("room", {})
-            if room.get("status") not in (0, 6):   # 0=complete, 6=complete-after-recovery
+            if room.get("status") not in ROOM_EVENT_DONE_STATUSES:   # 0=complete, 6=complete-after-recovery
                 continue
             rid = str(room.get("rid", ""))
             total_area = room.get("totalArea")
+            if total_area is None:
+                total_area = room.get("passArea")   # single pass: the same thing
             area = room.get("area")
             if not rid or total_area is None or not area:
                 continue
@@ -961,7 +1043,7 @@ class MissionStore:
                 if not isinstance(ev, dict) or ev.get("type") != "room":
                     continue
                 room = ev.get("room") or {}
-                if room.get("status") not in (0, 6):   # 0=complete, 6=after-recovery
+                if not room_event_was_cleaned(room):   # history: finished OR cleaned floor
                     continue
                 rid = str(room.get("rid", ""))
                 if rid and rid not in seen:
@@ -2024,10 +2106,17 @@ class MissionStore:
             return
 
         # Group records by hour-truncated start timestamp (LTS granularity)
-        area_stats: list[StatisticData] = []
-        duration_stats: list[StatisticData] = []
-        completion_stats: list[StatisticData] = []
-
+        # CUMULATIVE SUMS, ONE ENTRY PER HOUR. These are `has_sum`
+        # statistics: Home Assistant reads `sum` as a running total and
+        # derives each period's change as `sum - previous sum`
+        # (recorder/statistics.py). Until 4.2.11 each mission's OWN value
+        # went into `sum`, so a 20 m² mission followed by a 15 m² one
+        # showed a change of -5 m²; and two missions in the same hour were
+        # two entries with one start, of which one was lost. Now: add up
+        # per hour, then accumulate in time order. Re-importing the whole
+        # history overwrites the old entries by their start time, so
+        # series written wrongly before are corrected on the next run.
+        per_hour: dict[Any, list[float]] = {}   # bucket -> [area, duration, completed, has_area]
         for r in self._records:
             started_str = r.get("started_at", "")
             if not started_str:
@@ -2038,21 +2127,30 @@ class MissionStore:
                     continue
                 if started_dt.tzinfo is None:
                     started_dt = started_dt.replace(tzinfo=timezone.utc)
-                # Truncate to hour for LTS
                 bucket = started_dt.replace(minute=0, second=0, microsecond=0)
             except (ValueError, TypeError):
                 continue
-
+            slot = per_hour.setdefault(bucket, [0.0, 0.0, 0.0, 0.0])
             area_sqft = r.get("area_sqft")
-            duration_min = r.get("duration_min") or 0
-            is_completed = r.get("result") in ("completed", "stuck_and_resumed")
-
             if area_sqft is not None:
-                area_m2 = round(float(area_sqft) * SQFT_TO_M2, 2)
-                area_stats.append(StatisticData(start=bucket, sum=area_m2))
+                slot[0] += round(float(area_sqft) * SQFT_TO_M2, 2)
+                slot[3] = 1.0
+            slot[1] += float(r.get("duration_min") or 0)
+            slot[2] += 1.0 if r.get("result") in ("completed", "stuck_and_resumed") else 0.0
 
-            duration_stats.append(StatisticData(start=bucket, sum=float(duration_min)))
-            completion_stats.append(StatisticData(start=bucket, sum=1.0 if is_completed else 0.0))
+        area_stats: list[StatisticData] = []
+        duration_stats: list[StatisticData] = []
+        completion_stats: list[StatisticData] = []
+        area_total = duration_total = completion_total = 0.0
+        for bucket in sorted(per_hour):
+            area, duration, completed, has_area = per_hour[bucket]
+            if has_area:
+                area_total = round(area_total + area, 2)
+                area_stats.append(StatisticData(start=bucket, state=area, sum=area_total))
+            duration_total += duration
+            duration_stats.append(StatisticData(start=bucket, state=duration, sum=duration_total))
+            completion_total += completed
+            completion_stats.append(StatisticData(start=bucket, state=completed, sum=completion_total))
 
         source = "roomba_plus"
 

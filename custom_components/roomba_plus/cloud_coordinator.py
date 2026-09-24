@@ -296,7 +296,7 @@ def _compute_daily_dirt_density(records: list[dict[str, Any]]) -> dict[str, floa
             local_dt = dt_util.as_local(datetime.fromtimestamp(int(ts), tz=UTC))
             day_str = local_dt.date().isoformat()
             by_day[day_str].append(float(r["dirt"]) / (float(sqft) * SQFT_TO_M2))
-        except (ValueError, OSError):
+        except (ValueError, OSError, OverflowError):
             pass
     return {day: statistics.median(dens) for day, dens in by_day.items()}
 
@@ -735,7 +735,7 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         # CR3 — when cloud mission history is empty but MissionStore has enriched
         # records (from a previous successful cloud fetch + merge), serve them as
-        # raw_records fallback so CloudRawSensor entities remain available.
+        # raw_records fallback so the cloud sensors remain available.
         if not result["mission_history_raw"] and self._mission_store is not None:
             fallback = [
                 r for r in self._mission_store.records
@@ -1291,31 +1291,6 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 len(geo["regions"]),
                 self.blid,
             )
-
-            # RESEARCH-ROOMTYPE (v3.3.0 ROOM-TYPE-VERIFY, temporary) —
-            # one-time field capture of iRobot's ML room-type classifier
-            # output. Same pattern as RESEARCH-MISSIONMAP: INFO-level,
-            # fires only when the debug flag file exists, no extra cloud
-            # call (data is already in this response). Region names are
-            # NOT logged — only ids, suggested types, and scores.
-            # Remove after field verification (Thonno / veronoicc).
-            if geo["region_suggestions"] or maps:
-                import os as _os  # noqa: PLC0415 — temporary research block
-                if _os.path.exists(self.hass.config.path("roomba_plus_research_roomtype")):
-                    _LOGGER.info(
-                        "RESEARCH-ROOMTYPE %s: pmap=%s maps=%d "
-                        "suggestions=%s",
-                        self.blid,
-                        active_id,
-                        len(maps),
-                        [
-                            {
-                                "region_id": s.get("region_id"),
-                                "suggested_types": s.get("suggested_types"),
-                            }
-                            for s in geo["region_suggestions"]
-                        ] or "EMPTY",
-                    )
 
             return {
                 "keepoutzones": [

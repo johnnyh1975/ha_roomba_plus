@@ -432,6 +432,30 @@ class RoombaData:
     #: NOT used by the MQTT watchdog, which relies on 0.0 meaning
     #: "no message yet" to stay quiet before the first one.
     setup_ts: float = 0.0
+
+    @property
+    def silence_reference_ts(self) -> float:
+        """Timestamp a staleness check should measure silence against.
+
+        The last MQTT message when there has been one, otherwise setup
+        time — see the note on `setup_ts` above for why, and whose robot
+        it cost.
+
+        THIS EXISTS BECAUSE THE RULE HAD THREE ANSWERS. The same edge
+        case — no message since the entry loaded — was handled three
+        ways: `sensor_helpers.py` fell back to `setup_ts` (correct, with
+        the field report recorded), `binary_sensor.py` returned "not
+        stale", and a second helper skipped the check entirely with
+        `if last_mqtt_ts > 0`. One site was fixed and its two twins were
+        left standing, which is the failure shape the architecture
+        review found in four separate dimensions.
+
+        Returns 0.0 only when neither timestamp is set — i.e. before
+        setup finishes. Callers must treat that as "cannot judge", not
+        as "silent forever": the MQTT watchdog deliberately relies on
+        0.0 meaning "no message yet" to stay quiet before the first one.
+        """
+        return (self.last_mqtt_message_ts or 0.0) or (self.setup_ts or 0.0)
     #: Extent of the room map's last render, in its own coordinate
     #: space: (x_min, x_max, y_min, y_max) in mm.
     #:

@@ -1943,8 +1943,8 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                 # reaching a clean end (HA restart, manual intervention) —
                 # see _async_save_mission_checkpoint() docstring.
                 if self._config_entry is not None and self._had_cleaning_phase:
-                    asyncio.run_coroutine_threadsafe(
-                        self._async_save_mission_checkpoint(), self.hass.loop
+                    self._config_entry.async_create_task(
+                        self.hass, self._async_save_mission_checkpoint()
                     )
             self._last_stuck_count = stuck
 
@@ -1977,11 +1977,8 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         self._attr_image_last_updated = dt_util.now(datetime.timezone.utc)
         self._cache = None
         if self._config_entry is not None:
-            asyncio.run_coroutine_threadsafe(
-                _async_send_coverage_signal(
-                    self.hass, self._config_entry.entry_id
-                ),
-                self.hass.loop,
+            self._config_entry.async_create_task(
+                self.hass, _async_send_coverage_signal(self.hass, self._config_entry.entry_id)
             )
 
 
@@ -2193,8 +2190,8 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                         # not the HA event loop thread — get_event_loop()
                         # there is not guaranteed to return the same loop
                         # HA actually runs on.
-                        asyncio.run_coroutine_threadsafe(
-                            self._trigger_drift_issue_enriched(dx, dy), self.hass.loop,
+                        self._config_entry.async_create_task(
+                            self.hass, self._trigger_drift_issue_enriched(dx, dy)
                         )
                     # v3.2.1 field-fix — this save call was missing
                     # entirely in the first version: the old
@@ -2203,9 +2200,8 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                     # this new mechanism must too, or a HA restart right
                     # after a correction would silently lose the
                     # updated cumulative_drift_mm/recent_drifts_mm.
-                    asyncio.run_coroutine_threadsafe(
-                        geometry_store.async_save(self.hass, self._config_entry.entry_id),
-                        self.hass.loop,
+                    self._config_entry.async_create_task(
+                        self.hass, geometry_store.async_save(self.hass, self._config_entry.entry_id)
                     )
 
         self._dock_anchor_buffering = False
@@ -2220,8 +2216,8 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         # to True with the original, now-superseded pending segment,
         # and losing whatever _mission_points accumulated afterward.
         if self._config_entry is not None and self._had_cleaning_phase:
-            asyncio.run_coroutine_threadsafe(
-                self._async_save_mission_checkpoint(), self.hass.loop
+            self._config_entry.async_create_task(
+                self.hass, self._async_save_mission_checkpoint()
             )
 
     def _handle_mission_end(self, ending_phase: str = "") -> None:
@@ -2264,11 +2260,23 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
 
         The step-order test in test_image.py enforces points 2 and 3.
         """
-        # Called from roombapy's paho-MQTT thread — NOT the HA event loop.
-        # hass.async_create_task() is not thread-safe and raises RuntimeError
-        # on recent HA versions when called from a foreign thread.
-        # All coroutine scheduling must go through asyncio.run_coroutine_threadsafe().
-        loop = self.hass.loop
+        # RUNS ON THE EVENT LOOP. This used to be reached from roombapy's
+        # paho-MQTT thread, and every coroutine here was scheduled with
+        # asyncio.run_coroutine_threadsafe() because hass.async_create_task()
+        # is not thread-safe. That has not been true since 4.2: roombapy 2.x
+        # runs on aiomqtt and guarantees callbacks run on the loop.
+        #
+        # The bridge was therefore doing nothing useful and one thing
+        # harmful — an exception inside a coroutine scheduled that way is
+        # retrieved into a concurrent.futures.Future nobody reads, so
+        # Python's "Task exception was never retrieved" never fires and
+        # the failure is completely silent. config_entry.async_create_task
+        # logs it and is cancelled on unload.
+        #
+        # NOTE FOR PRIME: roombapy-prime still uses paho and its callbacks
+        # DO run on a network thread. Nothing in this class is reached from
+        # there (RoombaMapImage is Classic-only; Prime gets PrimeMapImage),
+        # but a new Prime callback would need the bridge back.
 
         # v2.8.2 bug-hunt fix — checkpoint clearing must happen unconditionally,
         # before the "nothing to process" early-return below. A checkpoint can
@@ -2283,8 +2291,8 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         # this is harmless on the (overwhelmingly common) normal-end path
         # where no checkpoint exists at all.
         if self._config_entry is not None:
-            asyncio.run_coroutine_threadsafe(
-                self._async_clear_mission_checkpoint(), loop
+            self._config_entry.async_create_task(
+                self.hass, self._async_clear_mission_checkpoint()
             )
 
         self._refresh_terminal_mission_images()
@@ -2319,12 +2327,11 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                 # than the trigger, so the issue doesn't flap right at
                 # the boundary.
                 if data.geometry_store.drift_recovered():
-                    asyncio.run_coroutine_threadsafe(
-                        self._clear_drift_issue(), loop
+                    self._config_entry.async_create_task(
+                        self.hass, self._clear_drift_issue()
                     )
-                asyncio.run_coroutine_threadsafe(
-                    data.geometry_store.async_save(self.hass, self._config_entry.entry_id),
-                    loop,
+                self._config_entry.async_create_task(
+                    self.hass, data.geometry_store.async_save(self.hass, self._config_entry.entry_id)
                 )
 
         # v2.4.2 GS-SMART — accumulate door-crossing markers for SMART robots.
@@ -2357,17 +2364,16 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                 )
                 if _midpoints:
                     _data.geometry_store.update_from_midpoints(_midpoints)
-                    asyncio.run_coroutine_threadsafe(
-                        _data.geometry_store.async_save(
-                            self.hass, self._config_entry.entry_id
-                        ),
-                        loop,
+                    self._config_entry.async_create_task(
+                        self.hass, _data.geometry_store.async_save(self.hass, self._config_entry.entry_id)
                     )
 
         # Persist renderer state so the map survives an HA restart
         _renderer = self._renderer
         if _renderer and _renderer.has_data:
-            asyncio.run_coroutine_threadsafe(self._async_save_map_state(), loop)
+            self._config_entry.async_create_task(
+                self.hass, self._async_save_map_state()
+            )
 
         # F-EPHEMERAL — Room outline recompute moved AFTER the GridStore
         # update below (v3.2.1 redesign): it now derives directly from
@@ -2457,11 +2463,8 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                 _gdata.grid_store.record_processed_nmssn(
                     self.mission_stats.get("nMssn")
                 )
-                asyncio.run_coroutine_threadsafe(
-                    _gdata.grid_store.async_save(
-                        self.hass, self._config_entry.entry_id
-                    ),
-                    loop,
+                self._config_entry.async_create_task(
+                    self.hass, _gdata.grid_store.async_save(self.hass, self._config_entry.entry_id)
                 )
 
                 # v3.2.1 FIELD FIX — outline recompute's PURE, synchronous
@@ -2519,12 +2522,11 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                         # found, not just an existing unconfirmed one
                         # persisting across this recompute).
                         if len(_gdata.room_seg_store.unconfirmed_rooms) > _unconfirmed_before:
-                            asyncio.run_coroutine_threadsafe(self._trigger_zone_issue(), loop)
-                        asyncio.run_coroutine_threadsafe(
-                            _gdata.room_seg_store.async_save(
-                                self.hass, self._config_entry.entry_id
-                            ),
-                            loop,
+                            self._config_entry.async_create_task(
+                                self.hass, self._trigger_zone_issue()
+                            )
+                        self._config_entry.async_create_task(
+                            self.hass, _gdata.room_seg_store.async_save(self.hass, self._config_entry.entry_id)
                         )
                         # ROOM-SEG — sync GeometryStore's door_markers from
                         # the just-recomputed RoomSegStore.doors, replacing
@@ -2537,11 +2539,8 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                             _gdata.geometry_store.update_from_room_seg_store(
                                 _gdata.room_seg_store
                             )
-                            asyncio.run_coroutine_threadsafe(
-                                _gdata.geometry_store.async_save(
-                                    self.hass, self._config_entry.entry_id
-                                ),
-                                loop,
+                            self._config_entry.async_create_task(
+                                self.hass, _gdata.geometry_store.async_save(self.hass, self._config_entry.entry_id)
                             )
 
                         # v3.2.1 — FreezeSnapshotStore: count this
@@ -2568,11 +2567,8 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                                     _outline_pts,
                                     dt_util.now().isoformat(),
                                 )
-                                asyncio.run_coroutine_threadsafe(
-                                    _gdata.freeze_snapshot_store.async_save(
-                                        self.hass, self._config_entry.entry_id
-                                    ),
-                                    loop,
+                                self._config_entry.async_create_task(
+                                    self.hass, _gdata.freeze_snapshot_store.async_save(self.hass, self._config_entry.entry_id)
                                 )
 
                 # F-EPHEMERAL — Room outline (v3.2.1 redesign): recompute
@@ -2593,11 +2589,8 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                     self._map_capability == MapCapability.EPHEMERAL
                     and _gdata.outline_store is not None
                 ):
-                    asyncio.run_coroutine_threadsafe(
-                        _gdata.outline_store.async_save(
-                            self.hass, self._config_entry.entry_id
-                        ),
-                        loop,
+                    self._config_entry.async_create_task(
+                        self.hass, _gdata.outline_store.async_save(self.hass, self._config_entry.entry_id)
                     )
 
                 # v3.2.1 — MissionTrajectoryStore: record this mission's raw
@@ -2616,11 +2609,8 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                         _mission_key, self._mission_points,
                         thetas_deg=self._mission_thetas,
                     )
-                    asyncio.run_coroutine_threadsafe(
-                        _gdata.trajectory_store.async_save(
-                            self.hass, self._config_entry.entry_id
-                        ),
-                        loop,
+                    self._config_entry.async_create_task(
+                        self.hass, _gdata.trajectory_store.async_save(self.hass, self._config_entry.entry_id)
                     )
                 _LOGGER.debug(
                     "GridStore: updated from mission — %d pose pts, %d stuck pts",

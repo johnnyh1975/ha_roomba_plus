@@ -1486,10 +1486,10 @@ class RoombaPlusOptionsFlow(OptionsFlow):
                     default=current.get(CONF_BLOCKING_BEHAVIOR, DEFAULT_BLOCKING_BEHAVIOR),
                 ): selector.SelectSelector(
                     selector.SelectSelectorConfig(
-                        options=[
-                            selector.SelectOptionDict(value="abort", label="Abort start"),
-                            selector.SelectOptionDict(value="queue", label="Queue and wait"),
-                        ],
+                        # Labels come from strings.json -> selector.blocking_behavior,
+                        # so they are translated like the rest of the form.
+                        options=["abort", "queue"],
+                        translation_key="blocking_behavior",
                         mode=selector.SelectSelectorMode.LIST,
                     )
                 ),
@@ -1550,10 +1550,9 @@ class RoombaPlusOptionsFlow(OptionsFlow):
                     default=current.get(CONF_PRESENCE_MODE, DEFAULT_PRESENCE_MODE),
                 ): selector.SelectSelector(
                     selector.SelectSelectorConfig(
-                        options=[
-                            selector.SelectOptionDict(value="away_only", label="Unfreeze when all away"),
-                            selector.SelectOptionDict(value="always_ask", label="Fire event (manual control)"),
-                        ],
+                        # Labels come from strings.json -> selector.presence_mode.
+                        options=["away_only", "always_ask"],
+                        translation_key="presence_mode",
                         mode=selector.SelectSelectorMode.LIST,
                     )
                 ),
@@ -2088,11 +2087,16 @@ class RoombaPlusOptionsFlow(OptionsFlow):
                 if pmaps:
                     current_pmap_id = next(iter(pmaps[0]), "")
 
-            if not parsed:
-                errors["zone_names"] = "no_valid_ids"
-                pending = getattr(self, "_pending_zone_ids", [])
-            elif not current_pmap_id:
-                errors["zone_names"] = "pmap_not_resolved"
+            # BOTH ERRORS RETURN THE FORM. `no_valid_ids` used to be set and
+            # then fall through to the save: a user who typed "3: Kitchen"
+            # instead of "3=Kitchen" saw the step close as if it had
+            # worked, with nothing saved and the error never shown. Only
+            # `pmap_not_resolved` returned. Found by the config-flow
+            # coverage work for the quality scale.
+            if not parsed or not current_pmap_id:
+                errors["zone_names"] = (
+                    "no_valid_ids" if not parsed else "pmap_not_resolved"
+                )
                 pending = getattr(self, "_pending_zone_ids", [])
                 default_text = "\n".join(f"{rid}=" for rid in pending)
                 return self.async_show_form(

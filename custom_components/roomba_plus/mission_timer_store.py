@@ -55,6 +55,13 @@ def _safe_float(val: Any) -> float | None:
 
 
 STORAGE_VERSION = 1
+
+#: Our own payload format version, separate from STORAGE_VERSION above
+#: (which is Home Assistant's and stays pinned at 1 forever — raising it
+#: hands the file to HA's migration machinery). Nothing branches on this
+#: yet; it exists so a future format change is RECOGNISED rather than
+#: read as if it were the current one.
+PAYLOAD_VERSION = 1
 _DELAY_SAVE_SEC = 15.0  # v3.3.0 DELAY-SAVE — debounce window
 _STORAGE_KEY_PREFIX = "roomba_plus_mission_timer"
 _STALE_THRESHOLD_SEC = 7200  # 2 hours — if snapshot is older, timer is stale
@@ -149,6 +156,18 @@ class MissionTimerStore:
         data: dict[str, Any] | None = await store.async_load()
         if not data:
             return
+        # Absent means version 1: files written before this field existed
+        # are in the current format, so a missing key must not read as a
+        # mismatch.
+        stored_version = int(data.get("payload_version", 1) or 1)
+        if stored_version > PAYLOAD_VERSION:
+            _LOGGER.warning(
+                "MissionTimerStore: stored payload is version %d, this "
+                "release understands %d — not loading it. An in-flight "
+                "mission's timer restarts; the file is left intact.",
+                stored_version, PAYLOAD_VERSION,
+            )
+            return
         try:
             snapshot_ts = float(data.get("snapshot_ts", 0))
             # Staleness gate: discard if snapshot is older than 2 hours.
@@ -181,6 +200,7 @@ class MissionTimerStore:
         """Serialise current timer state (single home for the shape —
         used by both the immediate and the delayed save path)."""
         return {
+            "payload_version":     PAYLOAD_VERSION,
             "mission_id":          self.mission_id,
             "run_sec":             self.run_sec,
             "total_estimated_sec": self.total_estimated_sec,
@@ -222,10 +242,21 @@ class MissionTimerStore:
         MP1 decision, now resolved.
 
         v3.3.0 STORE-ENCAP — public: callbacks.py needs it for the
-        recharge-position persist and previously called the private name."""
-        hass.loop.call_soon_threadsafe(
-            self._delay_save_on_loop, hass, entry_id
-        )
+        recharge-position persist and previously called the private name.
+
+        Calls `_delay_save_on_loop` directly. Until 4.2 every caller sat
+        on roombapy's paho thread and `Store.async_delay_save` must run on
+        the event loop, so this went through `call_soon_threadsafe`.
+        roombapy 2.x dispatches callbacks on the loop; the hand-off had
+        become a one-iteration delay and nothing else.
+
+        It survived one attempt at removal: 45 tests leant on it as an
+        isolation seam — a MagicMock `hass.loop` swallowed the save so it
+        never reached a real Store. They now isolate `Store` directly
+        (see `_isolate_ha_store` in the test module), which is where the
+        seam belonged. The two methods stay separate because tests patch
+        `_schedule_save`."""
+        self._delay_save_on_loop(hass, entry_id)
 
     def _delay_save_on_loop(self, hass: HomeAssistant, entry_id: str) -> None:
         """Loop-side half of schedule_save — Store.async_delay_save must

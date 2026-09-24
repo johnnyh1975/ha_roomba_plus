@@ -30,15 +30,20 @@ from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.storage import Store
 
 from .command_record import record_command
+from .service_guard import register as register_guarded
 from .const import (
+    maintenance_changed_signal,
     PRIME_ERROR_SEVERITY,
     cleaning_modes_for,
     ATTR_ORDERED,
     IROBOT_PART_ROLE_FILTER,
     IROBOT_PART_ROLE_MAIN_BRUSH,
+    IROBOT_PART_ROLE_SIDE_BRUSH,
+    IROBOT_PART_ROLE_CLEAN_BASE_BAG,
     ATTR_OVERRIDE_BLOCKING,
     ATTR_ROOM_NAME,
     ATTR_ROOM_PASSES,
@@ -56,10 +61,6 @@ from .const import (
     CONF_ROOM_SCHEDULE,
     SERVICE_CLEAN_SEQUENCE,
     SERVICE_EXPLAIN_MISSION,
-    SERVICE_RESET_BATTERY,
-    SERVICE_RESET_BRUSH,
-    SERVICE_RESET_FILTER,
-    SERVICE_RESET_PAD,
     SERVICE_SET_QUIET_HOURS,
     SERVICE_SMART_START,
     SERVICE_CREATE_BACKUP,
@@ -125,38 +126,14 @@ _BACKUP_STORES: tuple[tuple[str, str], ...] = (
 
 # ── Signal helper ─────────────────────────────────────────────────────────────
 
-def _async_signal_entities(
-    hass: HomeAssistant,
-    entry_id: str,
-    keys: list[str],
-) -> None:
-    """Force-refresh sensor/binary_sensor entities after non-MQTT state changes.
+def _async_signal_maintenance_changed(hass: HomeAssistant, config_entry: RoombaConfigEntry) -> None:
+    """Tell every entity of the robot to re-render after a maintenance change.
 
-    Called after maintenance resets to immediately reflect the new baseline
-    in timestamp sensors and L4 wear sensors, without waiting for the next
-    MQTT push from the robot.
+    This used to look up a list of chosen sensors and write each one's
+    CURRENT state back with a new timestamp -- the old value, so a reset
+    showed up only after the robot's next message.
     """
-    ent_reg = er.async_get(hass)
-    entry = hass.config_entries.async_get_entry(entry_id)
-    if entry is None:
-        return
-    data: RoombaData = entry.runtime_data
-    robot_uid = f"roomba_plus_{data.blid}"
-    for key in keys:
-        for platform in ("sensor", "binary_sensor"):
-            entity_id = ent_reg.async_get_entity_id(
-                platform, DOMAIN, f"{robot_uid}_{key}"
-            )
-            if entity_id:
-                current = hass.states.get(entity_id)
-                if current:
-                    hass.states.async_set(
-                        entity_id,
-                        current.state,
-                        current.attributes,
-                        force_update=True,
-                    )
-                break
+    async_dispatcher_send(hass, maintenance_changed_signal(config_entry.runtime_data.blid))
 
 
 def _fire_maintenance_reset_event(
@@ -464,7 +441,7 @@ async def _async_clean_rooms_via_backend(
                 f"{entity_id}, so `clean_room` cannot address it. Use "
                 f"`roomba_plus.clean_zone` with the same name.",
                 translation_domain=DOMAIN,
-                translation_key="room_name_is_a_zone",
+                translation_key="room_name_is_a_zone",translation_placeholders={"names": ", ".join(_as_zone)}
             )
 
         raise ServiceValidationError(
@@ -902,7 +879,7 @@ async def async_handle_smart_start(call: ServiceCall) -> None:
             raise ServiceValidationError(
                 f"Entity {eid} not found",
                 translation_domain=DOMAIN,
-                translation_key="entity_not_found",
+                translation_key="entity_not_found",translation_placeholders={"entity_id": str(eid)}
             )
         config_entry = hass.config_entries.async_get_entry(entry_reg.config_entry_id or "")
         if config_entry is None:
@@ -990,7 +967,7 @@ async def async_handle_clean_overdue_rooms(call: ServiceCall) -> None:
             raise ServiceValidationError(
                 f"Entity {eid} not found",
                 translation_domain=DOMAIN,
-                translation_key="entity_not_found",
+                translation_key="entity_not_found",translation_placeholders={"entity_id": str(eid)}
             )
         config_entry = hass.config_entries.async_get_entry(entry_reg.config_entry_id or "")
         if config_entry is None:
@@ -1151,7 +1128,7 @@ async def async_handle_auto_clean_dirty_rooms(call: ServiceCall) -> None:
             raise ServiceValidationError(
                 f"Entity {eid} not found",
                 translation_domain=DOMAIN,
-                translation_key="entity_not_found",
+                translation_key="entity_not_found",translation_placeholders={"entity_id": str(eid)}
             )
         config_entry = hass.config_entries.async_get_entry(entry_reg.config_entry_id or "")
         if config_entry is None:
@@ -1256,8 +1233,10 @@ async def async_handle_auto_clean_dirty_rooms(call: ServiceCall) -> None:
 # counter, and "pad" is a Braava consumable the parts endpoint does not
 # report, so both reset locally only.
 _RESET_PART_TO_CLOUD_ROLE: dict[str, str] = {
-    "filter": IROBOT_PART_ROLE_FILTER,
-    "brush":  IROBOT_PART_ROLE_MAIN_BRUSH,
+    "filter":         IROBOT_PART_ROLE_FILTER,
+    "brush":          IROBOT_PART_ROLE_MAIN_BRUSH,
+    "side_brush":     IROBOT_PART_ROLE_SIDE_BRUSH,
+    "clean_base_bag": IROBOT_PART_ROLE_CLEAN_BASE_BAG,
 }
 
 
@@ -1324,19 +1303,29 @@ async def _handle_reset_service(
     for eid in entity_ids:
         entry_reg = ent_reg.async_get(eid)
         if entry_reg is None:
-            _LOGGER.warning("reset_%s: entity not found: %s", part, eid)
-            continue
+            # Refuse, as every cleaning action does: logging and carrying on
+            # reported success for a reset that never happened.
+            raise ServiceValidationError(
+                f"Entity {eid} not found",
+                translation_domain=DOMAIN,
+                translation_key="entity_not_found",
+                translation_placeholders={"entity_id": eid},
+            )
         config_entry = hass.config_entries.async_get_entry(entry_reg.config_entry_id or "")
         if config_entry is None:
-            _LOGGER.warning("reset_%s: config entry not found for %s", part, eid)
-            continue
+            raise ServiceValidationError(
+                f"No config entry for {eid}",
+                translation_domain=DOMAIN,
+                translation_key="config_entry_not_found",
+                translation_placeholders={"entity_id": eid},
+            )
 
         data: RoombaData = config_entry.runtime_data
         if data.maintenance_store is None:
             raise ServiceValidationError(
                 f"Maintenance store not available for {eid}",
                 translation_domain=DOMAIN,
-                translation_key="maintenance_store_unavailable",
+                translation_key="maintenance_store_unavailable",translation_placeholders={"entity_id": str(eid)}
             )
 
         # The hour meter the reset is recorded against, so "hours since
@@ -1368,18 +1357,7 @@ async def _handle_reset_service(
         # service call. Robots whose account does not serve the parts
         # endpoint simply have no role mapping and skip this entirely.
         await _async_push_part_reset_to_cloud(config_entry, data, part)
-        _async_signal_entities(hass, config_entry.entry_id, [
-            "filter_last_replaced",
-            "brush_last_replaced",
-            "pad_last_replaced",
-            "battery_last_replaced",
-            "filter_wear_rate",
-            "brush_wear_rate",
-            "pad_wear_rate",
-            "filter_days_until_due",
-            "brush_days_until_due",
-            "pad_days_until_due",
-        ])
+        _async_signal_maintenance_changed(hass, config_entry)
         _LOGGER.info("reset_%s: executed for %s at %dh", part, eid, current_hr)
 
 
@@ -1398,29 +1376,35 @@ async def _handle_inspect_reset_service(
     for eid in entity_ids:
         entry_reg = ent_reg.async_get(eid)
         if entry_reg is None:
-            _LOGGER.warning("reset_%s_cleaning: entity not found: %s", component, eid)
-            continue
+            # Refuse, as every cleaning action does: logging and carrying on
+            # reported success for a reset that never happened.
+            raise ServiceValidationError(
+                f"Entity {eid} not found",
+                translation_domain=DOMAIN,
+                translation_key="entity_not_found",
+                translation_placeholders={"entity_id": eid},
+            )
         config_entry = hass.config_entries.async_get_entry(entry_reg.config_entry_id or "")
         if config_entry is None:
-            _LOGGER.warning("reset_%s_cleaning: config entry not found for %s", component, eid)
-            continue
+            raise ServiceValidationError(
+                f"No config entry for {eid}",
+                translation_domain=DOMAIN,
+                translation_key="config_entry_not_found",
+                translation_placeholders={"entity_id": eid},
+            )
 
         data: RoombaData = config_entry.runtime_data
         if data.maintenance_store is None:
             raise ServiceValidationError(
                 f"Maintenance store not available for {eid}",
                 translation_domain=DOMAIN,
-                translation_key="maintenance_store_unavailable",
+                translation_key="maintenance_store_unavailable",translation_placeholders={"entity_id": str(eid)}
             )
 
         getattr(data.maintenance_store, f"reset_{component}_cleaning")()
         await data.maintenance_store.async_save(hass, config_entry.entry_id)
         _fire_maintenance_reset_event(hass, config_entry, component, None)
-        _async_signal_entities(hass, config_entry.entry_id, [
-            "wheel_last_cleaned",
-            "contact_last_cleaned",
-            "bin_last_cleaned",
-        ])
+        _async_signal_maintenance_changed(hass, config_entry)
         _LOGGER.info("reset_%s_cleaning: executed for %s", component, eid)
 
 
@@ -1482,17 +1466,17 @@ async def async_handle_explain_mission(call: ServiceCall) -> dict[str, Any]:
     ent_reg = er.async_get(call.hass)
     entry_reg = ent_reg.async_get(entity_id)
     if entry_reg is None:
-        raise ServiceValidationError(f"explain_mission: entity not found: {entity_id}")
+        raise ServiceValidationError(f"explain_mission: entity not found: {entity_id}", translation_domain=DOMAIN, translation_key="entity_not_found", translation_placeholders={"entity_id": str(entity_id)})
     config_entry = call.hass.config_entries.async_get_entry(entry_reg.config_entry_id or "")
     if config_entry is None:
         raise ServiceValidationError(
-            f"explain_mission: config entry not found for {entity_id}"
+            f"explain_mission: config entry not found for {entity_id}", translation_domain=DOMAIN, translation_key="config_entry_not_found", translation_placeholders={"entity_id": str(entity_id)}
         )
 
     data: RoombaData = config_entry.runtime_data
     mission_store = getattr(data, "mission_store", None)
     if mission_store is None:
-        raise ServiceValidationError(f"explain_mission: no mission history for {entity_id}")
+        raise ServiceValidationError(f"explain_mission: no mission history for {entity_id}", translation_domain=DOMAIN, translation_key="no_mission_history", translation_placeholders={"entity_id": str(entity_id)})
 
     # v3.3.1 EXPLAIN-CLOUD bug-hunt fix — the REST view (api_views.py's
     # ExplainMissionView) gained cloud-only "c_{ts}" id resolution, but this
@@ -1507,7 +1491,7 @@ async def async_handle_explain_mission(call: ServiceCall) -> dict[str, Any]:
         record_override = _resolve_cloud_explain_record(data, mission_id)
         if record_override is None:
             raise ServiceValidationError(
-                f"explain_mission: mission not found for {entity_id} (id={mission_id})"
+                f"explain_mission: mission not found for {entity_id} (id={mission_id})", translation_domain=DOMAIN, translation_key="mission_not_found", translation_placeholders={"entity_id": str(entity_id), "mission_id": str(mission_id)}
             )
 
     result = mission_store.explain_mission(
@@ -1517,7 +1501,7 @@ async def async_handle_explain_mission(call: ServiceCall) -> dict[str, Any]:
     if result is None:
         raise ServiceValidationError(
             f"explain_mission: mission not found for {entity_id}"
-            + (f" (id={mission_id})" if mission_id is not None else "")
+            + (f" (id={mission_id})" if mission_id is not None else ""), translation_domain=DOMAIN, translation_key="mission_not_found", translation_placeholders={"entity_id": str(entity_id), "mission_id": str(mission_id) if mission_id is not None else "-"}
         )
     return dict(result)
 
@@ -1575,8 +1559,8 @@ async def async_handle_clean_sequence(
     for eid in (trigger_entity, target_entity):
         entry = reg.async_get(eid)
         if entry is None or entry.platform != DOMAIN or entry.domain != "vacuum":
-            raise vol.Invalid(
-                f"Entity {eid} is not a roomba_plus vacuum entity"
+            raise ServiceValidationError(
+                f"Entity {eid} is not a roomba_plus vacuum entity", translation_domain=DOMAIN, translation_key="not_a_roomba_plus_vacuum", translation_placeholders={"entity_id": str(eid)}
             )
 
     _LOGGER.debug(
@@ -1588,9 +1572,8 @@ async def async_handle_clean_sequence(
     unsub_ref: list[Any] = []
 
     @callback
-    def _on_trigger_state_change(
-        entity_id: str, old_state: Any, new_state: Any
-    ) -> None:
+    def _on_trigger_state_change(event: Any) -> None:
+        new_state = event.data.get("new_state")
         if new_state is None:
             return
         state_str = new_state.state
@@ -1625,8 +1608,11 @@ async def async_handle_clean_sequence(
             target_entity, delay_min, trigger_entity,
         )
 
-    from homeassistant.helpers.event import async_track_state_change
-    unsub = async_track_state_change(hass, trigger_entity, _on_trigger_state_change)
+    # The event-based tracker. `async_track_state_change` was deprecated
+    # for removal in Home Assistant 2025.5 and logged a warning on every
+    # use; where it is gone, this service failed on import.
+    from homeassistant.helpers.event import async_track_state_change_event
+    unsub = async_track_state_change_event(hass, [trigger_entity], _on_trigger_state_change)
     unsub_ref.append(unsub)
 
 
@@ -1689,7 +1675,7 @@ async def async_handle_set_quiet_hours(call: ServiceCall) -> None:
             raise ServiceValidationError(
                 f"Entity {entity_id} not found",
                 translation_domain=DOMAIN,
-                translation_key="entity_not_found",
+                translation_key="entity_not_found",translation_placeholders={"entity_id": str(entity_id)}
             )
         data = entry.runtime_data
         robot = getattr(data, "prime_robot", None)
@@ -1698,7 +1684,7 @@ async def async_handle_set_quiet_hours(call: ServiceCall) -> None:
             raise ServiceValidationError(
                 f"{entity_id} is not a V4/Prime robot with a household.",
                 translation_domain=DOMAIN,
-                translation_key="quiet_hours_not_prime",
+                translation_key="quiet_hours_not_prime",translation_placeholders={"entity": str(entity_id)}
             )
 
         if ends_at is not None:
@@ -1764,7 +1750,7 @@ def async_register_services(hass: HomeAssistant) -> None:
     _RESET_SCHEMA = vol.Schema({vol.Required("entity_id"): cv.entity_ids})
 
     if not hass.services.has_service(DOMAIN, SERVICE_CLEAN_ROOM):
-        hass.services.async_register(
+        register_guarded(hass, 
             DOMAIN,
             SERVICE_CLEAN_ROOM,
             async_handle_clean_room,
@@ -1848,7 +1834,7 @@ def async_register_services(hass: HomeAssistant) -> None:
         _LOGGER.debug("Registered %s.%s action", DOMAIN, SERVICE_CLEAN_ROOM)
 
     if not hass.services.has_service(DOMAIN, SERVICE_CLEAN_ZONE):
-        hass.services.async_register(
+        register_guarded(hass, 
             DOMAIN,
             SERVICE_CLEAN_ZONE,
             async_handle_clean_zone,
@@ -1884,7 +1870,7 @@ def async_register_services(hass: HomeAssistant) -> None:
         _LOGGER.debug("Registered %s.%s action", DOMAIN, SERVICE_CLEAN_ZONE)
 
     if not hass.services.has_service(DOMAIN, SERVICE_SET_QUIET_HOURS):
-        hass.services.async_register(
+        register_guarded(hass, 
             DOMAIN,
             SERVICE_SET_QUIET_HOURS,
             async_handle_set_quiet_hours,
@@ -1903,7 +1889,7 @@ def async_register_services(hass: HomeAssistant) -> None:
         _LOGGER.debug("Registered %s.%s action", DOMAIN, SERVICE_SET_QUIET_HOURS)
 
     if not hass.services.has_service(DOMAIN, SERVICE_SMART_START):
-        hass.services.async_register(
+        register_guarded(hass, 
             DOMAIN,
             SERVICE_SMART_START,
             async_handle_smart_start,
@@ -1916,7 +1902,7 @@ def async_register_services(hass: HomeAssistant) -> None:
         _LOGGER.debug("Registered %s.%s action", DOMAIN, SERVICE_SMART_START)
 
     if not hass.services.has_service(DOMAIN, SERVICE_CLEAN_OVERDUE_ROOMS):
-        hass.services.async_register(
+        register_guarded(hass, 
             DOMAIN,
             SERVICE_CLEAN_OVERDUE_ROOMS,
             async_handle_clean_overdue_rooms,
@@ -1932,7 +1918,7 @@ def async_register_services(hass: HomeAssistant) -> None:
         )
 
     if not hass.services.has_service(DOMAIN, SERVICE_AUTO_CLEAN_DIRTY_ROOMS):
-        hass.services.async_register(
+        register_guarded(hass, 
             DOMAIN,
             SERVICE_AUTO_CLEAN_DIRTY_ROOMS,
             async_handle_auto_clean_dirty_rooms,
@@ -1957,7 +1943,7 @@ def async_register_services(hass: HomeAssistant) -> None:
             ) -> None:
                 await _handle_reset_service(call.hass, call, p)
 
-            hass.services.async_register(
+            register_guarded(hass, 
                 DOMAIN,
                 svc,
                 _make_reset_handler,
@@ -1975,7 +1961,7 @@ def async_register_services(hass: HomeAssistant) -> None:
             ) -> None:
                 await _handle_inspect_reset_service(call.hass, call, c)
 
-            hass.services.async_register(
+            register_guarded(hass, 
                 DOMAIN,
                 svc,
                 _make_inspect_handler,
@@ -1983,7 +1969,7 @@ def async_register_services(hass: HomeAssistant) -> None:
             )
 
     if not hass.services.has_service(DOMAIN, "reset_robot_profile"):
-        hass.services.async_register(
+        register_guarded(hass, 
             DOMAIN,
             "reset_robot_profile",
             async_handle_reset_robot_profile,
@@ -1992,7 +1978,7 @@ def async_register_services(hass: HomeAssistant) -> None:
 
     # ── F10d — clean_sequence ─────────────────────────────────────────────────
     if not hass.services.has_service(DOMAIN, SERVICE_CLEAN_SEQUENCE):
-        hass.services.async_register(
+        register_guarded(hass, 
             DOMAIN,
             SERVICE_CLEAN_SEQUENCE,
             async_handle_clean_sequence,
@@ -2002,7 +1988,7 @@ def async_register_services(hass: HomeAssistant) -> None:
 
     # ── v3.2.0 ANOMALY-EXPLAIN — explain_mission ───────────────────────────────
     if not hass.services.has_service(DOMAIN, SERVICE_EXPLAIN_MISSION):
-        hass.services.async_register(
+        register_guarded(hass, 
             DOMAIN,
             SERVICE_EXPLAIN_MISSION,
             async_handle_explain_mission,
@@ -2016,7 +2002,7 @@ def async_register_services(hass: HomeAssistant) -> None:
 
     # ── v3.5.0 FULL-BACKUP — create_backup / restore_backup ───────────────────
     if not hass.services.has_service(DOMAIN, SERVICE_CREATE_BACKUP):
-        hass.services.async_register(
+        register_guarded(hass, 
             DOMAIN,
             SERVICE_CREATE_BACKUP,
             async_handle_create_backup,
@@ -2026,7 +2012,7 @@ def async_register_services(hass: HomeAssistant) -> None:
         _LOGGER.debug("Registered %s.%s action", DOMAIN, SERVICE_CREATE_BACKUP)
 
     if not hass.services.has_service(DOMAIN, SERVICE_RESTORE_BACKUP):
-        hass.services.async_register(
+        register_guarded(hass, 
             DOMAIN,
             SERVICE_RESTORE_BACKUP,
             async_handle_restore_backup,
@@ -2040,7 +2026,7 @@ def async_register_services(hass: HomeAssistant) -> None:
 
     # ── ADVANCE-ROOM-V2 (v2.8.0) — manual room-progress override ─────────────
     if not hass.services.has_service(DOMAIN, "advance_room"):
-        hass.services.async_register(
+        register_guarded(hass, 
             DOMAIN,
             "advance_room",
             async_handle_advance_room,
@@ -2049,7 +2035,7 @@ def async_register_services(hass: HomeAssistant) -> None:
         _LOGGER.debug("Registered %s.advance_room action", DOMAIN)
 
     if not hass.services.has_service(DOMAIN, "run_favorite"):
-        hass.services.async_register(
+        register_guarded(hass, 
             DOMAIN,
             "run_favorite",
             async_handle_run_favorite,
@@ -2276,7 +2262,7 @@ def _write_backup_zip(
 def _read_backup_zip(zip_path: str) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
     """Blocking: read manifest + all store payloads back out of a ZIP."""
     if not Path(zip_path).is_file():
-        raise HomeAssistantError(f"Backup file not found: {zip_path}")
+        raise HomeAssistantError(f"Backup file not found: {zip_path}", translation_domain=DOMAIN, translation_key="backup_not_found", translation_placeholders={"path": str(zip_path)})
     payloads: dict[str, dict[str, Any]] = {}
     manifest: dict[str, Any] = {}
     try:
@@ -2284,7 +2270,7 @@ def _read_backup_zip(zip_path: str) -> tuple[dict[str, Any], dict[str, dict[str,
             names = set(zf.namelist())
             if "manifest.json" not in names:
                 raise HomeAssistantError(
-                    f"Not a valid Roomba+ backup (missing manifest.json): {zip_path}"
+                    f"Not a valid Roomba+ backup (missing manifest.json): {zip_path}", translation_domain=DOMAIN, translation_key="backup_invalid", translation_placeholders={"path": str(zip_path)}
                 )
             manifest = json.loads(zf.read("manifest.json"))
             for _attr, prefix in _BACKUP_STORES:
@@ -2293,7 +2279,7 @@ def _read_backup_zip(zip_path: str) -> tuple[dict[str, Any], dict[str, dict[str,
                     payloads[prefix] = json.loads(zf.read(member))
     except zipfile.BadZipFile as exc:
         raise HomeAssistantError(
-            f"Backup file is corrupt or not a ZIP: {zip_path}"
+            f"Backup file is corrupt or not a ZIP: {zip_path}", translation_domain=DOMAIN, translation_key="backup_corrupt", translation_placeholders={"path": str(zip_path)}
         ) from exc
     return manifest, payloads
 
@@ -2486,35 +2472,3 @@ async def async_handle_restore_backup(
     }
 
 
-def async_remove_services(hass: HomeAssistant) -> None:
-    """Remove all Roomba+ domain services (called when last entry unloads)."""
-    for svc in (
-        "run_favorite",
-        # Registered from prime_schedule_services, removed here with the
-        # rest -- a test asserts that the two lists agree, which is how
-        # this was caught rather than by a leaked service after reload.
-        "create_schedule",
-        "update_schedule",
-        "delete_schedule",
-        SERVICE_CLEAN_ROOM,
-        SERVICE_CLEAN_ZONE,
-        SERVICE_SET_QUIET_HOURS,
-        SERVICE_SMART_START,
-        SERVICE_CLEAN_OVERDUE_ROOMS,
-        SERVICE_AUTO_CLEAN_DIRTY_ROOMS,
-        SERVICE_CLEAN_SEQUENCE,
-        SERVICE_RESET_FILTER,
-        SERVICE_RESET_BRUSH,
-        SERVICE_RESET_BATTERY,
-        SERVICE_RESET_PAD,
-        "reset_wheel_cleaning",
-        "reset_contact_cleaning",
-        "reset_bin_cleaning",
-        "reset_robot_profile",
-        "advance_room",
-        SERVICE_EXPLAIN_MISSION,
-        SERVICE_CREATE_BACKUP,
-        SERVICE_RESTORE_BACKUP,
-    ):
-        if hass.services.has_service(DOMAIN, svc):
-            hass.services.async_remove(DOMAIN, svc)

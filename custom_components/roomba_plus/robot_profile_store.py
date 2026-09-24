@@ -34,6 +34,13 @@ _LOGGER = logging.getLogger(__name__)
 STORAGE_KEY_PREFIX = "roomba_plus_robot_profile"
 STORAGE_VERSION = 1
 
+#: Our own payload format version, separate from STORAGE_VERSION above
+#: (Home Assistant's, pinned at 1 forever). Nothing branches on it yet;
+#: it is recorded so a future format change is RECOGNISED instead of
+#: read as if it were the current one. This store's contents cannot be
+#: rebuilt from anywhere else.
+PAYLOAD_VERSION = 1
+
 # v3.3.0 CROSS-CORR — external-sensor correlation.
 _CORR_MIN_SAMPLES = 30          # Pearson only meaningful from here (spec)
 _CORR_MAX_SAMPLES = 120         # bounded history per entity
@@ -333,6 +340,18 @@ class RobotProfileStore:
         if not data:
             _LOGGER.debug("RobotProfileStore: no persisted data for %s", entry_id)
             return
+        # Absent means version 1: files written before this field
+        # existed are in the current format, so a missing key must not
+        # read as a mismatch.
+        stored_version = int(data.get("payload_version", 1) or 1)
+        if stored_version > PAYLOAD_VERSION:
+            _LOGGER.warning(
+                "RobotProfileStore: stored payload is version %d, this release "
+                "understands %d — not loading it. Learned measurements start over. The file is "
+                "left intact for a newer release to read.",
+                stored_version, PAYLOAD_VERSION,
+            )
+            return
         try:
             lf = data.get("learned_filter_hours")
             self.learned_filter_hours = float(lf) if lf is not None else None
@@ -450,6 +469,7 @@ class RobotProfileStore:
             return
         store: Store[dict[str, Any]] = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
         await store.async_save({
+            "payload_version": PAYLOAD_VERSION,
             "learned_filter_hours": self.learned_filter_hours,
             "learned_brush_hours": self.learned_brush_hours,
             "baseline_by_weekday": {str(k): v for k, v in self.baseline_by_weekday.items()},
@@ -1123,6 +1143,54 @@ class RobotProfileStore:
             self.coverage_baseline is not None
             and self.coverage_mission_count >= _COVERAGE_BASELINE_MIN_MISSIONS
         )
+
+    @property
+    def mission_duration_mean_sec(self) -> int:
+        """The rolling mean mission duration in SECONDS, 0 when unknown.
+
+        Same reasoning as `coverage_ratio()` above. Three sites in
+        sensor_rooms.py carried the identical
+
+            round((rps.mission_duration_mean or 0) * 60) if rps else 0
+
+        — a unit conversion and two None guards, written out three
+        times. Stored in minutes because that is what the cloud's
+        mission records use; consumed in seconds because every caller
+        compares it against elapsed run time.
+
+        Returns 0 rather than None: all three callers already collapsed
+        the missing case to 0, and a falsy 0 reads the same as "no
+        estimate yet" at every use site.
+        """
+        return round((self.mission_duration_mean or 0) * 60)
+
+    def coverage_ratio(self, current: float | None) -> float | None:
+        """`current` measured against the learned baseline, or None.
+
+        THE ARITHMETIC LIVES HERE, not in each consumer. Two sensors —
+        the integration-health score in sensor_cloud.py and the coverage
+        sensor's own attribute in sensor_rooms.py — each carried their
+        own copy of "is the baseline ready, is it non-zero, divide".
+        Two copies is two places an edge case gets fixed in one of them:
+        that is how five of the seven bugs in the week before the
+        architecture review were made, and this was the pattern that
+        review found underneath them.
+
+        Callers still supply their own `current`, because they measure
+        different things: one reads the grid store's live edge ratio, the
+        other the sensor's own value. What they share is the guard and
+        the division, and that is what moved.
+
+        Returns None when the baseline is not established yet, when it is
+        zero or missing, or when the caller has no current value —
+        callers report `unknown` rather than a fabricated 1.0.
+        """
+        if current is None or not self.coverage_baseline_ready:
+            return None
+        baseline = self.coverage_baseline
+        if not baseline or baseline <= 0:
+            return None
+        return current / baseline
 
     def update_mission_stats(
         self,

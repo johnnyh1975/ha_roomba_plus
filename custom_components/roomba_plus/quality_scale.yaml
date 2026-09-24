@@ -3,91 +3,122 @@ rules:
   action-setup:
     status: done
     comment: >
-      All services (reset_filter, reset_brush, reset_battery, reset_pad,
-      clean_room, smart_start) registered in async_setup_entry, not at
-      module level.
+      All 16 actions are registered once in async_setup (with CONFIG_SCHEMA =
+      config_entry_only_config_schema), not per entry. A call for a robot
+      whose entry is not loaded is refused with a translated message
+      (service_guard.py). Moved from async_setup_entry in 4.2.11.
   appropriate-polling:
     status: done
     comment: >
-      Integration is local_push (MQTT). Cloud coordinator polls on a 24h
-      interval — appropriate for slowly-changing pmap/favorites data.
+      Classic robots push over local MQTT; nothing is polled. The optional
+      cloud coordinator for Classic polls every 24 hours plus right after a
+      mission. V4/Prime state is pushed; consumable parts are read every 6
+      hours, schedules and room names every 15 minutes.
   brands:
     status: done
     comment: >
-      Brand assets (icon.png, icon@2x.png) ship in the inline brand/ directory.
-      Since HA 2026.3 the inline brand/ directory is the supported mechanism and
-      a separate PR to github.com/home-assistant/brands is no longer required.
+      Brand assets (icon.png, icon@2x.png) ship in the inline brand/
+      directory.
   common-modules:
     status: done
     comment: >
-      entity.py (IRobotEntity base), models.py (RoombaData, MapCapability),
-      const.py (all constants), separate store modules for mission/maintenance/
-      zone/geometry data.
+      Shared base entity in entity.py, runtime data in models.py, constants in
+      const.py, one coordinator module per data source (cloud_coordinator.py,
+      prime_coordinator.py), stores in their own modules.
   config-flow:
     status: done
-    comment: Full config flow with DHCP/Zeroconf discovery and options flow.
+    comment: >
+      UI setup with DHCP/Zeroconf discovery, manual entry, V4/Prime account
+      sign-in, options flow, reconfigure and reauth. Every field of every
+      setup and options step has a data_description in all eight languages,
+      and option lists are translated (enforced by
+      tests/test_guard_gold_entities.py).
   config-flow-test-coverage:
     status: done
     comment: >
-      20 tests in tests/test_config_flow.py (stub-based, no HA install
-      required) — kept out of the main tests/ run
-      (--ignore=tests/test_config_flow.py, same exclusion as
-      test_rest980_migrate.py) and run standalone. Covers
-      async_migrate_entry (v1→v2), config flow error handling, reconfigure
-      flow (form display + cannot_connect error), and options flow menu
-      routing + settings save. Note: this comment previously described a
-      separate tests_integration/ directory with its own pytest.ini; that
-      no longer exists in the current tree — corrected v3.4.2.
+      100% line coverage of config_flow.py, through Home Assistant's real flow
+      manager (tests/test_config_flow_real.py, test_config_flow_branches.py).
+      Reached in 4.2.11; it had been 81%, and writing the missing tests found
+      a manual zone-name step that closed silently on invalid input.
   dependency-transparency:
     status: done
-    comment: roombapy==2.0.1 pinned in manifest.requirements.
+    comment: >
+      roombapy==2.0.2 and roombapy-prime[map]==0.3.4, pinned in manifest
+      requirements; both are published on PyPI with public source.
   docs-actions:
     status: done
     comment: >
-      services.yaml documents all 6 actions with field descriptions, selectors,
-      and examples. README actions table added in v2.0.
+      services.yaml documents all 16 actions with field descriptions and
+      selectors; docs/AUTOMATIONS.md shows them in use.
   docs-configuration-parameters:
     status: done
     comment: >
-      README Configuration parameters section documents all options: connection
-      settings, map, blocking sensors, presence scheduling, cloud credentials,
-      and reconfiguration flow.
+      docs/FEATURES.md, 'Every option, and what it costs you to leave it off',
+      documents every option with its default.
   docs-installation-instructions:
     status: done
-    comment: README covers HACS and manual install.
+    comment: >
+      README: installation via HACS and manually, first-time setup steps.
+  docs-removal-instructions:
+    status: done
+    comment: >
+      README section 'Removal': deleting the entry (which also deletes
+      everything Roomba+ stored for the robot), removing the files via HACS or
+      manually, and what stays on the robot.
+  docs-installation-parameters:
+    status: done
+    comment: >
+      README 'First-time setup' lists every setup field and what to enter:
+      robot or IP address, password, iRobot email and password (optional for
+      Classic, required for V4/Prime), robot choice for V4/Prime.
   entity-event-setup:
     status: done
     comment: >
-      All entity state updates driven by roombapy MQTT callbacks via
-      new_state_filter + schedule_update_ha_state(). No polling in entities.
+      Entities subscribe in async_added_to_hass and pass every unsubscribe
+      handle to async_on_remove, so nothing keeps calling a removed entity.
+      Fixed in 4.2.11: the handles returned by register_on_message_callback
+      were discarded.
   entity-unique-id:
     status: done
-    comment: All entities set _attr_unique_id in __init__.
+    comment: >
+      Every entity sets a unique ID derived from the robot's BLID
+      (roomba_plus_<BLID>_<key>).
   has-entity-name:
     status: done
-    comment: All entities use translation_key + strings.json — no hardcoded names.
+    comment: >
+      _attr_has_entity_name = True on the shared base entity; names come from
+      translation keys. Favourite buttons take the favourite's own name from
+      the iRobot account.
   runtime-data:
     status: done
     comment: >
-      All runtime state in config_entry.runtime_data (RoombaData dataclass).
-      No hass.data[DOMAIN] usage anywhere.
+      All runtime state lives in config_entry.runtime_data (RoombaData);
+      hass.data is not used for it.
   test-before-setup:
     status: done
     comment: >
-      MQTT connection established and confirmed before async_setup_entry
-      returns. Cloud coordinator failure is caught and logged — local MQTT
-      always succeeds or raises ConfigEntryNotReady.
+      Setup connects to the robot before returning; a failed connection raises
+      ConfigEntryNotReady, rejected cloud credentials raise
+      ConfigEntryAuthFailed.
   unique-config-entry:
     status: done
-    comment: BLID used as unique_id in config flow — prevents duplicate entries.
-
+    comment: >
+      The robot's BLID is the config entry's unique ID; a robot cannot be
+      added twice.
   # ── Silver ────────────────────────────────────────────────────────────────
   action-exceptions:
     status: done
-    comment: Services raise ServiceValidationError with translation keys.
+    comment: >
+      Actions raise ServiceValidationError for bad input and
+      HomeAssistantError for failures, all with translation keys. Since 4.2.11
+      the maintenance reset actions also refuse an unknown robot instead of
+      reporting success.
   config-entry-unloading:
     status: done
-    comment: async_unload_entry implemented — unloads all platforms cleanly.
+    comment: >
+      async_unload_entry unloads all platforms, stops timers and listeners and
+      closes the robot connection; covered by an end-to-end setup/unload test
+      through Home Assistant's entry manager.
   docs-supported-functions:
     status: done
     comment: >
@@ -100,32 +131,42 @@ rules:
       102 entity keys across sensor, binary_sensor, select, button platforms.
       8 languages (EN/DE/FR/ES/IT/NL/PT/PL). All keys present in strings.json
       and all translation files.
+  entity-unavailable:
+    status: done
+    comment: >
+      Entities showing the robot's live state become unavailable when the
+      robot is not reachable: LocalAvailabilityWatcher for Classic,
+      PrimeAvailabilityWatcher for V4/Prime (both coordinators). Settings
+      switches and selects that are read from the robot are included.
   integration-owner:
     status: done
-    comment: codeowners set in manifest.
+    comment: >
+      codeowners set in manifest.json.
   log-when-unavailable:
     status: done
     comment: >
-      Disconnect logged by roombapy at WARNING level. Reconnect attempts
-      logged at INFO. Cloud failures logged at WARNING.
+      availability.py logs once when a robot becomes unavailable and once when
+      it is back, for both Classic (local connection) and V4/Prime (cloud
+      state).
   parallel-updates:
     status: done
     comment: >
-      PARALLEL_UPDATES = 0 set in all 7 platform files (vacuum, sensor,
-      binary_sensor, select, button, image, switch). MQTT push integration
-      — entities update independently via callbacks, no coordinator polling.
+      PARALLEL_UPDATES is set in all ten platform modules: binary_sensor,
+      button, calendar, device_tracker, image, select, sensor, switch, todo,
+      vacuum.
   reauthentication-flow:
     status: done
-    comment: Cloud coordinator raises ConfigEntryAuthFailed on auth failure.
+    comment: >
+      async_step_reauth / async_step_reauth_confirm: rejected iRobot
+      credentials raise ConfigEntryAuthFailed and start the reauth flow.
   test-coverage:
     status: done
     comment: >
-      3937 tests across 56 test files (was 2712/45 — stale since before
-      v3.4.2; corrected v3.4.2). Stub-based — no HA install required.
-      Covers all stores, sensors, cloud coordinator, services, callbacks,
-      migration (v1→v13), classification, REST API, backfill, UmfAligner,
-      device triggers, logbook, and wiring.
-
+      Every one of the 84 modules is above 95% line coverage, counted exactly
+      rather than from the rounded report; 96.5% overall, 8,200+ tests, run
+      against pytest-homeassistant-custom-component. Enforced in CI:
+      scripts/check_coverage_per_module.py fails the build when any module
+      drops below 95%, reading coverage.xml line by line.
   # ── Gold ──────────────────────────────────────────────────────────────────
   devices:
     status: done
@@ -139,8 +180,8 @@ rules:
   docs-high-level-description:
     status: done
     comment: >
-      README introduction updated for v2.0 — describes local-push architecture,
-      Gold Quality Scale, v2.1 performance intelligence and repair issue scope, and version history.
+      README introduction: what the integration does, local-push architecture
+      for Classic robots, cloud-only V4/Prime support.
   entity-category:
     status: done
     comment: >
@@ -154,16 +195,22 @@ rules:
   exception-translations:
     status: done
     comment: >
-      All ServiceValidationError raises use translation_key= (v2.4.0 F-RB-7).
-      Keys: entity_not_found, maintenance_store_unavailable, no_valid_segments
-      added in v2.4.0. All 9 exception keys defined in strings.json and
-      be converted to translation_key pattern in v2.4.0 (F-RB-7).
+      Every Home Assistant exception the integration raises (123 raise sites)
+      carries translation_domain and translation_key, with texts in all eight
+      languages. Enforced by tests/test_guard_exception_translations.py, which
+      also checks that placeholders passed in code match the message in both
+      directions, and formats every message through Home Assistant's own
+      translation loader. In 4.2.11: 62 untranslated raises fixed, eight call
+      sites that passed no placeholders their message needed, and strings.json
+      brought back in line with translations/en.json.
   icon-translations:
     status: done
     comment: >
-      icons.json created with 98 entity icons across sensor (75), button (14),
-      select (6), and switch (3) platforms. All _attr_icon and icon= assignments
-      removed from entity files — icons served via frontend translation system.
+      Icons live in icons.json. In 4.2.11 five icons still set in code (four
+      static _attr_icon, one description icon=) moved there. One documented
+      exception: the cloud room picker's icon follows the region type of the
+      selected room, and its options are the household's own room names, which
+      icons.json cannot list. Enforced by tests/test_guard_gold_entities.py.
   reconfiguration-flow:
     status: done
     comment: >
@@ -171,12 +218,77 @@ rules:
       removing the entry. Validates connection before applying. Reloads entry on success.
   repair-issues:
     status: done
-    comment: repairs.py raises RepairIssues for dock drift, unconfirmed zones, cloud auth.
+    comment: >
+      Repair issues for dock drift, zones that need naming (with a fix flow),
+      cloud authentication, MQTT silence, counter resets and observed obstacle
+      zones. Every constant issue key exists in all eight languages with the
+      placeholders the code passes
+      (tests/test_guard_exception_translations.py). In 4.2.11
+      observed_zones_detected carried the zone-naming text by mistake, in all
+      languages; rewritten.
   stale-devices:
     status: done
     comment: >
-      async_remove_config_entry_devices implemented. Each config entry manages
-      one robot device — any device presented for removal is safe to remove.
+      async_remove_config_entry_device refuses the device of the robot the
+      entry is configured for (identifier roomba_plus_<BLID>) and allows any
+      other device of the entry: a replaced robot, an identifier from an older
+      release. Until 4.2.11 it returned True for every device, including the
+      live robot's. Tested against the real device registry.
+  discovery-update-info:
+    status: done
+    comment: >
+      DHCP and Zeroconf discovery both run through _async_step_discovery,
+      which sets the BLID from the hostname as unique ID and aborts with
+      updates={CONF_HOST: ip}, so a robot that moved to a new IP address is
+      updated in place.
+  docs-data-update:
+    status: done
+    comment: >
+      README section 'How data is updated': Classic local MQTT push without
+      polling; optional iRobot cloud every 24 hours plus right after each
+      mission; V4/Prime state and live map by push, consumable parts every 6
+      hours, schedules, room names, quiet hours and favourites every 15
+      minutes. Taken from the coordinators' update intervals.
+  docs-examples:
+    status: done
+    comment: >
+      docs/AUTOMATIONS.md: automation recipes (presence-based cleaning,
+      scheduled room cleans, pausing on arrival, catch-up cleans for overdue
+      rooms, sending the mission map).
+  docs-known-limitations:
+    status: done
+    comment: >
+      README section 'Known limitations'. Some entries there record
+      confirmations rather than limitations and should be moved to the feature
+      status.
+  docs-supported-devices:
+    status: done
+    comment: >
+      README section 'Supported hardware & capability matrix' and 'V4/Prime
+      support'.
+  docs-troubleshooting:
+    status: done
+    comment: >
+      docs/TROUBLESHOOTING.md.
+  docs-use-cases:
+    status: done
+    comment: >
+      docs/AUTOMATIONS.md describes what the integration is used for, by
+      scenario: cleaning while nobody is home, room cleans on a schedule,
+      rain-day maintenance cleans, zone cleaning on demand.
+  dynamic-devices:
+    status: exempt
+    comment: >
+      One config entry is one robot. The integration never discovers further
+      devices after setup; a second robot is a second config entry.
+  entity-device-class:
+    status: done
+    comment: >
+      Every sensor measuring a span of time uses SensorDeviceClass.DURATION
+      (17 sensors added in 4.2.11; enforced by
+      tests/test_guard_gold_entities.py). Sensors without a device class have
+      no matching one in Home Assistant: fill levels and rates in percent,
+      capacity in mAh, wear in hours per day, mission counts.
   strict-typing:
     status: done
     comment: >
@@ -267,4 +379,6 @@ rules:
       because nothing checks it against config_flow.VERSION.
   test-before-configure:
     status: done
-    comment: MQTT credentials verified during config flow before entry is created.
+    comment: >
+      The config flow connects to the robot (or signs in to the iRobot cloud
+      for V4/Prime) before an entry is created.

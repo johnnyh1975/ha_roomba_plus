@@ -15,6 +15,9 @@
         "description": "Seleziona un Roomba rilevato oppure aggiungine uno manualmente.",
         "data": {
           "host": "Seleziona robot"
+        },
+        "data_description": {
+          "host": "Il robot da configurare. Vengono elencati i robot trovati nella rete; se il tuo manca, scegli l'inserimento manuale."
         }
       },
       "manual": {
@@ -36,6 +39,9 @@
         "description": "Il recupero automatico della password è fallito. Inserisci manualmente la password del Roomba. Istruzioni: [{auth_help_url}]({auth_help_url}).",
         "data": {
           "password": "Password"
+        },
+        "data_description": {
+          "password": "La password locale del robot. Viene letta automaticamente mentre tieni premuto il tasto HOME; inseriscila solo se non ha funzionato."
         }
       },
       "cloud_credentials": {
@@ -90,6 +96,9 @@
         "description": "Robot trovati su questo account. Scegline uno da configurare — aggiungi altri robot riavviando questa configurazione.",
         "data": {
           "blid": "Robot"
+        },
+        "data_description": {
+          "blid": "Il robot del tuo account iRobot da aggiungere. Ogni robot diventa una voce separata."
         }
       },
       "prime_classic_ip": {
@@ -97,6 +106,9 @@
         "description": "Impossibile trovare {name} automaticamente sulla tua rete locale. Inserisci il suo indirizzo IP locale — le credenziali già confermate tramite il tuo account iRobot verranno riutilizzate.",
         "data": {
           "host": "Indirizzo IP"
+        },
+        "data_description": {
+          "host": "L'indirizzo IP locale del robot nella tua rete, ad esempio come mostrato dal router."
         }
       },
       "prime_classic_analytics": {
@@ -104,6 +116,9 @@
         "description": "Mantenere le credenziali del tuo account iRobot anche per questo robot, per abilitare nomi delle stanze, cronologia missioni e preferiti letti dal cloud? Tutti i comandi continueranno comunque a essere eseguiti localmente tramite MQTT.",
         "data": {
           "enable_cloud_analytics": "Abilita le funzioni cloud per questo robot"
+        },
+        "data_description": {
+          "enable_cloud_analytics": "Conserva le credenziali iRobot per questo robot per aggiungere nomi delle stanze, storico delle missioni e preferiti. Il robot resta comandato in locale."
         }
       }
     },
@@ -179,7 +194,17 @@
         "data_description": {
           "map_enabled": "Abilita la mappa di pulizia in tempo reale per i robot con rilevamento della posizione (Roomba 900, i, s, j, Braava m).",
           "map_size_px": "Dimensione del canvas della mappa in pixel (400–1200). Predefinito: 600.",
-          "map_scale_mm_per_px": "Millimetri per pixel (5–30). Predefinito 10 = 6 m × 6 m a 600 px."
+          "map_scale_mm_per_px": "Millimetri per pixel (5–30). Predefinito 10 = 6 m × 6 m a 600 px.",
+          "floor_label": "Testo libero, ad esempio Piano terra. Raggruppa i robot nella vista flotta.",
+          "correlation_entities": "Sensori come umidità o pollini. Dopo 30 missioni Roomba+ indica se il robot raccoglie più sporco quando i valori sono alti. Calcolato in locale.",
+          "map_room_labels": "Scrive il nome di ogni stanza sull'immagine della mappa.",
+          "prime_favorite_buttons": "Un pulsante per ogni preferito salvato nell'app iRobot. Con molti preferiti sono molti pulsanti.",
+          "enable_schedule_calendar": "Mostra le programmazioni di pulizia del robot come calendario.",
+          "map_clean_zones": "Evidenzia il contorno delle zone di pulizia sull'immagine della mappa.",
+          "map_keepout_zones": "Evidenzia il contorno delle zone vietate sull'immagine della mappa.",
+          "map_nomop_zones": "Evidenzia il contorno delle zone senza lavaggio sull'immagine della mappa.",
+          "enable_maintenance_list": "Mostra la manutenzione in scadenza come elenco di attività.",
+          "region_sensors": "Crea un sensore separato per ogni stanza e zona."
         }
       },
       "smart_zones_manual": {
@@ -200,6 +225,10 @@
         "data": {
           "irobot_username": "Email iRobot",
           "irobot_password": "Password iRobot"
+        },
+        "data_description": {
+          "irobot_username": "L'indirizzo e-mail del tuo account dell'app iRobot. Lascia vuoti entrambi i campi per disattivare le funzioni cloud.",
+          "irobot_password": "La password del tuo account dell'app iRobot."
         }
       },
       "blocking_sensors": {
@@ -221,7 +250,10 @@
         "data": {
           "selected_zone": "Zone to edit"
         },
-        "description": "Seleziona una zona da rinominare o nascondere. Invia senza zona selezionata per salvare.\n\n{zone_summary}"
+        "description": "Seleziona una zona da rinominare o nascondere. Invia senza zona selezionata per salvare.\n\n{zone_summary}",
+        "data_description": {
+          "selected_zone": "La zona da rinominare o nascondere. Invia senza zona per salvare le modifiche."
+        }
       },
       "map_management_edit": {
         "title": "Modifica zona: {zone_name}",
@@ -244,6 +276,13 @@
           "presence_mode": "Modalità",
           "away_delay_min": "Ritardo dopo la partenza (minuti)",
           "clean_delay_min": "Ritardo prima dell'avvio del secondo robot"
+        },
+        "data_description": {
+          "presence_scheduling_enabled": "Sospende le programmazioni di pulizia mentre qualcuno è in casa e le riattiva quando tutti sono usciti.",
+          "presence_entities": "Le persone la cui presenza conta.",
+          "presence_mode": "«Sblocca quando tutti sono fuori» riattiva le programmazioni automaticamente; «Genera evento (controllo manuale)» lascia la decisione alla tua automazione.",
+          "away_delay_min": "Per quanto tempo tutti devono essere fuori prima che le programmazioni vengano riattivate.",
+          "clean_delay_min": "Un'attesa aggiuntiva dopo il ritardo di assenza prima che la pulizia inizi davvero."
         }
       },
       "demand_cleaning": {
@@ -252,6 +291,10 @@
         "data": {
           "demand_cleaning_enabled": "Enable demand cleaning",
           "demand_clean_multiplier": "Moltiplicatore di attivazione (es. 1,5 = 50% sopra la media)"
+        },
+        "data_description": {
+          "demand_cleaning_enabled": "Avvia automaticamente una pulizia quando il pavimento è molto più sporco del solito.",
+          "demand_clean_multiplier": "Quanto sopra il livello di sporco abituale avvia una pulizia: 1,5 significa il 50% sopra la media."
         }
       },
       "test_cloud_connection": {
@@ -263,6 +306,9 @@
         "description": "Trovate {room_count} stanza/e nella tua installazione roomba_rest980 non ancora denominate in Roomba+: {room_names}. Importarle ora? Le stanze già denominate qui non verranno modificate.",
         "data": {
           "confirm_import": "Importa queste stanze"
+        },
+        "data_description": {
+          "confirm_import": "Importa i nomi delle stanze dalla tua installazione roomba_rest980. Le stanze già nominate in Roomba+ mantengono il loro nome."
         }
       },
       "room_schedule": {
@@ -709,30 +755,6 @@
       "mission_id": {
         "name": "Missione – ID"
       },
-      "recent_completion_rate": {
-        "name": "Tasso di completamento (30 giorni)"
-      },
-      "recent_recharges": {
-        "name": "Ricariche intermedie (30 giorni)"
-      },
-      "recent_evacuations": {
-        "name": "Svuotamenti Clean Base (30 giorni)"
-      },
-      "recent_dirt_events": {
-        "name": "Rilevamenti sporco (30 giorni)"
-      },
-      "recent_error_code": {
-        "name": "Errore – Ultimo codice (cloud)"
-      },
-      "recent_error_time": {
-        "name": "Errore – Ultima ora (cloud)"
-      },
-      "recent_wifi_floor": {
-        "name": "Wi-Fi – Segnale minimo"
-      },
-      "recent_wifi_stability": {
-        "name": "Wi-Fi – Stabilità segnale"
-      },
       "mop_clean_mode": {
         "name": "Mocio – Modalità pulizia",
         "state": {
@@ -768,15 +790,6 @@
           "unknown": "Sconosciuto"
         }
       },
-      "recent_cleaning_speed": {
-        "name": "Prestazioni – Velocità di pulizia"
-      },
-      "recent_dirt_density": {
-        "name": "Prestazioni – Densità sporco"
-      },
-      "recent_recharge_fraction": {
-        "name": "Prestazioni – Frazione di ricarica"
-      },
       "cleaning_speed_trend": {
         "name": "Prestazioni – Tendenza velocità pulizia",
         "state": {
@@ -785,9 +798,6 @@
           "declining": "In calo",
           "unknown": "Sconosciuto"
         }
-      },
-      "recent_coverage_pct": {
-        "name": "Prestazioni – Copertura"
       },
       "battery_capacity_retention": {
         "name": "Manutenzione – Ritenzione capacità batteria"
@@ -1297,14 +1307,14 @@
       "part_dirt_bag": {
         "name": "Manutenzione – Sacchetto della polvere"
       },
-      "last_charge": {
-        "name": "Ultima ricarica"
-      },
       "reset_diagnostics_summary": {
         "name": "Contatori di reset diagnostici"
       },
       "last_mission_area": {
         "name": "Missioni – Ultima superficie"
+      },
+      "prime_dock_tank_level": {
+        "name": "Serbatoio acqua pulita base"
       }
     },
     "binary_sensor": {
@@ -1768,7 +1778,7 @@
     },
     "observed_zones_detected": {
       "title": "Ostacoli rilevati dal robot nella mappa cloud",
-      "description": "{robot}: {zone_count} zona/e senza nome (ID: {zone_ids}). Inserisci una per riga come `id=Nome`. Se non sai quale sia quale, apri la mappa del robot nell'app iRobot: le zone sono disegnate con i loro numeri."
+      "description": "La mappa cloud di iRobot mostra {zone_count} zona/e di ostacoli rilevate dal robot, ma Roomba+ non ha ancora dati locali che le confermino. Esegui alcune pulizie: questo avviso scompare quando i dati del robot confermano gli ostacoli. Se un ostacolo va evitato sempre, aggiungi una zona vietata nell'app iRobot."
     },
     "dock_contact_health": {
       "title": "Rilevato problema ai contatti della base",
@@ -2022,6 +2032,159 @@
     },
     "room_name_is_a_zone": {
       "message": "{names} è una zona e non una stanza su questo robot. Usa roomba_plus.clean_zone con lo stesso nome."
+    },
+    "entry_not_loaded": {
+      "message": "Il robot Roomba+ di {entity_id} non è caricato al momento. Verifica che la sua voce dell'integrazione sia abilitata e configurata, poi riprova."
+    },
+    "roombapy_too_old": {
+      "message": "Roomba+ richiede roombapy 2.x asincrono, ma è installata una versione precedente ({error}). Riavvia Home Assistant. Se il problema persiste, l'integrazione Roomba integrata di Home Assistant sta reinstallando la vecchia libreria e va rimossa."
+    },
+    "cannot_connect_local": {
+      "message": "Impossibile connettersi al robot all'indirizzo {host}."
+    },
+    "prime_login_rejected": {
+      "message": "Il cloud iRobot ha rifiutato l'accesso per il robot {blid}: {error}"
+    },
+    "prime_login_failed": {
+      "message": "Impossibile accedere al cloud iRobot per il robot {blid}: {error}"
+    },
+    "start_time_required": {
+      "message": "È richiesto un orario di inizio."
+    },
+    "all_day_not_schedulable": {
+      "message": "Gli eventi di un'intera giornata non possono diventare programmazioni: il robot ha bisogno di un orario di avvio."
+    },
+    "robot_not_connected": {
+      "message": "Nessuna connessione con il robot."
+    },
+    "no_robot_schedule": {
+      "message": "Questo robot non segnala alcuna programmazione, quindi non c'è nulla da scrivere."
+    },
+    "schedule_occurrence_not_editable": {
+      "message": "Una programmazione del robot non ha singole occorrenze da modificare: ogni esecuzione deriva dalla stessa voce settimanale."
+    },
+    "schedule_entry_unknown": {
+      "message": "Impossibile identificare questa voce di programmazione sul robot."
+    },
+    "rrule_not_supported": {
+      "message": "Questo robot non può rappresentare '{rrule}'. Supporta programmazioni settimanali, ogni due settimane, mensili e singole. Per tutto il resto usa l'azione roomba_plus.create_schedule."
+    },
+    "schedule_change_rejected": {
+      "message": "Impossibile modificare la programmazione del robot: {reason}"
+    },
+    "command_not_delivered": {
+      "message": "Il comando '{command}' non è stato accettato per l'invio: non ha mai raggiunto il cloud iRobot, quindi il robot non lo ha ricevuto. È un problema di connessione, non un rifiuto del robot."
+    },
+    "prime_shadows_unavailable": {
+      "message": "Impossibile leggere lo stato del robot {blid} dal cloud iRobot: {error}"
+    },
+    "schedules_unreadable": {
+      "message": "Impossibile leggere le programmazioni dal cloud iRobot: non è stato scritto nulla."
+    },
+    "prime_cannot_connect": {
+      "message": "Impossibile connettersi al robot {blid} tramite il cloud iRobot: {error}"
+    },
+    "parts_unreadable": {
+      "message": "Impossibile leggere i materiali di consumo dal cloud iRobot: {error}"
+    },
+    "not_a_roomba_plus_entity": {
+      "message": "{entity_id} non è un'entità Roomba+."
+    },
+    "not_a_prime_robot": {
+      "message": "{entity_id} non è un robot cloud (V4/Prime). Queste azioni gestiscono le programmazioni del cloud iRobot e ne richiedono uno."
+    },
+    "not_a_schedule_switch": {
+      "message": "{entity_id} non è un interruttore di programmazione. Scegli l'interruttore della programmazione stessa."
+    },
+    "schedule_unknown_rooms": {
+      "message": "Stanze sconosciute: {rooms}. Stanze note: {known}."
+    },
+    "schedule_container_gone": {
+      "message": "Il gruppo di programmazione di {schedule_id} non esiste più."
+    },
+    "no_schedule_template": {
+      "message": "Questa casa non ha programmazioni esistenti da cui partire. Creane prima una nell'app iRobot: il cloud rifiuta programmazioni create da zero."
+    },
+    "schedule_gone": {
+      "message": "Questa programmazione non esiste più sul robot: potrebbe essere stata eliminata nell'app iRobot. Ricarica l'integrazione per aggiornarti."
+    },
+    "schedule_id_gone": {
+      "message": "La programmazione {schedule_id} non esiste più sul robot."
+    },
+    "schedule_time_required": {
+      "message": "È richiesto un orario, perché la programmazione usata come modello non ne ha."
+    },
+    "schedule_changed_meanwhile": {
+      "message": "La programmazione {schedule_id} è scomparsa durante la modifica: probabilmente un'altra app l'ha eliminata. Non è stato scritto nulla."
+    },
+    "room_list_not_read": {
+      "message": "L'elenco delle stanze non è ancora stato letto, quindi non si sa a quale mappa appartenga ciascuna."
+    },
+    "room_map_unknown": {
+      "message": "La mappa di queste stanze non è ancora nota, quindi non si può inviare la pulizia per stanza: altrimenti partirebbe la pulizia di tutta la casa. Attendi il caricamento della mappa o avvia il robot senza indicare stanze."
+    },
+    "rooms_on_different_maps": {
+      "message": "Queste stanze si trovano su mappe diverse. Un comando di pulizia può riguardare una sola mappa, quindi puliscile separatamente."
+    },
+    "current_map_unknown": {
+      "message": "Questo robot ha {count} mappe e non indica su quale si trova, quindi non è chiaro a quale piano ti riferisci. Avvialo prima dall'app iRobot o attendi che si sia rilocalizzato."
+    },
+    "no_saved_maps": {
+      "message": "Questo robot non ha ancora mappe salvate, quindi non può pulire una stanza con nome. Lascia prima che completi un giro di mappatura completo."
+    },
+    "not_a_cleaning_mode": {
+      "message": "{option} non è una modalità di pulizia."
+    },
+    "cleaning_mode_unsupported": {
+      "message": "Questo robot non supporta «{option}». Supporta: {supported}."
+    },
+    "not_an_account_map": {
+      "message": "{option} non è una delle mappe di questo account."
+    },
+    "no_mission_history": {
+      "message": "Non c'è ancora uno storico delle missioni per {entity_id}."
+    },
+    "mission_not_found": {
+      "message": "Missione {mission_id} non trovata per {entity_id}."
+    },
+    "backup_not_found": {
+      "message": "File di backup non trovato: {path}"
+    },
+    "backup_corrupt": {
+      "message": "Il file di backup è danneggiato o non è un file ZIP: {path}"
+    },
+    "backup_invalid": {
+      "message": "Backup Roomba+ non valido (manca manifest.json): {path}"
+    },
+    "not_a_roomba_plus_vacuum": {
+      "message": "{entity_id} non è un aspirapolvere Roomba+."
+    },
+    "not_a_suction_level": {
+      "message": "{fan_speed} non è uno dei livelli di aspirazione di questo robot."
+    },
+    "send_command_prime_unsupported": {
+      "message": "send_command non è ancora supportato per i robot cloud (V4/Prime). Usa invece le azioni standard dell'aspirapolvere (avvia, pausa, ferma, torna alla base, localizza)."
+    },
+    "cloud_part_reset_unavailable": {
+      "message": "Il ripristino di questa parte viene registrato nel cloud iRobot e la connessione al cloud non è disponibile. Non è stato ripristinato nulla."
+    },
+    "cloud_part_unknown": {
+      "message": "Il cloud iRobot non elenca la parte {part} per questo robot, quindi il suo contatore non può essere ripristinato lì."
+    },
+    "cloud_part_reset_failed": {
+      "message": "Il cloud iRobot non ha ripristinato il contatore ({error}). Il contatore locale è rimasto invariato; riprova più tardi."
+    },
+    "cloud_part_reset_not_confirmed": {
+      "message": "Il cloud iRobot ha accettato la richiesta ma non ha confermato il ripristino. Il contatore locale è rimasto invariato."
+    },
+    "no_confirmed_room": {
+      "message": "Nessuna stanza appresa è ancora confermata. Le stanze vengono apprese dalle missioni completate; eseguine ancora qualcuna."
+    },
+    "no_last_mission": {
+      "message": "Il robot non ha segnalato alcun comando di pulizia precedente da ripetere."
+    },
+    "favorite_has_no_commands": {
+      "message": "Il preferito {name} non contiene comandi da eseguire."
     }
   },
   "selector": {
@@ -2032,6 +2195,18 @@
         "every_2_days": "Ogni 2 giorni",
         "three_per_week": "3 volte a settimana",
         "weekly": "Settimanale"
+      }
+    },
+    "blocking_behavior": {
+      "options": {
+        "abort": "Annulla l'avvio",
+        "queue": "Attendi e poi avvia"
+      }
+    },
+    "presence_mode": {
+      "options": {
+        "away_only": "Sblocca quando tutti sono fuori",
+        "always_ask": "Genera evento (controllo manuale)"
       }
     }
   }

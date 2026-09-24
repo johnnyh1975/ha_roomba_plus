@@ -137,6 +137,8 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
     - Cleaning time and area during active missions
     """
 
+    _live_state = True  # unavailable while the robot is unreachable (availability.py)
+
     _attr_name = None
     _attr_available = True  # Always available so setup doesn't fail
 
@@ -1190,7 +1192,7 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         value = self.PRIME_SUCTION.get(fan_speed)
         if value is None:
             raise ServiceValidationError(
-                f"{fan_speed} is not one of this robot's suction levels"
+                f"{fan_speed} is not one of this robot's suction levels", translation_domain=DOMAIN, translation_key="not_a_suction_level", translation_placeholders={"fan_speed": str(fan_speed)}
             )
         await self._prime_robot.set_setting("suctionLevel", value)
 
@@ -1342,7 +1344,7 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
             raise ServiceValidationError(
                 "send_command is not yet supported for V4/Prime robots -- "
                 "use the standard vacuum actions (start/pause/stop/"
-                "return_to_base/locate) instead."
+                "return_to_base/locate) instead.", translation_domain=DOMAIN, translation_key="send_command_prime_unsupported"
             )
         _LOGGER.debug("send_command %s params=%s", command, params)
 

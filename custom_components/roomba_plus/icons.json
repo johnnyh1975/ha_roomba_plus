@@ -77,7 +77,7 @@
         "default": "mdi:ip-network-outline"
       },
       "job_initiator": {
-        "default": "mdi:account-arrow-right-outline"
+        "default": "mdi:account-question"
       },
       "last_error_at": {
         "default": "mdi:clock-alert-outline"
@@ -172,24 +172,6 @@
       "readiness": {
         "default": "mdi:check-circle-outline"
       },
-      "recent_completion_rate": {
-        "default": "mdi:check-circle-outline"
-      },
-      "recent_dirt_events": {
-        "default": "mdi:spray"
-      },
-      "recent_error_code": {
-        "default": "mdi:alert-circle-outline"
-      },
-      "recent_error_time": {
-        "default": "mdi:clock-alert-outline"
-      },
-      "recent_evacuations": {
-        "default": "mdi:delete-empty"
-      },
-      "recent_recharges": {
-        "default": "mdi:battery-charging"
-      },
       "rssi": {
         "default": "mdi:signal"
       },
@@ -220,12 +202,6 @@
       "total_missions": {
         "default": "mdi:counter"
       },
-      "recent_wifi_floor": {
-        "default": "mdi:wifi-arrow-down"
-      },
-      "recent_wifi_stability": {
-        "default": "mdi:wifi-alert"
-      },
       "mop_clean_mode": {
         "default": "mdi:water-opacity"
       },
@@ -235,20 +211,8 @@
       "mop_ars_behavior": {
         "default": "mdi:shimmer"
       },
-      "recent_cleaning_speed": {
-        "default": "mdi:speedometer"
-      },
-      "recent_dirt_density": {
-        "default": "mdi:grain"
-      },
-      "recent_recharge_fraction": {
-        "default": "mdi:battery-charging-medium"
-      },
       "cleaning_speed_trend": {
         "default": "mdi:trending-up"
-      },
-      "recent_coverage_pct": {
-        "default": "mdi:map-check"
       },
       "battery_capacity_retention": {
         "default": "mdi:battery-heart"
@@ -462,6 +426,9 @@
       },
       "last_mission_area": {
         "default": "mdi:texture-box"
+      },
+      "prime_dock_tank_level": {
+        "default": "mdi:water-pump"
       }
     },
     "button": {
@@ -598,6 +565,12 @@
       },
       "prime_zone_select": {
         "default": "mdi:floor-plan"
+      },
+      "prime_cleaning_mode": {
+        "default": "mdi:auto-mode"
+      },
+      "prime_map": {
+        "default": "mdi:layers-outline"
       }
     },
     "switch": {
@@ -648,6 +621,9 @@
       },
       "prime_not_connected": {
         "default": "mdi:lan-disconnect"
+      },
+      "prime_quiet_hours_active": {
+        "default": "mdi:sleep"
       }
     },
     "image": {
@@ -733,6 +709,9 @@
       },
       "demand_clean_blocked": {
         "default": "mdi:play-box-lock"
+      },
+      "prime_quiet_hours": {
+        "default": "mdi:sleep"
       }
     },
     "device_tracker": {

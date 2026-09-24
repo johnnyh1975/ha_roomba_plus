@@ -46,6 +46,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
+from .const import ROOM_EVENT_DONE_STATUSES
+
 if TYPE_CHECKING:
     from .cloud_api import IrobotCloudApi
 
@@ -124,7 +126,7 @@ def _ts_to_iso(unix_ts: Any) -> str | None:
         return None
     try:
         return datetime.fromtimestamp(int(unix_ts), tz=UTC).isoformat()
-    except (TypeError, ValueError, OSError):
+    except (TypeError, ValueError, OSError, OverflowError):
         return None
 
 
@@ -665,12 +667,14 @@ class MissionArchive:
                 ev_ts = _safe_int(ev.get("ts"))
                 if ev_ts:
                     room_visits.append({"rid": rid, "ts": ev_ts})
-                if status in (0, 6):    # 0=complete, 6=complete after recovery
+                if status in ROOM_EVENT_DONE_STATUSES:    # 0=complete, 6=complete after recovery
+                    # "area" is the ROOM SIZE: this seeds the same dirt index
+                    # the live path feeds, which divides passes by room area.
+                    # `totalArea or area` mixed in the covered union for
+                    # multi-pass rooms (totalArea exists only from pass 2).
                     rooms_completed[rid] = {
                         "passes": _safe_int(room.get("passCount")),
-                        "area": _safe_float(
-                            room.get("totalArea") or room.get("area")
-                        ),
+                        "area": _safe_float(room.get("area")),
                     }
                 elif status == 5:       # 5=interrupted
                     if rid not in rooms_interrupted:
@@ -796,7 +800,7 @@ class MissionArchive:
                 status = room.get("status")
                 if not rid:
                     continue
-                if status in (0, 6):
+                if status in ROOM_EVENT_DONE_STATUSES:
                     events.append([
                         "room_done",
                         {

@@ -141,7 +141,7 @@ class PrimeCoordinator(DataUpdateCoordinator[MissionTimelineReport]):
             await self.prime_robot.connect()
         except (ShadowSSLError, ShadowConnectionError, ShadowError) as exc:
             raise ConfigEntryNotReady(
-                f"Could not connect to V4/Prime robot {self.blid}: {exc}"
+                f"Could not connect to V4/Prime robot {self.blid}: {exc}", translation_domain=DOMAIN, translation_key="prime_cannot_connect", translation_placeholders={"blid": str(self.blid), "error": str(exc)}
             ) from exc
 
         self.entry.async_create_background_task(
@@ -471,7 +471,6 @@ class PrimeCoordinator(DataUpdateCoordinator[MissionTimelineReport]):
             return None
         name = names.get(str(region_id))
         return str(name) if name else None
-        return None
 
     def _request_parts_refresh_on_mission_end(self, report: Any) -> None:
         """Refreshes the consumable parts once a mission finishes.
@@ -765,7 +764,7 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
 
         if not seeded and last_exc is not None:
             raise ConfigEntryNotReady(
-                f"Could not fetch any named shadow for V4/Prime robot {self.blid}: {last_exc}"
+                f"Could not fetch any named shadow for V4/Prime robot {self.blid}: {last_exc}", translation_domain=DOMAIN, translation_key="prime_shadows_unavailable", translation_placeholders={"blid": str(self.blid), "error": str(last_exc)}
             )
 
         # NEW (this session): one-time seed of the classic/unnamed shadow
@@ -1349,7 +1348,7 @@ class PrimePartsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         try:
             info = await self.prime_robot.get_robot_parts()
         except Exception as exc:  # noqa: BLE001
-            raise UpdateFailed(f"could not fetch consumable parts: {exc}") from exc
+            raise UpdateFailed(f"could not fetch consumable parts: {exc}", translation_domain=DOMAIN, translation_key="parts_unreadable", translation_placeholders={"error": str(exc)}) from exc
 
         parts = {
             p.part_id: p for p in (getattr(info, "parts", None) or []) if p.part_id
@@ -1670,7 +1669,7 @@ class PrimeScheduleCoordinator(DataUpdateCoordinator[list[tuple[str, list[Any]]]
             # exists to preserve. Raising keeps the last good data and
             # marks the coordinator unavailable, instead of telling every
             # switch its schedule vanished.
-            raise UpdateFailed("could not read schedules")
+            raise UpdateFailed("could not read schedules", translation_domain=DOMAIN, translation_key="schedules_unreadable")
         return containers
 
 

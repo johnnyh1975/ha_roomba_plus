@@ -41,6 +41,7 @@ from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv, entity_registry as er
 
+from .service_guard import register as register_guarded
 from .const import DOMAIN
 from .prime_schedule_switch import (
     _container_lock,
@@ -90,17 +91,17 @@ def _prime_entry_for(hass: HomeAssistant, entity_id: str) -> Any:
     registry = er.async_get(hass)
     entry = registry.async_get(entity_id)
     if entry is None or not entry.config_entry_id:
-        raise ServiceValidationError(f"{entity_id} is not a roomba_plus entity")
+        raise ServiceValidationError(f"{entity_id} is not a roomba_plus entity", translation_domain=DOMAIN, translation_key="not_a_roomba_plus_entity", translation_placeholders={"entity_id": str(entity_id)})
     config_entry = hass.config_entries.async_get_entry(entry.config_entry_id)
     if config_entry is None or config_entry.domain != DOMAIN:
-        raise ServiceValidationError(f"{entity_id} does not belong to {DOMAIN}")
+        raise ServiceValidationError(f"{entity_id} does not belong to {DOMAIN}", translation_domain=DOMAIN, translation_key="not_a_roomba_plus_entity", translation_placeholders={"entity_id": str(entity_id)})
     data = config_entry.runtime_data
     if getattr(data, "prime_robot", None) is None or not getattr(
         data, "prime_household_id", None
     ):
         raise ServiceValidationError(
             f"{entity_id} is not a Prime (cloud/V4) robot — these services "
-            "manage iRobot cloud schedules and need one"
+            "manage iRobot cloud schedules and need one", translation_domain=DOMAIN, translation_key="not_a_prime_robot", translation_placeholders={"entity_id": str(entity_id)}
         )
     return config_entry, entry
 
@@ -112,7 +113,7 @@ def _schedule_id_from(entry: er.RegistryEntry, blid: str) -> str:
     if not unique_id.startswith(prefix):
         raise ServiceValidationError(
             f"{entry.entity_id} is not a schedule switch — target the "
-            "schedule's own switch entity"
+            "schedule's own switch entity", translation_domain=DOMAIN, translation_key="not_a_schedule_switch", translation_placeholders={"entity_id": str(entry.entity_id)}
         )
     return unique_id[len(prefix):]
 
@@ -169,7 +170,7 @@ def _resolve_rooms(
     if unknown:
         raise ServiceValidationError(
             f"Unknown room(s): {', '.join(unknown)}. Known: "
-            f"{', '.join(sorted(room_names.values())) or '(no named rooms yet)'}"
+            f"{', '.join(sorted(room_names.values())) or '(no named rooms yet)'}", translation_domain=DOMAIN, translation_key="schedule_unknown_rooms", translation_placeholders={"rooms": ", ".join(unknown), "known": ", ".join(sorted(room_names.values())) or "-"}
         )
     return resolved
 
@@ -259,7 +260,7 @@ def _reshaped_options(template_options: Any, call_data: dict[str, Any], containe
             hour = getattr(start, "hour", None)
             minute = getattr(start, "min", None)
         if hour is None:
-            raise ServiceValidationError("A time is required (template has none)")
+            raise ServiceValidationError("A time is required (template has none)", translation_domain=DOMAIN, translation_key="schedule_time_required")
         changes["start"] = ScheduleTime(day=days, hour=int(hour), min=int(minute or 0))
 
     commands = list(getattr(template_options, "commands", None) or [])
@@ -293,15 +294,22 @@ async def _read_containers_or_error(config_entry: Any) -> list[Any]:
     containers = await async_read_schedule_containers(config_entry)
     if containers is None:
         raise ServiceValidationError(
-            "Could not read schedules from the cloud — nothing was written"
+            "Could not read schedules from the cloud — nothing was written", translation_domain=DOMAIN, translation_key="schedules_unreadable"
         )
     return containers
 
 
-async def _async_create(hass: HomeAssistant, call: ServiceCall) -> dict[str, Any]:
-    config_entry, _entry = _prime_entry_for(hass, call.data["entity_id"])
-    data = config_entry.runtime_data
+async def _async_create_from_template(
+    config_entry: Any, call_data: dict[str, Any], default_name: str
+) -> Any:
+    """Create a schedule derived from the household's first existing one.
 
+    The cloud refuses schedules built from scratch, so a new one starts
+    from an existing schedule's options, reshaped by the call. Shared by
+    the create_schedule action and the calendar; the two used to carry
+    their own copies of this. A missing or empty name gets the default.
+    """
+    data = config_entry.runtime_data
     containers = await _read_containers_or_error(config_entry)
     template = None
     for _cid, schedules in containers:
@@ -316,17 +324,21 @@ async def _async_create(hass: HomeAssistant, call: ServiceCall) -> dict[str, Any
             "This household has no existing schedule to derive from — "
             "create one in the iRobot app first (a schedule built from "
             "literals is refused by the server; deriving is the only "
-            "field-proven path)"
+            "field-proven path)", translation_domain=DOMAIN, translation_key="no_schedule_template"
         )
-
-    options = _reshaped_options(template, dict(call.data), containers, config_entry)
-    if "name" not in call.data:
-        options = replace(options, name=f"HA {call.data['time'].strftime('%H:%M')}")
-
-    response = await data.prime_robot.create_schedules(
-        data.prime_household_id, [options]
-    )
+    options = _reshaped_options(template, call_data, containers, config_entry)
+    if not call_data.get("name"):
+        options = replace(options, name=default_name)
+    response = await data.prime_robot.create_schedules(data.prime_household_id, [options])
     await _refresh(config_entry)
+    return response
+
+
+async def _async_create(hass: HomeAssistant, call: ServiceCall) -> dict[str, Any]:
+    config_entry, _entry = _prime_entry_for(hass, call.data["entity_id"])
+    response = await _async_create_from_template(
+        config_entry, dict(call.data), f"HA {call.data['time'].strftime('%H:%M')}"
+    )
     created_id = (response or {}).get("household_schedule_id")
     _LOGGER.info("roomba_plus: created schedule %s", created_id)
     return {"household_schedule_id": created_id}
@@ -391,29 +403,7 @@ async def async_create_schedule_from_calendar(
     if operating_mode is not None:
         call_data["operating_mode"] = operating_mode
 
-    data = config_entry.runtime_data
-    containers = await _read_containers_or_error(config_entry)
-    template = None
-    for _cid, schedules in containers:
-        for schedule in schedules:
-            if getattr(schedule.options, "enabled", None) is not None:
-                template = schedule.options
-                break
-        if template:
-            break
-    if template is None:
-        raise ServiceValidationError(
-            "This household has no existing schedule to derive from — create "
-            "one in the iRobot app first. A schedule built from literals is "
-            "refused by the server; deriving is the only field-proven path."
-        )
-
-    options = _reshaped_options(template, call_data, containers, config_entry)
-    if not name:
-        options = replace(options, name=f"HA {hour:02d}:{minute:02d}")
-    await data.prime_robot.create_schedules(data.prime_household_id, [options])
-    await _refresh(config_entry)
-    _LOGGER.info("roomba_plus: created schedule from calendar -- %s", note)
+    await _async_create_from_template(config_entry, call_data, f"HA {hour:02d}:{minute:02d}")
 
 
 def _days_for_update(
@@ -557,7 +547,7 @@ async def async_update_schedule_from_calendar(
     if container_id is None:
         raise ServiceValidationError(
             "That schedule no longer exists on the robot -- it may have been "
-            "deleted in the iRobot app. Reload the integration to catch up."
+            "deleted in the iRobot app. Reload the integration to catch up.", translation_domain=DOMAIN, translation_key="schedule_gone"
         )
 
     async with _container_lock(config_entry, container_id):
@@ -576,7 +566,7 @@ async def async_update_schedule_from_calendar(
         if target is None:
             raise ServiceValidationError(
                 "That schedule no longer exists on the robot -- it may have been "
-                "deleted in the iRobot app. Reload the integration to catch up."
+                "deleted in the iRobot app. Reload the integration to catch up.", translation_domain=DOMAIN, translation_key="schedule_gone"
             )
 
         # THE SERIES' OWN DAYS, not the edited occurrence's.
@@ -632,7 +622,7 @@ async def async_delete_schedule_by_id(
     )
     if container_id is None:
         raise ServiceValidationError(
-            f"Schedule {schedule_id} no longer exists on the robot"
+            f"Schedule {schedule_id} no longer exists on the robot", translation_domain=DOMAIN, translation_key="schedule_id_gone", translation_placeholders={"schedule_id": str(schedule_id)}
         )
 
     async with _container_lock(config_entry.entry_id, container_id):
@@ -670,7 +660,7 @@ async def _async_update(hass: HomeAssistant, call: ServiceCall) -> dict[str, Any
     )
     if container_id is None:
         raise ServiceValidationError(
-            f"Schedule {schedule_id} no longer exists on the robot"
+            f"Schedule {schedule_id} no longer exists on the robot", translation_domain=DOMAIN, translation_key="schedule_id_gone", translation_placeholders={"schedule_id": str(schedule_id)}
         )
 
     async with _container_lock(config_entry.entry_id, container_id):
@@ -691,14 +681,14 @@ async def _async_update(hass: HomeAssistant, call: ServiceCall) -> dict[str, Any
                     updated.append(schedule)
             if not found:
                 raise ServiceValidationError(
-                    f"Schedule {schedule_id} vanished between read and write"
+                    f"Schedule {schedule_id} vanished between read and write", translation_domain=DOMAIN, translation_key="schedule_changed_meanwhile", translation_placeholders={"schedule_id": str(schedule_id)}
                 )
             await data.prime_robot.update_schedules(
                 data.prime_household_id, container_id, updated
             )
             await _refresh(config_entry)
             return {"updated": schedule_id}
-    raise ServiceValidationError(f"Container for {schedule_id} not found")
+    raise ServiceValidationError(f"Container for {schedule_id} not found", translation_domain=DOMAIN, translation_key="schedule_container_gone", translation_placeholders={"schedule_id": str(schedule_id)})
 
 
 async def _async_delete(hass: HomeAssistant, call: ServiceCall) -> dict[str, Any]:
@@ -716,7 +706,7 @@ async def _async_delete(hass: HomeAssistant, call: ServiceCall) -> dict[str, Any
     )
     if target is None:
         raise ServiceValidationError(
-            f"Schedule {schedule_id} no longer exists on the robot"
+            f"Schedule {schedule_id} no longer exists on the robot", translation_domain=DOMAIN, translation_key="schedule_id_gone", translation_placeholders={"schedule_id": str(schedule_id)}
         )
     container_id, _schedules = target
 
@@ -743,7 +733,7 @@ async def _async_delete(hass: HomeAssistant, call: ServiceCall) -> dict[str, Any
         ]
         if not any(s.schedule_id == schedule_id for s in current):
             raise ServiceValidationError(
-                f"Schedule {schedule_id} vanished between read and write"
+                f"Schedule {schedule_id} vanished between read and write", translation_domain=DOMAIN, translation_key="schedule_changed_meanwhile", translation_placeholders={"schedule_id": str(schedule_id)}
             )
         if len(current) == 1:
             # Sole occupant: the per-container DELETE endpoint — the
@@ -782,7 +772,7 @@ def async_register_prime_schedule_services(hass: HomeAssistant) -> None:
         (SERVICE_DELETE_SCHEDULE, handle_delete, _DELETE_SCHEMA),
     ):
         if not hass.services.has_service(DOMAIN, name):
-            hass.services.async_register(
+            register_guarded(hass, 
                 DOMAIN,
                 name,
                 handler,

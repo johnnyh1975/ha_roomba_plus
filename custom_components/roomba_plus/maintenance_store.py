@@ -36,6 +36,18 @@ _LOGGER = logging.getLogger(__name__)
 STORAGE_KEY_PREFIX = "roomba_plus_maintenance"
 STORAGE_VERSION    = 1
 
+#: Application payload version, separate from STORAGE_VERSION above.
+#: STORAGE_VERSION is Home Assistant's own and must stay pinned at 1
+#: forever -- raising it hands the file to HA's migration machinery,
+#: which raises NotImplementedError unless we implement its hook.
+#:
+#: This one is ours. Nothing branches on it yet; it is recorded so a
+#: future format change can be RECOGNISED instead of silently misread.
+#: This store holds when the user replaced a part, which cannot be
+#: rebuilt from anything -- unlike the pose-derived stores, which just
+#: refuse to load an unknown version and fill again on the next mission.
+PAYLOAD_VERSION    = 1
+
 
 def _iso_from_epoch(ts: Any) -> str | None:
     """Convert an epoch-seconds reset timestamp to a local ISO-8601 string.
@@ -147,6 +159,22 @@ class MaintenanceStore:
         if not data:
             _LOGGER.debug("MaintenanceStore: no persisted data for %s", entry_id)
             return
+        # A payload written by a NEWER release than this one. Absent means
+        # version 1: every file written before this field existed is in
+        # the current format, so a missing key must not be read as a
+        # mismatch -- that would discard the replacement dates of every
+        # install that upgrades.
+        stored_version = int(data.get("payload_version", 1) or 1)
+        if stored_version > PAYLOAD_VERSION:
+            _LOGGER.warning(
+                "MaintenanceStore: stored payload is version %d, this "
+                "release understands %d. Not loading it — maintenance "
+                "counters will start from zero rather than be read "
+                "wrongly. Downgrading? The file is intact; a newer "
+                "release will read it again.",
+                stored_version, PAYLOAD_VERSION,
+            )
+            return
         try:
             self.filter_reset_hr  = int(data.get("filter_reset_hr",  0))
             self.brush_reset_hr   = int(data.get("brush_reset_hr",   0))
@@ -209,6 +237,7 @@ class MaintenanceStore:
         """Persist current reset values to hass.storage."""
         store: Store[dict[str, Any]] = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
         await store.async_save({
+            "payload_version":  PAYLOAD_VERSION,
             "filter_reset_hr":  self.filter_reset_hr,
             "brush_reset_hr":   self.brush_reset_hr,
             "battery_reset_hr": self.battery_reset_hr,

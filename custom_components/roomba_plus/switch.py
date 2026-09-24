@@ -359,6 +359,7 @@ class EdgeCleanSwitch(IRobotEntity, SwitchEntity):
       openOnly=False → edge cleaning ON  (robot cleans edges)
     We invert this so the switch is ON when edge cleaning is active.
     """
+    _live_state = True   # shows a setting the robot reports; stale when unreachable
 
     _attr_translation_key = "edge_clean"
     _attr_entity_category = EntityCategory.CONFIG
@@ -398,6 +399,7 @@ class AlwaysFinishSwitch(IRobotEntity, SwitchEntity):
 
     Only created on models that report this preference (Clean Base models).
     """
+    _live_state = True   # shows a setting the robot reports; stale when unreachable
 
     _attr_translation_key = "always_finish"
     _attr_entity_category = EntityCategory.CONFIG
@@ -438,6 +440,7 @@ class ScheduleHoldSwitch(IRobotEntity, SwitchEntity):
 
     Only created on models that report this preference.
     """
+    _live_state = True   # shows a setting the robot reports; stale when unreachable
 
     _attr_translation_key = "schedule_hold"
     _attr_entity_category = EntityCategory.CONFIG
@@ -477,6 +480,7 @@ class ChildLockSwitch(IRobotEntity, SwitchEntity):
 
     Only created on models that report this preference.
     """
+    _live_state = True   # shows a setting the robot reports; stale when unreachable
 
     _attr_translation_key = "child_lock"
     _attr_entity_category = EntityCategory.CONFIG
@@ -513,6 +517,7 @@ class EcoChargeSwitch(IRobotEntity, SwitchEntity):
 
     Only created on models that report this preference.
     """
+    _live_state = True   # shows a setting the robot reports; stale when unreachable
 
     _attr_translation_key = "eco_charge"
     _attr_entity_category = EntityCategory.CONFIG
@@ -554,6 +559,7 @@ class GentleModeSwitch(IRobotEntity, SwitchEntity):
 
     Only created on models that report this preference.
     """
+    _live_state = True   # shows a setting the robot reports; stale when unreachable
 
     _attr_translation_key = "gentle_mode"
     _attr_entity_category = EntityCategory.CONFIG
@@ -609,6 +615,7 @@ class PrimeCarpetBoostSwitch(IRobotEntity, SwitchEntity):
     working mechanism eventually was. Treat a successful toggle here as
     "the write went through", not yet as "confirmed working" the way
     start/stop/dock/find are."""
+    _live_state = True   # shows a setting the robot reports; stale when unreachable
 
     entity_description = SwitchEntityDescription(
         key="prime_carpet_boost",
@@ -833,6 +840,7 @@ class PrimeSettingSwitch(IRobotEntity, SwitchEntity):
     rather than copied four times. Copying it would have meant four
     places to fix when the shadow name or the read path changes.
     """
+    _live_state = True   # shows a setting the robot reports; stale when unreachable
 
     _attr_has_entity_name = True
     entity_description: PrimeSettingSwitchDescription
@@ -943,10 +951,10 @@ class PrimeQuietHoursSwitch(IRobotEntity, SwitchEntity, RestoreEntity):
     the robot obeys is a separate question no field report has answered
     yes. Keep automations that depend on quiet hours in Home Assistant.
     """
+    _live_state = True   # shows a setting the robot reports; stale when unreachable
 
     _attr_has_entity_name = True
     _attr_translation_key = "prime_quiet_hours_active"
-    _attr_icon = "mdi:sleep"
     _attr_entity_category = EntityCategory.CONFIG
 
     def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:
@@ -1018,6 +1026,7 @@ class PrimePadDrySwitch(IRobotEntity, SwitchEntity):
     out not to be honoured in some state, a button that is ignored is
     a nuisance where a switch that springs back looks broken.
     """
+    _live_state = True   # shows a setting the robot reports; stale when unreachable
 
     _attr_translation_key = "prime_pad_dry"
     _attr_has_entity_name = True

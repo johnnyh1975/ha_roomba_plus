@@ -249,6 +249,8 @@ async def async_setup_entry(
 class RoombaBinStatus(IRobotEntity, BinarySensorEntity):
     """Binary sensor that is ON when the Roomba's bin is full."""
 
+    _live_state = True  # unavailable while the robot is unreachable (availability.py)
+
     entity_description = BinarySensorEntityDescription(
         key="bin_full",
         name="Bin full",
@@ -278,6 +280,8 @@ class RoombaBinPresentStatus(IRobotEntity, BinarySensorEntity):
     during evacuation and may accidentally be left out. When OFF (bin missing),
     the robot cannot start a cleaning mission.
     """
+
+    _live_state = True  # unavailable while the robot is unreachable (availability.py)
 
     entity_description = BinarySensorEntityDescription(
         key="bin_present",
@@ -349,7 +353,10 @@ class RoombaConnectionStatus(IRobotEntity, BinarySensorEntity):
     async def async_added_to_hass(self) -> None:
         """Register both message and disconnect callbacks."""
         await super().async_added_to_hass()
-        self.vacuum.register_on_disconnect_callback(self._on_disconnect)
+        # Unsubscribe on removal — see IRobotEntity.async_added_to_hass.
+        self.async_on_remove(
+            self.vacuum.register_on_disconnect_callback(self._on_disconnect)
+        )
 
     def _on_disconnect(self, error: str | None) -> None:
         """Schedule HA state update when the robot disconnects."""
@@ -372,6 +379,8 @@ class RoombaMopReadyStatus(IRobotEntity, BinarySensorEntity):
 
     Only created when mopReady is present in the state (Braava m6).
     """
+
+    _live_state = True  # unavailable while the robot is unreachable (availability.py)
 
     entity_description = BinarySensorEntityDescription(
         key="mop_ready",
@@ -421,6 +430,8 @@ class RoombaMopTankPresentStatus(IRobotEntity, BinarySensorEntity):
     Only created on Braava m6 (mopReady present in state).
     """
 
+    _live_state = True  # unavailable while the robot is unreachable (availability.py)
+
     entity_description = BinarySensorEntityDescription(
         key="mop_tank_present",
         name="Mop tank present",
@@ -465,6 +476,8 @@ class RoombaMopLidClosedStatus(IRobotEntity, BinarySensorEntity):
     specifically alert when the lid has been left open after a pad change.
     Only created on Braava m6 (mopReady present in state).
     """
+
+    _live_state = True  # unavailable while the robot is unreachable (availability.py)
 
     entity_description = BinarySensorEntityDescription(
         key="mop_lid_closed",
@@ -518,6 +531,8 @@ class RoombaMapSavingStatus(IRobotEntity, BinarySensorEntity):
     Device class UPDATE: ON = update in progress (map save running),
     OFF = idle (map save complete, commands accepted normally).
     """
+
+    _live_state = True  # unavailable while the robot is unreachable (availability.py)
 
     entity_description = BinarySensorEntityDescription(
         key="map_saving",
@@ -630,9 +645,15 @@ class RoombaMaintenanceDue(IRobotEntity, BinarySensorEntity):
         """v2.9.0 — also forwards the live due-items list to repairs.py's
         sustained-duration check, on top of the normal state-write handling.
 
-        Runs on roombapy's MQTT thread (same as IRobotEntity.on_message
-        itself) — call_soon_threadsafe bridges to the event loop thread for
-        the same reason make_map_updating_callback does in callbacks.py.
+        Runs on the event loop, not on a separate thread — roombapy 2.x
+        dispatches callbacks there (see callbacks.py). The
+        `call_soon_threadsafe` below therefore no longer bridges anything;
+        it only defers the check to the next loop iteration. Nobody has
+        established that the deferral is needed, and nobody has
+        established that it is safe to drop either: `async_check_maintenance_due`
+        is synchronous and touches the repair registry. Left as it is
+        until someone checks, rather than removed on the assumption that
+        obsolete motivation means obsolete behaviour.
         """
         super().on_message(json_data)
         if not self.enabled:
@@ -655,6 +676,8 @@ class RoombaStartBlocked(IRobotEntity, BinarySensorEntity):
     Attributes expose which sensors are currently blocking, when queueing
     started, and when the timeout will expire.
     """
+
+    _live_state = True  # unavailable while the robot is unreachable (availability.py)
 
     entity_description = BinarySensorEntityDescription(
         key="start_blocked",
@@ -766,6 +789,8 @@ class RoombaMopLidOpen(IRobotEntity, BinarySensorEntity):
     Only created when `lidOpen` is present in the initial state.
     """
 
+    _live_state = True  # unavailable while the robot is unreachable (availability.py)
+
     entity_description = BinarySensorEntityDescription(
         key="mop_lid_open",
         name="Lid open",
@@ -796,6 +821,8 @@ class RoombaMopTankPresentDirect(IRobotEntity, BinarySensorEntity):
 
     Only created when `tankPresent` is present as a top-level state key.
     """
+
+    _live_state = True  # unavailable while the robot is unreachable (availability.py)
 
     entity_description = BinarySensorEntityDescription(
         key="mop_tank_present_direct",
@@ -840,6 +867,8 @@ class RoombaMidMissionRecharge(IRobotEntity, BinarySensorEntity):
     Always created on all robots — the condition is universal across firmware.
     """
 
+    _live_state = True  # unavailable while the robot is unreachable (availability.py)
+
     entity_description = BinarySensorEntityDescription(
         key="mid_mission_recharge",
         name="Mid-mission recharge",
@@ -882,6 +911,8 @@ class RoombaMissionActive(IRobotEntity, BinarySensorEntity):
     phase=="charge" with cycle!="none" = mid-mission recharge → still ON.
     phase=="charge" with cycle=="none" = final dock after mission → OFF.
     """
+
+    _live_state = True  # unavailable while the robot is unreachable (availability.py)
 
     entity_description = BinarySensorEntityDescription(
         key="mission_active",
@@ -1411,6 +1442,7 @@ class PrimeBinPresentSensor(_PrimeStatusSensorBase, BinarySensorEntity):
     CurrentStateShadow.bin.present (confirmed live, chairstacker) --
     matching the same "present": true structure as roomba_reported_state()'s
     own "bin" dict, just from a different transport."""
+    _live_state = True   # mirrors the robot now; stale when unreachable
 
     entity_description = BinarySensorEntityDescription(
         key="bin_present",
@@ -1479,6 +1511,7 @@ class PrimeTankPresentSensor(_PrimeStatusSensorBase, BinarySensorEntity):
     CurrentStateShadow.tank_present directly (confirmed live,
     chairstacker: a plain boolean, genuinely distinct from any numeric
     tank-fill-level field -- see that field's own docstring)."""
+    _live_state = True   # mirrors the robot now; stale when unreachable
 
     entity_description = BinarySensorEntityDescription(
         key="mop_tank_present",
@@ -1524,6 +1557,7 @@ class PrimeDockErrorSensor(_PrimeStatusSensorBase, BinarySensorEntity):
     is_on is True for any nonzero value -- the specific MEANING of a
     given nonzero code is unconfirmed, so the raw value is also
     exposed as an extra_state_attribute for anyone who needs it."""
+    _live_state = True   # mirrors the robot now; stale when unreachable
 
     entity_description = BinarySensorEntityDescription(
         key="prime_dock_error",
@@ -1628,7 +1662,10 @@ class PrimeRobotConnectivitySensor(IRobotEntity, BinarySensorEntity):
         raw = coordinator.data.get("rw-constatus")
         if raw is None:
             return None
-        return bool(ConnectionStatusShadow.from_json(raw).connected)
+        # None when the shadow lacks the field — unknown, not "off".
+        # `bool(None)` used to show a robot of unknown state as disconnected.
+        connected = ConnectionStatusShadow.from_json(raw).connected
+        return None if connected is None else bool(connected)
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
@@ -1666,6 +1703,7 @@ class PrimeStartBlockedSensor(_PrimeStatusSensorBase, BinarySensorEntity):
     and puts its codes in `cond_not_ready` instead. Checking one of the
     two would miss the case this sensor exists for.
     """
+    _live_state = True   # mirrors the robot now; stale when unreachable
 
     entity_description = BinarySensorEntityDescription(
         key="prime_start_blocked",
@@ -1797,7 +1835,6 @@ class PrimeQuietHoursSensor(IRobotEntity, BinarySensorEntity):
     """
 
     _attr_translation_key = "prime_quiet_hours"
-    _attr_icon = "mdi:sleep"
 
     def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:
         IRobotEntity.__init__(

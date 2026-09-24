@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING, Any
 from homeassistant.components.button import ButtonEntity
 from homeassistant.const import EntityCategory
 
-from homeassistant.exceptions import ServiceValidationError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 
 from .const import (
     CONF_PRIME_FAVORITE_BUTTONS,
@@ -54,6 +54,7 @@ class PrimeFavoriteButton(IRobotEntity, ButtonEntity):
     one deleted must not shift every button after it onto a different
     routine.
     """
+    _live_state = True   # sends a command to the robot; unavailable when it cannot be reached
 
     _attr_has_entity_name = True
 
@@ -263,6 +264,7 @@ class PrimeDockButton(IRobotEntity, ButtonEntity):
     true". Only an explicit 0 means absent, the same contract the other
     Prime capability checks use.
     """
+    _live_state = True   # sends a command to the robot; unavailable when it cannot be reached
 
     _attr_has_entity_name = True
 
@@ -381,7 +383,10 @@ class PrimeDockButton(IRobotEntity, ButtonEntity):
     async def async_press(self) -> None:
         robot = self._config_entry.runtime_data.prime_robot
         if robot is None:
-            return
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="robot_not_connected",
+            )
         # THE RESULT WAS THROWN AWAY. send_simple_command() reports
         # whether the broker acknowledged the publish; ignoring it made a
         # command that never left look exactly like one the robot chose
@@ -397,6 +402,7 @@ class PrimeLocateButton(IRobotEntity, ButtonEntity):
     identified Prime equivalent, so they are absent rather than
     non-functional.
     """
+    _live_state = True   # sends a command to the robot; unavailable when it cannot be reached
 
     _attr_has_entity_name = True
     _attr_translation_key = "prime_locate"
@@ -836,6 +842,7 @@ class PrimeZoneCleanButton(IRobotEntity, ButtonEntity):
     ONE SELECT, so there is nothing to choose between either: the id
     carries its own map.
     """
+    _live_state = True   # sends a command to the robot; unavailable when it cannot be reached
 
     _attr_translation_key = "prime_clean_zone"
 

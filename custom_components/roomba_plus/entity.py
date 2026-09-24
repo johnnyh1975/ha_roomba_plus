@@ -7,11 +7,14 @@ from typing import TYPE_CHECKING, Any
 
 from homeassistant.const import ATTR_CONNECTIONS
 from homeassistant.helpers import device_registry as dr
+from homeassistant.core import callback
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import Entity
 
 from . import roomba_reported_state
-from .const import DOMAIN
+from .availability import is_locally_available, local_availability_signal
+from .const import DOMAIN, maintenance_changed_signal
 
 if TYPE_CHECKING:
     from .models import RoombaConfigEntry
@@ -35,6 +38,17 @@ class IRobotEntity(Entity):
 
     _attr_should_poll = False
     _attr_has_entity_name = True
+
+    #: LIVE STATE — what the robot is doing and reporting right now.
+    #: True makes the entity unavailable once a Classic robot's local
+    #: connection has been down for the grace period (availability.py).
+    #: False, the default, keeps the last value: history, counters,
+    #: configuration and the last mission are still true while the
+    #: robot is away. @mdarocha: before this, every entity counted as
+    #: always available, so a dead-battery robot read "cleaning, 99 %"
+    #: for three and a half hours. Set on the class, or per instance
+    #: (RoombaSensor takes it from its description).
+    _live_state: bool = False
 
     def __init__(
         self,
@@ -307,13 +321,67 @@ class IRobotEntity(Entity):
         re-derive the same {} __init__ already set.
         """
         if self.vacuum is not None:
-            self.vacuum.register_on_message_callback(self.on_message)
+            # UNSUBSCRIBE ON REMOVAL (quality scale: entity-event-setup).
+            # `register_on_message_callback` returns an Unsubscribe; it was
+            # discarded, so an entity removed or disabled at runtime stayed
+            # registered on the client and kept receiving every message.
+            self.async_on_remove(
+                self.vacuum.register_on_message_callback(self.on_message)
+            )
             # Refresh snapshot — full state available now
             self.vacuum_state = roomba_reported_state(self.vacuum)
+        if self._live_state:
+            # Classic and Prime. The signal also fires on RECONNECT, which
+            # matters: many entities re-render only when their own key
+            # arrives, and would otherwise sit unavailable after the robot
+            # came back.
+            self.async_on_remove(
+                async_dispatcher_connect(
+                    self.hass,
+                    local_availability_signal(self._blid),
+                    self._on_local_availability,
+                )
+            )
+        # MAINTENANCE CHANGED OUTSIDE A ROBOT MESSAGE (a reset button or
+        # action). Every entity of the robot re-renders from its stores; a
+        # list of chosen keys would miss the next sensor that depends on
+        # maintenance data, and resets are rare enough for that to cost
+        # nothing.
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass,
+                maintenance_changed_signal(self._blid),
+                self._on_maintenance_changed,
+            )
+        )
         # Patch DeviceInfo and the live DeviceRegistry entry
         await self._async_update_device_name()
         # Force a state write so sensors don't show 'unavailable' on first render
         self.schedule_update_ha_state()
+
+    @callback
+    def _on_maintenance_changed(self) -> None:
+        """Re-render from the stores after a maintenance reset."""
+        self.async_write_ha_state()
+
+    @callback
+    def _on_local_availability(self, _available: bool) -> None:
+        """Re-render when the local connection crosses the grace period."""
+        self.async_write_ha_state()
+
+    @property
+    def available(self) -> bool:
+        """Unavailable only for LIVE state of an unreachable robot.
+
+        Classic and Prime alike since 4.2.11 — each generation's watcher
+        in availability.py decides from its own signals. Non-live entities
+        are never affected; subclasses with their own `available` keep it.
+        """
+        if not super().available:
+            return False
+        if not self._live_state:
+            return True
+        return is_locally_available(self._blid)
 
     async def _async_update_device_name(self) -> None:
         """Resolve the robot's name and write it to the DeviceRegistry.

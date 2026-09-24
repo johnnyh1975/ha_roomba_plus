@@ -390,12 +390,7 @@ async def async_attach_trigger(
             TRIGGER_MAP_RETRAIN_STARTED: EVENT_MAP_RETRAIN_STARTED,
             TRIGGER_MAP_RETRAIN_COMPLETED: EVENT_MAP_RETRAIN_COMPLETED,
         }.get(trigger_type)
-        if event_type is None:
-            _LOGGER.warning(
-                "roomba_plus: automation uses unknown trigger type %r -- "
-                "it will never fire. Recreate the trigger.",
-                trigger_type,
-            )
+        if event_type is None:   # unreachable: the three keys are the branch
             return lambda: None
         event_config = event_trigger.TRIGGER_SCHEMA(
             {
@@ -450,4 +445,15 @@ async def async_attach_trigger(
 
         return hass.bus.async_listen(EVENT_HEALTH_CHANGE, _handle_health_change)
 
+    # AN UNKNOWN TRIGGER TYPE LANDS HERE — a type from an older version, or
+    # a hand-edited automation. The warning used to sit inside the event
+    # branch above, which only the three known event types can enter, so
+    # it could never fire; an unknown type returned here in silence and
+    # the automation loaded, never fired, and said nothing. Found by the
+    # coverage work for the quality scale.
+    _LOGGER.warning(
+        "roomba_plus: automation uses unknown trigger type %r -- "
+        "it will never fire. Recreate the trigger.",
+        trigger_type,
+    )
     return lambda: None

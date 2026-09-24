@@ -202,18 +202,9 @@ def _phase_value(entity: "IRobotEntity") -> str:
     # function.
     _entry = getattr(entity, "_config_entry", None)
     _data = getattr(_entry, "runtime_data", None)
-    _last = getattr(_data, "last_mqtt_message_ts", 0.0) or 0.0
-    if not _last:
-        # NOTHING SINCE SETUP -- measure from then. `last_mqtt_message_ts`
-        # is in-memory and starts at zero, so a robot that was already
-        # silent before a Home Assistant restart never gets one and this
-        # check could not fire at all. @utkjmitch's robot was quiet for
-        # nine days and every restart put it back to a confident phase.
-        #
-        # An hour of uptime with no message is an hour of silence. It
-        # cannot false-positive at startup, where the elapsed time is
-        # zero.
-        _last = getattr(_data, "setup_ts", 0.0) or 0.0
+    # The rule (last message, else setup time) lives on RoombaData now —
+    # it had drifted into three different answers across three callers.
+    _last = getattr(_data, "silence_reference_ts", 0.0) or 0.0
     if _last:
         _quiet = _time_mod.time() - _last
         if _quiet > _SILENCE_BEFORE_STATUS_SAYS_SO_SEC:
@@ -253,7 +244,7 @@ def _mission_elapsed_value(entity: "IRobotEntity") -> float | None:
     try:
         elapsed = dt_util.now(datetime.timezone.utc) - datetime.datetime.fromtimestamp(ts, datetime.timezone.utc)
         return round(elapsed.total_seconds() / 60, 1)
-    except (TypeError, ValueError, OSError):
+    except (TypeError, ValueError, OSError, OverflowError):
         return None
 
 
@@ -263,7 +254,7 @@ def _ts_or_none(ts: int | None) -> "datetime.datetime | None":
         return None
     try:
         return datetime.datetime.fromtimestamp(ts, datetime.timezone.utc)
-    except (TypeError, ValueError, OSError):
+    except (TypeError, ValueError, OSError, OverflowError):
         return None
 
 
@@ -734,7 +725,11 @@ def _compute_integration_health(hass: Any, entry: Any) -> tuple[int, dict[str, A
     breakdown["active_issues"] = issue_count
 
     data = entry.runtime_data
-    last_mqtt_ts = getattr(data, "last_mqtt_message_ts", 0.0) or 0.0
+    # Same reference as the phase-confidence check above: a robot that
+    # was already silent before a restart never gets a message timestamp,
+    # so this skipped the deduction entirely for exactly the robots it
+    # was meant to catch.
+    last_mqtt_ts = getattr(data, "silence_reference_ts", 0.0) or 0.0
     mqtt_age_hours: float | None = None
     if last_mqtt_ts > 0:
         mqtt_age_hours = (_time_mod.time() - last_mqtt_ts) / 3600

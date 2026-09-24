@@ -331,11 +331,11 @@ class RoombaScheduleCalendar(IRobotEntity, CalendarEntity):
         """
         start = event.get("dtstart")
         if start is None:
-            raise ServiceValidationError("A start time is required.")
+            raise ServiceValidationError("A start time is required.", translation_domain=DOMAIN, translation_key="start_time_required")
         if not isinstance(start, dt_stdlib.datetime):
             raise ServiceValidationError(
                 "All-day events cannot become schedules -- a robot needs a "
-                "time of day to start at."
+                "time of day to start at.", translation_domain=DOMAIN, translation_key="all_day_not_schedulable"
             )
         local = dt_util.as_local(start)
         return (local.weekday() + 1) % 7, local.hour, local.minute
@@ -349,7 +349,7 @@ class RoombaScheduleCalendar(IRobotEntity, CalendarEntity):
         """
         roomba = self._config_entry.runtime_data.roomba
         if roomba is None:
-            raise ServiceValidationError("Not connected to the robot.")
+            raise ServiceValidationError("Not connected to the robot.", translation_domain=DOMAIN, translation_key="robot_not_connected")
         await roomba.set_preference(key, schedule)
 
     def _with_entry(
@@ -396,7 +396,7 @@ class RoombaScheduleCalendar(IRobotEntity, CalendarEntity):
         if key is None:
             raise ServiceValidationError(
                 "This robot does not report a schedule, so there is nothing "
-                "to write to."
+                "to write to.", translation_domain=DOMAIN, translation_key="no_robot_schedule"
             )
         try:
             reject_unsupported(
@@ -409,7 +409,7 @@ class RoombaScheduleCalendar(IRobotEntity, CalendarEntity):
                 key, current, weekday=weekday, hour=hour, minute=minute
             )
         except ScheduleFormatError as err:
-            raise ServiceValidationError(str(err)) from err
+            raise ServiceValidationError(str(err), translation_domain=DOMAIN, translation_key="schedule_change_rejected", translation_placeholders={"reason": str(err)}) from err
         await self._async_write(schedule, key)
 
     async def async_update_event(
@@ -430,13 +430,13 @@ class RoombaScheduleCalendar(IRobotEntity, CalendarEntity):
         if recurrence_range == "THISEVENT":
             raise ServiceValidationError(
                 "A robot schedule has no single occurrence to change -- every "
-                "run comes from the same weekly entry."
+                "run comes from the same weekly entry.", translation_domain=DOMAIN, translation_key="schedule_occurrence_not_editable"
             )
         key, current = self._schedule_state()
         if key is None:
             raise ServiceValidationError(
                 "This robot does not report a schedule, so there is nothing "
-                "to write to."
+                "to write to.", translation_domain=DOMAIN, translation_key="no_robot_schedule"
             )
         try:
             reject_unsupported(
@@ -475,7 +475,7 @@ class RoombaScheduleCalendar(IRobotEntity, CalendarEntity):
                 key, current, weekday=weekday, hour=hour, minute=minute
             )
         except ScheduleFormatError as err:
-            raise ServiceValidationError(str(err)) from err
+            raise ServiceValidationError(str(err), translation_domain=DOMAIN, translation_key="schedule_change_rejected", translation_placeholders={"reason": str(err)}) from err
         await self._async_write(schedule, key)
 
     async def async_delete_event(
@@ -490,12 +490,12 @@ class RoombaScheduleCalendar(IRobotEntity, CalendarEntity):
         weekday = _weekday_from_uid(uid)
         if key is None or weekday is None:
             raise ServiceValidationError(
-                "That schedule entry cannot be identified on the robot."
+                "That schedule entry cannot be identified on the robot.", translation_domain=DOMAIN, translation_key="schedule_entry_unknown"
             )
         try:
             schedule = self._without_day(key, current, weekday)
         except ScheduleFormatError as err:
-            raise ServiceValidationError(str(err)) from err
+            raise ServiceValidationError(str(err), translation_domain=DOMAIN, translation_key="schedule_change_rejected", translation_placeholders={"reason": str(err)}) from err
         await self._async_write(schedule, key)
 
     def _zone_labels(self, region_ids: list[str]) -> list[str]:
@@ -1073,11 +1073,11 @@ class PrimeScheduleCalendar(IRobotEntity, CalendarEntity):
 
         start = kwargs.get("dtstart")
         if start is None:
-            raise ServiceValidationError("A start time is required.")
+            raise ServiceValidationError("A start time is required.", translation_domain=DOMAIN, translation_key="start_time_required")
         if not isinstance(start, dt_stdlib.datetime):
             raise ServiceValidationError(
                 "All-day events cannot become schedules -- a robot needs a "
-                "time of day to start at."
+                "time of day to start at.", translation_domain=DOMAIN, translation_key="all_day_not_schedulable"
             )
 
         frequency = self._frequency_from_rrule(kwargs.get("rrule"))
@@ -1127,7 +1127,7 @@ class PrimeScheduleCalendar(IRobotEntity, CalendarEntity):
                     },
                 )
         except AmbiguousRoomError as err:
-            raise ServiceValidationError(str(err)) from err
+            raise ServiceValidationError(str(err), translation_domain=DOMAIN, translation_key="schedule_change_rejected", translation_placeholders={"reason": str(err)}) from err
 
         await async_create_schedule_from_calendar(
             self.hass,
@@ -1201,16 +1201,16 @@ class PrimeScheduleCalendar(IRobotEntity, CalendarEntity):
             raise ServiceValidationError(
                 "A robot schedule has no single occurrence to change -- every "
                 "run comes from the same rule. Choose to edit all events, or "
-                "delete this schedule and create another."
+                "delete this schedule and create another.", translation_domain=DOMAIN, translation_key="schedule_occurrence_not_editable"
             )
 
         start = event.get("dtstart")
         if start is None:
-            raise ServiceValidationError("A start time is required.")
+            raise ServiceValidationError("A start time is required.", translation_domain=DOMAIN, translation_key="start_time_required")
         if not isinstance(start, dt_stdlib.datetime):
             raise ServiceValidationError(
                 "All-day events cannot become schedules -- a robot needs a "
-                "time of day to start at."
+                "time of day to start at.", translation_domain=DOMAIN, translation_key="all_day_not_schedulable"
             )
 
         # AN EDIT THAT SAYS NOTHING ABOUT RECURRENCE MUST NOT CHANGE IT.
@@ -1256,7 +1256,7 @@ class PrimeScheduleCalendar(IRobotEntity, CalendarEntity):
         try:
             room_ids = match_rooms(text, self._room_names())
         except AmbiguousRoomError as err:
-            raise ServiceValidationError(str(err)) from err
+            raise ServiceValidationError(str(err), translation_domain=DOMAIN, translation_key="schedule_change_rejected", translation_placeholders={"reason": str(err)}) from err
 
         await async_update_schedule_from_calendar(
             self.hass,
@@ -1355,7 +1355,7 @@ class PrimeScheduleCalendar(IRobotEntity, CalendarEntity):
             raise ServiceValidationError(
                 f"This robot cannot express '{rrule}'. It supports weekly, "
                 "every two weeks, monthly, and one-off schedules. For anything "
-                "else, use the roomba_plus.create_schedule action."
+                "else, use the roomba_plus.create_schedule action.", translation_domain=DOMAIN, translation_key="rrule_not_supported", translation_placeholders={"rrule": str(rrule)}
             )
         return frequency
 

@@ -225,7 +225,7 @@ class DirtThresholdManager:
                     datetime.fromtimestamp(int(ts), tz=UTC)
                 )
                 wd = local_dt.weekday()
-            except (ValueError, OSError):
+            except (ValueError, OSError, OverflowError):
                 continue
             if wd != weekday:
                 continue

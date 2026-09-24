@@ -1318,7 +1318,7 @@ class PrimeRoomCleaning(RoomCleaningBackend):
             if len(maps) > 1:
                 raise HomeAssistantError(
                     "Those rooms are on different maps. A single cleaning command "
-                    "can only target one map, so please clean them separately."
+                    "can only target one map, so please clean them separately.", translation_domain=DOMAIN, translation_key="rooms_on_different_maps"
                 )
             # Optional across both branches: the block further down
             # clears it when the robot names a map that is not in its
@@ -1448,12 +1448,12 @@ class PrimeRoomCleaning(RoomCleaningBackend):
                     f"This robot has {len(map_ids)} maps and is not currently "
                     "reporting which one it is on, so there is no way to tell which "
                     "floor's rooms you mean. Start the robot from the iRobot app "
-                    "first, or wait until it has relocalised."
+                    "first, or wait until it has relocalised.", translation_domain=DOMAIN, translation_key="current_map_unknown", translation_placeholders={"count": str(len(map_ids))}
                 )
             else:
                 raise HomeAssistantError(
                     "This robot has no saved maps yet, so it cannot clean a named "
-                    "room. Let it finish a full mapping run first."
+                    "room. Let it finish a full mapping run first.", translation_domain=DOMAIN, translation_key="no_saved_maps"
                 )
 
         await self._send_region_command(
@@ -1991,7 +1991,7 @@ class ClassicRoomCleaning(RoomCleaningBackend):
             # an empty pmap_id, which the robot accepts and ignores.
             raise HomeAssistantError(
                 "Room list has not been read yet, so the map each room belongs to "
-                "is unknown."
+                "is unknown.", translation_domain=DOMAIN, translation_key="room_list_not_read"
             )
 
         self._raise_if_map_updating()
@@ -2019,7 +2019,7 @@ class ClassicRoomCleaning(RoomCleaningBackend):
                 "The map these rooms belong to is not known yet, so a "
                 "room-targeted clean cannot be sent. Sending it anyway would "
                 "start a whole-house clean instead. Wait for the map to load, "
-                "or start the robot without naming rooms."
+                "or start the robot without naming rooms.", translation_domain=DOMAIN, translation_key="room_map_unknown"
             )
         # WRONG FLOOR? SAY SO, BUT SEND IT.
         #

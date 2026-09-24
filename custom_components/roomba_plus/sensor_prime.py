@@ -325,6 +325,7 @@ class PrimeBatterySensor(_PrimeCurrentStateSensorBase):
     int, 0-100, e.g. 72). Same key/device_class/unit as the Classic
     "battery" sensor (sensor_core.py's own SENSORS tuple) so both
     present identically to the user regardless of connection type."""
+    _live_state = True   # mirrors the robot now; stale when unreachable
 
     entity_description = SensorEntityDescription(
         key="battery",
@@ -499,6 +500,7 @@ class PrimeDetectedPadSensor(_PrimeCurrentStateSensorBase):
     single-state captures from different robots, which is why this was
     settled by an accident during a rescue rather than by the pad-fitted
     capture that had been asked for."""
+    _live_state = True   # mirrors the robot now; stale when unreachable
 
     entity_description = SensorEntityDescription(
         key="prime_detected_pad",
@@ -660,6 +662,7 @@ class PrimeDockStatusSensor(_PrimeCurrentStateSensorBase):
     (confirmed live, chairstacker: 301 -> DockState.DOCK_READY) --
     see DockState's own docstring in roombapy-prime for the full,
     86-value confirmed enum this is drawn from."""
+    _live_state = True   # mirrors the robot now; stale when unreachable
 
     entity_description = SensorEntityDescription(
         key="prime_dock_status",
@@ -717,6 +720,7 @@ class PrimeDockStatusSensor(_PrimeCurrentStateSensorBase):
 class PrimePadWashStatusSensor(_PrimeCurrentStateSensorBase):
     """V4/Prime pad wash status. Reads CurrentStateShadow.dock.pw_state
     (confirmed live, chairstacker: 601 -> DockState.PAD_WASH_OKAY)."""
+    _live_state = True   # mirrors the robot now; stale when unreachable
 
     entity_description = SensorEntityDescription(
         key="prime_pad_wash_status",
@@ -765,9 +769,11 @@ class PrimeDockTankLevelSensor(_PrimeCurrentStateSensorBase):
     app's native library but its role could not be established, and it
     appears in no capture from either dock.
     """
+    _live_state = True   # mirrors the robot now; stale when unreachable
 
     entity_description = SensorEntityDescription(
         key="prime_dock_tank_level",
+        translation_key="prime_dock_tank_level",
         native_unit_of_measurement=PERCENTAGE,
         state_class=SensorStateClass.MEASUREMENT,
     )
@@ -775,7 +781,6 @@ class PrimeDockTankLevelSensor(_PrimeCurrentStateSensorBase):
 
     def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:
         super().__init__(blid, config_entry)
-        self._attr_name = "Dock clean water tank"
         self._attr_unique_id = f"{self.robot_unique_id}_prime_dock_tank_level"
 
     @property
@@ -789,6 +794,7 @@ class PrimeDockTankLevelSensor(_PrimeCurrentStateSensorBase):
 class PrimePadDryStatusSensor(_PrimeCurrentStateSensorBase):
     """V4/Prime pad dry status. Reads CurrentStateShadow.dock.pd_state
     (confirmed live, chairstacker: 701 -> DockState.PAD_DRY_OKAY)."""
+    _live_state = True   # mirrors the robot now; stale when unreachable
 
     entity_description = SensorEntityDescription(
         key="prime_pad_dry_status",
@@ -867,6 +873,7 @@ class PrimeRuntimeHoursSensor(_PrimeCurrentStateSensorBase):
 
     entity_description = SensorEntityDescription(
         key="prime_runtime_hours",
+        device_class=SensorDeviceClass.DURATION,
         translation_key="prime_runtime_hours",
         native_unit_of_measurement=UnitOfTime.HOURS,
         state_class=SensorStateClass.TOTAL_INCREASING,
@@ -1158,6 +1165,7 @@ class PrimeSystemUptimeSensor(_PrimeStatsSensorBase):
 
     entity_description = SensorEntityDescription(
         key="prime_system_uptime",
+        device_class=SensorDeviceClass.DURATION,
         translation_key="prime_system_uptime",
         native_unit_of_measurement=UnitOfTime.HOURS,
         state_class=SensorStateClass.TOTAL_INCREASING,
@@ -1348,6 +1356,7 @@ class PrimeErrorSensor(_PrimeCurrentStateSensorBase):
     to start would leave `error` at 0 while cond_not_ready carries the
     actual reasons. Keeping them visible here means that case is
     diagnosable from the entity itself, not only from a CLI script."""
+    _live_state = True   # mirrors the robot now; stale when unreachable
 
     entity_description = SensorEntityDescription(
         key="prime_error",
@@ -1954,6 +1963,7 @@ class PrimePhaseSensor(_PrimeCurrentStateSensorBase):
     them here would break templates people copied from Classic
     documentation.
     """
+    _live_state = True   # mirrors the robot now; stale when unreachable
 
     entity_description = SensorEntityDescription(
         key="prime_phase",
@@ -2208,6 +2218,7 @@ class PrimeReadinessSensor(_PrimeCurrentStateSensorBase):
     robot refuses a start silently. The command is accepted, nothing
     happens, and this sensor is the only place that says why.
     """
+    _live_state = True   # mirrors the robot now; stale when unreachable
 
     entity_description = SensorEntityDescription(
         key="prime_readiness",
@@ -2303,6 +2314,7 @@ class PrimeJobInitiatorSensor(_PrimeCurrentStateSensorBase):
     at all" -- until the vendor's own enum was read against it. All 25
     are named now, and a test asserts the table covers the enum.
     """
+    _live_state = True   # mirrors the robot now; stale when unreachable
 
     _attr_has_entity_name = True
 
@@ -2310,7 +2322,6 @@ class PrimeJobInitiatorSensor(_PrimeCurrentStateSensorBase):
         key="job_initiator",
         translation_key="job_initiator",
         entity_category=EntityCategory.DIAGNOSTIC,
-        icon="mdi:account-question",
     )
 
     def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:

@@ -13,8 +13,8 @@ import datetime
 
 from collections import Counter
 from collections.abc import Callable
-from dataclasses import dataclass, field
-from typing import Any, ClassVar, cast
+from dataclasses import dataclass
+from typing import Any, cast
 import logging
 
 from homeassistant.components.sensor import (
@@ -134,15 +134,6 @@ CLOUD_HISTORY_SENSORS: tuple[CloudHistorySensorDescription, ...] = (
 # Unlike the lifetime sensors above, these are window-relative: they reflect
 # the last ~30 days, not all-time totals.
 
-@dataclass(frozen=True, kw_only=True)
-class CloudRawSensorDescription(SensorEntityDescription):
-    """Description for a sensor reading from the raw per-mission record list."""
-    value_fn: Callable[[list[dict[str, Any]]], StateType]
-    attributes_fn: Callable[[list[dict[str, Any]]], dict[str, Any]] | None = None
-    # When set, entity is unavailable (not unknown) when fn returns False.
-    # Receives the CloudRawSensor entity so the lambda can access both
-    # coordinator.raw_records and runtime_data (e.g. mission_store).
-    available_fn: Callable[[Any], bool] | None = field(default=None)
 
 
 # ── F5 — Performance intelligence (RoombaSensor + consolidated functions) ───
@@ -449,142 +440,6 @@ def _raw_cleaning_speed_trend(records: list[dict[str, Any]]) -> StateType:
     return "stable"
 
 
-class CloudRawSensor(IRobotEntity, SensorEntity):
-    """Sensor reading per-mission stats from the iRobot cloud raw record list.
-
-    Reads from coordinator.raw_records — the per-mission list stored since v2.0.
-    Updates whenever the coordinator refreshes (daily poll or map-retrain trigger).
-
-    Available for all robots with cloud credentials (EPHEMERAL + SMART).
-
-    SC1 (v2.7.0): these individual sensors are deprecated and disabled by default
-    on fresh installs. Use the consolidated sensors instead:
-      sensor.*_cleaning_performance, *_cleaning_analytics_30d,
-      *_wifi_health, *_event_counts_30d.
-    They will be removed in v3.0.
-    """
-
-    entity_description: CloudRawSensorDescription
-    # SC1 (v2.7.0): tracks which keys have already logged a deprecation warning
-    # this session. Class-level so it persists across sensor instances.
-    _sc1_warned: ClassVar[set[str]] = set()
-
-    def __init__(
-        self,
-        roomba: Any,
-        blid: str,
-        coordinator: IrobotCloudCoordinator,
-        description: CloudRawSensorDescription,
-        config_entry: RoombaConfigEntry,
-    ) -> None:
-        super().__init__(roomba, blid)
-        self.entity_description = description
-        self._coordinator = coordinator
-        self._config_entry = config_entry
-        self._attr_unique_id = f"{self.robot_unique_id}_cloud_{description.key}"
-        # Lock entity_id to the description key so it is locale-independent.
-
-    @property
-    def native_value(self) -> StateType:
-        # SC1 (v2.7.0): log a one-shot deprecation warning per key per session.
-        key = self.entity_description.key
-        if key not in CloudRawSensor._sc1_warned:
-            _LOGGER.warning(
-                "Roomba+ sensor '%s' is deprecated (SC1, v2.7.0) and will be "
-                "removed in v3.0. Use sensor.*_cleaning_performance, "
-                "*_cleaning_analytics_30d, *_wifi_health, or *_event_counts_30d "
-                "instead. Disable this sensor in HA to suppress this warning.",
-                key,
-            )
-            CloudRawSensor._sc1_warned.add(key)
-        value = self.entity_description.value_fn(self._coordinator.raw_records)
-        # Caches cleaning_speed_trend_value, which IS still read (by the
-        # F6a-successor logic further down this same file).
-        #
-        # TWO SIBLING BRANCHES REMOVED HERE (this session): they cached
-        # recharge_fraction_value and dirt_density_rising, and nothing
-        # anywhere read either one. v3.5.0 removed the Repair Issues
-        # they fed (battery_recharge_high is still listed in
-        # repairs.py's _REMOVED_REPAIR_TRANSLATION_KEYS) but left the
-        # data scaffolding standing.
-        #
-        # The dirt-density branch was not merely dead storage: it ran a
-        # median over up to ten mission records on every sensor update,
-        # for a consumer that had not existed for two minor versions.
-        #
-        # What made it hard to spot: the comment above claimed "this now
-        # only maintains the cached values other code reads". That was
-        # already untrue when it was written, and a comment asserting a
-        # consumer is precisely what stops anyone checking for one.
-        data = self._config_entry.runtime_data
-        if key == "cleaning_speed_trend":
-            data.cleaning_speed_trend_value = str(value) if value else None
-        return value
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        if self.entity_description.attributes_fn is None:
-            return {}
-        attrs = dict(self.entity_description.attributes_fn(self._coordinator.raw_records))
-        # L5 (v2.6.0): add by_room dirtiness to recent_dirt_density sensor
-        if self.entity_description.key == "recent_dirt_density":
-            rps = getattr(self._config_entry.runtime_data, "robot_profile_store", None)
-            if rps is not None:
-                rel = rps.room_dirt_relative()
-                if rel:
-                    attrs["by_room"] = {rid: round(v, 3) for rid, v in rel.items()}
-                # v3.3.0 DIRT-VEL — per-room accumulation velocity
-                # ((passCount/m²)/day, EMA-smoothed). Present only once a
-                # room has two sufficiently spaced cleanings.
-                vel = rps.dirt_accumulation_rate()
-                if vel:
-                    attrs["by_room_velocity"] = vel
-        return attrs
-
-    @property
-    def available(self) -> bool:
-        # R3: return False when cloud is not configured so HA shows "Unavailable"
-        # rather than showing None state with available=True. Distinguishes
-        # "cloud not configured" from "coordinator not yet updated".
-        if not self._config_entry.runtime_data.has_cloud:
-            return False
-        if not (self._coordinator.last_update_success
-                and self._coordinator.data is not None):
-            return False
-        # available_fn: mark unavailable when insufficient data (not unknown).
-        if self.entity_description.available_fn is not None:
-            if not self.entity_description.available_fn(self):
-                return False
-        return True
-
-    def new_state_filter(self, new_state: dict[str, Any]) -> bool:
-        return False
-
-    async def async_added_to_hass(self) -> None:
-        await super().async_added_to_hass()
-
-        @callback
-        def _on_coordinator_update() -> None:
-            self.async_write_ha_state()
-            # F6f -- trigger accident detection on each cloud poll,
-            # but only from the dirt density sensor to avoid 6x redundant calls.
-            if (
-                self.entity_description.key == "recent_dirt_density"
-                and self.hass.is_running
-            ):
-                from .repairs import async_check_accident_detection
-                self.hass.async_create_task(
-                    async_check_accident_detection(
-                        self.hass,
-                        self._config_entry,
-                        self._coordinator.raw_records,
-                    ),
-                    name="roomba_plus_f6f_accident_check",
-                )
-
-        self.async_on_remove(
-            self._coordinator.async_add_listener(_on_coordinator_update)
-        )
 
 
 class CloudHistorySensor(IRobotEntity, SensorEntity):
@@ -1008,14 +863,12 @@ class RoombaRobotHealthSensor(IRobotEntity, SensorEntity):
         bat_retention = data.battery_retention_value
 
         # Signal 2: navigation efficiency — current edge ratio vs stored baseline
-        nav_ratio: float | None = None
         gs = data.grid_store
-        if rps.coverage_baseline_ready and rps.coverage_baseline and gs is not None:
-            current_ratio = gs.edge_coverage_ratio()
-            if current_ratio is not None and rps.coverage_baseline > 0:
-                nav_ratio = current_ratio / rps.coverage_baseline
+        nav_ratio = rps.coverage_ratio(
+            gs.edge_coverage_ratio() if gs is not None else None
+        )
 
-        # Signal 3: cleaning speed trend (cached from CloudRawSensor)
+        # Signal 3: cleaning speed trend (cached by _cache_and_check_f6a)
         trend = data.cleaning_speed_trend_value
 
         # Signal 4: consecutive anomalous missions (L3)

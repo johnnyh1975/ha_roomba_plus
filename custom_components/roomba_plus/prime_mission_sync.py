@@ -412,7 +412,13 @@ async def _async_sync_locked(
     #
     # A wide window on purpose -- this is a duplicate check, and a
     # mission older than the window would be re-added on every run.
-    known = {rec.get("id") for rec in store.query(days=3650)}
+    # EVERY STORED ID, not a date query. `store.query()` skips records
+    # without a parseable `started_at`, and Prime records written before
+    # `started_at` fell back to the end time have none. Their ids were
+    # never "known", so each poll rebuilt them as new (@1lyra): dropped
+    # as duplicates when recent, APPENDED a second time when older than
+    # the five records `async_append` compares against.
+    known = {rec.get("id") for rec in store.records}
     added = 0
     # Oldest first, so the store's own ordering assumptions and any
     # rolling statistics see missions in the order they happened.
@@ -423,9 +429,12 @@ async def _async_sync_locked(
         record = prime_entry_to_record(entry)
         if record is None or record["id"] in known:
             continue
-        await store.async_append(record)
         known.add(record["id"])
-        added += 1
+        # Count only what was actually stored. A dropped duplicate counted
+        # here would still trigger the save, the statistics backfill and
+        # EVENT_MISSION_COMPLETED -- a "finished cleaning" for nothing.
+        if await store.async_append(record):
+            added += 1
 
     # SAVED ONCE, AFTER THE LOOP.
     #

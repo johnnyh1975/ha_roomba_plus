@@ -144,6 +144,8 @@ class RoombaDeviceTracker(IRobotEntity, TrackerEntity):
     EPHEMERAL-tier extension point.
     """
 
+    _live_state = True  # unavailable while the robot is unreachable (availability.py)
+
     _attr_name = None
     _attr_translation_key = "position"
     # TrackerEntity.entity_registry_enabled_default returns False when both
@@ -443,7 +445,13 @@ class RoombaDeviceTracker(IRobotEntity, TrackerEntity):
                 # `prime_room_names` is flat and holds both. A room wins
                 # a name collision: its name comes from the map's own
                 # metadata, a zone's from whatever the last command
-                # called it.
+                # called it. Missing zone NAMES (#47) were not the cause:
+                # the list would have been empty with every zone named.
+                #
+                # This block existed twice, the second copy below this
+                # one and unreachable — every name it could add was
+                # already added here. Removed in 4.2.11, found by the
+                # coverage work for the quality scale.
                 zones = getattr(
                     self._config_entry.runtime_data, "prime_room_names", None
                 ) or {}
@@ -458,30 +466,6 @@ class RoombaDeviceTracker(IRobotEntity, TrackerEntity):
                 if not hasattr(self, "_seen_region_ids"):
                     self._seen_region_ids = set()
                 self._seen_region_ids |= {str(r) for r in zones}
-
-                # ZONES ARE PLACES THE ROBOT CAN BE.
-                #
-                # `available_rooms()` reads `rooms_metadata` from each
-                # map, which carries rooms and not zones. So a
-                # zone-targeted mission produced a region id that
-                # matched nothing in this cache and the tracker showed
-                # nothing -- not because the zone was unnamed, but
-                # because it was never in the list being searched.
-                #
-                # @chairstacker (#70) assumed the missing zone NAMES in
-                # #47 were the cause. They are not: this would still be
-                # empty if every zone on his map had a name.
-                #
-                # `prime_room_names` holds every region the coordinator
-                # has seen, rooms and zones together, keyed the same
-                # way. Rooms win a collision because they come from the
-                # map's own metadata.
-                zones = getattr(
-                    self._config_entry.runtime_data, "prime_room_names", None
-                ) or {}
-                for region_id, name in zones.items():
-                    if name and str(name) not in self._prime_rooms:
-                        self._prime_rooms[str(name)] = str(region_id)
 
                 record_success("prime room names")
         except Exception:  # noqa: BLE001

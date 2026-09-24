@@ -115,10 +115,24 @@ class RoombaSensorDescription(SensorEntityDescription):
     filter_fn: Callable[[dict[str, Any]], bool] = field(
         default_factory=lambda: lambda _: True
     )
-    # When set, the entity reports unavailable (not unknown) when fn returns False.
-    # Use for sensors that only apply in a specific robot state (e.g. mid-mission
-    # recharge). "Unknown" implies a data error; "Unavailable" is cleaner for
-    # "not applicable right now".
+    # RARELY THE RIGHT TOOL. `unavailable` means Home Assistant cannot
+    # reach the device; `unknown` means it is fine and has no value right
+    # now. This field was introduced for the second case on the theory
+    # that "unknown implies a data error" -- it does not, and the
+    # distinction cost us thirteen entities that a fresh install showed
+    # as broken, which orphan-entity tooling duly reported (naveso).
+    #
+    # Before reaching for it, take one of these instead:
+    #   * the robot will NEVER report this -> filter_fn, so the entity is
+    #     not created at all. That is what "hide it" actually requires
+    #   * the value does not exist YET -> return None from value_fn and
+    #     let the sensor read `unknown` until it does
+    #   * our own wiring decides (a store this generation does not get)
+    #     -> filter_fn as well; that is not a reachability question
+    #
+    # What is left is a sensor that genuinely only applies in one robot
+    # state and will apply again later -- mid-mission recharge is the
+    # example the two remaining users cover.
     available_fn: Callable[[IRobotEntity], bool] | None = field(default=None)
     # v1.7.0 L2 — when set, exposed as "threshold_hours" in extra_state_attributes
     # Used by the Lovelace card to compute remaining % without hard-coded thresholds.
@@ -129,6 +143,11 @@ class RoombaSensorDescription(SensorEntityDescription):
     # threshold_hours — lets the card render remaining/max as a fraction
     # even for cloud-only consumables that have no threshold_fn.
     role: str | None = None
+    #: LIVE STATE — see IRobotEntity._live_state. True for what the
+    #: robot reports right now (battery, phase, signal, the active
+    #: mission's times); False for history, counters and settings,
+    #: which stay true while the robot is unreachable.
+    live_state: bool = False
     remaining: bool = False
     max_hours_fn: Callable[[IRobotEntity], int | None] = field(
         default_factory=lambda: lambda _: None
@@ -178,6 +197,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
 
     RoombaSensorDescription(
         key="battery",
+        live_state=True,
         device_class=SensorDeviceClass.BATTERY,
         native_unit_of_measurement=PERCENTAGE,
         state_class=SensorStateClass.MEASUREMENT,
@@ -186,6 +206,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     ),
     RoombaSensorDescription(
         key="phase",
+        live_state=True,
         translation_key="phase",
         name="Status",
         entity_category=None,
@@ -193,6 +214,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     ),
     RoombaSensorDescription(
         key="error",
+        live_state=True,
         translation_key="error",
         name="Status – Error",
         entity_category=None,
@@ -225,6 +247,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
 
     RoombaSensorDescription(
         key="readiness",
+        live_state=True,
         translation_key="readiness",
         name="Status – Readiness",
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -232,6 +255,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     ),
     RoombaSensorDescription(
         key="job_initiator",
+        live_state=True,
         translation_key="job_initiator",
         name="Status – Started by",
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -259,6 +283,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
 
     RoombaSensorDescription(
         key="filter_remaining_hours",
+        device_class=SensorDeviceClass.DURATION,
         translation_key="filter_remaining_hours",
         name="Maintenance – Filter",
         native_unit_of_measurement=UnitOfTime.HOURS,
@@ -271,6 +296,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     ),
     RoombaSensorDescription(
         key="brush_remaining_hours",
+        device_class=SensorDeviceClass.DURATION,
         translation_key="brush_remaining_hours",
         name="Maintenance – Brushes",
         native_unit_of_measurement=UnitOfTime.HOURS,
@@ -283,6 +309,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     ),
     RoombaSensorDescription(
         key="part_edge_brush",
+        device_class=SensorDeviceClass.DURATION,
         translation_key="part_edge_brush",
         name="Maintenance – Side brush",
         native_unit_of_measurement=UnitOfTime.HOURS,
@@ -296,6 +323,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     ),
     RoombaSensorDescription(
         key="part_dirt_bag",
+        device_class=SensorDeviceClass.DURATION,
         translation_key="part_dirt_bag",
         name="Maintenance – Clean Base bag",
         native_unit_of_measurement=UnitOfTime.HOURS,
@@ -380,6 +408,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     ),
     RoombaSensorDescription(
         key="total_cleaning_time",
+        device_class=SensorDeviceClass.DURATION,
         translation_key="total_cleaning_time",
         name="Missions – Total time",
         native_unit_of_measurement=UnitOfTime.HOURS,
@@ -388,6 +417,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     ),
     RoombaSensorDescription(
         key="average_mission_time",
+        device_class=SensorDeviceClass.DURATION,
         translation_key="average_mission_time",
         name="Missions – Avg. duration",
         native_unit_of_measurement=UnitOfTime.MINUTES,
@@ -404,7 +434,10 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         suggested_display_precision=0,
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
-        available_fn=lambda e: bool(e.mission_stats.get("nMssn")),
+        # No available_fn: it repeated `if nMssn` from the value_fn
+        # below, which already returns None before the first mission. A
+        # brand-new robot reads `unknown` rather than `unavailable` --
+        # and never 0%, which would be the misleading alternative.
         value_fn=lambda e: (
             round(
                 e.mission_stats.get("nMssnOk", 0)
@@ -433,7 +466,13 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         name="Battery – BMS cycle count",
         state_class=SensorStateClass.TOTAL_INCREASING,
         entity_category=EntityCategory.DIAGNOSTIC,
-        available_fn=lambda e: e.vacuum_state.get("batInfo") is not None,
+        # CAPABILITY, NOT STATE: a robot either reports batInfo or never
+        # will. filter_fn means the entity is not created at all on those
+        # robots -- which is what "hide it" actually requires. An
+        # available_fn here created the entity and then marked it
+        # unavailable forever, which orphan-entity tooling reports as
+        # broken (naveso).
+        filter_fn=lambda s: s.get("batInfo") is not None,
         entity_registry_enabled_default=False,
         value_fn=lambda e: e.vacuum_state.get("batInfo", {}).get("cCount"),
         extra_attributes_fn=lambda e: {
@@ -444,6 +483,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
 
     RoombaSensorDescription(
         key="battery_age_days",
+        device_class=SensorDeviceClass.DURATION,
         translation_key="battery_age_days",
         name="Battery – Age",
         native_unit_of_measurement="d",
@@ -451,9 +491,10 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,
-        available_fn=lambda e: bool(
-            (e.vacuum_state.get("batInfo") or {}).get("mDate")
-        ),
+        # Same reasoning as battery_cycle_count_bms above: a robot either
+        # reports batInfo.mDate or never will, so this is a capability
+        # question and belongs in filter_fn.
+        filter_fn=lambda s: bool((s.get("batInfo") or {}).get("mDate")),
         value_fn=lambda e: _battery_age_days(e),
     ),
 
@@ -629,6 +670,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     ),
     RoombaSensorDescription(
         key="rssi",
+        live_state=True,
         translation_key="rssi",
         name="Wi-Fi signal",
         device_class=SensorDeviceClass.SIGNAL_STRENGTH,
@@ -641,6 +683,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
 
     RoombaSensorDescription(
         key="snr",
+        live_state=True,
         translation_key="snr",
         name="SNR",
         device_class=SensorDeviceClass.SIGNAL_STRENGTH,
@@ -653,6 +696,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
 
     RoombaSensorDescription(
         key="signal_noise",
+        live_state=True,
         translation_key="signal_noise",
         device_class=SensorDeviceClass.SIGNAL_STRENGTH,
         native_unit_of_measurement="dB",
@@ -679,6 +723,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     # Low values indicate poor lighting or significant environmental changes.
     RoombaSensorDescription(
         key="nav_quality",
+        live_state=True,
         translation_key="nav_quality",
         name="Navigation quality",
         state_class=SensorStateClass.MEASUREMENT,
@@ -698,36 +743,48 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     # Mission-time sensors
     RoombaSensorDescription(
         key="mission_start_time",
+        live_state=True,
         translation_key="mission_start_time",
         name="Mission start",
         device_class=SensorDeviceClass.TIMESTAMP,
         entity_category=EntityCategory.DIAGNOSTIC,
+        # No available_fn: between missions the robot is reachable, there is
+        # simply no running mission, so the correct state is "unknown", not
+        # "unavailable" (reported by naveso -- unavailable trips orphan-entity
+        # checks such as Orphan Entity Cleaner). The value_fn below still
+        # gates on the phase, so this stays the LIVE mission's start time;
+        # the completed one lives in "Missions - Last".
         value_fn=lambda e: (
             e.last_mission
             if e.clean_mission_status.get("phase") in _ACTIVE_PHASES
             else None
         ),
-        available_fn=lambda e: e.clean_mission_status.get("phase") in _ACTIVE_PHASES,
     ),
 
     RoombaSensorDescription(
         key="mission_elapsed_time",
+        live_state=True,
         translation_key="mission_elapsed_time",
         name="Mission elapsed time",
         device_class=SensorDeviceClass.DURATION,
         native_unit_of_measurement="min",
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
+        # No available_fn, same reasoning as mission_start_time above.
+        # _mission_elapsed_value() already returns None when no mission is
+        # running, so the guard only ever converted a correct "unknown" into
+        # a misleading "unavailable". Keeping state_class MEASUREMENT is why
+        # we do NOT retain the last value here: a frozen duration would be
+        # recorded into long-term statistics as if the mission were still
+        # running. The completed duration lives in "Missions - Last duration".
         value_fn=_mission_elapsed_value,
-        available_fn=lambda e: e.clean_mission_status.get("phase") in
-            ("run", "hmMidMsn", "evac", "charge", "hmPostMsn")
-            and e.clean_mission_status.get("cycle") not in (None, "none"),
     ),
 
     # SC2 (v2.7.0): TIMESTAMP is the preferred variant — enabled by default.
     # mission_recharge_minutes (numeric) is disabled below.
     RoombaSensorDescription(
         key="mission_recharge_time",
+        live_state=True,
         translation_key="mission_recharge_time",
         device_class=SensorDeviceClass.TIMESTAMP,
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -738,6 +795,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     # mission_expire_minutes (numeric) was already disabled in v2.6.2.
     RoombaSensorDescription(
         key="mission_expire_time",
+        live_state=True,
         translation_key="mission_expire_time",
         device_class=SensorDeviceClass.TIMESTAMP,
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -754,6 +812,8 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
 
     RoombaSensorDescription(
         key="mission_recharge_minutes",
+        device_class=SensorDeviceClass.DURATION,
+        live_state=True,
         translation_key="mission_recharge_minutes",
         name="Mission – Recharge time remaining",
         native_unit_of_measurement=UnitOfTime.MINUTES,
@@ -776,6 +836,8 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     ),
     RoombaSensorDescription(
         key="mission_expire_minutes",
+        device_class=SensorDeviceClass.DURATION,
+        live_state=True,
         translation_key="mission_expire_minutes",
         name="Mission – Time until expiry",
         native_unit_of_measurement=UnitOfTime.MINUTES,
@@ -795,6 +857,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     ),
     RoombaSensorDescription(
         key="mission_id",
+        live_state=True,
         translation_key="mission_id",
         name="Mission – ID",
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -820,6 +883,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
 
     RoombaSensorDescription(
         key="clean_base_status",
+        live_state=True,
         translation_key="clean_base_status",
         name="Clean Base status",
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -838,6 +902,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     ),
     RoombaSensorDescription(
         key="dock_tank_level",
+        live_state=True,
         translation_key="dock_tank_level",
         name="Dock tank level",
         native_unit_of_measurement=PERCENTAGE,
@@ -850,6 +915,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
 
     RoombaSensorDescription(
         key="tank_level",
+        live_state=True,
         translation_key="tank_level",
         name="Tank level",
         native_unit_of_measurement=PERCENTAGE,
@@ -859,6 +925,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     ),
     RoombaSensorDescription(
         key="mop_pad",
+        live_state=True,
         translation_key="mop_pad",
         name="Mop pad",
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -880,6 +947,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     ),
     RoombaSensorDescription(
         key="mop_tank_level",
+        live_state=True,
         translation_key="mop_tank_level",
         name="Mop tank level",
         native_unit_of_measurement=PERCENTAGE,
@@ -903,6 +971,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     # F3 -- Mop tank status (consolidated from 4 binary mopReady sub-fields)
     RoombaSensorDescription(
         key="mop_tank_status",
+        live_state=True,
         translation_key="mop_tank_status",
         name="Mop – Tank status",
         device_class=SensorDeviceClass.ENUM,
@@ -1032,10 +1101,10 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
             )
             else None
         ),
-        available_fn=lambda e: (
-            e._config_entry.runtime_data.maintenance_store is not None
-            and e._config_entry.runtime_data.maintenance_store.wheel_cleaned_at is not None
-        ),
+        # No available_fn: it repeated the value_fn's own condition
+        # verbatim. Never having cleaned this part is a missing value,
+        # not an unreachable robot -- the value_fn already returns None
+        # for both an absent store and an unset timestamp.
     ),
     RoombaSensorDescription(
         key="contact_last_cleaned",
@@ -1054,10 +1123,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
             )
             else None
         ),
-        available_fn=lambda e: (
-            e._config_entry.runtime_data.maintenance_store is not None
-            and e._config_entry.runtime_data.maintenance_store.contact_cleaned_at is not None
-        ),
+        # Same as wheel_last_cleaned above.
     ),
     RoombaSensorDescription(
         key="bin_last_cleaned",
@@ -1076,10 +1142,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
             )
             else None
         ),
-        available_fn=lambda e: (
-            e._config_entry.runtime_data.maintenance_store is not None
-            and e._config_entry.runtime_data.maintenance_store.bin_cleaned_at is not None
-        ),
+        # Same as wheel_last_cleaned above.
     ),
 
     # ── v1.8.0 L1 — Mission Log ───────────────────────────────────────────────
@@ -1181,13 +1244,17 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         value_fn=lambda e: _mission_store_value(
             e, lambda s: s.latest().get("result") if s.latest() else None
         ),
-        available_fn=lambda e: bool(
-            e._config_entry.runtime_data.mission_store
-            and e._config_entry.runtime_data.mission_store.records
-        ),
+        # No available_fn: "no mission recorded yet" is a missing value,
+        # not an unreachable robot. `_mission_store_value` already returns
+        # None for both an absent store and an empty record list, so the
+        # sensor reads `unknown` until the first mission finishes. The
+        # earlier guard reported `unavailable`, which orphan-entity
+        # tooling lists as broken on every fresh install (naveso).
+        # See the note on available_fn in RoombaSensorDescription.
     ),
     RoombaSensorDescription(
         key="last_mission_duration",
+        device_class=SensorDeviceClass.DURATION,
         translation_key="last_mission_duration",
         name="Missions – Last duration",
         native_unit_of_measurement=UnitOfTime.MINUTES,
@@ -1196,10 +1263,13 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         value_fn=lambda e: _mission_store_value(
             e, lambda s: s.latest().get("duration_min") if s.latest() else None
         ),
-        available_fn=lambda e: bool(
-            e._config_entry.runtime_data.mission_store
-            and e._config_entry.runtime_data.mission_store.records
-        ),
+        # No available_fn: "no mission recorded yet" is a missing value,
+        # not an unreachable robot. `_mission_store_value` already returns
+        # None for both an absent store and an empty record list, so the
+        # sensor reads `unknown` until the first mission finishes. The
+        # earlier guard reported `unavailable`, which orphan-entity
+        # tooling lists as broken on every fresh install (naveso).
+        # See the note on available_fn in RoombaSensorDescription.
     ),
     RoombaSensorDescription(
         key="last_mission_area",
@@ -1217,10 +1287,13 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         # whatever has already recorded against it.
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda e: _last_mission_area_m2(e),
-        available_fn=lambda e: bool(
-            e._config_entry.runtime_data.mission_store
-            and e._config_entry.runtime_data.mission_store.records
-        ),
+        # No available_fn: "no mission recorded yet" is a missing value,
+        # not an unreachable robot. `_mission_store_value` already returns
+        # None for both an absent store and an empty record list, so the
+        # sensor reads `unknown` until the first mission finishes. The
+        # earlier guard reported `unavailable`, which orphan-entity
+        # tooling lists as broken on every fresh install (naveso).
+        # See the note on available_fn in RoombaSensorDescription.
     ),
 
     # ── v1.8.0 L3 — Error Intelligence ───────────────────────────────────────
@@ -1231,10 +1304,8 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         name="Error – Last code",
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=_last_error_code_value,
-        available_fn=lambda e: bool(
-            e.vacuum_state.get("cleanMissionStatus", {}).get("error", 0)
-            or e._config_entry.runtime_data.last_error_code is not None
-        ),
+        # No available_fn: same as last_error_at -- never having errored
+        # is not unreachability. `_last_error_code_value` returns None.
     ),
     RoombaSensorDescription(
         key="last_error_at",
@@ -1243,7 +1314,11 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         device_class=SensorDeviceClass.TIMESTAMP,
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=_last_error_at_value,
-        available_fn=lambda e: bool(e._config_entry.runtime_data.last_error_at),
+        # No available_fn: a robot that has never errored is a robot in
+        # good health, not one we cannot reach. `_last_error_at_value`
+        # already returns None, so this reads `unknown` until the first
+        # error -- which on a reliable robot may be never, and that is
+        # exactly the case the old guard made look broken.
     ),
     RoombaSensorDescription(
         key="last_error_zone",
@@ -1254,7 +1329,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         # SMART: resolved from lastCommand.regions at mission start.
         # EPHEMERAL: resolved from ZoneStore at mission start.
         value_fn=lambda e: e._config_entry.runtime_data.last_error_zone,
-        available_fn=lambda e: e._config_entry.runtime_data.last_error_zone is not None,
+        # Same as last_error_at above: no error yet is a missing value.
     ),
     RoombaSensorDescription(
         key="stuck_count_30d",
@@ -1276,10 +1351,11 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         # 600-series, which is the actual intent.
         filter_fn=lambda s: has_pose(s),
         value_fn=_problem_zone_value,
-        available_fn=lambda e: bool(
-            e._config_entry.runtime_data.mission_store
-            and e._config_entry.runtime_data.mission_store.query(30, result=e._config_entry.runtime_data.mission_store.STUCK_RESULTS)
-        ),
+        # No available_fn: no robot has got stuck in the last 30 days is
+        # good news, not an unreachable robot. `_problem_zone_value`
+        # already returns None. The old guard also ran a 30-day store
+        # query on every availability check, which the value function
+        # then repeated.
     ),
 
     # ── v3.0.0 L3-FIX — Consecutive anomalous missions ────────────────────────
@@ -1300,7 +1376,9 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
             if e._config_entry.runtime_data.mission_store is not None
             else None
         ),
-        available_fn=lambda e: e._config_entry.runtime_data.mission_store is not None,
+        # No available_fn: whether this generation gets a mission_store
+        # is our own wiring, not robot reachability. The value_fn already
+        # guards the same condition.
         # v3.2.0 ANOMALY-EXPLAIN — surfaces the mission id to pass straight
         # into the explain_mission service/REST endpoint, so the card (or
         # an automation) doesn't need to separately query mission history
@@ -1388,6 +1466,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     ),
     RoombaSensorDescription(
         key="filter_days_until_due",
+        device_class=SensorDeviceClass.DURATION,
         translation_key="filter_days_until_due",
         name="Maintenance – Filter days until due",
         native_unit_of_measurement=UnitOfTime.DAYS,
@@ -1399,6 +1478,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     ),
     RoombaSensorDescription(
         key="brush_days_until_due",
+        device_class=SensorDeviceClass.DURATION,
         translation_key="brush_days_until_due",
         name="Maintenance – Brush days until due",
         native_unit_of_measurement=UnitOfTime.DAYS,
@@ -1410,6 +1490,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     ),
     RoombaSensorDescription(
         key="pad_days_until_due",
+        device_class=SensorDeviceClass.DURATION,
         translation_key="pad_days_until_due",
         name="Maintenance – Pad days until due",
         native_unit_of_measurement=UnitOfTime.DAYS,
@@ -1445,6 +1526,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     ),
     RoombaSensorDescription(
         key="side_brush_days_until_due",
+        device_class=SensorDeviceClass.DURATION,
         translation_key="side_brush_days_until_due",
         name="Maintenance – Side brush days until due",
         native_unit_of_measurement=UnitOfTime.DAYS,
@@ -1456,6 +1538,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
     ),
     RoombaSensorDescription(
         key="clean_base_bag_days_until_due",
+        device_class=SensorDeviceClass.DURATION,
         translation_key="clean_base_bag_days_until_due",
         name="Maintenance – Clean Base bag days until due",
         native_unit_of_measurement=UnitOfTime.DAYS,
@@ -1638,9 +1721,10 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
         filter_fn=lambda s: "estCap" in (s.get("bbchg3") or {}),
         value_fn=_estimated_battery_eol,
-        # available_fn calls the function directly: covers all None conditions
-        # (no baseline, no cycles, no degradation yet).
-        available_fn=lambda e: _estimated_battery_eol(e) is not None,
+        # No available_fn: it called _estimated_battery_eol() a second
+        # time purely to ask whether the first call would return None.
+        # The value_fn returning None is the same answer, reported as
+        # `unknown` -- correct for "not enough history yet".
     ),
 
     # F6g -- consecutive clean skips counter (diagnostic).
@@ -1700,6 +1784,7 @@ class RoombaSensor(IRobotEntity, SensorEntity):
     ) -> None:
         super().__init__(roomba, blid, config_entry)
         self.entity_description = description
+        self._live_state = description.live_state
         self._config_entry = config_entry
         self._attr_unique_id = f"{self.robot_unique_id}_{description.key}"
         self._unsub_tick: Callable[[], None] | None = None

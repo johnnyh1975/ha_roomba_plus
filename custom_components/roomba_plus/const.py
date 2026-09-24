@@ -653,10 +653,6 @@ CONF_SMART_ZONE_DATA: Final = "smart_zone_data"
 CONF_SMART_ZONE_LABELS: Final = "smart_zone_labels"
 
 # ── v1.7.0 — Services ────────────────────────────────────────────────────────
-SERVICE_RESET_FILTER: Final = "reset_filter"
-SERVICE_RESET_BRUSH: Final = "reset_brush"
-SERVICE_RESET_BATTERY: Final = "reset_battery"
-SERVICE_RESET_PAD: Final = "reset_pad"
 SERVICE_SMART_START: Final = "smart_start"
 #: Writes the household's Do Not Disturb window.
 #:
@@ -1146,6 +1142,106 @@ DOCK_TASK_PHASES: Final[frozenset[str]] = frozenset(
 # rooms — "stop"/"completed"/"cancelled" are unambiguous, deliberate terminal
 # phases never used for inter-room signalling and always confirm immediately.
 ROOM_TRANSITION_CANDIDATE_PHASES: Final[frozenset[str]] = frozenset({"charge", "hmPostMsn"})
+
+#: WHAT A `room` EVENT'S `status` MEANS — Classic, Stufe A (lewis and ruby
+#: firmware, byte-identical where compared; established over four research
+#: rounds for 4.2.11). The wire value IS the firmware's TimelineAreaStatus,
+#: unchanged (`end_given_room_or_zone_event` writes it straight through).
+#: Values come from different places:
+#:
+#:   0  last pass done — the ROOM is finished. CleanStatus 3 (done) with
+#:      no passes remaining (`get_remaining_sub_clean_zone_passes() == 0`).
+#:   1  a pass done, MORE FOLLOW. CleanStatus 3 with passes remaining.
+#:      The field registry's "pass in progress" was wrong.
+#:   3  "done, other variant" from CleanStatus 4/5 — but ALSO emitted for
+#:      the not-done CleanStatus 0/1 on an unexpected path (with a
+#:      warning). Ambiguous; never observed on the wire.
+#:   4  the robot was picked up (`update_robot_was_kidnapped`).
+#:   5, 6  the room was STILL OPEN when the mission ended, and
+#:      `handle_mission_end` closed it (lewis: `movne #5 / moveq #6` on a
+#:      timeline flag). Produced nowhere else. The old reading of 6 as
+#:      "finished after error recovery" was an interpretation of real
+#:      observations, not a meaning.
+#:   2, 7  internal only; 2 does not close the event, 7 never reaches the
+#:      wire.
+#:
+#: `status` is optional; a second field `reason` (0–7) is not decoded yet.
+#: The iRobot app does not evaluate `status` at all (APK 7.18.0) — it
+#: shows a room with any room event as cleaned.
+#:
+#: THREE QUESTIONS, three sets. They must not be mixed up: a room still
+#: in progress counted as finished closes a mission after its first room
+#: (v2.9.0), and half a pass counted as a finished one distorts what is
+#: learned about the room.
+
+#: "Is the ROOM finished?" — the end gate, stuck recovery, the dirt index,
+#: room coverage, the archive's completed list. {0, 6}. Not 1 (more passes
+#: follow), not 3 (ambiguous — may come from a not-done status), not 4
+#: (picked up), not 5.
+#:
+#: WHY 6 STAYS, although the firmware says it marks a room still OPEN at
+#: mission end. That finding tells where 6 comes from, not whether the
+#: room was finished: an event can still be open while the room is fully
+#: cleaned — most plausibly the LAST room of a mission, if the mission
+#: ends before the regular close runs (lewis has a quirk exactly there).
+#: If that is the common case, dropping 6 would, on lewis robots, drop
+#: the last room from coverage and keep it out of the dirt index. How often
+#: a 6 marks a fully covered last room is a question for field data
+#: (.storage/roomba_plus_missions_*), not for the binary. Kept until then.
+#:
+#: Since 4.2.11 this rule is used only for LEARNED figures -- coverage, the
+#: dirt index, the archive's completed rooms. The end gate and the stuck
+#: classification ask different questions and have their own rules.
+ROOM_EVENT_DONE_STATUSES: Final[frozenset[int]] = frozenset({0, 6})
+
+#: "Is the mission over as far as this room is concerned?" -- for the END
+#: GATE only. 0 is a finished room; 5 and 6 are room events the firmware
+#: closed in `handle_mission_end`, which it only runs when the mission has
+#: ended. Any of the three in the cloud record proves the mission is over,
+#: whether or not the room was finished -- which is all the end gate asks.
+#: 5 had been left out, so a mission whose last room closed on 5 waited out
+#: the full cap instead of being confirmed.
+ROOM_EVENT_CLOSED_AT_END_STATUSES: Final[frozenset[int]] = frozenset({0, 5, 6})
+
+#: "Was a PASS completed here?" — 0 and 1. A completed pass means the
+#: robot drove and cleaned the room, so room history counts it outright.
+ROOM_EVENT_PASS_DONE_STATUSES: Final[frozenset[int]] = frozenset({0, 1})
+
+
+def room_event_was_cleaned(room: object) -> bool:
+    """Whether a `room` event says the robot cleaned in that room.
+
+    For ROOM HISTORY — "when was this room last cleaned". A completed
+    pass counts (status 0 or 1, ROOM_EVENT_PASS_DONE_STATUSES); so does
+    any event with cleaned floor (`passArea > 0`) — a room force-closed
+    at mission end (5, 6) or where the robot was picked up (4) was still
+    cleaned as far as it got, and the iRobot app shows it as cleaned.
+
+    One step stricter than the app, on purpose: an event with no cleaned
+    area and no finished status does not count. Skipped regions — the
+    user's `skip` command and the area clean's own "Skipping region" —
+    ARRIVE AS ROOM EVENTS, through `send_timeline_notification` with
+    their own status; the app has no "skip" event type. The firmware
+    writes `passArea` only when it has coverage data for the room
+    (`end_given_room_or_zone_event`); a region it never drove has none,
+    so all area fields are absent and it cannot slip in here. A pass is
+    done means it has coverage data, so a done pass on status 1 counts.
+    `status` is optional in the schema; an event without one counts by
+    its area.
+
+    NOT for the end gate or for learned figures — see
+    ROOM_EVENT_DONE_STATUSES.
+    """
+    if not isinstance(room, dict):
+        return False
+    if room.get("status") in ROOM_EVENT_PASS_DONE_STATUSES:
+        return True
+    pass_area = room.get("passArea")
+    return (
+        isinstance(pass_area, (int, float))
+        and not isinstance(pass_area, bool)
+        and pass_area > 0
+    )
 # Number of consecutive "looks like a genuine end" messages required on an
 # ambiguous phase before committing to end-of-mission processing.
 END_SIGNAL_DEBOUNCE_COUNT: Final[int] = 2
@@ -2924,3 +3020,14 @@ def state_slug(value: str) -> str:
     with_boundaries = _re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", value)
     slug = _re.sub(r"[^a-zA-Z0-9]+", "_", with_boundaries).strip("_").lower()
     return slug or "unknown"
+
+
+def maintenance_changed_signal(blid: str) -> str:
+    """Dispatcher signal: this robot's maintenance data changed outside a
+    robot message -- a reset button or action wrote the store.
+
+    Until 4.2.11 the reset paths re-wrote each sensor's OLD state with a
+    new timestamp, or refreshed only the button itself, so the new value
+    appeared only when the robot next sent a message.
+    """
+    return f"{DOMAIN}_maintenance_changed_{blid}"

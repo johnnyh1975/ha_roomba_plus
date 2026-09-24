@@ -21,7 +21,13 @@ from .const import (
     DEFAULT_PRIME_FAVORITE_BUTTONS,
 )
 from .withheld_features import withheld_features
-from .const import DIAG_REDACT_KEYS, DOMAIN, ERROR_CODE_LABELS
+from .const import (
+    DIAG_REDACT_KEYS,
+    DOMAIN,
+    ERROR_CODE_LABELS,
+    ROOM_EVENT_DONE_STATUSES,
+    room_event_was_cleaned,
+)
 from .models import ConnectionType, RoombaConfigEntry
 from .binary_sensor import _prime_reports_tank
 
@@ -802,6 +808,85 @@ def _prime_shadow_dump(data: Any) -> dict[str, Any]:
     return {
         name: _redact_values(_clean(shadow), blid)
         for name, shadow in coordinator.data.items()
+    }
+
+
+def _last_mission_room_events(data: Any) -> dict[str, Any]:
+    """The newest mission record's room events, beside what was stored.
+
+    Classic only. A Classic record gets `timeline` when the cloud catch-up
+    merges iRobot's own mission record into it; room history is then read
+    from its `room` events, counted only when `status` is in
+    ROOM_EVENT_DONE_STATUSES.
+
+    WHY THIS IS HERE. @Thonno (21 Sep 2026): the iRobot app showed the
+    Kitchen cleaned, Roomba+ left it out of the room history, and the
+    diagnostic he attached could not say why -- it held no mission
+    record at all. The answer was one field away: the status of the
+    Kitchen's room event. This puts it in the diagnostic, next to the
+    rooms the tracker stored, so the next such report answers itself.
+
+    Area figures and region ids only; room names appear in
+    `last_cleaned_rooms`, which the tracking section already shows.
+    """
+    store = getattr(data, "mission_store", None)
+    try:
+        rec = store.latest() if store is not None else None
+    except Exception:  # noqa: BLE001
+        rec = None
+    if not isinstance(rec, dict):
+        return {"available": False, "reason": "no mission record"}
+
+    base = {
+        "record_id": rec.get("id"),
+        "ended_at": rec.get("ended_at"),
+        "result": rec.get("result"),
+        "last_cleaned_rooms": rec.get("last_cleaned_rooms"),
+        "zones": rec.get("zones"),
+    }
+    timeline = rec.get("timeline")
+    if not isinstance(timeline, dict):
+        return {
+            "available": False,
+            **base,
+            "reason": (
+                "record has no cloud timeline -- the catch-up has not run "
+                "yet, or no cloud account is configured"
+            ),
+        }
+
+    events: list[dict[str, Any]] = []
+    rooms: list[dict[str, Any]] = []
+    for ev in timeline.get("finEvents") or []:
+        if isinstance(ev, dict) and ev.get("type") == "room":
+            room = ev.get("room") or {}
+            rooms.append(room)
+            events.append({
+                k: room.get(k)
+                for k in ("rid", "status", "reason", "passCount",
+                          "area", "passArea", "totalArea")
+            })
+
+    def _rids(pred: Any) -> set[str]:
+        return {
+            str(r.get("rid")) for r in rooms
+            if r.get("rid") not in (None, "") and pred(r)
+        }
+
+    seen = _rids(lambda _r: True)
+    cleaned = _rids(room_event_was_cleaned)
+    finished = _rids(lambda r: r.get("status") in ROOM_EVENT_DONE_STATUSES)
+    # BOTH ANSWERS, because they differ on purpose: room history counts a
+    # room the robot cleaned floor in; the end gate and learned figures
+    # count only a finished pass. A region in `cleaned` but not
+    # `finished` is exactly the case the two rules exist to separate.
+    return {
+        "available": True,
+        **base,
+        "rids_counted_as_cleaned": sorted(cleaned),
+        "rids_finished": sorted(finished),
+        "rids_seen_but_not_counted": sorted(seen - cleaned),
+        "room_events": events,
     }
 
 
@@ -1883,6 +1968,7 @@ async def _build_diagnostics(
     # middle of a mission and not one of the values that decide an
     # advance was in it.
     room_diag["tracking"] = _room_tracking_summary(data)
+    room_diag["last_mission_room_events"] = _last_mission_room_events(data)
     if data.room_seg_store is not None:
         room_diag.update(data.room_seg_store.diagnostic_info(
             grid_cell_count=(

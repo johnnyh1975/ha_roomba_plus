@@ -15,6 +15,9 @@
         "description": "Selecteer een gevonden Roomba of voeg er handmatig een toe.",
         "data": {
           "host": "Robot selecteren"
+        },
+        "data_description": {
+          "host": "De robot die je wilt instellen. Robots op je netwerk worden getoond; ontbreekt de jouwe, kies dan handmatige invoer."
         }
       },
       "manual": {
@@ -36,6 +39,9 @@
         "description": "Automatisch ophalen van het wachtwoord is mislukt. Voer je Roomba-wachtwoord handmatig in. Instructies: [{auth_help_url}]({auth_help_url}).",
         "data": {
           "password": "Wachtwoord"
+        },
+        "data_description": {
+          "password": "Het lokale wachtwoord van de robot. Het wordt automatisch gelezen terwijl je de HOME-knop ingedrukt houdt; vul het alleen in als dat mislukt is."
         }
       },
       "cloud_credentials": {
@@ -90,6 +96,9 @@
         "description": "Robots gevonden op dit account. Kies er één om in te stellen — voeg extra robots toe door deze installatie opnieuw te starten.",
         "data": {
           "blid": "Robot"
+        },
+        "data_description": {
+          "blid": "De robot uit je iRobot-account die je wilt toevoegen. Elke robot wordt een eigen item."
         }
       },
       "prime_classic_ip": {
@@ -97,6 +106,9 @@
         "description": "Kon {name} niet automatisch vinden op je lokale netwerk. Voer het lokale IP-adres in — de inloggegevens die al via je iRobot-account zijn bevestigd, worden hergebruikt.",
         "data": {
           "host": "IP-adres"
+        },
+        "data_description": {
+          "host": "Het lokale IP-adres van de robot op je netwerk, bijvoorbeeld zoals je router het toont."
         }
       },
       "prime_classic_analytics": {
@@ -104,6 +116,9 @@
         "description": "Wil je de inloggegevens van je iRobot-account ook voor deze robot behouden, om kamernamen, missiegeschiedenis en favorieten uit de cloud te lezen? Alle opdrachten blijven hoe dan ook lokaal via MQTT verlopen.",
         "data": {
           "enable_cloud_analytics": "Cloudfuncties voor deze robot inschakelen"
+        },
+        "data_description": {
+          "enable_cloud_analytics": "Bewaart je iRobot-gegevens voor deze robot om kamernamen, missiegeschiedenis en favorieten toe te voegen. De robot zelf wordt nog steeds lokaal bediend."
         }
       }
     },
@@ -179,7 +194,17 @@
         "data_description": {
           "map_enabled": "De live reinigingskaart inschakelen voor robots met positiebepaling (Roomba 900, i, s, j, Braava m).",
           "map_size_px": "Kaartcanvasgrootte in pixels (400–1200). Standaard: 600.",
-          "map_scale_mm_per_px": "Millimeter per pixel (5–30). Standaard 10 = 6 m × 6 m bij 600 px."
+          "map_scale_mm_per_px": "Millimeter per pixel (5–30). Standaard 10 = 6 m × 6 m bij 600 px.",
+          "floor_label": "Vrije tekst, bijvoorbeeld Begane grond. Groepeert robots in het vlootoverzicht.",
+          "correlation_entities": "Sensoren zoals luchtvochtigheid of pollen. Na 30 missies meldt Roomba+ of de robot meer vuil verzamelt als ze hoog zijn. Lokaal berekend.",
+          "map_room_labels": "Zet de naam van elke kamer op de kaartafbeelding.",
+          "prime_favorite_buttons": "Eén knop per favoriet die in de iRobot-app is opgeslagen. Bij veel favorieten zijn dat veel knoppen.",
+          "enable_schedule_calendar": "Toont de reinigingsschema's van de robot als agenda.",
+          "map_clean_zones": "Tekent de reinigingszones op de kaartafbeelding.",
+          "map_keepout_zones": "Tekent de verboden zones op de kaartafbeelding.",
+          "map_nomop_zones": "Tekent de zones zonder dweilen op de kaartafbeelding.",
+          "enable_maintenance_list": "Toont onderhoud dat eraan komt als takenlijst.",
+          "region_sensors": "Maakt een aparte sensor voor elke kamer en zone."
         }
       },
       "smart_zones_manual": {
@@ -200,6 +225,10 @@
         "data": {
           "irobot_username": "iRobot e-mail",
           "irobot_password": "iRobot wachtwoord"
+        },
+        "data_description": {
+          "irobot_username": "Het e-mailadres van je iRobot-appaccount. Laat beide velden leeg om de cloudfuncties uit te zetten.",
+          "irobot_password": "Het wachtwoord van je iRobot-appaccount."
         }
       },
       "blocking_sensors": {
@@ -221,7 +250,10 @@
         "data": {
           "selected_zone": "Zone to edit"
         },
-        "description": "Selecteer een zone om te hernoemen of te verbergen. Verzend zonder zone om wijzigingen op te slaan.\n\n{zone_summary}"
+        "description": "Selecteer een zone om te hernoemen of te verbergen. Verzend zonder zone om wijzigingen op te slaan.\n\n{zone_summary}",
+        "data_description": {
+          "selected_zone": "De zone die je wilt hernoemen of verbergen. Verstuur zonder zone om je wijzigingen op te slaan."
+        }
       },
       "map_management_edit": {
         "title": "Zone bewerken: {zone_name}",
@@ -244,6 +276,13 @@
           "presence_mode": "Modus",
           "away_delay_min": "Vertraging na vertrek (minuten)",
           "clean_delay_min": "Vertraging voor start tweede robot"
+        },
+        "data_description": {
+          "presence_scheduling_enabled": "Houdt reinigingsschema's vast zolang er iemand thuis is en geeft ze vrij zodra iedereen weg is.",
+          "presence_entities": "De personen van wie de aanwezigheid meetelt.",
+          "presence_mode": "'Vrijgeven als iedereen weg is' geeft schema's automatisch vrij; 'Gebeurtenis afvuren (handmatige bediening)' laat de beslissing aan je eigen automatisering.",
+          "away_delay_min": "Hoe lang iedereen weg moet zijn voordat schema's worden vrijgegeven.",
+          "clean_delay_min": "Een extra wachttijd na de afwezigheidsvertraging voordat het reinigen echt begint."
         }
       },
       "demand_cleaning": {
@@ -252,6 +291,10 @@
         "data": {
           "demand_cleaning_enabled": "Enable demand cleaning",
           "demand_clean_multiplier": "Drempelfactor (bijv. 1,5 = 50% boven gemiddeld)"
+        },
+        "data_description": {
+          "demand_cleaning_enabled": "Start automatisch een reiniging als de vloer duidelijk viezer is dan normaal.",
+          "demand_clean_multiplier": "Hoeveel boven het normale vuilniveau een reiniging start: 1,5 betekent 50% boven het gemiddelde."
         }
       },
       "test_cloud_connection": {
@@ -263,6 +306,9 @@
         "description": "{room_count} kamer(s) gevonden in je roomba_rest980-installatie die nog geen naam hebben in Roomba+: {room_names}. Nu importeren? Kamers die hier al een naam hebben, blijven ongewijzigd.",
         "data": {
           "confirm_import": "Deze kamers importeren"
+        },
+        "data_description": {
+          "confirm_import": "Neemt de kamernamen over uit je roomba_rest980-installatie. Kamers die je in Roomba+ al een naam hebt gegeven, houden die."
         }
       },
       "room_schedule": {
@@ -709,30 +755,6 @@
       "mission_id": {
         "name": "Missie – ID"
       },
-      "recent_completion_rate": {
-        "name": "Voltooiingspercentage (30 dagen)"
-      },
-      "recent_recharges": {
-        "name": "Tussentijdse oplaadbeurten (30 dagen)"
-      },
-      "recent_evacuations": {
-        "name": "Clean Base-ledigingen (30 dagen)"
-      },
-      "recent_dirt_events": {
-        "name": "Vuildetecties (30 dagen)"
-      },
-      "recent_error_code": {
-        "name": "Fout – Laatste code (cloud)"
-      },
-      "recent_error_time": {
-        "name": "Fout – Laatste tijdstip (cloud)"
-      },
-      "recent_wifi_floor": {
-        "name": "Wi-Fi – Signaalminimum"
-      },
-      "recent_wifi_stability": {
-        "name": "Wi-Fi – Signaalstabiliteit"
-      },
       "mop_clean_mode": {
         "name": "Dweil – Reinigingsmodus",
         "state": {
@@ -768,15 +790,6 @@
           "unknown": "Onbekend"
         }
       },
-      "recent_cleaning_speed": {
-        "name": "Prestaties – Reinigingssnelheid"
-      },
-      "recent_dirt_density": {
-        "name": "Prestaties – Vuildichtheid"
-      },
-      "recent_recharge_fraction": {
-        "name": "Prestaties – Oplaadfractie"
-      },
       "cleaning_speed_trend": {
         "name": "Prestaties – Trend reinigingssnelheid",
         "state": {
@@ -785,9 +798,6 @@
           "declining": "Afnemend",
           "unknown": "Onbekend"
         }
-      },
-      "recent_coverage_pct": {
-        "name": "Prestaties – Dekking"
       },
       "battery_capacity_retention": {
         "name": "Onderhoud – Accucapaciteitsbehoud"
@@ -1297,14 +1307,14 @@
       "part_dirt_bag": {
         "name": "Onderhoud – Stofzak"
       },
-      "last_charge": {
-        "name": "Laatst opgeladen"
-      },
       "reset_diagnostics_summary": {
         "name": "Diagnostische reset-tellers"
       },
       "last_mission_area": {
         "name": "Missies – Laatste oppervlakte"
+      },
+      "prime_dock_tank_level": {
+        "name": "Schoonwatertank basisstation"
       }
     },
     "binary_sensor": {
@@ -1768,7 +1778,7 @@
     },
     "observed_zones_detected": {
       "title": "Door robot gedetecteerde obstakels in cloudkaart",
-      "description": "{robot}: {zone_count} zone(s) hebben nog geen naam (ID's: {zone_ids}). Voer er één per regel in als `id=Naam`. Weet u niet welke zone welke is, open dan de kaart van de robot in de iRobot-app — de zones staan daar met hun nummers getekend."
+      "description": "De iRobot-cloudkaart toont {zone_count} door de robot gedetecteerde obstakelzone(s), maar Roomba+ heeft nog geen eigen gegevens die ze bevestigen. Laat de robot een paar keer reinigen — deze melding verdwijnt zodra de eigen gegevens van de robot de obstakels bevestigen. Moet een obstakel altijd worden vermeden, voeg dan in de iRobot-app een verboden zone toe."
     },
     "dock_contact_health": {
       "title": "Probleem met dockcontacten gedetecteerd",
@@ -2022,6 +2032,159 @@
     },
     "room_name_is_a_zone": {
       "message": "{names} is op deze robot een zone en geen kamer. Gebruik roomba_plus.clean_zone met dezelfde naam."
+    },
+    "entry_not_loaded": {
+      "message": "De Roomba+-robot voor {entity_id} is momenteel niet geladen. Controleer of de integratie-invoer is ingeschakeld en ingesteld en probeer het opnieuw."
+    },
+    "roombapy_too_old": {
+      "message": "Roomba+ heeft de asynchrone roombapy 2.x nodig, maar er is een oudere versie geïnstalleerd ({error}). Herstart Home Assistant. Blijft dit gebeuren, dan installeert de ingebouwde Roomba-integratie van Home Assistant de oude bibliotheek opnieuw en moet die worden verwijderd."
+    },
+    "cannot_connect_local": {
+      "message": "Kan geen verbinding maken met de robot op {host}."
+    },
+    "prime_login_rejected": {
+      "message": "De iRobot-cloud heeft de aanmelding voor robot {blid} geweigerd: {error}"
+    },
+    "prime_login_failed": {
+      "message": "Aanmelden bij de iRobot-cloud voor robot {blid} is mislukt: {error}"
+    },
+    "start_time_required": {
+      "message": "Een begintijd is vereist."
+    },
+    "all_day_not_schedulable": {
+      "message": "Evenementen van een hele dag kunnen geen schema worden — een robot heeft een tijdstip nodig om te starten."
+    },
+    "robot_not_connected": {
+      "message": "Geen verbinding met de robot."
+    },
+    "no_robot_schedule": {
+      "message": "Deze robot meldt geen schema, dus er is niets om naar te schrijven."
+    },
+    "schedule_occurrence_not_editable": {
+      "message": "Een robotschema heeft geen afzonderlijke keer om te wijzigen — elke run komt uit dezelfde wekelijkse invoer."
+    },
+    "schedule_entry_unknown": {
+      "message": "Die schema-invoer kan op de robot niet worden gevonden."
+    },
+    "rrule_not_supported": {
+      "message": "Deze robot kan '{rrule}' niet weergeven. Ondersteund zijn wekelijkse, tweewekelijkse, maandelijkse en eenmalige schema's. Gebruik voor iets anders de actie roomba_plus.create_schedule."
+    },
+    "schedule_change_rejected": {
+      "message": "Het robotschema kon niet worden gewijzigd: {reason}"
+    },
+    "command_not_delivered": {
+      "message": "Het commando '{command}' werd niet voor verzending geaccepteerd — het heeft de iRobot-cloud nooit bereikt, dus de robot heeft het niet ontvangen. Dit is een verbindingsprobleem, geen weigering door de robot."
+    },
+    "prime_shadows_unavailable": {
+      "message": "Kon voor robot {blid} geen status uit de iRobot-cloud lezen: {error}"
+    },
+    "schedules_unreadable": {
+      "message": "Kon de schema's niet uit de iRobot-cloud lezen — er is niets geschreven."
+    },
+    "prime_cannot_connect": {
+      "message": "Kon via de iRobot-cloud geen verbinding maken met robot {blid}: {error}"
+    },
+    "parts_unreadable": {
+      "message": "Kon de verbruiksonderdelen niet uit de iRobot-cloud lezen: {error}"
+    },
+    "not_a_roomba_plus_entity": {
+      "message": "{entity_id} is geen Roomba+-entiteit."
+    },
+    "not_a_prime_robot": {
+      "message": "{entity_id} is geen cloudrobot (V4/Prime). Deze acties beheren schema's in de iRobot-cloud en hebben er een nodig."
+    },
+    "not_a_schedule_switch": {
+      "message": "{entity_id} is geen schemaschakelaar. Kies de schakelaar van het schema zelf."
+    },
+    "schedule_unknown_rooms": {
+      "message": "Onbekende kamer(s): {rooms}. Bekende kamers: {known}."
+    },
+    "schedule_container_gone": {
+      "message": "De schemagroep voor {schedule_id} bestaat niet meer."
+    },
+    "no_schedule_template": {
+      "message": "Dit huishouden heeft geen bestaand schema om van uit te gaan. Maak er eerst een in de iRobot-app — de cloud weigert schema's die van nul af zijn opgebouwd."
+    },
+    "schedule_gone": {
+      "message": "Dat schema bestaat niet meer op de robot — mogelijk is het in de iRobot-app verwijderd. Herlaad de integratie om bij te werken."
+    },
+    "schedule_id_gone": {
+      "message": "Schema {schedule_id} bestaat niet meer op de robot."
+    },
+    "schedule_time_required": {
+      "message": "Een tijd is vereist, omdat het schema dat als sjabloon dient er geen heeft."
+    },
+    "schedule_changed_meanwhile": {
+      "message": "Schema {schedule_id} verdween tijdens het wijzigen — waarschijnlijk heeft een andere app het verwijderd. Er is niets geschreven."
+    },
+    "room_list_not_read": {
+      "message": "De kamerlijst is nog niet gelezen, dus is onbekend bij welke kaart elke kamer hoort."
+    },
+    "room_map_unknown": {
+      "message": "De kaart van deze kamers is nog niet bekend, dus een kamerreiniging kan niet worden verstuurd — anders wordt het hele huis gereinigd. Wacht tot de kaart geladen is, of start de robot zonder kamers te noemen."
+    },
+    "rooms_on_different_maps": {
+      "message": "Die kamers liggen op verschillende kaarten. Eén reinigingscommando kan maar één kaart betreffen, reinig ze dus apart."
+    },
+    "current_map_unknown": {
+      "message": "Deze robot heeft {count} kaarten en meldt niet op welke hij staat, dus het is onduidelijk welke verdieping je bedoelt. Start hem eerst vanuit de iRobot-app of wacht tot hij zich opnieuw heeft gelokaliseerd."
+    },
+    "no_saved_maps": {
+      "message": "Deze robot heeft nog geen opgeslagen kaarten en kan dus geen benoemde kamer reinigen. Laat hem eerst een volledige kaartronde afronden."
+    },
+    "not_a_cleaning_mode": {
+      "message": "{option} is geen reinigingsmodus."
+    },
+    "cleaning_mode_unsupported": {
+      "message": "Deze robot ondersteunt '{option}' niet. Mogelijk: {supported}."
+    },
+    "not_an_account_map": {
+      "message": "{option} is geen kaart van dit account."
+    },
+    "no_mission_history": {
+      "message": "Er is nog geen missiegeschiedenis voor {entity_id}."
+    },
+    "mission_not_found": {
+      "message": "Missie {mission_id} is niet gevonden voor {entity_id}."
+    },
+    "backup_not_found": {
+      "message": "Back-upbestand niet gevonden: {path}"
+    },
+    "backup_corrupt": {
+      "message": "Het back-upbestand is beschadigd of geen ZIP-bestand: {path}"
+    },
+    "backup_invalid": {
+      "message": "Geen geldige Roomba+-back-up (manifest.json ontbreekt): {path}"
+    },
+    "not_a_roomba_plus_vacuum": {
+      "message": "{entity_id} is geen Roomba+-stofzuiger."
+    },
+    "not_a_suction_level": {
+      "message": "{fan_speed} is geen zuigniveau van deze robot."
+    },
+    "send_command_prime_unsupported": {
+      "message": "send_command wordt nog niet ondersteund voor cloudrobots (V4/Prime). Gebruik in plaats daarvan de standaard stofzuigeracties (starten, pauzeren, stoppen, terug naar basis, lokaliseren)."
+    },
+    "cloud_part_reset_unavailable": {
+      "message": "Het resetten van dit onderdeel wordt in de iRobot-cloud vastgelegd, en de cloudverbinding is niet beschikbaar. Er is niets gereset."
+    },
+    "cloud_part_unknown": {
+      "message": "De iRobot-cloud kent het onderdeel {part} voor deze robot niet, dus de teller kan daar niet worden gereset."
+    },
+    "cloud_part_reset_failed": {
+      "message": "De iRobot-cloud heeft de teller niet gereset ({error}). De lokale teller is ongewijzigd; probeer het later opnieuw."
+    },
+    "cloud_part_reset_not_confirmed": {
+      "message": "De iRobot-cloud heeft het verzoek aangenomen, maar de reset niet bevestigd. De lokale teller is ongewijzigd."
+    },
+    "no_confirmed_room": {
+      "message": "Er is nog geen geleerde kamer bevestigd. Kamers worden geleerd uit voltooide missies; laat de robot nog een paar keer reinigen."
+    },
+    "no_last_mission": {
+      "message": "De robot heeft geen eerder reinigingscommando gemeld om te herhalen."
+    },
+    "favorite_has_no_commands": {
+      "message": "De favoriet {name} bevat geen commando's om uit te voeren."
     }
   },
   "selector": {
@@ -2032,6 +2195,18 @@
         "every_2_days": "Om de 2 dagen",
         "three_per_week": "3 keer per week",
         "weekly": "Wekelijks"
+      }
+    },
+    "blocking_behavior": {
+      "options": {
+        "abort": "Start afbreken",
+        "queue": "Wachten en dan starten"
+      }
+    },
+    "presence_mode": {
+      "options": {
+        "away_only": "Vrijgeven als iedereen weg is",
+        "always_ask": "Gebeurtenis afvuren (handmatige bediening)"
       }
     }
   }

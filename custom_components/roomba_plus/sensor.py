@@ -139,8 +139,6 @@ from .sensor_cloud import (
     CLOUD_HISTORY_SENSORS,
     CloudHistorySensor,
     CloudHistorySensorDescription,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
-    CloudRawSensor,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
-    CloudRawSensorDescription,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
     RoombaCleaningAnalytics30dSensor,
     RoombaCleaningPerformanceSensor,
     RoombaEventCounts30dSensor,

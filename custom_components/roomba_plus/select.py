@@ -325,6 +325,7 @@ class SimpleRoombaSelect(IRobotEntity, SelectEntity):
     CleaningPassesSelect, DisposablePadWetnessSelect,
     ReusablePadWetnessSelect, CarpetBoostSelect.
     """
+    _live_state = True   # shows a setting the robot reports; stale when unreachable
 
     entity_description: RoombaPlusSelectDescription
     _attr_entity_category = EntityCategory.CONFIG
@@ -774,19 +775,21 @@ class SmartZoneSelect(IRobotEntity, SelectEntity):
             # the async task runs the MQTT connection may have dropped and
             # vacuum_state may no longer contain the regions.
             captured = sorted(new_unlabelled)
-            self.hass.loop.call_soon_threadsafe(
-                lambda ids=captured: self.hass.async_create_task(  # type: ignore[misc]
-                    self._async_raise_naming_issue(ids)
-                )
+            # Straight to the config entry: this runs on the event loop
+            # (roombapy 2.x dispatches callbacks there), so the old
+            # call_soon_threadsafe wrapper around hass.async_create_task
+            # was working around a thread that no longer exists. Going
+            # through the entry also means the task is cancelled on
+            # unload and its exceptions are logged.
+            self._config_entry.async_create_task(
+                self.hass, self._async_raise_naming_issue(captured)
             )
 
         # Dismiss issue when all region_ids have been labelled
         elif self._known_unlabelled and not unlabelled:
             self._known_unlabelled = set()
-            self.hass.loop.call_soon_threadsafe(
-                lambda: self.hass.async_create_task(
-                    self._async_dismiss_naming_issue()
-                )
+            self._config_entry.async_create_task(
+                self.hass, self._async_dismiss_naming_issue()
             )
 
     async def _async_raise_naming_issue(self, region_ids: list[str]) -> None:
@@ -992,6 +995,9 @@ class CloudSmartZoneSelect(IRobotEntity, SelectEntity):
 
     @property
     def icon(self) -> str:
+        # Kept in code, not icons.json: the icon follows the region TYPE
+        # of the selected room (kitchen, bathroom, ...), and the options are
+        # the household's own room names, which icons.json cannot list.
         """F7g -- dynamic icon based on selected zone region_type."""
         from .const import REGION_TYPE_ICONS
         current = self._selected

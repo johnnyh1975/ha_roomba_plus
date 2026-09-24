@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from homeassistant.exceptions import HomeAssistantError
+from .const import DOMAIN
 
 
 async def _send_confirmed(robot: Any, command: str) -> None:
@@ -33,5 +34,5 @@ async def _send_confirmed(robot: Any, command: str) -> None:
         raise HomeAssistantError(
             f"The '{command}' command was not accepted for delivery -- it never "
             "reached iRobot's cloud, so the robot has not seen it. This is a "
-            "connection problem rather than a refusal by the robot."
+            "connection problem rather than a refusal by the robot.", translation_domain=DOMAIN, translation_key="command_not_delivered", translation_placeholders={"command": str(command)}
         )

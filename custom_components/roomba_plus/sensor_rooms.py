@@ -79,12 +79,11 @@ class RoombaEdgeCoverageSensor(IRobotEntity, SensorEntity):
         }
         # L6 (v2.6.0): ratio vs personal baseline (1.0 = on-par; <1 = below norm)
         rps = getattr(self._config_entry.runtime_data, "robot_profile_store", None)
-        if rps is not None and rps.coverage_baseline_ready:
+        if rps is not None:
             current = self.native_value
-            if isinstance(current, float) and rps.coverage_baseline:
-                attrs["coverage_vs_baseline"] = round(
-                    current / rps.coverage_baseline, 3
-                )
+            ratio = rps.coverage_ratio(current if isinstance(current, float) else None)
+            if ratio is not None:
+                attrs["coverage_vs_baseline"] = round(ratio, 3)
         return attrs
 
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:
@@ -833,10 +832,7 @@ def _resolve_smart_tier_room_state(config_entry: Any) -> dict[str, Any]:
         # therefore the whole "Unknown" percentage) stuck for the entire
         # mission whenever per-room estimates aren't available.
         rps = getattr(data, "robot_profile_store", None)
-        mean_sec = (
-            round((rps.mission_duration_mean or 0) * 60)
-            if rps is not None else 0
-        )
+        mean_sec = rps.mission_duration_mean_sec if rps is not None else 0
         if mean_sec > 0:
             estimated_remaining_min = max(0, round((mean_sec - elapsed) / 60))
 
@@ -902,6 +898,8 @@ class RoombaMissionProgress(IRobotEntity, SensorEntity):
     Available only for SMART robots with cloud credentials and a loaded
     MissionTimerStore. Shows Unknown when no mission is active.
     """
+
+    _live_state = True  # unavailable while the robot is unreachable (availability.py)
 
     entity_description = SensorEntityDescription(
         key="mission_progress",
@@ -1115,10 +1113,7 @@ class RoombaMissionProgress(IRobotEntity, SensorEntity):
             # robot with no planned room order -- but it is an estimate,
             # and the release notes and the feature docs now say so.
             rps = getattr(data, "robot_profile_store", None)
-            mean_sec = (
-                round((rps.mission_duration_mean or 0) * 60)
-                if rps is not None else 0
-            )
+            mean_sec = rps.mission_duration_mean_sec if rps is not None else 0
             if mean_sec > 0:
                 self._last_progress = min(99, round(elapsed / mean_sec * 100))
                 return self._last_progress
@@ -1201,10 +1196,7 @@ class RoombaMissionProgress(IRobotEntity, SensorEntity):
             # time stayed "Unknown" for the entire mission whenever Auto
             # mode was used, not just transiently.
             rps = getattr(data, "robot_profile_store", None)
-            mean_sec = (
-                round((rps.mission_duration_mean or 0) * 60)
-                if rps is not None else 0
-            )
+            mean_sec = rps.mission_duration_mean_sec if rps is not None else 0
             if mean_sec > 0:
                 self._last_progress = min(99, round(elapsed / mean_sec * 100))
                 return self._last_progress

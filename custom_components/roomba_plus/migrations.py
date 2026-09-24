@@ -102,7 +102,18 @@ async def async_migrate_entry(
         )
         current = 3
 
-    if current == 3:
+    # NOT `if current == 3`. The jump below has to be reachable from 4
+    # through 9 as well, and nesting it inside an `== 3` branch made it
+    # reachable from 3 only -- so an entry on 4..9 matched no branch at
+    # all, never advanced, and Home Assistant refused to load it with
+    # nothing in the log to say why.
+    #
+    # The source-text guard beside this one could not see it: it asserts
+    # that the string "3 <= current < 10" appears in this function, and
+    # it did — in a branch those versions never entered. Found by
+    # TestNoVersionIsStranded, which runs the chain from every version
+    # instead of reading it.
+    if 3 <= current < 10:
         # v3 → v10 (v2.1.1 – v2.1.2): REMOVED, replaced by a version jump.
         #
         # These seven steps renamed entity_ids from German slugs to English
@@ -127,15 +138,18 @@ async def async_migrate_entry(
         #
         # WHAT SUCH AN ENTRY LOSES: nothing it would have got. The removed
         # steps only ever matched one robot's entity_ids.
-        if 3 <= current < 10:
-            _LOGGER.info(
-                "Roomba+ migration: entry %s is at version %s, from a release "
-                "series whose entity_id fixes applied to a single installation. "
-                "Skipping to version 10; all later migrations still run.",
-                config_entry.entry_id, current,
-            )
-            current = 10
+        _LOGGER.info(
+            "Roomba+ migration: entry %s is at version %s, from a release "
+            "series whose entity_id fixes applied to a single installation. "
+            "Skipping to version 10; all later migrations still run.",
+            config_entry.entry_id, current,
+        )
+        current = 10
 
+    # OWN BRANCH. This sat inside the 3..9 jump above, so an entry on
+    # exactly 10 skipped it and matched nothing after it either —
+    # the same stranding as 4..9, one version further on.
+    if current == 10:
         # v10 → v11 (v2.1.2): rename cloud history sensor entity_ids.
         #
         # The sensors lifetime_area and lifetime_time were misnamed — they
@@ -1050,7 +1064,20 @@ async def async_migrate_entry(
 
         def _v18_rename_or_remove(old_eid: str, correct_eid: str) -> bool:
             """Rename old_eid → correct_eid; if target exists, remove old_eid.
-            Returns True when an action was taken."""
+            Returns True when an action was taken.
+
+            `async_update_entity(..., new_entity_id=...)` AND NOT REMOVE +
+            RECREATE. A registry rename carries the entity's recorder
+            history and its long-term statistics across to the new id;
+            removing the entity and letting the platform create it again
+            under the new name throws both away. The user sees an empty
+            graph where years of data used to be, and nothing in the logs
+            says why.
+
+            The remove branch below is the other case: the target id
+            already exists, so there is nothing to rename onto and the
+            stale entity is simply dropped.
+            """
             if old_eid == correct_eid:
                 return False
             existing = entity_reg_18.async_get(correct_eid)
@@ -1245,37 +1272,47 @@ async def async_migrate_entry(
                 continue
             eid = entry_er.entity_id
             domain = eid.split(".", 1)[0]
-            new_eid = ""
+            # NONE, NOT "". The checks below ask `... is None`; with ""
+            # none of them held, the battery and image renames never ran,
+            # and every entity matching no cloud suffix reached
+            # `async_update_entity(eid, new_entity_id="")` -- which Home
+            # Assistant rejects with ValueError, aborting the migration and
+            # leaving the entry unloadable for anyone upgrading from schema
+            # 20 or earlier. Found by the registry migration tests, which use
+            # the real registry.
+            # Its own name: `new_eid` is a `str` further up, and reusing it is
+            # what made `""` look like the way to satisfy the type checker.
+            fixed_eid_21: str | None = None
 
             # Cloud-prefix sensors
             for wrong, correct in _FIXES_21:
                 if eid.endswith(wrong):
-                    new_eid = eid[: -len(wrong)] + correct
+                    fixed_eid_21 = eid[: -len(wrong)] + correct
                     break
 
             # battery → battery_level (sensor only)
-            if new_eid is None and domain == "sensor" and eid.endswith("_battery"):
-                new_eid = eid + "_level"
+            if fixed_eid_21 is None and domain == "sensor" and eid.endswith("_battery"):
+                fixed_eid_21 = eid + "_level"
 
             # image _map → _cleaning_map
             # Guard: must NOT already end with _cleaning_map or _coverage_map
-            if new_eid is None and domain == "image":
+            if fixed_eid_21 is None and domain == "image":
                 if (eid.endswith("_map")
                         and not eid.endswith("_cleaning_map")
                         and not eid.endswith("_coverage_map")):
-                    new_eid = eid[:-4] + "_cleaning_map"
+                    fixed_eid_21 = eid[:-4] + "_cleaning_map"
 
-            if new_eid is None or new_eid == eid:
+            if fixed_eid_21 is None or fixed_eid_21 == eid:
                 continue
 
-            existing = entity_reg_21.async_get(new_eid)
+            existing = entity_reg_21.async_get(fixed_eid_21)
             if existing is not None and existing.entity_id != eid:
-                entity_reg_21.async_remove(new_eid)
-                _LOGGER.info("Roomba+: v21 removed zombie %s", new_eid)
+                entity_reg_21.async_remove(fixed_eid_21)
+                _LOGGER.info("Roomba+: v21 removed zombie %s", fixed_eid_21)
 
-            entity_reg_21.async_update_entity(eid, new_entity_id=new_eid)
+            entity_reg_21.async_update_entity(eid, new_entity_id=fixed_eid_21)
             renamed_21 += 1
-            _LOGGER.info("Roomba+: v21 renamed %s → %s", eid, new_eid)
+            _LOGGER.info("Roomba+: v21 renamed %s → %s", eid, fixed_eid_21)
 
         hass.config_entries.async_update_entry(config_entry, version=21)
         _LOGGER.info(

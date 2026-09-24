@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from time import monotonic
 
-import asyncio
+import dataclasses
 import datetime
 import logging
 from typing import TYPE_CHECKING, Any
@@ -24,6 +24,11 @@ from homeassistant.util import dt as dt_util
 from homeassistant.helpers.event import async_call_later
 from homeassistant.core import HomeAssistant, callback
 
+from .const import (
+    ROOM_EVENT_CLOSED_AT_END_STATUSES,
+    ROOM_EVENT_DONE_STATUSES,
+    ROOM_EVENT_PASS_DONE_STATUSES,
+)
 from .const import CLEANING_PHASES, CONF_BLID, CONF_CORRELATION_ENTITIES, CONF_SMART_ZONE_DATA, END_SIGNAL_DEBOUNCE_COUNT, END_SIGNAL_MIN_HOLD_SECONDS, EVENT_MAP_RETRAIN_COMPLETED, EVENT_MAP_RETRAIN_STARTED, EVENT_MISSION_COMPLETED, EVENT_ROOM_COMPLETED, POSE_POINT_CM_TO_MM, ROOM_TRANSITION_CANDIDATE_PHASES, UNVISITED_ROOMS_MAX_SUPPRESSION_SECONDS, active_charge_cycles, estcap_to_mah
 from .map_renderer import ROBOT_DIAMETER_MM_ISJ_SERIES
 from .mission_map import (
@@ -360,7 +365,7 @@ def _room_transition_confidence_ok(
 # ── Partial-message-safe top-level key lookup ───────────────────────────────
 
 def _mission_recovered_after_stuck(
-    entry: RoombaConfigEntry, mission: dict[str, Any]
+    entry: RoombaConfigEntry, mission: dict[str, Any], stuck_at: float
 ) -> bool | None:
     """Did this mission carry on after its stuck event?
 
@@ -370,25 +375,43 @@ def _mission_recovered_after_stuck(
     phase, so a mission that resumed and then cleaned for hours read as
     abandoned whenever its final room ran short.
 
-    Two signals, both already in the cloud record:
+    Two signals, both already in the cloud record, and both counted only
+    AFTER `stuck_at` (wall clock, compared with the record's own Unix
+    timestamps):
 
-      - rooms the robot finished (`finEvents` entries with a completed
-        status), which a robot that gave up does not accumulate
-      - a `travel` event whose destination is the dock, which is how a
-        mission ends when the robot drove home rather than being
-        cancelled or expiring
+      - a pass the robot finished (status 0 or 1). A robot that gave up
+        finishes none -- but it may well have finished rooms BEFORE it got
+        stuck, and those were counted too, so a mission that cleaned two
+        rooms and gave up in the third read as resumed and counted as
+        completed. Status 5 and 6 do not count at all: they are events the
+        firmware closes at mission END, which says the mission stopped,
+        not that the robot worked on.
+      - a `travel` to the dock, which is how a mission ends when the robot
+        drove home rather than being cancelled or expiring.
 
     Returns None when the record is not available -- a Prime robot, a
-    local-only setup, or the cloud simply not having caught up. The
-    caller then falls back to the old elapsed-time test, which is wrong
-    in one direction but better than refusing to classify.
+    local-only setup, the cloud not having caught up -- or when the stuck
+    time is unknown. The caller then falls back to the old elapsed-time
+    test, which is wrong in one direction but better than refusing to
+    classify.
     """
+    if not stuck_at:
+        return None
     cc = getattr(entry.runtime_data, "cloud_coordinator", None)
     if cc is None:
         return None
     mission_id = mission.get("missionId") or mission.get("mission_id")
     if not mission_id:
         return None
+
+    def _after_stuck(ev: dict[str, Any]) -> bool:
+        # A room event carries its start (`ts`) and its end (`ets`); the
+        # end is what must come after the stuck. A travel event has `ts`.
+        when = ev.get("ets") or ev.get("ts")
+        try:
+            return when is not None and float(when) > stuck_at
+        except (TypeError, ValueError):
+            return False
 
     for record in getattr(cc, "raw_records", None) or []:
         if not isinstance(record, dict):
@@ -398,24 +421,24 @@ def _mission_recovered_after_stuck(
         timeline = record.get("timeline")
         if not isinstance(timeline, dict):
             return None
-        events = timeline.get("finEvents") or []
+        events = [ev for ev in timeline.get("finEvents") or [] if isinstance(ev, dict)]
 
-        rooms_done = sum(
-            1 for ev in events
-            if isinstance(ev, dict)
-            and ev.get("type") == "room"
-            and (ev.get("room") or {}).get("status") in (0, 6)
-        )
-        docked = any(
-            isinstance(ev, dict)
-            and ev.get("type") == "travel"
-            and (ev.get("travel") or {}).get("dest") == "dock"
+        worked_on = any(
+            ev.get("type") == "room"
+            and (ev.get("room") or {}).get("status") in ROOM_EVENT_PASS_DONE_STATUSES
+            and _after_stuck(ev)
             for ev in events
         )
-        # EITHER is enough. A mission that finished rooms after being
+        docked = any(
+            ev.get("type") == "travel"
+            and (ev.get("travel") or {}).get("dest") == "dock"
+            and _after_stuck(ev)
+            for ev in events
+        )
+        # EITHER is enough. A mission that finished a pass after being
         # freed did not abandon, whatever its ending; and one that drove
         # home under its own power did not abandon either.
-        return rooms_done > 0 or docked
+        return worked_on or docked
 
     return None
 
@@ -823,12 +846,12 @@ async def async_record_mission(
     # Guard: only fire when hass is fully initialised (has config attribute)
     if getattr(hass, "is_running", False):
         from .repairs import async_check_mixed_schedule, async_check_mission_anomaly
-        asyncio.run_coroutine_threadsafe(
-            async_check_mixed_schedule(hass, entry), hass.loop
+        entry.async_create_task(
+            hass, async_check_mixed_schedule(hass, entry)
         )
         # L3 — check for consecutive anomalous missions after each append
-        asyncio.run_coroutine_threadsafe(
-            async_check_mission_anomaly(hass, entry), hass.loop
+        entry.async_create_task(
+            hass, async_check_mission_anomaly(hass, entry)
         )
 
     # Update L3 runtime error state.
@@ -944,22 +967,25 @@ def _seed_maintenance_baselines(
         )
 
 
-def make_mission_callback(
-    hass: Any,
-    entry: RoombaConfigEntry,
-) -> Any:
-    """Return an MQTT message callback that tracks mission lifecycle.
 
-    Returned callable is suitable for roomba.register_on_message_callback().
-    Closure holds mutable state for phase tracking across messages.
+
+@dataclasses.dataclass
+class _MissionState:
+    """Everything `_on_mission_message` remembers between messages.
+
+    Extracted from eighteen `nonlocal` variables of
+    `make_mission_callback`. Nothing about the values changed; they
+    were only made visible. The comments are the ones that sat beside
+    each variable in the factory.
     """
+
     last_phase: str = ""
     was_travelling: bool = False
     #: Whether a working mode has been seen since the current room
     #: was entered; see the note in the advance block.
     cleaned_in_room: bool = False
     travel_started_at: float | None = None
-    current_mission_zones: list[str] = []
+    current_mission_zones: list[str] = dataclasses.field(default_factory=list)
     mission_start_ts: int = 0
     nstuck_at_start: int = 0
     # v3.2.0 ANOMALY-EXPLAIN — npicks (bbrun.nPicks) at mission start,
@@ -1015,21 +1041,981 @@ def make_mission_callback(
     #: dock, filed as `completed` -- leaves no trace in the end state.
     mission_error_code: int = 0
     stuck_cleared_ts: float = 0.0
+    # Wall-clock time the stuck was detected, to compare with the cloud
+    # record's own timestamps. stuck_cleared_ts is monotonic and cannot be.
+    stuck_at: float = 0.0
     # v2.6.3 A+D — True once robot enters an active cleaning phase in this mission.
     # Replaces the last_phase-in-_CLEANING_PHASES guard so that:
     #   A) stuck → stop/charge correctly triggers mission end (not bypassed)
     #   D) stuck → run does NOT re-fire mission start (no false reset)
     had_cleaning_phase: bool = False
 
+
+
+def _evaluate_travel_edge(ms: _MissionState, travelling: bool | None) -> bool:
+    """Whether this message is the END of a drive — a room-boundary candidate.
+
+    Reads `ms.was_travelling` and `ms.travel_started_at`; writes
+    `ms.travel_started_at` (set on departure, cleared on return). The
+    caller updates `ms.was_travelling` itself, after using the result.
+
+    Lifted out of `_on_mission_message` as the first step of Group 5:
+    the smallest block with a clean boundary, chosen to prove the pattern
+    before the larger ones. Its behaviour is pinned by
+    `TestTravelEdgeDrivenThroughTheCallback`, written before this move
+    because no test drove a message through it until then.
+
+    `travelling` is None when the robot reports no usable
+    `operatingMode`, in which case neither edge can fire.
+    """
+    returned = False
+    if travelling is False and ms.was_travelling:
+        _drive_sec = (
+            (monotonic() - ms.travel_started_at)
+            if ms.travel_started_at is not None
+            else None
+        )
+        # DURATION SAYS NOTHING. THE FIELD SETTLED IT TWICE.
+        #
+        # This required a drive to last 6 seconds before it counted
+        # as a room boundary, to keep repositioning inside one room
+        # from advancing the display. It gets both cases backwards:
+        #
+        #   @ScenicSystemsLLC, Guest Bathroom -> Hallway, watched in
+        #   person: the real crossing took 3.8 s and was thrown away
+        #   as "too short". The drive off the dock, which is NOT a
+        #   room change, took 17.7 s and was accepted. One mission,
+        #   both decisions wrong, in opposite directions.
+        #
+        #   @AlakazipLabs, three-room mission: drives of 12 s, 69 s
+        #   and 11.3 minutes, the long one most likely the robot
+        #   re-finding itself on a cold map.
+        #
+        # Nothing separates a boundary from a reposition by how long
+        # the drive took. What does is whether the robot WORKED in
+        # the room behind it -- see `cleaned_in_room` below, which
+        # answers both of their missions correctly.
+        returned = _drive_sec is not None
+        _LOGGER.debug(
+            "AUTO-ADVANCE-ROOM: travel ended after %ss -> boundary "
+            "candidate (confirmed only if the robot cleaned here)",
+            round(_drive_sec, 1) if _drive_sec is not None else "?",
+        )
+        ms.travel_started_at = None
+    elif travelling is True and not ms.was_travelling:
+        ms.travel_started_at = monotonic()
+    return returned
+
+
+
+
+def _handle_mission_start(
+    ms: _MissionState,
+    hass: HomeAssistant,
+    entry: "RoombaConfigEntry",
+    *,
+    phase: str,
+    reported: dict[str, Any],
+    mission: dict[str, Any],
+    candidate_cycle: Any,
+    candidate_mission_start_ts: Any,
+) -> dict[str, Any]:
+    """Recognise the start of a new mission and initialise its state.
+
+    Writes twelve `ms` fields — the per-mission counters, flags and the
+    start timestamp — plus `entry.runtime_data.demand_triggered_ts`.
+
+    RETURNS `mission`, possibly REPLACED: when the DirtThresholdManager
+    fired a start within the last 30 seconds, the initiator is
+    overridden to "demand" on a copy, and that copy is what the rest of
+    the callback records. The caller must use the returned value.
+
+    Lifted out of `_on_mission_message` in Group 5. It looked like a
+    fifteen-input block at first measurement; ten of those were values
+    it sets itself, and the real inputs are the five message fields
+    here plus the fixed hass/entry/ms.
+    """
+    if (
+        phase in _ACTIVE_CLEANING_PHASES
+        and candidate_cycle not in _NON_MISSION_CYCLES
+        and not ms.had_cleaning_phase
+        and not _mission_already_terminal(entry, candidate_mission_start_ts)
+    ):
+        ms.had_cleaning_phase = True
+        ms.current_mission_zones = _capture_zone_names(entry, reported)
+        ms.mission_start_ts = candidate_mission_start_ts
+        bbrun = _merged_top_level(entry, reported, "bbrun")
+        ms.nstuck_at_start = bbrun.get("nStuck", 0)
+        ms.npicks_at_start = bbrun.get("nPicks", 0)
+        ms.recharge_min_accumulator = 0
+        ms.current_leg_rechrgM = 0
+        ms.last_recharge_phase_ts = 0.0
+        ms._last_mirrored_recharge_min = 0
+        ms.had_stuck_event = False
+        ms.mission_error_code = 0
+        ms.stuck_cleared_ts = 0.0
+        ms.stuck_at = 0.0
+        _LOGGER.debug(
+            "MissionStore: mission started ts=%s nstuck_baseline=%d",
+            ms.mission_start_ts, ms.nstuck_at_start,
+        )
+
+        # F12a — record clean event in PresenceManager for window analytics.
+        # record_clean_event() is idempotent and never raises.
+        _pm = getattr(entry.runtime_data, "presence_manager", None)
+        if _pm is not None:
+            try:
+                _started_at = (
+                    datetime.datetime.fromtimestamp(
+                        ms.mission_start_ts, tz=datetime.timezone.utc
+                    )
+                    if ms.mission_start_ts
+                    else datetime.datetime.now(datetime.timezone.utc)
+                )
+                _pm.record_clean_event(_started_at)
+            except Exception:  # noqa: BLE001
+                # Never raises by contract (see the CROSS-CORR note
+                # below, which relies on it). Logged because a clean
+                # event that fails to record is invisible otherwise:
+                # the mission still runs, and only the derived counts
+                # come out wrong, later, with no trace of the cause.
+                _LOGGER.debug(
+                    "Roomba+: PresenceManager clean event not recorded",
+                    exc_info=True,
+                )
+
+        # v3.3.0 CROSS-CORR — mission-start snapshot of the configured
+        # external sensors (opt-in). We are on the paho-MQTT thread;
+        # hass.states is read loop-side via call_soon_threadsafe, and
+        # the pending snapshot is persisted immediately so an HA
+        # restart mid-mission keeps the pair. Never raises (same
+        # contract as the PresenceManager block above).
+        _corr_entities = entry.options.get(CONF_CORRELATION_ENTITIES) or []
+        _rps_corr = getattr(entry.runtime_data, "robot_profile_store", None)
+        # isinstance guard: also keeps a malformed option (or a test's
+        # auto-MagicMock options) from engaging the opt-in feature.
+        if (
+            isinstance(_corr_entities, (list, tuple))
+            and _corr_entities
+            and _rps_corr is not None
+        ):
+            def _capture_corr_snapshot() -> None:
+                try:
+                    values: dict[str, float] = {}
+                    for _eid in _corr_entities:
+                        _st = hass.states.get(_eid)
+                        if _st is None:
+                            continue
+                        try:
+                            values[_eid] = float(_st.state)
+                        except (TypeError, ValueError):
+                            continue
+                    if values:
+                        import time as _t_corr
+                        _rps_corr.record_correlation_snapshot(
+                            values, _t_corr.time()
+                        )
+                        hass.async_create_task(
+                            _rps_corr.async_save(hass, entry.entry_id),
+                            name="roomba_plus_corr_snapshot_save",
+                        )
+                except Exception:  # noqa: BLE001
+                    _LOGGER.debug("CROSS-CORR snapshot failed", exc_info=True)
+            hass.loop.call_soon_threadsafe(_capture_corr_snapshot)
+
+        # MS1 (v2.6.0): override initiator to "demand" when DirtThresholdManager
+        # fired a start command within the last 30 seconds.
+        _demand_ts = getattr(entry.runtime_data, "demand_triggered_ts", None)
+        if isinstance(_demand_ts, float):
+            import time as _t_mod
+            if _t_mod.monotonic() - _demand_ts <= 30.0:
+                mission = dict(mission)  # copy to avoid mutating reported state
+                mission["initiator"] = "demand"
+                entry.runtime_data.demand_triggered_ts = None
+                _LOGGER.info("MissionStore: mission initiator overridden → demand")
+    return mission
+
+
+
+
+def _update_room_progress(
+    ms: _MissionState,
+    hass: HomeAssistant,
+    entry: "RoombaConfigEntry",
+    *,
+    mts_upd: Any,
+    phase: str,
+) -> None:
+    """Advance the room display and its timer from one message.
+
+    The largest block of `_on_mission_message` — 284 lines — and, once
+    measured, the one with the narrowest interface: it needs two values
+    from the message, `mts_upd` (the MissionTimerStore, or None) and
+    `phase`. Everything else is `ms`, hass, entry and module names.
+    Nothing it computes flows back to the caller.
+
+    Lifted out in Group 5. Covered to all but two lines by the existing
+    behaviour tests before the move, which is why it could go in one
+    piece rather than being carved up.
+    """
+    if mts_upd is not None and ms.mission_start_ts:
+        _mission_id = f"{entry.data.get('blid', '')}_{ms.mission_start_ts}"
+        if phase == "run":
+            _is_new_mission = mts_upd.mission_id != _mission_id
+            mts_upd.on_phase_run(_mission_id, hass, entry.entry_id)
+            if _is_new_mission:
+                # v2.7.5: wire set_mission_plan on mission start so
+                # planned_rooms is populated for current_room fallback
+                # and for MTS persistence across HA restarts.
+                _master = (
+                    getattr(entry.runtime_data.roomba, "master_state", None) or {}
+                )
+                _rep = (_master.get("state") or {}).get("reported") or {}
+                _regions = (_rep.get("lastCommand") or {}).get("regions") or []
+                _zone = entry.options.get(CONF_SMART_ZONE_DATA, {})
+                # v2.9.0 (D) — use MissionStore.extract_rid() instead of
+                # only checking region_id/region_name. The iRobot app
+                # (direct start, not via roomba_plus.clean_room) reports
+                # regions as {"rid": ...} on lewis 22.52.10+ — the same
+                # format _get_planned_room_order() already handles
+                # correctly for the sensor display. This block builds
+                # mts.planned_rooms (the AUTO-ADVANCE-ROOM/estimate-
+                # wiring source) and previously missed this format
+                # entirely, leaving planned_rooms empty for any mission
+                # started directly from the iRobot app.
+                #
+                # v2.9.0 (H) — NAME-PRIORITY CONSISTENCY. This used to
+                # prefer region_name (raw MQTT field) then the zone
+                # alias, then the raw ID — a DIFFERENT priority order
+                # than _get_planned_room_order() (sensor.py, the live
+                # display path), which resolves PURELY from
+                # cloud_coordinator.regions[*].name keyed by rid, never
+                # considering region_name or the zone alias at all. With
+                # a custom alias configured that differs from the cloud
+                # name, mts.planned_rooms (this fallback source) and the
+                # live sensor display could show two different strings
+                # for the same room. Now matches the same priority:
+                # cloud name first, region_name/alias/raw-id as
+                # successive fallbacks only when cloud data is
+                # unavailable (mirrors how _get_planned_room_order()
+                # itself falls back to mts.planned_rooms when cc.regions
+                # can't resolve a name).
+                from .mission_store import MissionStore as _MS
+                _cc = getattr(entry.runtime_data, "cloud_coordinator", None)
+                _cloud_id_to_name: dict[str, str] = (
+                    region_names_across_maps(_cc)
+                )
+                _names = [
+                    _cloud_id_to_name.get(_MS.extract_rid(r) or "")
+                    or r.get("region_name")
+                    or (_zone.get(_MS.extract_rid(r)) or {}).get("name")
+                    or _MS.extract_rid(r)
+                    for r in _regions
+                    if isinstance(r, dict) and _MS.extract_rid(r)
+                ]
+                if _names:
+                    # v2.8.0 AUTO-ADVANCE-ROOM (live wiring): use the real
+                    # cloud TE1 per-room time estimates instead of the
+                    # previous hardcoded 0. total_estimated_sec is the sum
+                    # of available per-room estimates (None entries are
+                    # excluded from the sum, not treated as 0 seconds).
+                    # Deferred import: sensor.py imports from this package's
+                    # __init__.py (roomba_reported_state), and __init__.py
+                    # imports this module at load time — a top-level import
+                    # here would be circular. Safe at call time since both
+                    # modules are fully loaded by then.
+                    #
+                    # Bug-hunt: this entire block is wrapped because
+                    # _compute_room_time_estimates() reads cloud_coordinator
+                    # and roomba_reported_state() — an unexpected None or a
+                    # malformed cloud payload there must not crash this
+                    # whole MQTT callback (which would also break mission
+                    # tracking, stuck detection, etc. for this message).
+                    # Falls back to the pre-v2.8.0 behaviour (no estimate)
+                    # on any failure, same as if cloud data were absent.
+                    _room_secs: list[float | None] = [None] * len(_names)
+                    _total_est: float | None = None
+                    try:
+                        from .sensor import _compute_room_time_estimates
+                        _room_secs = list(
+                            _compute_room_time_estimates(
+                                entry, [str(x) for x in _names]
+                            )
+                        )
+                        _known_secs: list[float] = []
+                        for _s in _room_secs:
+                            if _s is None:
+                                continue
+                            try:
+                                _sf = float(_s)
+                            except (TypeError, ValueError):
+                                continue
+                            if _sf > 0:
+                                _known_secs.append(_sf)
+                        if _known_secs:
+                            _total_est = sum(_known_secs)
+                        else:
+                            # THE SHORTEST PLAUSIBLE PER-ROOM TIME,
+                            # before falling back to a whole-house
+                            # figure.
+                            #
+                            # The cloud holds one estimate per SET
+                            # OF CLEANING PARAMETERS for each room.
+                            # In Auto pass mode the robot picks a
+                            # set during the mission, so none can be
+                            # chosen in advance and the lookup above
+                            # yields nothing -- correct for a
+                            # displayed percentage, fatal for a gate.
+                            #
+                            # For "has enough time passed in this
+                            # room", the shortest of those estimates
+                            # is the point past which the answer can
+                            # be yes at all. It is a real per-room
+                            # figure from the robot's own cloud.
+                            #
+                            # WHAT IT REPLACES: a whole-house
+                            # mission average divided by the rooms
+                            # in THIS mission. On
+                            # @ScenicSystemsLLC's two-room run that
+                            # was 10.7 hours, giving 5.3 hours per
+                            # room -- a threshold no 17-minute
+                            # mission could ever cross.
+                            from .sensor_rooms import (  # noqa: PLC0415
+                                shortest_plausible_room_seconds,
+                            )
+
+                            _floor_secs = [
+                                s for s in shortest_plausible_room_seconds(
+                                    entry, [str(x) for x in _names]
+                                ) if s and s > 0
+                            ]
+                            if _floor_secs:
+                                _total_est = sum(_floor_secs)
+                                _LOGGER.debug(
+                                    "AUTO-ADVANCE-ROOM: no confident "
+                                    "per-room estimate — using the "
+                                    "shortest plausible cloud estimate "
+                                    "for %d of %d room(s), "
+                                    "total_estimated_sec=%.0f",
+                                    len(_floor_secs), len(_names),
+                                    _total_est,
+                                )
+                        if _total_est is None:
+                            # v2.9.0 (A) — CONFIRMED ROOT CAUSE: every
+                            # planned room using Auto pass mode (no
+                            # per-room estimate exists by firmware design)
+                            # OR none of them yet having GOOD_CONFIDENCE
+                            # cloud history both leave _known_secs empty,
+                            # making total_estimated_sec permanently None
+                            # for the WHOLE mission — and with it,
+                            # expected_room_sec's uniform-split fallback
+                            # has nothing to divide. AUTO-ADVANCE-ROOM can
+                            # then never advance current_room_idx past 0,
+                            # for the entire mission, regardless of how
+                            # many rooms the robot actually visits. Likely
+                            # the majority case (Auto is the default pass
+                            # mode). Falls back to the robot's own
+                            # historical mean mission duration — already
+                            # used by mission_progress's "no room
+                            # sequence" branch for exactly this purpose,
+                            # same pattern applied here. Stays None only
+                            # for a brand-new install with no mission
+                            # history yet, in which case AUTO-ADVANCE-ROOM
+                            # correctly continues to conservatively refuse
+                            # (same behaviour as before this fix).
+                            _rps = getattr(
+                                entry.runtime_data, "robot_profile_store", None
+                            )
+                            _mean_min = (
+                                getattr(_rps, "mission_duration_mean", None)
+                                if _rps is not None else None
+                            )
+                            _total_est = (
+                                round(_mean_min * 60)
+                                if _mean_min and _mean_min > 0
+                                else None
+                            )
+                            if _total_est:
+                                # NAME THE REASON, do not list both.
+                                #
+                                # This said "Auto pass mode OR
+                                # insufficient cloud confidence" and
+                                # left the reader to pick. They are
+                                # different problems: Auto means no
+                                # estimate CAN be chosen yet, low
+                                # confidence means one exists and is
+                                # not trusted. A cache of past
+                                # estimates would help the second
+                                # and do nothing for the first.
+                                #
+                                # @ScenicSystemsLLC's mission hit one
+                                # of them and the log could not say
+                                # which, so the next step could not
+                                # be chosen either.
+                                # LATE ON PURPOSE: `sensor_rooms`
+                                # reaches back into the package,
+                                # so importing it at module level
+                                # is a genuine circular import --
+                                # confirmed by 63 collection
+                                # errors when it was tried.
+                                from .sensor_rooms import (  # noqa: PLC0415
+                                    why_no_room_estimates,
+                                )
+
+                                _LOGGER.debug(
+                                    "AUTO-ADVANCE-ROOM: no per-room "
+                                    "estimates — %s. Falling back to "
+                                    "robot_profile_store"
+                                    ".mission_duration_mean=%.1fmin "
+                                    "(total_estimated_sec=%s), which is a "
+                                    "WHOLE-HOUSE figure divided by the "
+                                    "rooms in THIS mission",
+                                    why_no_room_estimates(entry),
+                                    _mean_min, _total_est,
+                                )
+                    except Exception:  # noqa: BLE001
+                        _LOGGER.debug(
+                            # NOT INSTRUMENTED: an estimate is
+                            # legitimately absent for Auto pass mode
+                            # and for rooms the robot has not
+                            # learned, so a failure here is a normal
+                            # state rather than a defect.
+                            "AUTO-ADVANCE-ROOM: room time estimate lookup "
+                            "failed — continuing without estimates",
+                            exc_info=True,
+                        )
+                    mts_upd.set_mission_plan(
+                        _mission_id,
+                        _names,
+                        _total_est,
+                        hass,
+                        entry.entry_id,
+                        room_estimates_sec=_room_secs,
+                    )
+        else:
+            # v2.7.5: pass hass/entry_id so on_phase_other can save
+            # the flushed delta without waiting for next on_phase_run.
+            mts_upd.on_phase_other(hass, entry.entry_id)
+
+            # v2.9.0 (E) — RETRY for missing estimates. set_mission_plan()
+            # only ran once, at the first "run" message. If cloud TE1
+            # data wasn't synced yet at that exact moment, total_estimated
+            # _sec stayed None for the rest of the mission with no
+            # chance to recover — even though the data might be ready
+            # now, several messages later. One-shot per mission in
+            # practice: once update_estimates() succeeds, this check is
+            # always False afterwards (total_estimated_sec is no longer
+            # None). Cheap and side-effect-free when cloud_coordinator
+            # is None or regions are still empty — _compute_room_time_
+            # estimates() degrades to all-None, update_estimates() just
+            # re-saves the same None it already had.
+            if (
+                mts_upd.total_estimated_sec is None
+                and mts_upd.planned_rooms
+            ):
+                try:
+                    from .sensor import _compute_room_time_estimates
+                    _retry_secs = _compute_room_time_estimates(
+                        entry, mts_upd.planned_rooms
+                    )
+                    _retry_known = [
+                        float(_s) for _s in _retry_secs
+                        if _s is not None and float(_s) > 0
+                    ]
+                    if _retry_known:
+                        mts_upd.update_estimates(
+                            sum(_retry_known), _retry_secs,
+                            hass, entry.entry_id,
+                        )
+                        _LOGGER.info(
+                            "AUTO-ADVANCE-ROOM: retry succeeded — cloud "
+                            "estimates now available (total_estimated_sec"
+                            "=%.0fs), updated mid-mission without "
+                            "resetting progress",
+                            sum(_retry_known),
+                        )
+                except Exception:  # noqa: BLE001
+                    _LOGGER.debug(
+                        # NOT INSTRUMENTED: the retry exists because
+                        # the first attempt legitimately finds nothing.
+                        "AUTO-ADVANCE-ROOM: estimate retry failed — "
+                        "continuing without estimates",
+                        exc_info=True,
+                    )
+
+
+
+def _confirm_mission_end(
+    ms: _MissionState,
+    hass: HomeAssistant,
+    entry: "RoombaConfigEntry",
+    *,
+    end_gate_passes: bool,
+    looks_like_end: bool,
+    mission: dict[str, Any],
+    phase: str,
+    reported: dict[str, Any],
+) -> None:
+    """Close the mission once the end signal has passed the gate.
+
+    `end_gate_passes` is computed once in the caller and shared with the
+    diagnostic log there, so the decision this function acts on is the
+    same one the log explains — that was a separate computation until
+    Group 5, held consistent only by an invariant set elsewhere.
+
+    Resets the per-mission `ms` fields and schedules the record write.
+    """
+    if (
+        phase in _MISSION_END_PHASES
+        and ms.had_cleaning_phase
+        and looks_like_end
+        and ms.end_signal_streak >= _END_SIGNAL_DEBOUNCE_COUNT
+        and end_gate_passes
+    ):
+        ms.had_cleaning_phase = False
+        ms.end_signal_streak = 0
+        ms.end_signal_first_ts = 0.0
+        bbrun_end = _merged_top_level(entry, reported, "bbrun")
+        nstuck_delta = max(0, bbrun_end.get("nStuck", 0) - ms.nstuck_at_start)
+        npicks_delta = max(0, bbrun_end.get("nPicks", 0) - ms.npicks_at_start)
+
+        # A FLAT BATTERY IS NOT AN ENTRAPMENT, and the robot's own
+        # counter cannot tell them apart.
+        #
+        # @AlakazipLabs walked an i3 down to 6%, sent `dock`, and
+        # watched it accept, set off, and give up 13 seconds later
+        # with `error 46` (Low battery) -- and `nStuck` went 111 to
+        # 112. So a robot that repeatedly runs itself flat scores
+        # identically to one that repeatedly gets trapped, in the
+        # problem-zone sensor and in every mission result.
+        #
+        # `error 46` separates them, and it is in the same message.
+        # Deliberately narrow: only this one code, only when the
+        # stuck delta would otherwise have decided the result.
+        _battery_abort = (mission.get("error") == 46)
+
+        # F6h — classify stuck recovery outcome
+        result_override: str | None = None
+        if _battery_abort and ms.had_stuck_event and nstuck_delta > 0:
+            # Ran out of charge mid-drive. The mission ended, but not
+            # because anything trapped the robot.
+            result_override = "error"
+        if not _battery_abort and ms.had_stuck_event and nstuck_delta > 0:
+            # WHAT THE MISSION DID, not when its phase last changed.
+            #
+            # The elapsed-time test below reads `stuck_cleared_ts` as
+            # "when the robot resumed". It is not: the edge that sets
+            # it fires on EVERY re-entry into an active phase after a
+            # stuck, so over a long mission the last one wins.
+            #
+            # @ScenicSystemsLLC's Braava got stuck, was freed by hand
+            # 16 minutes later, then cleaned four more rooms and
+            # docked -- 168 minutes, 524 sqft, a genuine `dest: dock`
+            # finish. It was recorded `stuck_and_abandoned`, because
+            # the last room before docking took under five minutes
+            # and that is all the clock was measuring.
+            #
+            # His own suggestion, and it is the right one: decide
+            # retrospectively from what the mission recorded. Rooms
+            # completed after the stuck, plus a real dock finish,
+            # answer the question directly -- elapsed time was only
+            # ever a proxy for both.
+            _resumed = _mission_recovered_after_stuck(entry, mission, ms.stuck_at)
+            if _resumed is not None:
+                result_override = (
+                    "stuck_and_resumed" if _resumed
+                    else "stuck_and_abandoned"
+                )
+        if (
+            result_override is None
+            and not _battery_abort
+            and ms.had_stuck_event
+            and nstuck_delta > 0
+        ):
+            # stuck_and_resumed: robot had stuck event but kept cleaning
+            # (stuck_cleared_ts was reset when it re-entered run phase)
+            # We distinguish by whether total run time is > 5 min post-stuck,
+            # using mission duration as a proxy. If mission was short (<10 min)
+            # and we have nstuck, it abandoned immediately.
+            elapsed_total = (
+                _time_mod.monotonic() - (ms.stuck_cleared_ts if ms.stuck_cleared_ts else 0)
+            )
+            # A mission that lasted >5 min after the stuck event = resumed
+            if ms.stuck_cleared_ts > 0 and elapsed_total > 300:
+                result_override = "stuck_and_resumed"
+            else:
+                result_override = "stuck_and_abandoned"
+
+        entry.async_create_task(
+            hass, async_record_mission(hass, entry, mission, reported, list(ms.current_mission_zones), observed_rooms=_observed_rooms(entry), start_ts=ms.mission_start_ts, nstuck_delta=nstuck_delta, mission_error_code=ms.mission_error_code, recharge_min=ms.recharge_min_accumulator + ms.current_leg_rechrgM, result_override=result_override, npicks_delta=npicks_delta)
+        )
+        # MP1 (v2.6.0): clear mission timer at end
+        _mts = getattr(entry.runtime_data, "mission_timer_store", None)
+        if _mts is not None:
+            _mts.clear(hass, entry.entry_id)
+
+        ms.current_mission_zones = []
+        ms.mission_start_ts = 0
+        ms.nstuck_at_start = 0
+        ms.npicks_at_start = 0   # v3.2.0 bug-hunt fix — was missing here,
+                               # inconsistent with nstuck_at_start's
+                               # defensive reset right above it (both
+                               # get re-captured at the next mission's
+                               # actual start too, but this guards
+                               # against a stale cross-mission value if
+                               # that re-capture were ever skipped)
+        ms.recharge_min_accumulator = 0
+        ms.current_leg_rechrgM = 0
+        ms.last_recharge_phase_ts = 0.0
+        ms._last_mirrored_recharge_min = 0
+        ms.had_stuck_event = False
+        ms.stuck_cleared_ts = 0.0
+
+
+def _advance_room_on_drive_end(
+    ms: _MissionState,
+    hass: HomeAssistant,
+    entry: "RoombaConfigEntry",
+    *,
+    mts_upd: Any,
+    returned_from_travel: bool,
+    mission: dict[str, Any],
+    phase: str,
+) -> None:
+    """Advance to the next planned room when a drive ends in a new room.
+
+    The travel route for robots that emit no phase change between rooms
+    (`soho`, @ScenicSystemsLLC) and the phase route for those that do,
+    in one place. `returned_from_travel` comes from
+    `_evaluate_travel_edge`; the advance also needs `ms.cleaned_in_room`,
+    so a drive that ends without cleaning does not count as arrival.
+
+    Lifted out in Group 5; fully covered by behaviour tests before the
+    move.
+    """
+    if mts_upd is not None and ms.mission_start_ts:
+        # EVALUATED ON EVERY PHASE, not just the non-run ones.
+        #
+        # This sat inside the `phase != "run"` branch, together with
+        # the flag it reads. The phase route needs `charge` or
+        # `hmPostMsn` and was fine there; the travel route needs `run`
+        # and could never fire.
+        #
+        # One placement explained both field reports: @ScenicSystemsLLC's
+        # S9+ sent nine clean seconds of the travel signal and the
+        # display never moved, while his Braava -- which sends no travel
+        # signal at all -- advanced late through the phase route.
+        if (
+            (
+                (
+                    ms.last_phase != phase
+                    and phase in _ROOM_TRANSITION_CANDIDATE_PHASES
+                )
+                or (returned_from_travel and ms.cleaned_in_room)
+            )
+            and _room_transition_confidence_ok(
+                mission, mts_upd, from_travel=returned_from_travel
+            )
+        ):
+            # WHAT THE ROOM ACTUALLY TOOK, before advancing.
+            #
+            # We measure this the whole time -- the progress sensor
+            # shows it every 30 seconds -- and then threw it away at
+            # exactly the moment it became a finished figure.
+            #
+            # That left the cloud as the only source of per-room
+            # estimates, and the cloud has two structural reasons to
+            # offer none: auto pass mode (the robot decides passes
+            # at runtime, so there is nothing to estimate) and
+            # insufficient region history. A robot in auto mode
+            # therefore NEVER gets one, and falls back to a
+            # whole-house mean divided by the rooms in this mission
+            # -- 5.9 hours per room on @ScenicSystemsLLC's two-room
+            # run, a threshold no real mission can cross.
+            #
+            # His question was the right one: four real runs of the
+            # same two rooms, and nothing learned. We had the
+            # measurement every time.
+            _measured = getattr(mts_upd, "time_in_current_room_sec", None)
+            # `planned_rooms` holds NAMES; the estimate cache is
+            # keyed by region id. Resolving here rather than at
+            # write time keeps the resolution next to the data that
+            # knows about it.
+            _finished_room = (
+                mts_upd.planned_rooms[mts_upd.current_room_idx]
+                if 0 <= mts_upd.current_room_idx < len(mts_upd.planned_rooms)
+                else None
+            )
+            _advanced = mts_upd.advance_room(hass, entry.entry_id)
+            if _advanced:
+                _remember_measured_room_time(
+                    entry, _finished_room, _measured,
+                    mode=mission.get("operatingMode"),
+                )
+                # The new room has not been cleaned yet.
+                ms.cleaned_in_room = False
+                _LOGGER.info(
+                    "AUTO-ADVANCE-ROOM: advanced to room %d/%d (%s) "
+                    "on phase=%s confidence signal",
+                    mts_upd.current_room_idx + 1,
+                    len(mts_upd.planned_rooms),
+                    mts_upd.current_room,
+                    phase,
+                )
+                # v2.9.0 EVENT-BUS — room_completed fires for the
+                # room just LEFT (current_room_idx already advanced
+                # above, so current_room now refers to the NEXT
+                # room — use idx-1 / the previous room name).
+                _completed_idx = mts_upd.current_room_idx - 1
+                _completed_room = (
+                    mts_upd.planned_rooms[_completed_idx]
+                    if 0 <= _completed_idx < len(mts_upd.planned_rooms)
+                    else None
+                )
+                # v2.9.0 BUGFIX (field report Thonno, v2.8.7) —
+                # _on_mission_message runs on roombapy's MQTT thread,
+                # not the event loop thread. hass.bus.async_fire is a
+                # plain (non-coroutine) function that touches hass's
+                # event bus — call_soon_threadsafe is the correct
+                # bridge, same pattern already used for
+                # async_check_map_retrain_workflow below. Calling it
+                # directly raised RuntimeError on every room
+                # transition on newer/stricter HA core versions,
+                # crashing the entire paho-mqtt message thread —
+                # which then explained the "mission never closes"
+                # symptom: no further MQTT messages were ever
+                # processed after the first room transition, so the
+                # v2.9.0 stuck-end-state recheck kept re-evaluating
+                # the same frozen cached state forever.
+                # Fired directly. This was wrapped in
+                # call_soon_threadsafe from v2.8.7 until now, and the
+                # reason is worth keeping: on roombapy 1.x, paho
+                # invoked this callback from its own thread, a direct
+                # hass.bus.async_fire() tripped HA's thread-safety
+                # check, and the resulting RuntimeError killed the
+                # whole paho message thread. Thonno's symptom was
+                # "mission never closes" — no MQTT message was
+                # processed after the first room transition.
+                #
+                # That path is gone: since 4.2 roombapy runs on
+                # aiomqtt and dispatches callbacks on the event loop.
+                # prime_coordinator.py already fires this same event
+                # directly, and the only consumer is device_trigger.py
+                # — HA's own trigger machinery.
+                #
+                # If a future caller ever reaches this from a real
+                # thread again, the bridge has to come back.
+                hass.bus.async_fire(
+                    EVENT_ROOM_COMPLETED,
+                    {
+                        "entry_id": entry.entry_id,
+                        "name": entry.title,
+                        "room_name": _completed_room,
+                        "room_idx": _completed_idx,
+                    },
+                )
+
+
+# ── The end gate's two room checks ─────────────────────────────────────
+#
+# Nested inside _on_mission_message until Group 5, where they could only
+# be reached by building a whole mission callback. They decide whether an
+# ambiguous end phase is a pause between rooms (Thonno, v2.9.0: a two-room
+# mission was closed after the first room). Both need only `ms` and
+# `entry`; lifted out, each case is one line of setup.
+
+# v2.9.0 — ROOM-INDEX CORROBORATION. Reported by Thonno (i7+, lewis
+# 22.52.10) on v2.8.3: the time gate alone is not sufficient. Walking
+# through his timestamps, the robot sat in an ambiguous end phase for
+# ~12 seconds during a genuine inter-room transition — well past
+# END_SIGNAL_MIN_HOLD_SECONDS (2.0s) — so the time gate confirmed a
+# false end even though the mission was still running (confirmed:
+# the diagnostics snapshot from that exact run showed phase=="run"
+# afterwards). The 2.8.1/2.8.3 design assumed a transient blip
+# reverts within a message or two; that assumption doesn't hold for
+# this firmware's actual inter-room pause duration, and no fixed
+# timeout can be picked without overfitting to one firmware's
+# behaviour.
+#
+# Rather than guess a longer timeout, corroborate with a fact we
+# already have: MissionTimerStore's planned_rooms/current_room_idx.
+# If the robot still has at least one more planned room after the
+# current one, an ambiguous end phase (charge/hmPostMsn) cannot be a
+# genuine end — it suppresses confirmation regardless of how long
+# the time gate has been satisfied. Deliberately does NOT apply to
+# unambiguous terminal phases (stop/completed/cancelled), which can
+# be a genuine user-initiated early stop even with rooms remaining.
+# Naturally a no-op for EPHEMERAL/whole-home missions with no room
+# plan (planned_rooms empty) — falls through to the existing
+# time-based gate unchanged.
+#
+# v2.9.0 CONFIDENCE GUARD — confirmed regression: current_room_idx
+# can ONLY ever advance via AUTO-ADVANCE-ROOM, which requires
+# expected_room_sec to be available (see
+# _room_transition_confidence_ok in this module). That in turn
+# requires at least one room in the plan to have a real per-room or
+# total time estimate — structurally impossible whenever every
+# planned room uses Auto pass mode (no per-room estimate exists at
+# all by design), or whenever cloud TE1 data simply hasn't reached
+# GOOD_CONFIDENCE yet for any planned region (insufficient cleaning
+# history). For those missions — likely the majority, since Auto is
+# the default pass mode — current_room_idx is PERMANENTLY stuck at
+# 0, making _has_unvisited_planned_rooms() return True for the
+# entire mission regardless of actual progress. Without this guard,
+# EVERY genuine mission end for such missions would wait out the
+# full UNVISITED_ROOMS_MAX_SUPPRESSION_SECONDS safety cap (90s)
+# instead of the normal END_SIGNAL_MIN_HOLD_SECONDS (2s) — an 88s
+# regression on every single mission, not just the rare false-
+# positive case the original fix targeted. Only trust
+# current_room_idx as a corroboration signal when there is
+# concrete evidence AUTO-ADVANCE-ROOM could ever have advanced it
+# (at least one usable estimate exists); otherwise skip the
+# room-index check entirely and fall back to the plain time gate
+# immediately, as before this feature existed.
+# v2.10.1 CLOUD-ROOM-FALLBACK — structural gap found analysing a
+# Thonno field report: AUTO-ADVANCE-ROOM can NEVER advance
+# current_room_idx into the LAST planned room. Its own confidence
+# gate (_room_transition_confidence_ok) requires cycle in
+# ("clean", "quick") to fire at all — but cycle flips to "none"
+# at exactly the moment the robot transitions out of the
+# second-to-last room and into mission-end processing, since
+# there's no room left for the mission to still be "clean"/
+# "quick" about. current_room_idx is therefore permanently one
+# room behind for the entire tail of every multi-room mission,
+# making _has_unvisited_planned_rooms() wait out the full 90s cap
+# on every single one — not a rare edge case, the normal case.
+#
+# cycle itself was already ruled out as a substitute signal here
+# (confirmed unreliable for exactly this purpose — see the
+# v2.8.1 END-DEBOUNCE comment on the INTER-ROOM-TRANSITION guard
+# above: a single momentary cycle misread mid-mission caused a
+# real progress-reset regression for Thonno previously).
+#
+# The one genuinely independent, reliable signal for room
+# completion — `timeline.finEvents` room events with
+# status in ROOM_EVENT_DONE_STATUSES — comes from the cloud, not local MQTT. This
+# function checks it OPPORTUNISTICALLY: cloud_coordinator.raw_records
+# is whatever the existing periodic/event-triggered refreshes have
+# already cached (read-only, no new fetch triggered here) — if it
+# happens to already show every planned room done for the matching
+# record, trust that over the index; if not (most of the time,
+# since cloud data lags), fall through to the unchanged time-gated
+# behaviour below. Never makes things WORSE: a miss here costs
+# nothing beyond the status quo 90s wait.
+def _cloud_confirms_all_rooms_done(
+    ms: _MissionState, entry: "RoombaConfigEntry", planned_rids: list[str]
+) -> bool:
+    if not planned_rids:
+        return False
+    cc = getattr(entry.runtime_data, "cloud_coordinator", None)
+    if cc is None:
+        return False
+    records = getattr(cc, "raw_records", None) or []
+    match: dict[str, Any] | None = None
+    for r in records:
+        start = r.get("startTime")
+        if start is not None and abs(int(start) - ms.mission_start_ts) <= 120:
+            match = r
+            break
+    if match is None:
+        return False
+    timeline = match.get("timeline")
+    if not isinstance(timeline, dict):
+        return False
+    fin_events = timeline.get("finEvents") or []
+    from .mission_store import MissionStore as _MS
+    done_rids: set[str] = set()
+    for ev in fin_events:
+        if ev.get("type") != "room":
+            continue
+        room = ev.get("room") or {}
+        if room.get("status") in ROOM_EVENT_CLOSED_AT_END_STATUSES:
+            rid = _MS.extract_rid(room)
+            if rid:
+                done_rids.add(rid)
+    confirmed = all(rid in done_rids for rid in planned_rids)
+    if confirmed:
+        # SAY WHAT THIS CHECKS. The wording here claimed the
+        # index "cannot advance into the last room by design".
+        # It can, and does: `advance_room()` refuses to move
+        # OUT of the last room, not INTO it.
+        #
+        # @ScenicSystemsLLC quoted this line back as a
+        # structural limit while diagnosing a display that never
+        # advanced, and it sent him -- and then me -- looking at
+        # the wrong thing. His actual blocker was a travel
+        # duration gate that threw away the only real crossing
+        # of the mission.
+        #
+        # A wrong sentence in a debug line is expensive with
+        # testers who read their logs carefully. It travels.
+        _LOGGER.debug(
+            "MissionStore: cloud finEvents confirm all %d planned "
+            "room(s) done — marking the mission complete "
+            "regardless of where current_room_idx stopped",
+            len(planned_rids),
+        )
+    return confirmed
+
+
+def _has_unvisited_planned_rooms(
+    ms: _MissionState, entry: "RoombaConfigEntry"
+) -> bool:
+    _mts_check = getattr(entry.runtime_data, "mission_timer_store", None)
+    if _mts_check is None:
+        return False
+    _rooms = getattr(_mts_check, "planned_rooms", None) or []
+    if not isinstance(_rooms, list) or not _rooms:
+        return False
+    _room_secs = getattr(_mts_check, "room_estimates_sec", None) or []
+    _has_any_estimate = (
+        any(_s is not None for _s in _room_secs)
+        or getattr(_mts_check, "total_estimated_sec", None) is not None
+    )
+    if not _has_any_estimate:
+        # current_room_idx cannot be trusted — AUTO-ADVANCE-ROOM
+        # never had data to work with, so it never had a chance to
+        # advance past 0. Don't penalise this mission with the 90s
+        # safety-cap wait; fall back to the plain time gate.
+        return False
+    _idx = getattr(_mts_check, "current_room_idx", 0)
+    if not isinstance(_idx, int):
+        return False
+    if _idx >= len(_rooms) - 1:
+        return False
+    # Index says rooms remain — but the index structurally can
+    # never reach the last room (see module note above). Give the
+    # opportunistic cloud check a chance to override before
+    # committing to the full wait.
+    _master = getattr(entry.runtime_data.roomba, "master_state", None) or {}
+    _reported = (_master.get("state") or {}).get("reported") or {}
+    _planned_regions = (_reported.get("lastCommand") or {}).get("regions") or []
+    from .mission_store import MissionStore as _MS2
+    _planned_rids = [
+        rid for rid in (_MS2.extract_rid(r) for r in _planned_regions) if rid
+    ]
+    if _cloud_confirms_all_rooms_done(ms, entry, _planned_rids):
+        return False
+    return True
+
+
+def make_mission_callback(
+    hass: Any,
+    entry: RoombaConfigEntry,
+) -> Any:
+    """Return an MQTT message callback that tracks mission lifecycle.
+
+    Returned callable is suitable for roomba.register_on_message_callback().
+    Closure holds mutable state for phase tracking across messages.
+    """
+    # ALL MISSION STATE LIVES ON `ms`. It used to be eighteen `nonlocal`
+    # variables of this factory, written from any branch of
+    # _on_mission_message, which is how twins formed: a block could not
+    # be read without knowing which of the eighteen it touched. See
+    # _MissionState for each field and why it exists.
+    ms = _MissionState()
+
     def _on_mission_message(json_data: dict[str, Any], _synthetic: bool = False) -> None:
-        nonlocal last_phase, was_travelling, cleaned_in_room, travel_started_at, current_mission_zones, mission_start_ts
-        nonlocal nstuck_at_start, recharge_min_accumulator, last_recharge_phase_ts
-        nonlocal current_leg_rechrgM
-        nonlocal _last_mirrored_recharge_min
-        nonlocal had_stuck_event, stuck_cleared_ts, had_cleaning_phase
-        nonlocal mission_error_code
-        nonlocal npicks_at_start
-        nonlocal end_signal_streak, end_signal_first_ts
 
         reported = json_data.get("state", {}).get("reported", {})
         if "cleanMissionStatus" not in reported:
@@ -1128,95 +2114,12 @@ def make_mission_callback(
         # a message that merely arrived thin. The bug being fixed here is
         # a robot that TOLD us it was evacuating.
         _candidate_cycle = mission.get("cycle")
-        if (
-            phase in _ACTIVE_CLEANING_PHASES
-            and _candidate_cycle not in _NON_MISSION_CYCLES
-            and not had_cleaning_phase
-            and not _mission_already_terminal(entry, _candidate_mission_start_ts)
-        ):
-            had_cleaning_phase = True
-            current_mission_zones = _capture_zone_names(entry, reported)
-            mission_start_ts = _candidate_mission_start_ts
-            bbrun = _merged_top_level(entry, reported, "bbrun")
-            nstuck_at_start = bbrun.get("nStuck", 0)
-            npicks_at_start = bbrun.get("nPicks", 0)
-            recharge_min_accumulator = 0
-            current_leg_rechrgM = 0
-            last_recharge_phase_ts = 0.0
-            _last_mirrored_recharge_min = 0
-            had_stuck_event = False
-            mission_error_code = 0
-            stuck_cleared_ts = 0.0
-            _LOGGER.debug(
-                "MissionStore: mission started ts=%s nstuck_baseline=%d",
-                mission_start_ts, nstuck_at_start,
-            )
-
-            # F12a — record clean event in PresenceManager for window analytics.
-            # record_clean_event() is idempotent and never raises.
-            _pm = getattr(entry.runtime_data, "presence_manager", None)
-            if _pm is not None:
-                try:
-                    _started_at = (
-                        datetime.datetime.fromtimestamp(
-                            mission_start_ts, tz=datetime.timezone.utc
-                        )
-                        if mission_start_ts
-                        else datetime.datetime.now(datetime.timezone.utc)
-                    )
-                    _pm.record_clean_event(_started_at)
-                except Exception:  # noqa: BLE001
-                    pass
-
-            # v3.3.0 CROSS-CORR — mission-start snapshot of the configured
-            # external sensors (opt-in). We are on the paho-MQTT thread;
-            # hass.states is read loop-side via call_soon_threadsafe, and
-            # the pending snapshot is persisted immediately so an HA
-            # restart mid-mission keeps the pair. Never raises (same
-            # contract as the PresenceManager block above).
-            _corr_entities = entry.options.get(CONF_CORRELATION_ENTITIES) or []
-            _rps_corr = getattr(entry.runtime_data, "robot_profile_store", None)
-            # isinstance guard: also keeps a malformed option (or a test's
-            # auto-MagicMock options) from engaging the opt-in feature.
-            if (
-                isinstance(_corr_entities, (list, tuple))
-                and _corr_entities
-                and _rps_corr is not None
-            ):
-                def _capture_corr_snapshot() -> None:
-                    try:
-                        values: dict[str, float] = {}
-                        for _eid in _corr_entities:
-                            _st = hass.states.get(_eid)
-                            if _st is None:
-                                continue
-                            try:
-                                values[_eid] = float(_st.state)
-                            except (TypeError, ValueError):
-                                continue
-                        if values:
-                            import time as _t_corr
-                            _rps_corr.record_correlation_snapshot(
-                                values, _t_corr.time()
-                            )
-                            hass.async_create_task(
-                                _rps_corr.async_save(hass, entry.entry_id),
-                                name="roomba_plus_corr_snapshot_save",
-                            )
-                    except Exception:  # noqa: BLE001
-                        _LOGGER.debug("CROSS-CORR snapshot failed", exc_info=True)
-                hass.loop.call_soon_threadsafe(_capture_corr_snapshot)
-
-            # MS1 (v2.6.0): override initiator to "demand" when DirtThresholdManager
-            # fired a start command within the last 30 seconds.
-            _demand_ts = getattr(entry.runtime_data, "demand_triggered_ts", None)
-            if isinstance(_demand_ts, float):
-                import time as _t_mod
-                if _t_mod.monotonic() - _demand_ts <= 30.0:
-                    mission = dict(mission)  # copy to avoid mutating reported state
-                    mission["initiator"] = "demand"
-                    entry.runtime_data.demand_triggered_ts = None
-                    _LOGGER.info("MissionStore: mission initiator overridden → demand")
+        mission = _handle_mission_start(
+            ms, hass, entry,
+            phase=phase, reported=reported, mission=mission,
+            candidate_cycle=_candidate_cycle,
+            candidate_mission_start_ts=_candidate_mission_start_ts,
+        )
 
         # F4e — accumulate recharge time on every hmMidMsn entry
         if phase == "hmMidMsn":
@@ -1226,23 +2129,23 @@ def make_mission_callback(
                 # repeated messages during the same leg would double-count
                 # (e.g. 1, 2, 3 across three messages summing to 6 instead
                 # of the correct 3).
-                current_leg_rechrgM = int(rechrgM)
-            elif last_recharge_phase_ts == 0.0:
+                ms.current_leg_rechrgM = int(rechrgM)
+            elif ms.last_recharge_phase_ts == 0.0:
                 # Fallback: record timestamp to compute elapsed on phase exit
-                last_recharge_phase_ts = _time_mod.monotonic()
+                ms.last_recharge_phase_ts = _time_mod.monotonic()
 
         # F4e fallback: if rechrgM was unavailable, compute elapsed time.
         # Also handles locking the rechrgM-based leg total (if that path was
         # used instead) into the completed-legs accumulator exactly once,
         # when the robot actually leaves hmMidMsn.
-        if last_phase == "hmMidMsn" and phase != "hmMidMsn":
-            if last_recharge_phase_ts > 0.0:
-                elapsed_min = int((_time_mod.monotonic() - last_recharge_phase_ts) / 60)
-                recharge_min_accumulator += elapsed_min
-                last_recharge_phase_ts = 0.0
-            elif current_leg_rechrgM > 0:
-                recharge_min_accumulator += current_leg_rechrgM
-            current_leg_rechrgM = 0
+        if ms.last_phase == "hmMidMsn" and phase != "hmMidMsn":
+            if ms.last_recharge_phase_ts > 0.0:
+                elapsed_min = int((_time_mod.monotonic() - ms.last_recharge_phase_ts) / 60)
+                ms.recharge_min_accumulator += elapsed_min
+                ms.last_recharge_phase_ts = 0.0
+            elif ms.current_leg_rechrgM > 0:
+                ms.recharge_min_accumulator += ms.current_leg_rechrgM
+            ms.current_leg_rechrgM = 0
 
         # v2.9.0 — mirror the F4e accumulator into MissionTimerStore so it's
         # readable live (mission_progress sensor) and survives HA restarts,
@@ -1251,13 +2154,13 @@ def make_mission_callback(
         # IN-PROGRESS leg's live value (current_leg_rechrgM, 0 if not
         # currently in hmMidMsn) — only mirrors when it actually changed
         # this message, to avoid a redundant storage write on every message.
-        _live_recharge_min = recharge_min_accumulator + current_leg_rechrgM
-        if _live_recharge_min != _last_mirrored_recharge_min:
+        _live_recharge_min = ms.recharge_min_accumulator + ms.current_leg_rechrgM
+        if _live_recharge_min != ms._last_mirrored_recharge_min:
             _mts_for_recharge = getattr(entry.runtime_data, "mission_timer_store", None)
             if _mts_for_recharge is not None and _mts_for_recharge.mission_id is not None:
                 _mts_for_recharge.recharge_min = float(_live_recharge_min)
                 _mts_for_recharge.schedule_save(hass, entry.entry_id)
-            _last_mirrored_recharge_min = _live_recharge_min
+            ms._last_mirrored_recharge_min = _live_recharge_min
 
         # F6h — detect stuck event: nStuck increased during this mission.
         # v2.6.3 A — check whenever mission is active (had_cleaning_phase=True),
@@ -1266,22 +2169,23 @@ def make_mission_callback(
         # Whenever it appears -- see mission_error_code above.
         _err = mission.get("error") or 0
         if isinstance(_err, int) and _err > 0:
-            mission_error_code = _err
+            ms.mission_error_code = _err
 
-        if had_cleaning_phase and "bbrun" in reported and not had_stuck_event:
+        if ms.had_cleaning_phase and "bbrun" in reported and not ms.had_stuck_event:
             bbrun_now = reported["bbrun"]
-            current_nstuck = bbrun_now.get("nStuck", nstuck_at_start)
-            if current_nstuck > nstuck_at_start:
-                had_stuck_event = True
-                stuck_cleared_ts = _time_mod.monotonic()
+            current_nstuck = bbrun_now.get("nStuck", ms.nstuck_at_start)
+            if current_nstuck > ms.nstuck_at_start:
+                ms.had_stuck_event = True
+                ms.stuck_cleared_ts = _time_mod.monotonic()
+                ms.stuck_at = _time_mod.time()
                 _LOGGER.debug("MissionStore: stuck event detected during mission")
 
         # F6h — if robot returned to cleaning after a stuck event, mark resumed
-        if had_stuck_event and phase in _ACTIVE_CLEANING_PHASES and last_phase not in _ACTIVE_CLEANING_PHASES:
+        if ms.had_stuck_event and phase in _ACTIVE_CLEANING_PHASES and ms.last_phase not in _ACTIVE_CLEANING_PHASES:
             # Robot re-entered active cleaning after a non-active phase (e.g. stuck)
-            if stuck_cleared_ts > 0 and (_time_mod.monotonic() - stuck_cleared_ts) < 1800:
+            if ms.stuck_cleared_ts > 0 and (_time_mod.monotonic() - ms.stuck_cleared_ts) < 1800:
                 # Still within 30-min window — mark as resumed
-                stuck_cleared_ts = _time_mod.monotonic()  # reset timer for next end
+                ms.stuck_cleared_ts = _time_mod.monotonic()  # reset timer for next end
 
         # v2.6.3 A — use had_cleaning_phase instead of last_phase guard so that
         # stuck → stop/charge (stuck_and_abandoned) is correctly detected.
@@ -1335,195 +2239,58 @@ def make_mission_callback(
         _looks_like_end = phase in _MISSION_END_PHASES and not _is_inter_room_transition
         _ambiguous_end_phase = phase in _ROOM_TRANSITION_CANDIDATE_PHASES
 
-        # v2.9.0 — ROOM-INDEX CORROBORATION. Reported by Thonno (i7+, lewis
-        # 22.52.10) on v2.8.3: the time gate alone is not sufficient. Walking
-        # through his timestamps, the robot sat in an ambiguous end phase for
-        # ~12 seconds during a genuine inter-room transition — well past
-        # END_SIGNAL_MIN_HOLD_SECONDS (2.0s) — so the time gate confirmed a
-        # false end even though the mission was still running (confirmed:
-        # the diagnostics snapshot from that exact run showed phase=="run"
-        # afterwards). The 2.8.1/2.8.3 design assumed a transient blip
-        # reverts within a message or two; that assumption doesn't hold for
-        # this firmware's actual inter-room pause duration, and no fixed
-        # timeout can be picked without overfitting to one firmware's
-        # behaviour.
-        #
-        # Rather than guess a longer timeout, corroborate with a fact we
-        # already have: MissionTimerStore's planned_rooms/current_room_idx.
-        # If the robot still has at least one more planned room after the
-        # current one, an ambiguous end phase (charge/hmPostMsn) cannot be a
-        # genuine end — it suppresses confirmation regardless of how long
-        # the time gate has been satisfied. Deliberately does NOT apply to
-        # unambiguous terminal phases (stop/completed/cancelled), which can
-        # be a genuine user-initiated early stop even with rooms remaining.
-        # Naturally a no-op for EPHEMERAL/whole-home missions with no room
-        # plan (planned_rooms empty) — falls through to the existing
-        # time-based gate unchanged.
-        #
-        # v2.9.0 CONFIDENCE GUARD — confirmed regression: current_room_idx
-        # can ONLY ever advance via AUTO-ADVANCE-ROOM, which requires
-        # expected_room_sec to be available (see
-        # _room_transition_confidence_ok in this module). That in turn
-        # requires at least one room in the plan to have a real per-room or
-        # total time estimate — structurally impossible whenever every
-        # planned room uses Auto pass mode (no per-room estimate exists at
-        # all by design), or whenever cloud TE1 data simply hasn't reached
-        # GOOD_CONFIDENCE yet for any planned region (insufficient cleaning
-        # history). For those missions — likely the majority, since Auto is
-        # the default pass mode — current_room_idx is PERMANENTLY stuck at
-        # 0, making _has_unvisited_planned_rooms() return True for the
-        # entire mission regardless of actual progress. Without this guard,
-        # EVERY genuine mission end for such missions would wait out the
-        # full UNVISITED_ROOMS_MAX_SUPPRESSION_SECONDS safety cap (90s)
-        # instead of the normal END_SIGNAL_MIN_HOLD_SECONDS (2s) — an 88s
-        # regression on every single mission, not just the rare false-
-        # positive case the original fix targeted. Only trust
-        # current_room_idx as a corroboration signal when there is
-        # concrete evidence AUTO-ADVANCE-ROOM could ever have advanced it
-        # (at least one usable estimate exists); otherwise skip the
-        # room-index check entirely and fall back to the plain time gate
-        # immediately, as before this feature existed.
-        # v2.10.1 CLOUD-ROOM-FALLBACK — structural gap found analysing a
-        # Thonno field report: AUTO-ADVANCE-ROOM can NEVER advance
-        # current_room_idx into the LAST planned room. Its own confidence
-        # gate (_room_transition_confidence_ok) requires cycle in
-        # ("clean", "quick") to fire at all — but cycle flips to "none"
-        # at exactly the moment the robot transitions out of the
-        # second-to-last room and into mission-end processing, since
-        # there's no room left for the mission to still be "clean"/
-        # "quick" about. current_room_idx is therefore permanently one
-        # room behind for the entire tail of every multi-room mission,
-        # making _has_unvisited_planned_rooms() wait out the full 90s cap
-        # on every single one — not a rare edge case, the normal case.
-        #
-        # cycle itself was already ruled out as a substitute signal here
-        # (confirmed unreliable for exactly this purpose — see the
-        # v2.8.1 END-DEBOUNCE comment on the INTER-ROOM-TRANSITION guard
-        # above: a single momentary cycle misread mid-mission caused a
-        # real progress-reset regression for Thonno previously).
-        #
-        # The one genuinely independent, reliable signal for room
-        # completion — `timeline.finEvents` room events with
-        # status in (0, 6) — comes from the cloud, not local MQTT. This
-        # function checks it OPPORTUNISTICALLY: cloud_coordinator.raw_records
-        # is whatever the existing periodic/event-triggered refreshes have
-        # already cached (read-only, no new fetch triggered here) — if it
-        # happens to already show every planned room done for the matching
-        # record, trust that over the index; if not (most of the time,
-        # since cloud data lags), fall through to the unchanged time-gated
-        # behaviour below. Never makes things WORSE: a miss here costs
-        # nothing beyond the status quo 90s wait.
-        def _cloud_confirms_all_rooms_done(planned_rids: list[str]) -> bool:
-            if not planned_rids:
-                return False
-            cc = getattr(entry.runtime_data, "cloud_coordinator", None)
-            if cc is None:
-                return False
-            records = getattr(cc, "raw_records", None) or []
-            match: dict[str, Any] | None = None
-            for r in records:
-                start = r.get("startTime")
-                if start is not None and abs(int(start) - mission_start_ts) <= 120:
-                    match = r
-                    break
-            if match is None:
-                return False
-            timeline = match.get("timeline")
-            if not isinstance(timeline, dict):
-                return False
-            fin_events = timeline.get("finEvents") or []
-            from .mission_store import MissionStore as _MS
-            done_rids: set[str] = set()
-            for ev in fin_events:
-                if ev.get("type") != "room":
-                    continue
-                room = ev.get("room") or {}
-                if room.get("status") in (0, 6):
-                    rid = _MS.extract_rid(room)
-                    if rid:
-                        done_rids.add(rid)
-            confirmed = all(rid in done_rids for rid in planned_rids)
-            if confirmed:
-                # SAY WHAT THIS CHECKS. The wording here claimed the
-                # index "cannot advance into the last room by design".
-                # It can, and does: `advance_room()` refuses to move
-                # OUT of the last room, not INTO it.
-                #
-                # @ScenicSystemsLLC quoted this line back as a
-                # structural limit while diagnosing a display that never
-                # advanced, and it sent him -- and then me -- looking at
-                # the wrong thing. His actual blocker was a travel
-                # duration gate that threw away the only real crossing
-                # of the mission.
-                #
-                # A wrong sentence in a debug line is expensive with
-                # testers who read their logs carefully. It travels.
-                _LOGGER.debug(
-                    "MissionStore: cloud finEvents confirm all %d planned "
-                    "room(s) done — marking the mission complete "
-                    "regardless of where current_room_idx stopped",
-                    len(planned_rids),
-                )
-            return confirmed
 
-        def _has_unvisited_planned_rooms() -> bool:
-            _mts_check = getattr(entry.runtime_data, "mission_timer_store", None)
-            if _mts_check is None:
-                return False
-            _rooms = getattr(_mts_check, "planned_rooms", None) or []
-            if not isinstance(_rooms, list) or not _rooms:
-                return False
-            _room_secs = getattr(_mts_check, "room_estimates_sec", None) or []
-            _has_any_estimate = (
-                any(_s is not None for _s in _room_secs)
-                or getattr(_mts_check, "total_estimated_sec", None) is not None
-            )
-            if not _has_any_estimate:
-                # current_room_idx cannot be trusted — AUTO-ADVANCE-ROOM
-                # never had data to work with, so it never had a chance to
-                # advance past 0. Don't penalise this mission with the 90s
-                # safety-cap wait; fall back to the plain time gate.
-                return False
-            _idx = getattr(_mts_check, "current_room_idx", 0)
-            if not isinstance(_idx, int):
-                return False
-            if _idx >= len(_rooms) - 1:
-                return False
-            # Index says rooms remain — but the index structurally can
-            # never reach the last room (see module note above). Give the
-            # opportunistic cloud check a chance to override before
-            # committing to the full wait.
-            _master = getattr(entry.runtime_data.roomba, "master_state", None) or {}
-            _reported = (_master.get("state") or {}).get("reported") or {}
-            _planned_regions = (_reported.get("lastCommand") or {}).get("regions") or []
-            from .mission_store import MissionStore as _MS2
-            _planned_rids = [
-                rid for rid in (_MS2.extract_rid(r) for r in _planned_regions) if rid
-            ]
-            if _cloud_confirms_all_rooms_done(_planned_rids):
-                return False
-            return True
 
-        if had_cleaning_phase:
+        if ms.had_cleaning_phase:
             if not _looks_like_end:
-                end_signal_streak = 0
-                end_signal_first_ts = 0.0
+                ms.end_signal_streak = 0
+                ms.end_signal_first_ts = 0.0
             elif _ambiguous_end_phase:
-                if end_signal_streak == 0:
+                if ms.end_signal_streak == 0:
                     # Record when the current streak started — used by the
                     # v2.8.3 time gate to reject rapid inter-room bursts.
-                    end_signal_first_ts = _time_mod.monotonic()
-                end_signal_streak += 1
+                    ms.end_signal_first_ts = _time_mod.monotonic()
+                ms.end_signal_streak += 1
             else:
                 # Unambiguous terminal phase — confirm immediately.
-                end_signal_streak = _END_SIGNAL_DEBOUNCE_COUNT
+                ms.end_signal_streak = _END_SIGNAL_DEBOUNCE_COUNT
 
-        if phase in _MISSION_END_PHASES and had_cleaning_phase:
-            _time_held = (
-                _time_mod.monotonic() - end_signal_first_ts
-                if end_signal_first_ts > 0
-                else 0.0
-            )
+        # THE END GATE, COMPUTED ONCE.
+        #
+        # Until Group 5 the decision below and the diagnostic here each
+        # computed this gate on their own, and disagreed where it mattered
+        # least and could matter most: the diagnostic treated
+        # `end_signal_first_ts == 0` as "held for 0 s", the decision took
+        # `monotonic() - 0` as "held since boot". They agreed in practice
+        # only because another block always sets first_ts when an
+        # ambiguous streak starts — an invariant neither of them knew
+        # about. `TestEndGateInvariant` now pins it.
+        #
+        # One computation means the log explains the decision the code
+        # actually made, rather than a parallel reconstruction of it.
+        # The 0 guard is the right reading: a streak with no start time
+        # has not held for anything.
+        _time_held = (
+            _time_mod.monotonic() - ms.end_signal_first_ts
+            if ms.end_signal_first_ts > 0
+            else 0.0
+        )
+        _time_gate_open = _time_held >= _END_SIGNAL_MIN_HOLD_SECONDS
+        # Only asked when it can matter: an ambiguous end phase after a
+        # clean. `_has_unvisited_planned_rooms` reads the timer store and
+        # the cloud, so it is not called for every message.
+        _unvisited_rooms = bool(
+            _ambiguous_end_phase
+            and phase in _MISSION_END_PHASES
+            and ms.had_cleaning_phase
+            and _has_unvisited_planned_rooms(ms, entry)
+            and _time_held < _UNVISITED_ROOMS_MAX_SUPPRESSION_SECONDS
+        )
+        _end_gate_passes = not _ambiguous_end_phase or (
+            _time_gate_open and not _unvisited_rooms
+        )
+
+        if phase in _MISSION_END_PHASES and ms.had_cleaning_phase:
             # v2.9.0 SAFETY CAP — confirmed in the field (Thonno, i7+, lewis
             # 22.52.10): a genuine, fully-completed 2-room mission never
             # confirmed because current_room_idx never advanced past 0 for
@@ -1532,24 +2299,20 @@ def make_mission_callback(
             # Past this many seconds, treat current_room_idx as unreliable
             # for this firmware/scenario and stop honouring it — see
             # UNVISITED_ROOMS_MAX_SUPPRESSION_SECONDS in const.py.
-            _unvisited_rooms = (
-                _ambiguous_end_phase
-                and _has_unvisited_planned_rooms()
-                and _time_held < _UNVISITED_ROOMS_MAX_SUPPRESSION_SECONDS
-            )
-            _time_gate_open = _time_held >= _END_SIGNAL_MIN_HOLD_SECONDS
             _LOGGER.debug(
                 "MissionStore: end-phase check phase=%s cycle=%s ambiguous=%s "
                 "is_inter_room=%s end_signal_streak=%d time_held=%.3fs "
                 "unvisited_rooms=%s",
                 phase, _cycle, _ambiguous_end_phase,
-                _is_inter_room_transition, end_signal_streak, _time_held,
+                _is_inter_room_transition, ms.end_signal_streak, _time_held,
                 _unvisited_rooms,
             )
+            # Logged exactly when the decision below refuses on the gate —
+            # the same predicate, negated, so the two cannot drift.
             if (
-                _ambiguous_end_phase
-                and end_signal_streak >= _END_SIGNAL_DEBOUNCE_COUNT
-                and (not _time_gate_open or _unvisited_rooms)
+                _looks_like_end
+                and ms.end_signal_streak >= _END_SIGNAL_DEBOUNCE_COUNT
+                and not _end_gate_passes
             ):
                 # v2.9.0 — log message now names the ACTUAL reason for
                 # rejection instead of always printing the time-gate
@@ -1572,158 +2335,7 @@ def make_mission_callback(
                     _reason,
                 )
 
-        if (
-            phase in _MISSION_END_PHASES
-            and had_cleaning_phase
-            and _looks_like_end
-            and end_signal_streak >= _END_SIGNAL_DEBOUNCE_COUNT
-            and (
-                not _ambiguous_end_phase
-                or (
-                    _time_mod.monotonic() - end_signal_first_ts
-                    >= _END_SIGNAL_MIN_HOLD_SECONDS
-                    and (
-                        not _has_unvisited_planned_rooms()
-                        or (_time_mod.monotonic() - end_signal_first_ts)
-                        >= _UNVISITED_ROOMS_MAX_SUPPRESSION_SECONDS
-                    )
-                )
-            )
-        ):
-            had_cleaning_phase = False
-            end_signal_streak = 0
-            end_signal_first_ts = 0.0
-            bbrun_end = _merged_top_level(entry, reported, "bbrun")
-            nstuck_delta = max(0, bbrun_end.get("nStuck", 0) - nstuck_at_start)
-            npicks_delta = max(0, bbrun_end.get("nPicks", 0) - npicks_at_start)
-
-            # A FLAT BATTERY IS NOT AN ENTRAPMENT, and the robot's own
-            # counter cannot tell them apart.
-            #
-            # @AlakazipLabs walked an i3 down to 6%, sent `dock`, and
-            # watched it accept, set off, and give up 13 seconds later
-            # with `error 46` (Low battery) -- and `nStuck` went 111 to
-            # 112. So a robot that repeatedly runs itself flat scores
-            # identically to one that repeatedly gets trapped, in the
-            # problem-zone sensor and in every mission result.
-            #
-            # `error 46` separates them, and it is in the same message.
-            # Deliberately narrow: only this one code, only when the
-            # stuck delta would otherwise have decided the result.
-            _battery_abort = (mission.get("error") == 46)
-
-            # F6h — classify stuck recovery outcome
-            result_override: str | None = None
-            if _battery_abort and had_stuck_event and nstuck_delta > 0:
-                # Ran out of charge mid-drive. The mission ended, but not
-                # because anything trapped the robot.
-                result_override = "error"
-            if not _battery_abort and had_stuck_event and nstuck_delta > 0:
-                # WHAT THE MISSION DID, not when its phase last changed.
-                #
-                # The elapsed-time test below reads `stuck_cleared_ts` as
-                # "when the robot resumed". It is not: the edge that sets
-                # it fires on EVERY re-entry into an active phase after a
-                # stuck, so over a long mission the last one wins.
-                #
-                # @ScenicSystemsLLC's Braava got stuck, was freed by hand
-                # 16 minutes later, then cleaned four more rooms and
-                # docked -- 168 minutes, 524 sqft, a genuine `dest: dock`
-                # finish. It was recorded `stuck_and_abandoned`, because
-                # the last room before docking took under five minutes
-                # and that is all the clock was measuring.
-                #
-                # His own suggestion, and it is the right one: decide
-                # retrospectively from what the mission recorded. Rooms
-                # completed after the stuck, plus a real dock finish,
-                # answer the question directly -- elapsed time was only
-                # ever a proxy for both.
-                _resumed = _mission_recovered_after_stuck(entry, mission)
-                if _resumed is not None:
-                    result_override = (
-                        "stuck_and_resumed" if _resumed
-                        else "stuck_and_abandoned"
-                    )
-            if (
-                result_override is None
-                and not _battery_abort
-                and had_stuck_event
-                and nstuck_delta > 0
-            ):
-                # stuck_and_resumed: robot had stuck event but kept cleaning
-                # (stuck_cleared_ts was reset when it re-entered run phase)
-                # We distinguish by whether total run time is > 5 min post-stuck,
-                # using mission duration as a proxy. If mission was short (<10 min)
-                # and we have nstuck, it abandoned immediately.
-                elapsed_total = (
-                    _time_mod.monotonic() - (stuck_cleared_ts if stuck_cleared_ts else 0)
-                )
-                # A mission that lasted >5 min after the stuck event = resumed
-                if stuck_cleared_ts > 0 and elapsed_total > 300:
-                    result_override = "stuck_and_resumed"
-                else:
-                    result_override = "stuck_and_abandoned"
-
-            asyncio.run_coroutine_threadsafe(
-                async_record_mission(
-                    hass,
-                    entry,
-                    mission,
-                    reported,
-                    # THE ROOMS THE ROBOT ACTUALLY WORKED IN, where we
-                    # know them.
-                    #
-                    # `current_mission_zones` is resolved at mission
-                    # START: it is what was REQUESTED. A room the robot
-                    # never reached -- flat battery, stuck, cancelled --
-                    # is in it all the same, so `last_cleaned_rooms`
-                    # built from it would be naming a plan.
-                    #
-                    # The completed-room source was `timeline.finEvents`,
-                    # which is Prime-only. On Classic it is never there,
-                    # so the resolution returned nothing every time and
-                    # the attribute held whatever it last managed to
-                    # resolve -- @ScenicSystemsLLC saw all seven rooms
-                    # of a whole-house run still listed after two
-                    # two-room missions.
-                    #
-                    # Room tracking now confirms transitions from
-                    # observations on both generations, so the rooms it
-                    # advanced through ARE rooms the robot worked in.
-                    # That is the honest Classic answer, and it did not
-                    # exist until this release.
-                    list(current_mission_zones),
-                    observed_rooms=_observed_rooms(entry),
-                    start_ts=mission_start_ts,
-                    nstuck_delta=nstuck_delta,
-                    mission_error_code=mission_error_code,
-                    recharge_min=recharge_min_accumulator + current_leg_rechrgM,  # F4e
-                    result_override=result_override,         # F6h
-                    npicks_delta=npicks_delta,                # v3.2.0 ANOMALY-EXPLAIN
-                ),
-                hass.loop,
-            )
-            # MP1 (v2.6.0): clear mission timer at end
-            _mts = getattr(entry.runtime_data, "mission_timer_store", None)
-            if _mts is not None:
-                _mts.clear(hass, entry.entry_id)
-
-            current_mission_zones = []
-            mission_start_ts = 0
-            nstuck_at_start = 0
-            npicks_at_start = 0   # v3.2.0 bug-hunt fix — was missing here,
-                                   # inconsistent with nstuck_at_start's
-                                   # defensive reset right above it (both
-                                   # get re-captured at the next mission's
-                                   # actual start too, but this guards
-                                   # against a stale cross-mission value if
-                                   # that re-capture were ever skipped)
-            recharge_min_accumulator = 0
-            current_leg_rechrgM = 0
-            last_recharge_phase_ts = 0.0
-            _last_mirrored_recharge_min = 0
-            had_stuck_event = False
-            stuck_cleared_ts = 0.0
+        _confirm_mission_end(ms, hass, entry, end_gate_passes=_end_gate_passes, looks_like_end=_looks_like_end, mission=mission, phase=phase, reported=reported)
             # had_cleaning_phase already reset to False above
 
         # MP1 (v2.6.0): accumulate run-only seconds in MissionTimerStore
@@ -1779,42 +2391,7 @@ def make_mission_callback(
         # the floor is set from one side only. It is logged on every
         # edge so the next report can move it with evidence instead of
         # taste.
-        _returned_from_travel = False
-        if _travelling is False and was_travelling:
-            _drive_sec = (
-                (monotonic() - travel_started_at)
-                if travel_started_at is not None
-                else None
-            )
-            # DURATION SAYS NOTHING. THE FIELD SETTLED IT TWICE.
-            #
-            # This required a drive to last 6 seconds before it counted
-            # as a room boundary, to keep repositioning inside one room
-            # from advancing the display. It gets both cases backwards:
-            #
-            #   @ScenicSystemsLLC, Guest Bathroom -> Hallway, watched in
-            #   person: the real crossing took 3.8 s and was thrown away
-            #   as "too short". The drive off the dock, which is NOT a
-            #   room change, took 17.7 s and was accepted. One mission,
-            #   both decisions wrong, in opposite directions.
-            #
-            #   @AlakazipLabs, three-room mission: drives of 12 s, 69 s
-            #   and 11.3 minutes, the long one most likely the robot
-            #   re-finding itself on a cold map.
-            #
-            # Nothing separates a boundary from a reposition by how long
-            # the drive took. What does is whether the robot WORKED in
-            # the room behind it -- see `cleaned_in_room` below, which
-            # answers both of their missions correctly.
-            _returned_from_travel = _drive_sec is not None
-            _LOGGER.debug(
-                "AUTO-ADVANCE-ROOM: travel ended after %ss -> boundary "
-                "candidate (confirmed only if the robot cleaned here)",
-                round(_drive_sec, 1) if _drive_sec is not None else "?",
-            )
-            travel_started_at = None
-        elif _travelling is True and not was_travelling:
-            travel_started_at = monotonic()
+        _returned_from_travel = _evaluate_travel_edge(ms, _travelling)
 
         # THE ROBOT WORKED HERE.
         #
@@ -1840,295 +2417,12 @@ def make_mission_callback(
         # room it is doing it in is the one it travelled to. Both
         # generations report `phase` and the travel bit the same way.
         if phase == "run" and _travelling is False:
-            cleaned_in_room = True
+            ms.cleaned_in_room = True
 
         if isinstance(_travelling, bool):
-            was_travelling = _travelling
+            ms.was_travelling = _travelling
 
-        if _mts_upd is not None and mission_start_ts:
-            _mission_id = f"{entry.data.get('blid', '')}_{mission_start_ts}"
-            if phase == "run":
-                _is_new_mission = _mts_upd.mission_id != _mission_id
-                _mts_upd.on_phase_run(_mission_id, hass, entry.entry_id)
-                if _is_new_mission:
-                    # v2.7.5: wire set_mission_plan on mission start so
-                    # planned_rooms is populated for current_room fallback
-                    # and for MTS persistence across HA restarts.
-                    _master = (
-                        getattr(entry.runtime_data.roomba, "master_state", None) or {}
-                    )
-                    _rep = (_master.get("state") or {}).get("reported") or {}
-                    _regions = (_rep.get("lastCommand") or {}).get("regions") or []
-                    _zone = entry.options.get(CONF_SMART_ZONE_DATA, {})
-                    # v2.9.0 (D) — use MissionStore.extract_rid() instead of
-                    # only checking region_id/region_name. The iRobot app
-                    # (direct start, not via roomba_plus.clean_room) reports
-                    # regions as {"rid": ...} on lewis 22.52.10+ — the same
-                    # format _get_planned_room_order() already handles
-                    # correctly for the sensor display. This block builds
-                    # mts.planned_rooms (the AUTO-ADVANCE-ROOM/estimate-
-                    # wiring source) and previously missed this format
-                    # entirely, leaving planned_rooms empty for any mission
-                    # started directly from the iRobot app.
-                    #
-                    # v2.9.0 (H) — NAME-PRIORITY CONSISTENCY. This used to
-                    # prefer region_name (raw MQTT field) then the zone
-                    # alias, then the raw ID — a DIFFERENT priority order
-                    # than _get_planned_room_order() (sensor.py, the live
-                    # display path), which resolves PURELY from
-                    # cloud_coordinator.regions[*].name keyed by rid, never
-                    # considering region_name or the zone alias at all. With
-                    # a custom alias configured that differs from the cloud
-                    # name, mts.planned_rooms (this fallback source) and the
-                    # live sensor display could show two different strings
-                    # for the same room. Now matches the same priority:
-                    # cloud name first, region_name/alias/raw-id as
-                    # successive fallbacks only when cloud data is
-                    # unavailable (mirrors how _get_planned_room_order()
-                    # itself falls back to mts.planned_rooms when cc.regions
-                    # can't resolve a name).
-                    from .mission_store import MissionStore as _MS
-                    _cc = getattr(entry.runtime_data, "cloud_coordinator", None)
-                    _cloud_id_to_name: dict[str, str] = (
-                        region_names_across_maps(_cc)
-                    )
-                    _names = [
-                        _cloud_id_to_name.get(_MS.extract_rid(r) or "")
-                        or r.get("region_name")
-                        or (_zone.get(_MS.extract_rid(r)) or {}).get("name")
-                        or _MS.extract_rid(r)
-                        for r in _regions
-                        if isinstance(r, dict) and _MS.extract_rid(r)
-                    ]
-                    if _names:
-                        # v2.8.0 AUTO-ADVANCE-ROOM (live wiring): use the real
-                        # cloud TE1 per-room time estimates instead of the
-                        # previous hardcoded 0. total_estimated_sec is the sum
-                        # of available per-room estimates (None entries are
-                        # excluded from the sum, not treated as 0 seconds).
-                        # Deferred import: sensor.py imports from this package's
-                        # __init__.py (roomba_reported_state), and __init__.py
-                        # imports this module at load time — a top-level import
-                        # here would be circular. Safe at call time since both
-                        # modules are fully loaded by then.
-                        #
-                        # Bug-hunt: this entire block is wrapped because
-                        # _compute_room_time_estimates() reads cloud_coordinator
-                        # and roomba_reported_state() — an unexpected None or a
-                        # malformed cloud payload there must not crash this
-                        # whole MQTT callback (which would also break mission
-                        # tracking, stuck detection, etc. for this message).
-                        # Falls back to the pre-v2.8.0 behaviour (no estimate)
-                        # on any failure, same as if cloud data were absent.
-                        _room_secs: list[float | None] = [None] * len(_names)
-                        _total_est: float | None = None
-                        try:
-                            from .sensor import _compute_room_time_estimates
-                            _room_secs = list(
-                                _compute_room_time_estimates(
-                                    entry, [str(x) for x in _names]
-                                )
-                            )
-                            _known_secs: list[float] = []
-                            for _s in _room_secs:
-                                if _s is None:
-                                    continue
-                                try:
-                                    _sf = float(_s)
-                                except (TypeError, ValueError):
-                                    continue
-                                if _sf > 0:
-                                    _known_secs.append(_sf)
-                            if _known_secs:
-                                _total_est = sum(_known_secs)
-                            else:
-                                # THE SHORTEST PLAUSIBLE PER-ROOM TIME,
-                                # before falling back to a whole-house
-                                # figure.
-                                #
-                                # The cloud holds one estimate per SET
-                                # OF CLEANING PARAMETERS for each room.
-                                # In Auto pass mode the robot picks a
-                                # set during the mission, so none can be
-                                # chosen in advance and the lookup above
-                                # yields nothing -- correct for a
-                                # displayed percentage, fatal for a gate.
-                                #
-                                # For "has enough time passed in this
-                                # room", the shortest of those estimates
-                                # is the point past which the answer can
-                                # be yes at all. It is a real per-room
-                                # figure from the robot's own cloud.
-                                #
-                                # WHAT IT REPLACES: a whole-house
-                                # mission average divided by the rooms
-                                # in THIS mission. On
-                                # @ScenicSystemsLLC's two-room run that
-                                # was 10.7 hours, giving 5.3 hours per
-                                # room -- a threshold no 17-minute
-                                # mission could ever cross.
-                                from .sensor_rooms import (  # noqa: PLC0415
-                                    shortest_plausible_room_seconds,
-                                )
-
-                                _floor_secs = [
-                                    s for s in shortest_plausible_room_seconds(
-                                        entry, [str(x) for x in _names]
-                                    ) if s and s > 0
-                                ]
-                                if _floor_secs:
-                                    _total_est = sum(_floor_secs)
-                                    _LOGGER.debug(
-                                        "AUTO-ADVANCE-ROOM: no confident "
-                                        "per-room estimate — using the "
-                                        "shortest plausible cloud estimate "
-                                        "for %d of %d room(s), "
-                                        "total_estimated_sec=%.0f",
-                                        len(_floor_secs), len(_names),
-                                        _total_est,
-                                    )
-                            if _total_est is None:
-                                # v2.9.0 (A) — CONFIRMED ROOT CAUSE: every
-                                # planned room using Auto pass mode (no
-                                # per-room estimate exists by firmware design)
-                                # OR none of them yet having GOOD_CONFIDENCE
-                                # cloud history both leave _known_secs empty,
-                                # making total_estimated_sec permanently None
-                                # for the WHOLE mission — and with it,
-                                # expected_room_sec's uniform-split fallback
-                                # has nothing to divide. AUTO-ADVANCE-ROOM can
-                                # then never advance current_room_idx past 0,
-                                # for the entire mission, regardless of how
-                                # many rooms the robot actually visits. Likely
-                                # the majority case (Auto is the default pass
-                                # mode). Falls back to the robot's own
-                                # historical mean mission duration — already
-                                # used by mission_progress's "no room
-                                # sequence" branch for exactly this purpose,
-                                # same pattern applied here. Stays None only
-                                # for a brand-new install with no mission
-                                # history yet, in which case AUTO-ADVANCE-ROOM
-                                # correctly continues to conservatively refuse
-                                # (same behaviour as before this fix).
-                                _rps = getattr(
-                                    entry.runtime_data, "robot_profile_store", None
-                                )
-                                _mean_min = (
-                                    getattr(_rps, "mission_duration_mean", None)
-                                    if _rps is not None else None
-                                )
-                                _total_est = (
-                                    round(_mean_min * 60)
-                                    if _mean_min and _mean_min > 0
-                                    else None
-                                )
-                                if _total_est:
-                                    # NAME THE REASON, do not list both.
-                                    #
-                                    # This said "Auto pass mode OR
-                                    # insufficient cloud confidence" and
-                                    # left the reader to pick. They are
-                                    # different problems: Auto means no
-                                    # estimate CAN be chosen yet, low
-                                    # confidence means one exists and is
-                                    # not trusted. A cache of past
-                                    # estimates would help the second
-                                    # and do nothing for the first.
-                                    #
-                                    # @ScenicSystemsLLC's mission hit one
-                                    # of them and the log could not say
-                                    # which, so the next step could not
-                                    # be chosen either.
-                                    # LATE ON PURPOSE: `sensor_rooms`
-                                    # reaches back into the package,
-                                    # so importing it at module level
-                                    # is a genuine circular import --
-                                    # confirmed by 63 collection
-                                    # errors when it was tried.
-                                    from .sensor_rooms import (  # noqa: PLC0415
-                                        why_no_room_estimates,
-                                    )
-
-                                    _LOGGER.debug(
-                                        "AUTO-ADVANCE-ROOM: no per-room "
-                                        "estimates — %s. Falling back to "
-                                        "robot_profile_store"
-                                        ".mission_duration_mean=%.1fmin "
-                                        "(total_estimated_sec=%s), which is a "
-                                        "WHOLE-HOUSE figure divided by the "
-                                        "rooms in THIS mission",
-                                        why_no_room_estimates(entry),
-                                        _mean_min, _total_est,
-                                    )
-                        except Exception:  # noqa: BLE001
-                            _LOGGER.debug(
-                                # NOT INSTRUMENTED: an estimate is
-                                # legitimately absent for Auto pass mode
-                                # and for rooms the robot has not
-                                # learned, so a failure here is a normal
-                                # state rather than a defect.
-                                "AUTO-ADVANCE-ROOM: room time estimate lookup "
-                                "failed — continuing without estimates",
-                                exc_info=True,
-                            )
-                        _mts_upd.set_mission_plan(
-                            _mission_id,
-                            _names,
-                            _total_est,
-                            hass,
-                            entry.entry_id,
-                            room_estimates_sec=_room_secs,
-                        )
-            else:
-                # v2.7.5: pass hass/entry_id so on_phase_other can save
-                # the flushed delta without waiting for next on_phase_run.
-                _mts_upd.on_phase_other(hass, entry.entry_id)
-
-                # v2.9.0 (E) — RETRY for missing estimates. set_mission_plan()
-                # only ran once, at the first "run" message. If cloud TE1
-                # data wasn't synced yet at that exact moment, total_estimated
-                # _sec stayed None for the rest of the mission with no
-                # chance to recover — even though the data might be ready
-                # now, several messages later. One-shot per mission in
-                # practice: once update_estimates() succeeds, this check is
-                # always False afterwards (total_estimated_sec is no longer
-                # None). Cheap and side-effect-free when cloud_coordinator
-                # is None or regions are still empty — _compute_room_time_
-                # estimates() degrades to all-None, update_estimates() just
-                # re-saves the same None it already had.
-                if (
-                    _mts_upd.total_estimated_sec is None
-                    and _mts_upd.planned_rooms
-                ):
-                    try:
-                        from .sensor import _compute_room_time_estimates
-                        _retry_secs = _compute_room_time_estimates(
-                            entry, _mts_upd.planned_rooms
-                        )
-                        _retry_known = [
-                            float(_s) for _s in _retry_secs
-                            if _s is not None and float(_s) > 0
-                        ]
-                        if _retry_known:
-                            _mts_upd.update_estimates(
-                                sum(_retry_known), _retry_secs,
-                                hass, entry.entry_id,
-                            )
-                            _LOGGER.info(
-                                "AUTO-ADVANCE-ROOM: retry succeeded — cloud "
-                                "estimates now available (total_estimated_sec"
-                                "=%.0fs), updated mid-mission without "
-                                "resetting progress",
-                                sum(_retry_known),
-                            )
-                    except Exception:  # noqa: BLE001
-                        _LOGGER.debug(
-                            # NOT INSTRUMENTED: the retry exists because
-                            # the first attempt legitimately finds nothing.
-                            "AUTO-ADVANCE-ROOM: estimate retry failed — "
-                            "continuing without estimates",
-                            exc_info=True,
-                        )
+        _update_room_progress(ms, hass, entry, mts_upd=_mts_upd, phase=phase)
 
                 # v2.8.0 AUTO-ADVANCE-ROOM — automatic confidence-based room
                 # advancement, per community feature request (Thonno).
@@ -2157,112 +2451,9 @@ def make_mission_callback(
                 # saw six excursions on a seven-room run, two of which
                 # were not room changes.
 
-        if _mts_upd is not None and mission_start_ts:
-            # EVALUATED ON EVERY PHASE, not just the non-run ones.
-            #
-            # This sat inside the `phase != "run"` branch, together with
-            # the flag it reads. The phase route needs `charge` or
-            # `hmPostMsn` and was fine there; the travel route needs `run`
-            # and could never fire.
-            #
-            # One placement explained both field reports: @ScenicSystemsLLC's
-            # S9+ sent nine clean seconds of the travel signal and the
-            # display never moved, while his Braava -- which sends no travel
-            # signal at all -- advanced late through the phase route.
-            if (
-                (
-                    (
-                        last_phase != phase
-                        and phase in _ROOM_TRANSITION_CANDIDATE_PHASES
-                    )
-                    or (_returned_from_travel and cleaned_in_room)
-                )
-                and _room_transition_confidence_ok(
-                    mission, _mts_upd, from_travel=_returned_from_travel
-                )
-            ):
-                # WHAT THE ROOM ACTUALLY TOOK, before advancing.
-                #
-                # We measure this the whole time -- the progress sensor
-                # shows it every 30 seconds -- and then threw it away at
-                # exactly the moment it became a finished figure.
-                #
-                # That left the cloud as the only source of per-room
-                # estimates, and the cloud has two structural reasons to
-                # offer none: auto pass mode (the robot decides passes
-                # at runtime, so there is nothing to estimate) and
-                # insufficient region history. A robot in auto mode
-                # therefore NEVER gets one, and falls back to a
-                # whole-house mean divided by the rooms in this mission
-                # -- 5.9 hours per room on @ScenicSystemsLLC's two-room
-                # run, a threshold no real mission can cross.
-                #
-                # His question was the right one: four real runs of the
-                # same two rooms, and nothing learned. We had the
-                # measurement every time.
-                _measured = getattr(_mts_upd, "time_in_current_room_sec", None)
-                # `planned_rooms` holds NAMES; the estimate cache is
-                # keyed by region id. Resolving here rather than at
-                # write time keeps the resolution next to the data that
-                # knows about it.
-                _finished_room = (
-                    _mts_upd.planned_rooms[_mts_upd.current_room_idx]
-                    if 0 <= _mts_upd.current_room_idx < len(_mts_upd.planned_rooms)
-                    else None
-                )
-                _advanced = _mts_upd.advance_room(hass, entry.entry_id)
-                if _advanced:
-                    _remember_measured_room_time(
-                        entry, _finished_room, _measured,
-                        mode=mission.get("operatingMode"),
-                    )
-                    # The new room has not been cleaned yet.
-                    cleaned_in_room = False
-                    _LOGGER.info(
-                        "AUTO-ADVANCE-ROOM: advanced to room %d/%d (%s) "
-                        "on phase=%s confidence signal",
-                        _mts_upd.current_room_idx + 1,
-                        len(_mts_upd.planned_rooms),
-                        _mts_upd.current_room,
-                        phase,
-                    )
-                    # v2.9.0 EVENT-BUS — room_completed fires for the
-                    # room just LEFT (current_room_idx already advanced
-                    # above, so current_room now refers to the NEXT
-                    # room — use idx-1 / the previous room name).
-                    _completed_idx = _mts_upd.current_room_idx - 1
-                    _completed_room = (
-                        _mts_upd.planned_rooms[_completed_idx]
-                        if 0 <= _completed_idx < len(_mts_upd.planned_rooms)
-                        else None
-                    )
-                    # v2.9.0 BUGFIX (field report Thonno, v2.8.7) —
-                    # _on_mission_message runs on roombapy's MQTT thread,
-                    # not the event loop thread. hass.bus.async_fire is a
-                    # plain (non-coroutine) function that touches hass's
-                    # event bus — call_soon_threadsafe is the correct
-                    # bridge, same pattern already used for
-                    # async_check_map_retrain_workflow below. Calling it
-                    # directly raised RuntimeError on every room
-                    # transition on newer/stricter HA core versions,
-                    # crashing the entire paho-mqtt message thread —
-                    # which then explained the "mission never closes"
-                    # symptom: no further MQTT messages were ever
-                    # processed after the first room transition, so the
-                    # v2.9.0 stuck-end-state recheck kept re-evaluating
-                    # the same frozen cached state forever.
-                    hass.loop.call_soon_threadsafe(
-                        hass.bus.async_fire,
-                        EVENT_ROOM_COMPLETED,
-                        {
-                            "entry_id": entry.entry_id,
-                            "name": entry.title,
-                            "room_name": _completed_room,
-                            "room_idx": _completed_idx,
-                        },
-                    )
+        _advance_room_on_drive_end(ms, hass, entry, mts_upd=_mts_upd, returned_from_travel=_returned_from_travel, mission=mission, phase=phase)
 
-        last_phase = phase
+        ms.last_phase = phase
 
     def _async_recheck_stuck_end_state(_now: Any = None) -> None:
         """v2.9.0 — periodic safety-net re-evaluation of the end-phase
@@ -2300,7 +2491,7 @@ def make_mission_callback(
         stub hass. The caller in __init__.py (where a real hass exists)
         reads this attribute and registers the timer itself.
         """
-        if not had_cleaning_phase:
+        if not ms.had_cleaning_phase:
             return
         cached_state = entry.runtime_data.roomba_reported_state()
         if "cleanMissionStatus" not in cached_state:
@@ -2318,6 +2509,11 @@ def make_mission_callback(
     _on_mission_message.recheck_stuck_end_state = (  # type: ignore[attr-defined]
         _async_recheck_stuck_end_state
     )
+    # Read-only view of the state for tests, attached the same way. The
+    # end gate below depends on an invariant set elsewhere in this
+    # callback (a running ambiguous streak always has a start time); a
+    # test can only pin that by reading `ms` after a message.
+    _on_mission_message.state = ms  # type: ignore[attr-defined]
     return _on_mission_message
 
 
@@ -2607,8 +2803,8 @@ def make_map_retrain_callback(
                     changed_pids.append(pid)
                 last_pmapv[pid] = pmapv
         if changed_pids:
-            asyncio.run_coroutine_threadsafe(
-                _refresh_and_report(changed_pids), hass.loop
+            entry.async_create_task(
+                hass, _refresh_and_report(changed_pids)
             )
 
     return _on_roomba_message
@@ -2757,11 +2953,16 @@ async def _async_update_robot_profile_store(
             if event.get("type") != "room":
                 continue
             room = event.get("room", {})
-            if room.get("status") not in (0, 6):
+            if room.get("status") not in ROOM_EVENT_DONE_STATUSES:
                 continue
             rid = str(room.get("rid", ""))
             pass_count = int(room.get("passCount", 0))
-            area_sqft = room.get("totalArea") or room.get("area") or 0
+            # ROOM SIZE, not covered area. `update_room_dirt_index` divides
+            # passes by the room's area. `totalArea or area` gave the room
+            # size for a one-pass room and the covered union for a two-pass
+            # one (totalArea only exists from the second pass on), so the
+            # same room's density jumped with its pass count.
+            area_sqft = room.get("area") or 0
             area_m2 = float(area_sqft) * SQFT_TO_M2
             if rid and pass_count > 0 and area_m2 > 0:
                 robot_profile_store.update_room_dirt_index(rid, pass_count, area_m2)
@@ -2785,7 +2986,14 @@ async def _async_update_robot_profile_store(
                 robot_profile_store.update_coverage_baseline(ratio)
                 changed = True
         except Exception:  # noqa: BLE001
-            pass
+            # Swallowed on purpose -- a failed baseline update must not stop
+            # the profile save below. Logged because silence here is how a
+            # measurement that never lands looks exactly like a measurement
+            # that was never taken: the sensor falls back to an estimate and
+            # nothing in the log says why.
+            _LOGGER.debug(
+                "Roomba+: coverage baseline update failed", exc_info=True
+            )
 
     # J: lifetime sqft staleness tracking
     try:
@@ -2800,7 +3008,12 @@ async def _async_update_robot_profile_store(
             if robot_profile_store.update_lifetime_sqft_tracking(float(_sqft)):
                 changed = True
     except Exception:  # noqa: BLE001
-        pass
+        # Same reasoning as the coverage baseline above: this reads several
+        # optional nested keys off the reported state, so a shape change on
+        # the robot's side lands here rather than anywhere visible.
+        _LOGGER.debug(
+            "Roomba+: lifetime sqft staleness tracking failed", exc_info=True
+        )
 
     if changed:
         await robot_profile_store.async_save(hass, entry.entry_id)
@@ -3132,9 +3345,8 @@ def make_cloud_refresh_callback(
     @callback
     def _on_cloud_refresh_complete() -> None:
         from .repairs import async_check_cloud_stale
-        hass.async_create_task(
-            async_check_cloud_stale(hass, config_entry, cloud_coordinator),
-            name="roomba_plus_cloud_stale_check",
+        config_entry.async_create_task(
+            hass, async_check_cloud_stale(hass, config_entry, cloud_coordinator), name='roomba_plus_cloud_stale_check'
         )
         if not cloud_coordinator.last_update_success:
             return
@@ -3143,42 +3355,35 @@ def make_cloud_refresh_callback(
             return
         _bf = ms.backfill_from_cloud(cloud_coordinator.raw_records)
         if _bf.corrected or _bf.enriched:
-            hass.async_create_task(
-                ms.async_save(hass, config_entry.entry_id),
-                name="roomba_plus_cloud_merge_save",
+            config_entry.async_create_task(
+                hass, ms.async_save(hass, config_entry.entry_id), name='roomba_plus_cloud_merge_save'
             )
         _dtm = config_entry.runtime_data.dirt_threshold_manager
         if _dtm is not None:
-            hass.async_create_task(
-                _dtm.async_evaluate(cloud_coordinator, config_entry.entry_id),
-                name="roomba_plus_demand_clean_eval",
+            config_entry.async_create_task(
+                hass, _dtm.async_evaluate(cloud_coordinator, config_entry.entry_id), name='roomba_plus_demand_clean_eval'
             )
         if _umf_version_changed(cloud_coordinator, config_entry):
-            hass.async_create_task(
-                _async_realign(hass, config_entry, cloud_coordinator),
-                name="roomba_plus_umf_realign",
+            config_entry.async_create_task(
+                hass, _async_realign(hass, config_entry, cloud_coordinator), name='roomba_plus_umf_realign'
             )
         from .repairs import async_check_error_recurrence
-        hass.async_create_task(
-            async_check_error_recurrence(hass, config_entry),
-            name="roomba_plus_error_recurrence_check",
+        config_entry.async_create_task(
+            hass, async_check_error_recurrence(hass, config_entry), name='roomba_plus_error_recurrence_check'
         )
         from .repairs import async_check_cancellation_recurrence
-        hass.async_create_task(
-            async_check_cancellation_recurrence(hass, config_entry),
-            name="roomba_plus_cancellation_recurrence_check",
+        config_entry.async_create_task(
+            hass, async_check_cancellation_recurrence(hass, config_entry), name='roomba_plus_cancellation_recurrence_check'
         )
         _rps = config_entry.runtime_data.robot_profile_store
         if _rps is not None:
-            hass.async_create_task(
-                _async_update_robot_profile_store(hass, config_entry, ms, _rps),
-                name="roomba_plus_profile_store_update",
+            config_entry.async_create_task(
+                hass, _async_update_robot_profile_store(hass, config_entry, ms, _rps), name='roomba_plus_profile_store_update'
             )
         if config_entry.runtime_data.grid_store is not None:
             from .repairs import async_check_stuck_pattern
-            hass.async_create_task(
-                async_check_stuck_pattern(hass, config_entry),
-                name="roomba_plus_l7_stuck_pattern_check",
+            config_entry.async_create_task(
+                hass, async_check_stuck_pattern(hass, config_entry), name='roomba_plus_l7_stuck_pattern_check'
             )
         # v3.4.0 GS-SMART-COVERAGE — must run BEFORE the GridStore-reading
         # FURNITURE check below so a mission backfilled from the cloud in
@@ -3196,11 +3401,8 @@ def make_cloud_refresh_callback(
             and config_entry.runtime_data.grid_store is not None
             and config_entry.runtime_data.umf_aligner is not None
         ):
-            hass.async_create_task(
-                _async_update_gs_smart_coverage(
-                    hass, config_entry, cloud_coordinator
-                ),
-                name="roomba_plus_gs_smart_coverage",
+            config_entry.async_create_task(
+                hass, _async_update_gs_smart_coverage(hass, config_entry, cloud_coordinator), name='roomba_plus_gs_smart_coverage'
             )
         # FURNITURE (layout-change) check dispatched on cloud-refresh
         # cadence. The former ROOM-ACCESS, STUCK-HOTSPOT, COVERAGE-FREQ
@@ -3211,9 +3413,8 @@ def make_cloud_refresh_callback(
         # dirt_weather_correlation sensor.
         if config_entry.runtime_data.grid_store is not None:
             from .repairs import async_check_furniture_change
-            hass.async_create_task(
-                async_check_furniture_change(hass, config_entry),
-                name="roomba_plus_furniture_change_check",
+            config_entry.async_create_task(
+                hass, async_check_furniture_change(hass, config_entry), name='roomba_plus_furniture_change_check'
             )
         # v3.5.0 Repairs redesign — the standalone smberr_high Repair was
         # removed; its signal now feeds as corroborating context into
@@ -3221,9 +3422,8 @@ def make_cloud_refresh_callback(
         # async_check_dock_health / async_check_battery_contact_issue) —
         # the raw bbchg.smberr count still appears in diagnostics.
         from .repairs import async_check_dock_health
-        hass.async_create_task(
-            async_check_dock_health(hass, config_entry),
-            name="roomba_plus_dock_health_check",
+        config_entry.async_create_task(
+            hass, async_check_dock_health(hass, config_entry), name='roomba_plus_dock_health_check'
         )
         from .models import MapCapability
         if config_entry.runtime_data.map_capability == MapCapability.SMART:
@@ -3235,9 +3435,8 @@ def make_cloud_refresh_callback(
             # _async_bootstrap_umf_aligner's docstring). The function itself
             # now handles constructing a fresh aligner when one doesn't
             # exist yet, so this only needs to gate on map_capability.
-            hass.async_create_task(
-                _async_bootstrap_umf_aligner(hass, config_entry, cloud_coordinator),
-                name="roomba_plus_gs_smart_umf_bootstrap",
+            config_entry.async_create_task(
+                hass, _async_bootstrap_umf_aligner(hass, config_entry, cloud_coordinator), name='roomba_plus_gs_smart_umf_bootstrap'
             )
 
     return _on_cloud_refresh_complete

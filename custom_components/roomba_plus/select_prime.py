@@ -56,6 +56,7 @@ import contextlib
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from .prime_room_map import SIGNAL_PRIME_ROOM_NAMES
 from .structural_failures import record_failure, record_success
+from .const import DOMAIN
 
 if TYPE_CHECKING:
     from .models import RoombaConfigEntry
@@ -719,6 +720,7 @@ class PrimeSettingSelect(IRobotEntity, SelectEntity):
     Same mechanism as the setting switches: set_setting() to write,
     PrimeStatusCoordinator to read back.
     """
+    _live_state = True   # shows a setting the robot reports; stale when unreachable
 
     _attr_has_entity_name = True
     entity_description: PrimeSelectDescription
@@ -869,7 +871,6 @@ class PrimeMapSelect(IRobotEntity, RestoreEntity, SelectEntity):
 
     _attr_entity_category = EntityCategory.CONFIG
     _attr_translation_key = "prime_map"
-    _attr_icon = "mdi:layers-outline"
 
     #: Not a map id, so it cannot collide with one.
     FOLLOW_ROBOT = "follow_robot"
@@ -922,7 +923,7 @@ class PrimeMapSelect(IRobotEntity, RestoreEntity, SelectEntity):
             )
             if match is None:
                 raise ServiceValidationError(
-                    f"{option} is not one of this account's maps"
+                    f"{option} is not one of this account's maps", translation_domain=DOMAIN, translation_key="not_an_account_map", translation_placeholders={"option": str(option)}
                 )
             data.prime_selected_map_id = match
 
@@ -1033,10 +1034,10 @@ class PrimeCleaningModeSelect(IRobotEntity, RestoreEntity, SelectEntity):
     own vocabulary. **Only a `start` counts**: `drypad` and `washpad`
     also carry regions and a mode, and neither is a cleaning choice.
     """
+    _live_state = True   # shows a setting the robot reports; stale when unreachable
 
     _attr_entity_category = EntityCategory.CONFIG
     _attr_translation_key = "prime_cleaning_mode"
-    _attr_icon = "mdi:auto-mode"
 
     #: The four the app offers, in the command's vocabulary.
     #: THE PRIME TABLE. Kept as a class attribute because callers reach
@@ -1202,7 +1203,7 @@ class PrimeCleaningModeSelect(IRobotEntity, RestoreEntity, SelectEntity):
 
     async def async_select_option(self, option: str) -> None:
         if option not in self.MODES:
-            raise ServiceValidationError(f"{option} is not a cleaning mode")
+            raise ServiceValidationError(f"{option} is not a cleaning mode", translation_domain=DOMAIN, translation_key="not_a_cleaning_mode", translation_placeholders={"option": str(option)})
         # A SERVICE CALL BYPASSES THE DROPDOWN.
         #
         # Filtering `options` shapes the UI only. An automation calling
@@ -1217,7 +1218,7 @@ class PrimeCleaningModeSelect(IRobotEntity, RestoreEntity, SelectEntity):
         if option not in self.options:
             raise ServiceValidationError(
                 f"This robot cannot {option.replace('_', ' ')}. "
-                f"It can: {', '.join(self.options)}"
+                f"It can: {', '.join(self.options)}", translation_domain=DOMAIN, translation_key="cleaning_mode_unsupported", translation_placeholders={"option": option.replace("_", " "), "supported": ", ".join(self.options)}
             )
         self._restored = option
         self.async_write_ha_state()

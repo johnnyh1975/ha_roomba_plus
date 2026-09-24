@@ -15,6 +15,9 @@
         "description": "Einen entdeckten Roomba auswählen oder manuell hinzufügen.",
         "data": {
           "host": "Roboter auswählen"
+        },
+        "data_description": {
+          "host": "Der Roboter, der eingerichtet werden soll. Im Netzwerk gefundene Roboter werden aufgelistet; fehlt deiner, wähle die manuelle Eingabe."
         }
       },
       "manual": {
@@ -36,6 +39,9 @@
         "description": "Automatischer Passwortabruf fehlgeschlagen. Bitte das Roomba-Passwort manuell eingeben. Anleitung: [{auth_help_url}]({auth_help_url}).",
         "data": {
           "password": "Passwort"
+        },
+        "data_description": {
+          "password": "Das lokale Passwort des Roboters. Es wird automatisch gelesen, während du die HOME-Taste hältst; gib es nur ein, wenn das fehlgeschlagen ist."
         }
       },
       "cloud_credentials": {
@@ -90,6 +96,9 @@
         "description": "Auf diesem Konto gefundene Roboter. Wähle einen zur Einrichtung aus — weitere Roboter fügst du hinzu, indem du diese Einrichtung erneut startest.",
         "data": {
           "blid": "Roboter"
+        },
+        "data_description": {
+          "blid": "Der Roboter aus deinem iRobot-Konto, der hinzugefügt werden soll. Jeder Roboter wird ein eigener Eintrag."
         }
       },
       "prime_classic_ip": {
@@ -97,6 +106,9 @@
         "description": "{name} konnte nicht automatisch in deinem lokalen Netzwerk gefunden werden. Gib die lokale IP-Adresse ein — Anmeldename/Passwort, die bereits über dein iRobot-Konto bestätigt wurden, werden weiterverwendet.",
         "data": {
           "host": "IP-Adresse"
+        },
+        "data_description": {
+          "host": "Die lokale IP-Adresse des Roboters in deinem Netzwerk, zum Beispiel wie im Router angezeigt."
         }
       },
       "prime_classic_analytics": {
@@ -104,6 +116,9 @@
         "description": "Sollen die Zugangsdaten deines iRobot-Kontos auch für diesen Roboter behalten werden, um Raumnamen, Missionsverlauf und Favoriten aus der Cloud zu lesen? Alle Befehle laufen so oder so weiterhin lokal über MQTT.",
         "data": {
           "enable_cloud_analytics": "Cloud-Funktionen für diesen Roboter aktivieren"
+        },
+        "data_description": {
+          "enable_cloud_analytics": "Behält deine iRobot-Zugangsdaten für diesen Roboter, um Raumnamen, Missionshistorie und Favoriten zu ergänzen. Gesteuert wird der Roboter weiterhin lokal."
         }
       }
     },
@@ -179,7 +194,17 @@
         "data_description": {
           "map_enabled": "Aktiviert die Live-Reinigungskarte für Roboter mit Positionserkennung (Roomba 900, i, s, j, Braava m).",
           "map_size_px": "Bildgröße der Karte in Pixel (400–1200). Standard: 600 px.",
-          "map_scale_mm_per_px": "Millimeter pro Pixel (5–30). Standard 10 entspricht 6 m × 6 m bei 600 Pixel."
+          "map_scale_mm_per_px": "Millimeter pro Pixel (5–30). Standard 10 entspricht 6 m × 6 m bei 600 Pixel.",
+          "floor_label": "Freitext, zum Beispiel Erdgeschoss. Gruppiert Roboter in der Flottenansicht.",
+          "correlation_entities": "Sensoren wie Luftfeuchte oder Pollen. Nach 30 Missionen meldet Roomba+, ob der Roboter bei hohen Werten mehr Schmutz sammelt. Wird lokal berechnet.",
+          "map_room_labels": "Schreibt die Namen der Räume in das Kartenbild.",
+          "prime_favorite_buttons": "Eine Taste für jeden in der iRobot-App gespeicherten Favoriten. Bei vielen Favoriten sind das viele Tasten.",
+          "enable_schedule_calendar": "Zeigt die Reinigungszeitpläne des Roboters als Kalender.",
+          "map_clean_zones": "Umrandet die Reinigungszonen im Kartenbild.",
+          "map_keepout_zones": "Umrandet die Sperrzonen im Kartenbild.",
+          "map_nomop_zones": "Umrandet die Nicht-Wischen-Zonen im Kartenbild.",
+          "enable_maintenance_list": "Zeigt fällige Wartung als To-do-Liste.",
+          "region_sensors": "Legt für jeden Raum und jede Zone einen eigenen Sensor an."
         }
       },
       "smart_zones_manual": {
@@ -200,6 +225,10 @@
         "data": {
           "irobot_username": "iRobot E-Mail",
           "irobot_password": "iRobot Passwort"
+        },
+        "data_description": {
+          "irobot_username": "Die E-Mail-Adresse deines iRobot-App-Kontos. Lass beide Felder leer, um die Cloud-Funktionen abzuschalten.",
+          "irobot_password": "Das Passwort deines iRobot-App-Kontos."
         }
       },
       "blocking_sensors": {
@@ -221,7 +250,10 @@
         "data": {
           "selected_zone": "Zu bearbeitende Zone"
         },
-        "description": "Zone zum Umbenennen oder Ausblenden auswählen. Ohne ausgewählte Zone absenden, um Änderungen zu speichern.\n\n{zone_summary}"
+        "description": "Zone zum Umbenennen oder Ausblenden auswählen. Ohne ausgewählte Zone absenden, um Änderungen zu speichern.\n\n{zone_summary}",
+        "data_description": {
+          "selected_zone": "Die Zone, die umbenannt oder ausgeblendet werden soll. Ohne Auswahl absenden, um die Änderungen zu speichern."
+        }
       },
       "map_management_edit": {
         "title": "Zone bearbeiten: {zone_name}",
@@ -244,6 +276,13 @@
           "presence_mode": "Modus",
           "away_delay_min": "Verzögerung nach dem Verlassen (Minuten)",
           "clean_delay_min": "Verzögerung vor Start des zweiten Roboters"
+        },
+        "data_description": {
+          "presence_scheduling_enabled": "Hält Reinigungszeitpläne an, solange jemand zu Hause ist, und gibt sie frei, sobald alle weg sind.",
+          "presence_entities": "Die Personen, deren Anwesenheit zählt.",
+          "presence_mode": "„Freigeben, wenn alle weg sind“ gibt Zeitpläne automatisch frei; „Ereignis auslösen (manuelle Steuerung)“ überlässt die Entscheidung deiner eigenen Automation.",
+          "away_delay_min": "Wie lange alle weg sein müssen, bevor Zeitpläne freigegeben werden.",
+          "clean_delay_min": "Eine zusätzliche Wartezeit nach der Abwesenheitsverzögerung, bevor die Reinigung tatsächlich beginnt."
         }
       },
       "demand_cleaning": {
@@ -252,6 +291,10 @@
         "data": {
           "demand_cleaning_enabled": "Bedarfsreinigung aktivieren",
           "demand_clean_multiplier": "Auslösemultiplikator (z.B. 1,5 = 50 % über Durchschnitt)"
+        },
+        "data_description": {
+          "demand_cleaning_enabled": "Startet automatisch eine Reinigung, wenn der Boden deutlich schmutziger ist als üblich.",
+          "demand_clean_multiplier": "Ab wie viel über dem üblichen Schmutzniveau gereinigt wird: 1,5 bedeutet 50 % über dem Durchschnitt."
         }
       },
       "test_cloud_connection": {
@@ -263,6 +306,9 @@
         "description": "{room_count} Raum/Räume in deiner roomba_rest980-Installation gefunden, die in Roomba+ noch nicht benannt sind: {room_names}. Jetzt importieren? Bereits hier benannte Räume bleiben unverändert.",
         "data": {
           "confirm_import": "Diese Räume importieren"
+        },
+        "data_description": {
+          "confirm_import": "Übernimmt die Raumnamen aus deiner roomba_rest980-Installation. Bereits in Roomba+ benannte Räume behalten ihren Namen."
         }
       },
       "room_schedule": {
@@ -709,30 +755,6 @@
       "mission_id": {
         "name": "Mission – ID"
       },
-      "recent_completion_rate": {
-        "name": "Abschlussrate (letzte 30 Tage)"
-      },
-      "recent_recharges": {
-        "name": "Zwischenladungen (letzte 30 Tage)"
-      },
-      "recent_evacuations": {
-        "name": "Clean-Base-Leerungen (letzte 30 Tage)"
-      },
-      "recent_dirt_events": {
-        "name": "Schmutz-Events (letzte 30 Tage)"
-      },
-      "recent_error_code": {
-        "name": "Letzter Fehlercode (letzte 30 Tage)"
-      },
-      "recent_error_time": {
-        "name": "Letzter Fehlerzeitpunkt (letzte 30 Tage)"
-      },
-      "recent_wifi_floor": {
-        "name": "WLAN – Signalminimum"
-      },
-      "recent_wifi_stability": {
-        "name": "WLAN – Signalstabilität"
-      },
       "mop_clean_mode": {
         "name": "Wischen – Reinigungsmodus",
         "state": {
@@ -768,15 +790,6 @@
           "unknown": "Unbekannt"
         }
       },
-      "recent_cleaning_speed": {
-        "name": "Leistung – Reinigungsgeschwindigkeit"
-      },
-      "recent_dirt_density": {
-        "name": "Leistung – Schmutzdichte"
-      },
-      "recent_recharge_fraction": {
-        "name": "Leistung – Ladeanteil"
-      },
       "cleaning_speed_trend": {
         "name": "Leistung – Reinigungsgeschwindigkeitstrend",
         "state": {
@@ -785,9 +798,6 @@
           "declining": "Abnehmend",
           "unknown": "Unbekannt"
         }
-      },
-      "recent_coverage_pct": {
-        "name": "Leistung – Abdeckung"
       },
       "battery_capacity_retention": {
         "name": "Wartung – Akkukapazität"
@@ -1297,14 +1307,14 @@
       "part_dirt_bag": {
         "name": "Wartung – Staubbeutel"
       },
-      "last_charge": {
-        "name": "Zuletzt geladen"
-      },
       "reset_diagnostics_summary": {
         "name": "Reset-Diagnostik-Zähler"
       },
       "last_mission_area": {
         "name": "Missionen – Zuletzt gereinigte Fläche"
+      },
+      "prime_dock_tank_level": {
+        "name": "Frischwassertank Dockingstation"
       }
     },
     "binary_sensor": {
@@ -1768,7 +1778,7 @@
     },
     "observed_zones_detected": {
       "title": "Roboter-erkannte Hindernisse in der Cloud-Karte",
-      "description": "{robot}: {zone_count} Zone(n) haben noch keinen Namen (IDs: {zone_ids}). Geben Sie eine pro Zeile als `id=Name` ein. Wenn Sie nicht wissen, welche Zone welche ist, öffnen Sie die Karte des Roboters in der iRobot-App – dort sind die Zonen mit ihren Nummern eingezeichnet."
+      "description": "Die iRobot-Cloud-Karte zeigt {zone_count} vom Roboter erkannte Hindernis-Zone(n), Roomba+ hat aber noch keine eigenen Daten, die sie bestätigen. Lass den Roboter ein paar Mal reinigen — dieser Hinweis verschwindet, sobald seine eigenen Aufzeichnungen die Hindernisse bestätigen. Soll ein Hindernis dauerhaft gemieden werden, lege in der iRobot-App eine Sperrzone an."
     },
     "dock_contact_health": {
       "title": "Problem mit Dock-Kontaktgesundheit erkannt",
@@ -2022,6 +2032,159 @@
     },
     "room_name_is_a_zone": {
       "message": "{names} ist auf diesem Roboter eine Zone und kein Raum. Verwenden Sie roomba_plus.clean_zone mit demselben Namen."
+    },
+    "entry_not_loaded": {
+      "message": "Der Roomba+-Roboter für {entity_id} ist gerade nicht geladen. Prüfe, ob sein Integrationseintrag aktiviert und eingerichtet ist, und versuche es erneut."
+    },
+    "roombapy_too_old": {
+      "message": "Roomba+ benötigt das asynchrone roombapy 2.x, installiert ist aber eine ältere Version ({error}). Starte Home Assistant neu. Bleibt der Fehler, installiert die eingebaute Roomba-Integration von Home Assistant die alte Bibliothek erneut und muss entfernt werden."
+    },
+    "cannot_connect_local": {
+      "message": "Keine Verbindung zum Roboter unter {host}."
+    },
+    "prime_login_rejected": {
+      "message": "Die iRobot-Cloud hat die Anmeldung für Roboter {blid} abgelehnt: {error}"
+    },
+    "prime_login_failed": {
+      "message": "Anmeldung bei der iRobot-Cloud für Roboter {blid} fehlgeschlagen: {error}"
+    },
+    "start_time_required": {
+      "message": "Eine Startzeit ist erforderlich."
+    },
+    "all_day_not_schedulable": {
+      "message": "Ganztägige Termine können keine Zeitpläne werden — ein Roboter braucht eine Uhrzeit zum Starten."
+    },
+    "robot_not_connected": {
+      "message": "Keine Verbindung zum Roboter."
+    },
+    "no_robot_schedule": {
+      "message": "Dieser Roboter meldet keinen Zeitplan, es gibt also nichts, in das geschrieben werden könnte."
+    },
+    "schedule_occurrence_not_editable": {
+      "message": "Ein Roboter-Zeitplan hat keinen einzelnen Termin zum Ändern — jeder Lauf stammt aus demselben wöchentlichen Eintrag."
+    },
+    "schedule_entry_unknown": {
+      "message": "Dieser Zeitplaneintrag lässt sich auf dem Roboter nicht zuordnen."
+    },
+    "rrule_not_supported": {
+      "message": "Dieser Roboter kann '{rrule}' nicht abbilden. Möglich sind wöchentliche, zweiwöchentliche, monatliche und einmalige Zeitpläne. Für alles andere nutze die Aktion roomba_plus.create_schedule."
+    },
+    "schedule_change_rejected": {
+      "message": "Der Roboter-Zeitplan konnte nicht geändert werden: {reason}"
+    },
+    "command_not_delivered": {
+      "message": "Der Befehl '{command}' wurde nicht zur Zustellung angenommen — er hat die iRobot-Cloud nie erreicht, der Roboter hat ihn also nicht gesehen. Das ist ein Verbindungsproblem, keine Ablehnung durch den Roboter."
+    },
+    "prime_shadows_unavailable": {
+      "message": "Für Roboter {blid} ließ sich kein Zustand aus der iRobot-Cloud lesen: {error}"
+    },
+    "schedules_unreadable": {
+      "message": "Die Zeitpläne ließen sich nicht aus der iRobot-Cloud lesen — es wurde nichts geschrieben."
+    },
+    "prime_cannot_connect": {
+      "message": "Keine Verbindung zu Roboter {blid} über die iRobot-Cloud: {error}"
+    },
+    "parts_unreadable": {
+      "message": "Die Verschleißteile ließen sich nicht aus der iRobot-Cloud lesen: {error}"
+    },
+    "not_a_roomba_plus_entity": {
+      "message": "{entity_id} ist keine Roomba+-Entität."
+    },
+    "not_a_prime_robot": {
+      "message": "{entity_id} ist kein Cloud-Roboter (V4/Prime). Diese Aktionen verwalten Zeitpläne in der iRobot-Cloud und brauchen einen solchen."
+    },
+    "not_a_schedule_switch": {
+      "message": "{entity_id} ist kein Zeitplan-Schalter. Wähle den Schalter des jeweiligen Zeitplans."
+    },
+    "schedule_unknown_rooms": {
+      "message": "Unbekannte Räume: {rooms}. Bekannte Räume: {known}."
+    },
+    "schedule_container_gone": {
+      "message": "Die Zeitplangruppe für {schedule_id} existiert nicht mehr."
+    },
+    "no_schedule_template": {
+      "message": "Dieser Haushalt hat keinen vorhandenen Zeitplan als Vorlage. Lege zuerst einen in der iRobot-App an — die Cloud lehnt von Grund auf erstellte Zeitpläne ab."
+    },
+    "schedule_gone": {
+      "message": "Dieser Zeitplan existiert auf dem Roboter nicht mehr — vielleicht wurde er in der iRobot-App gelöscht. Lade die Integration neu, um den Stand abzugleichen."
+    },
+    "schedule_id_gone": {
+      "message": "Zeitplan {schedule_id} existiert auf dem Roboter nicht mehr."
+    },
+    "schedule_time_required": {
+      "message": "Eine Uhrzeit ist erforderlich, weil der als Vorlage genutzte Zeitplan keine enthält."
+    },
+    "schedule_changed_meanwhile": {
+      "message": "Zeitplan {schedule_id} ist während der Änderung verschwunden — vermutlich hat eine andere App ihn gelöscht. Es wurde nichts geschrieben."
+    },
+    "room_list_not_read": {
+      "message": "Die Raumliste wurde noch nicht gelesen, daher ist unbekannt, zu welcher Karte jeder Raum gehört."
+    },
+    "room_map_unknown": {
+      "message": "Die Karte dieser Räume ist noch nicht bekannt, deshalb kann keine Raumreinigung gesendet werden — sie würde sonst das ganze Haus reinigen. Warte, bis die Karte geladen ist, oder starte den Roboter ohne Raumangabe."
+    },
+    "rooms_on_different_maps": {
+      "message": "Diese Räume liegen auf verschiedenen Karten. Ein Reinigungsbefehl kann nur eine Karte betreffen, reinige sie daher getrennt."
+    },
+    "current_map_unknown": {
+      "message": "Dieser Roboter hat {count} Karten und meldet nicht, auf welcher er steht, daher ist unklar, welches Stockwerk gemeint ist. Starte ihn zuerst aus der iRobot-App oder warte, bis er sich neu verortet hat."
+    },
+    "no_saved_maps": {
+      "message": "Dieser Roboter hat noch keine gespeicherten Karten und kann daher keinen benannten Raum reinigen. Lass ihn zuerst einen vollständigen Kartierungslauf abschließen."
+    },
+    "not_a_cleaning_mode": {
+      "message": "{option} ist kein Reinigungsmodus."
+    },
+    "cleaning_mode_unsupported": {
+      "message": "Dieser Roboter beherrscht „{option}“ nicht. Möglich sind: {supported}."
+    },
+    "not_an_account_map": {
+      "message": "{option} ist keine Karte dieses Kontos."
+    },
+    "no_mission_history": {
+      "message": "Für {entity_id} gibt es noch keine Missionshistorie."
+    },
+    "mission_not_found": {
+      "message": "Mission {mission_id} wurde für {entity_id} nicht gefunden."
+    },
+    "backup_not_found": {
+      "message": "Sicherungsdatei nicht gefunden: {path}"
+    },
+    "backup_corrupt": {
+      "message": "Die Sicherungsdatei ist beschädigt oder keine ZIP-Datei: {path}"
+    },
+    "backup_invalid": {
+      "message": "Keine gültige Roomba+-Sicherung (manifest.json fehlt): {path}"
+    },
+    "not_a_roomba_plus_vacuum": {
+      "message": "{entity_id} ist kein Roomba+-Staubsauger."
+    },
+    "not_a_suction_level": {
+      "message": "{fan_speed} ist keine Saugstufe dieses Roboters."
+    },
+    "send_command_prime_unsupported": {
+      "message": "send_command wird für Cloud-Roboter (V4/Prime) noch nicht unterstützt. Nutze stattdessen die normalen Staubsauger-Aktionen (Start, Pause, Stopp, zur Station, Orten)."
+    },
+    "cloud_part_reset_unavailable": {
+      "message": "Das Zurücksetzen dieses Teils wird in der iRobot-Cloud vermerkt, und die Cloud-Verbindung ist nicht verfügbar. Es wurde nichts zurückgesetzt."
+    },
+    "cloud_part_unknown": {
+      "message": "Die iRobot-Cloud führt das Teil {part} für diesen Roboter nicht, daher lässt sich sein Zähler dort nicht zurücksetzen."
+    },
+    "cloud_part_reset_failed": {
+      "message": "Die iRobot-Cloud hat den Zähler nicht zurückgesetzt ({error}). Der lokale Zähler blieb unverändert; versuche es später erneut."
+    },
+    "cloud_part_reset_not_confirmed": {
+      "message": "Die iRobot-Cloud hat die Anfrage angenommen, das Zurücksetzen aber nicht bestätigt. Der lokale Zähler blieb unverändert."
+    },
+    "no_confirmed_room": {
+      "message": "Noch kein gelernter Raum ist bestätigt. Räume werden aus abgeschlossenen Missionen gelernt; lass den Roboter noch ein paar Mal reinigen."
+    },
+    "no_last_mission": {
+      "message": "Der Roboter hat keinen vorherigen Reinigungsbefehl gemeldet, der wiederholt werden könnte."
+    },
+    "favorite_has_no_commands": {
+      "message": "Der Favorit {name} enthält keine Befehle zum Ausführen."
     }
   },
   "selector": {
@@ -2032,6 +2195,18 @@
         "every_2_days": "Alle 2 Tage",
         "three_per_week": "3× pro Woche",
         "weekly": "Wöchentlich"
+      }
+    },
+    "blocking_behavior": {
+      "options": {
+        "abort": "Start abbrechen",
+        "queue": "Warten und dann starten"
+      }
+    },
+    "presence_mode": {
+      "options": {
+        "away_only": "Freigeben, wenn alle weg sind",
+        "always_ask": "Ereignis auslösen (manuelle Steuerung)"
       }
     }
   }

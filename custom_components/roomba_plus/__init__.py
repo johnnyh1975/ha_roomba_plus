@@ -44,7 +44,9 @@ from homeassistant.const import (
     EVENT_HOMEASSISTANT_STOP,
     Platform,
 )
+import homeassistant.helpers.config_validation as cv
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.typing import ConfigType
 from homeassistant.helpers.event import async_track_time_interval
 
 from .callbacks import (
@@ -111,7 +113,7 @@ from .map_renderer import (
 from .migrations import async_migrate_entry  # noqa: F401 -- re-exported for HA's own lookup
 from .structural_failures import record_failure, record_success
 from .models import ConnectionType, MapCapability, RoombaConfigEntry, RoombaData
-from .services import async_register_services, async_remove_services
+from .services import async_register_services
 from .geometry_store import GeometryStore
 from .prime_coordinator import (
     PrimeCoordinator,
@@ -418,7 +420,7 @@ async def _phase_connect(ctx: _SetupContext) -> bool:
             return False
     except CannotConnect as err:
         raise exceptions.ConfigEntryNotReady(
-            f"Cannot connect to Roomba at {config_entry.data[CONF_HOST]}"
+            f"Cannot connect to Roomba at {config_entry.data[CONF_HOST]}", translation_domain=DOMAIN, translation_key="cannot_connect_local", translation_placeholders={"host": str(config_entry.data[CONF_HOST])}
         ) from err
 
     async def _async_disconnect_on_stop(event: Any) -> None:
@@ -689,11 +691,8 @@ async def _phase_data(ctx: _SetupContext) -> None:
     await mission_store.async_load(hass, config_entry.entry_id)
 
     robot_name = config_entry.title or "Roomba"
-    hass.async_create_task(
-        mission_store.async_backfill_statistics(
-            hass, config_entry.entry_id, robot_name
-        ),
-        name="roomba_plus_statistics_backfill",
+    config_entry.async_create_task(
+        hass, mission_store.async_backfill_statistics(hass, config_entry.entry_id, robot_name), name='roomba_plus_statistics_backfill'
     )
 
     # Restore L3 last-error state from mission history
@@ -1047,23 +1046,16 @@ async def _phase_finalize(ctx: _SetupContext) -> None:
                 "pre-v3.5.0 install for %s",
                 removed, config_entry.entry_id,
             )
-    hass.async_create_task(
-        _cleanup_removed_repairs(),
-        name=f"roomba_plus_cleanup_removed_repairs_{config_entry.entry_id}",
+    config_entry.async_create_task(
+        hass, _cleanup_removed_repairs(), name=f'roomba_plus_cleanup_removed_repairs_{config_entry.entry_id}'
     )
 
     # ARC1 — one-time paginated back-fill as background task
     if (ctx.mission_archive is not None
             and cloud_coordinator is not None
             and not ctx.mission_archive.initial_load_done):
-        hass.async_create_task(
-            ctx.mission_archive.async_initial_load(
-                cloud_coordinator.api,
-                config_entry.data[CONF_BLID],
-                hass,
-                config_entry.entry_id,
-            ),
-            name=f"roomba_plus_arc1_initial_load_{config_entry.entry_id}",
+        config_entry.async_create_task(
+            hass, ctx.mission_archive.async_initial_load(cloud_coordinator.api, config_entry.data[CONF_BLID], hass, config_entry.entry_id), name=f'roomba_plus_arc1_initial_load_{config_entry.entry_id}'
         )
 
     # B9 — late SKU resolve (980 may not send sku in first MQTT dump)
@@ -1105,6 +1097,15 @@ async def _phase_finalize(ctx: _SetupContext) -> None:
     from .callbacks import make_mqtt_stamp_callback
     roomba.register_on_message_callback(make_mqtt_stamp_callback(config_entry))
 
+    # LIVE STATE FOLLOWS THE LOCAL CONNECTION (@mdarocha). Started before
+    # the platforms so the availability registry exists when the first
+    # live entity is added; stopped on unload so a reload does not leave a
+    # timer or a stale "unavailable" behind for the next setup.
+    from .availability import LocalAvailabilityWatcher
+    _watcher = LocalAvailabilityWatcher(hass, roomba, config_entry.data[CONF_BLID])
+    _watcher.start()
+    config_entry.async_on_unload(_watcher.stop)
+
     await hass.config_entries.async_forward_entry_setups(config_entry, platforms)
 
     # REST API views (registered once per HA instance)
@@ -1120,14 +1121,11 @@ async def _phase_finalize(ctx: _SetupContext) -> None:
         hass.http.register_view(MissionMapPngView())
         hass.data["_roomba_plus_view_registered"] = True
 
-    async_register_services(hass)
-
     # F22a — check for cloud-detected obstacle zones
     if cloud_coordinator is not None and ctx.grid_store is not None:
         from .repairs import async_check_observed_zones
-        hass.async_create_task(
-            async_check_observed_zones(hass, config_entry),
-            name=f"roomba_plus_observed_zones_check_{config_entry.entry_id}",
+        config_entry.async_create_task(
+            hass, async_check_observed_zones(hass, config_entry), name=f'roomba_plus_observed_zones_check_{config_entry.entry_id}'
         )
 
     # MQTT callbacks
@@ -1224,6 +1222,24 @@ def _remove_calendar_entity_if_disabled(hass: HomeAssistant, config_entry: Roomb
             entity_reg.async_remove(entry.entity_id)
 
 
+#: Config entries only — no YAML. Required by Home Assistant as soon as an
+#: integration defines `async_setup`.
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+
+
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    """Register the service actions once, for the whole run.
+
+    QUALITY SCALE, action-setup. They used to be registered when an entry
+    loaded and removed when the last one unloaded, so an automation using
+    one could not be validated while the integration was down. A call for
+    a robot whose entry is not loaded is refused in service_guard.py,
+    with a translated message, before any handler runs.
+    """
+    async_register_services(hass)
+    return True
+
+
 async def async_setup_entry(hass: HomeAssistant, config_entry: RoombaConfigEntry) -> bool:
     """Set up Roomba+ from a config entry.
 
@@ -1259,7 +1275,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: RoombaConfigEntry
             f"one is installed ({ROOMBAPY_IMPORT_ERROR}). Restart Home "
             f"Assistant; if it persists, Home Assistant's built-in "
             f"Roomba integration is reinstalling the old library and "
-            f"needs removing."
+            f"needs removing.", translation_domain=DOMAIN, translation_key="roombapy_too_old", translation_placeholders={"error": str(ROOMBAPY_IMPORT_ERROR)}
         )
 
     if _connection_type(config_entry) == ConnectionType.CLOUD_ONLY:
@@ -1508,7 +1524,7 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
         )
     except AuthCredentialsError as exc:
         raise exceptions.ConfigEntryAuthFailed(
-            f"V4/Prime cloud login rejected for {blid}: {exc}"
+            f"V4/Prime cloud login rejected for {blid}: {exc}", translation_domain=DOMAIN, translation_key="prime_login_rejected", translation_placeholders={"blid": str(blid), "error": str(exc)}
         ) from exc
     except (
         AuthRateLimitedError,
@@ -1518,7 +1534,7 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
         AuthError,
     ) as exc:
         raise exceptions.ConfigEntryNotReady(
-            f"Could not log in to V4/Prime cloud for {blid}: {exc}"
+            f"Could not log in to V4/Prime cloud for {blid}: {exc}", translation_domain=DOMAIN, translation_key="prime_login_failed", translation_placeholders={"blid": str(blid), "error": str(exc)}
         ) from exc
 
     coordinator = PrimeCoordinator(hass, config_entry, blid, prime_robot)
@@ -1717,11 +1733,17 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
         # Fire-and-forget on purpose: it walks the whole history, and
         # setup must not wait for it. async_add_external_statistics is
         # idempotent, so a repeat on every restart is harmless.
-        hass.async_create_task(
-            prime_mission_store.async_backfill_statistics(
-                hass, config_entry.entry_id, config_entry.title or "Roomba"
-            ),
-            name="roomba_plus_prime_statistics_backfill",
+        # SETUP CODE, so the config entry is the right owner: this runs
+        # inside `async def _async_setup_entry_prime`, on the event loop.
+        #
+        # PRIME CALLBACKS ARE DIFFERENT. roombapy-prime uses paho and its
+        # `_on_message` runs on a network thread; `async_create_task` is
+        # not thread-safe. Nothing here is reached from there -- the Prime
+        # coordinators consume async generators, so the library bridges
+        # the thread before our code sees anything -- but a future Prime
+        # callback that schedules work must not copy this line.
+        config_entry.async_create_task(
+            hass, prime_mission_store.async_backfill_statistics(hass, config_entry.entry_id, config_entry.title or 'Roomba'), name='roomba_plus_prime_statistics_backfill'
         )
     except Exception:  # noqa: BLE001
         # Mission history is enrichment, not a dependency. A corrupt or
@@ -1826,6 +1848,16 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
         )
         _LOGGER.debug("Roomba+ Prime: presence manager active")
 
+    # LIVE STATE FOLLOWS THE CONNECTION — Prime's counterpart to the
+    # Classic watcher above, fed from our own connection and the robot's
+    # rw-constatus. Before the platforms, stopped on unload.
+    from .availability import PrimeAvailabilityWatcher
+    _prime_watcher = PrimeAvailabilityWatcher(
+        hass, blid, coordinator, status_coordinator
+    )
+    _prime_watcher.start()
+    config_entry.async_on_unload(_prime_watcher.stop)
+
     from .const import PRIME_PLATFORMS
     platforms = list(PRIME_PLATFORMS)
     platforms.extend(p for p in _optional_platforms(config_entry) if p not in platforms)
@@ -1865,8 +1897,17 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
                 exc_info=True,
             )
 
-    hass.async_create_task(
-        _first_mission_sync(), name="roomba_plus_prime_first_mission_sync"
+    # SETUP CODE, so the config entry is the right owner: this runs
+    # inside `async def _async_setup_entry_prime`, on the event loop.
+    #
+    # PRIME CALLBACKS ARE DIFFERENT. roombapy-prime uses paho and its
+    # `_on_message` runs on a network thread; `async_create_task` is
+    # not thread-safe. Nothing here is reached from there -- the Prime
+    # coordinators consume async generators, so the library bridges
+    # the thread before our code sees anything -- but a future Prime
+    # callback that schedules work must not copy this line.
+    config_entry.async_create_task(
+        hass, _first_mission_sync(), name='roomba_plus_prime_first_mission_sync'
     )
 
     # DOMAIN ACTIONS ARE SHARED BY BOTH GENERATIONS, and Prime never
@@ -1878,10 +1919,6 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
     # installation -- the services existed, the entities existed, and
     # nothing connected them.
     #
-    # Safe to call twice: each service is guarded by `has_service()`, so
-    # a household with one Classic and one Prime robot registers them
-    # once.
-    async_register_services(hass)
 
     _LOGGER.info(
         "Roomba+ (V4/Prime) connected to cloud for %s (blid=%s)", username, blid
@@ -1996,8 +2033,6 @@ async def async_unload_entry(
         #
         # Found by the generation-parity check on its first run, which is
         # what that check is for.
-        if not hass.config_entries.async_entries(DOMAIN):
-            async_remove_services(hass)
         return unload_ok
 
     data = config_entry.runtime_data
@@ -2042,9 +2077,6 @@ async def async_unload_entry(
         _roomba = config_entry.runtime_data.roomba
         if _roomba is not None:
             await async_disconnect_or_timeout(hass, roomba=_roomba)
-
-        if not hass.config_entries.async_entries(DOMAIN):
-            async_remove_services(hass)
 
     return unload_ok
 
@@ -2197,26 +2229,31 @@ class CannotConnect(exceptions.HomeAssistantError):
 async def async_remove_config_entry_device(
     hass: HomeAssistant, config_entry: RoombaConfigEntry, device_entry: Any
 ) -> bool:
-    """Return whether a stale device can be removed from the device registry.
+    """Return whether a device may be removed from the device registry.
 
-    THE NAME AND THE SIGNATURE WERE BOTH WRONG, and the symptom was the
-    familiar one: nothing failed, the hook simply never ran. Home
-    Assistant looks for `async_remove_config_entry_device` -- singular --
-    and passes ONE device entry, not a list. Ours was plural and took a
-    list, so Home Assistant found no hook at all and refused every
-    removal with "Failed to remove device entry, rejected by
-    integration".
+    THE NAME AND THE SIGNATURE WERE BOTH WRONG once, and the symptom was the
+    familiar one: nothing failed, the hook simply never ran. Home Assistant
+    looks for `async_remove_config_entry_device` -- singular -- and passes
+    ONE device entry. Ours was plural and took a list, so every removal was
+    refused with "rejected by integration".
 
-    Anyone who replaced a robot and tried to delete the old device from
-    the UI hit a refusal with no explanation, and nothing in our logs.
+    AND THEN IT ANSWERED YES TO EVERYTHING. The reasoning was that Home
+    Assistant only offers devices with no entities left. It does not: once
+    this hook exists, every device of the entry shows "Delete", and the
+    click lands here. Returning True let a user delete the device of the
+    robot that is still configured, cutting its entities loose until the
+    next reload.
 
-    Called by HA when the user requests removal of a device that is no longer
-    associated with any entity in this config entry. For Roomba+, each config
-    entry manages exactly one physical robot — there are no child devices or
-    dynamically-discovered sub-devices, so any device presented for removal
-    is safe to remove.
+    One config entry is one robot, identified as `roomba_plus_<BLID>`. That
+    device is refused; any other device of the entry -- a replaced robot, an
+    identifier from an older release -- is stale and may go.
     """
-    return True
+    blid = config_entry.data.get(CONF_BLID) or getattr(
+        getattr(config_entry, "runtime_data", None), "blid", None
+    )
+    if not blid:
+        return True  # no current robot to protect
+    return (DOMAIN, f"roomba_plus_{blid}") not in device_entry.identifiers
 
 
 # v3.4.0 bug-hunt finding (README/docs review) — Roomba+ persists 15 distinct
