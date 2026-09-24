@@ -2067,13 +2067,13 @@
       "message": "Die schema-invoer kan op de robot niet worden gevonden."
     },
     "rrule_not_supported": {
-      "message": "Deze robot kan '{rrule}' niet weergeven. Ondersteund zijn wekelijkse, tweewekelijkse, maandelijkse en eenmalige schema's. Gebruik voor iets anders de actie roomba_plus.create_schedule."
+      "message": "Deze robot kan “{rrule}” niet weergeven. Ondersteund zijn wekelijkse, tweewekelijkse, maandelijkse en eenmalige schema's. Gebruik voor iets anders de actie roomba_plus.create_schedule."
     },
     "schedule_change_rejected": {
       "message": "Het robotschema kon niet worden gewijzigd: {reason}"
     },
     "command_not_delivered": {
-      "message": "Het commando '{command}' werd niet voor verzending geaccepteerd — het heeft de iRobot-cloud nooit bereikt, dus de robot heeft het niet ontvangen. Dit is een verbindingsprobleem, geen weigering door de robot."
+      "message": "Het commando “{command}” werd niet voor verzending geaccepteerd — het heeft de iRobot-cloud nooit bereikt, dus de robot heeft het niet ontvangen. Dit is een verbindingsprobleem, geen weigering door de robot."
     },
     "prime_shadows_unavailable": {
       "message": "Kon voor robot {blid} geen status uit de iRobot-cloud lezen: {error}"
@@ -2136,7 +2136,7 @@
       "message": "{option} is geen reinigingsmodus."
     },
     "cleaning_mode_unsupported": {
-      "message": "Deze robot ondersteunt '{option}' niet. Mogelijk: {supported}."
+      "message": "Deze robot ondersteunt “{option}” niet. Mogelijk: {supported}."
     },
     "not_an_account_map": {
       "message": "{option} is geen kaart van dit account."

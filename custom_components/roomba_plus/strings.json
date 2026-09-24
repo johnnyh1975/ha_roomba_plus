@@ -2067,13 +2067,13 @@
       "message": "That schedule entry cannot be identified on the robot."
     },
     "rrule_not_supported": {
-      "message": "This robot cannot express '{rrule}'. It supports weekly, every two weeks, monthly and one-off schedules. For anything else, use the roomba_plus.create_schedule action."
+      "message": "This robot cannot express “{rrule}”. It supports weekly, every two weeks, monthly and one-off schedules. For anything else, use the roomba_plus.create_schedule action."
     },
     "schedule_change_rejected": {
       "message": "The robot schedule could not be changed: {reason}"
     },
     "command_not_delivered": {
-      "message": "The '{command}' command was not accepted for delivery — it never reached iRobot's cloud, so the robot has not seen it. This is a connection problem, not a refusal by the robot."
+      "message": "The “{command}” command was not accepted for delivery — it never reached iRobot's cloud, so the robot has not seen it. This is a connection problem, not a refusal by the robot."
     },
     "prime_shadows_unavailable": {
       "message": "Could not read any state from the iRobot cloud for robot {blid}: {error}"

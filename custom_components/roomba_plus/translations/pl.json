@@ -2067,13 +2067,13 @@
       "message": "Nie można rozpoznać tego wpisu harmonogramu w robocie."
     },
     "rrule_not_supported": {
-      "message": "Ten robot nie potrafi odwzorować '{rrule}'. Obsługuje harmonogramy tygodniowe, co dwa tygodnie, miesięczne i jednorazowe. W innych przypadkach użyj akcji roomba_plus.create_schedule."
+      "message": "Ten robot nie potrafi odwzorować „{rrule}”. Obsługuje harmonogramy tygodniowe, co dwa tygodnie, miesięczne i jednorazowe. W innych przypadkach użyj akcji roomba_plus.create_schedule."
     },
     "schedule_change_rejected": {
       "message": "Nie udało się zmienić harmonogramu robota: {reason}"
     },
     "command_not_delivered": {
-      "message": "Polecenie '{command}' nie zostało przyjęte do wysłania — nie dotarło do chmury iRobot, więc robot go nie otrzymał. To problem z połączeniem, a nie odmowa robota."
+      "message": "Polecenie „{command}” nie zostało przyjęte do wysłania — nie dotarło do chmury iRobot, więc robot go nie otrzymał. To problem z połączeniem, a nie odmowa robota."
     },
     "prime_shadows_unavailable": {
       "message": "Nie udało się odczytać stanu robota {blid} z chmury iRobot: {error}"

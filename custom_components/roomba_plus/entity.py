@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import datetime
 import logging
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.const import ATTR_CONNECTIONS
@@ -20,6 +21,27 @@ if TYPE_CHECKING:
     from .models import RoombaConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
+
+
+#: Phases in which a robot whose cycle is still set is no longer on a mission.
+_MISSION_ENDED_PHASES: frozenset[str] = frozenset({"stop", "cancelled", ""})
+
+
+def mission_in_progress(status: Mapping[str, Any]) -> bool:
+    """Whether the robot is on a mission, judged from `cleanMissionStatus`.
+
+    The one answer shared by the Mission active binary sensor and the
+    mission start and elapsed time sensors, so the three cannot disagree.
+
+    `cycle` decides first: "none" means no mission, whatever the phase.
+    A mid-mission recharge reports `charge` with the cycle still set and
+    counts as a mission. `mssnStrtTm` is NOT a signal: the firmware keeps
+    it after the mission ends, so an elapsed time computed from it alone
+    kept counting on the dock (reported by nareso).
+    """
+    if status.get("cycle", "none") == "none":
+        return False
+    return status.get("phase", "") not in _MISSION_ENDED_PHASES
 
 
 class IRobotEntity(Entity):
@@ -205,7 +227,7 @@ class IRobotEntity(Entity):
         the user's locale.  Subclasses that use EntityDescription should
         override this to return ``self.entity_description.key`` directly.
 
-        NAMING CONVENTION (enforced by test_locale_slug_guard):
+        NAMING CONVENTION (enforced by the locale-slug guard in test_translations.py):
         - NEVER set ``_attr_name`` alongside ``_attr_translation_key`` on a class.
         - ALWAYS set ``_attr_unique_id = f"{self.robot_unique_id}_{english_key}"``.
         - The English key must match the translation file key exactly.

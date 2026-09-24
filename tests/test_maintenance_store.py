@@ -1819,7 +1819,7 @@ class TestTheSeedReachesEveryRole:
     def test_the_setup_seeds_the_two_that_were_skipped(self) -> None:
         import inspect
 
-        from custom_components.roomba_plus import __init__ as init
+        import custom_components.roomba_plus as init
 
         source = inspect.getsource(init)
 

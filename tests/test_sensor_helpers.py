@@ -759,9 +759,11 @@ class TestMissionElapsedValue:
         e = _FakeEntity({"cleanMissionStatus": {"mssnStrtTm": 0}})
         assert _mission_elapsed_value(e) is None
 
+    RUNNING = {"cycle": "clean", "phase": "run"}
+
     def test_recent_start_returns_positive(self):
         ts = int(time.time()) - 300  # 5 minutes ago
-        e = _FakeEntity({"cleanMissionStatus": {"mssnStrtTm": ts}})
+        e = _FakeEntity({"cleanMissionStatus": {**self.RUNNING, "mssnStrtTm": ts}})
         result = _mission_elapsed_value(e)
         assert result is not None
         assert result >= 4.9  # at least ~5 min
@@ -769,9 +771,18 @@ class TestMissionElapsedValue:
 
     def test_returns_float(self):
         ts = int(time.time()) - 60
-        e = _FakeEntity({"cleanMissionStatus": {"mssnStrtTm": ts}})
+        e = _FakeEntity({"cleanMissionStatus": {**self.RUNNING, "mssnStrtTm": ts}})
         result = _mission_elapsed_value(e)
         assert isinstance(result, float)
+
+    def test_start_time_kept_after_the_mission_is_not_elapsed_time(self):
+        """nareso: docked after a mission, the sensor read 748 min -- the
+        time since the previous start. The firmware keeps mssnStrtTm."""
+        ts = int(time.time()) - 748 * 60
+        e = _FakeEntity({"cleanMissionStatus": {
+            "cycle": "none", "phase": "charge", "mssnStrtTm": ts,
+        }})
+        assert _mission_elapsed_value(e) is None
 
 
 # ── ERROR_CODE_LABELS ─────────────────────────────────────────────────────────

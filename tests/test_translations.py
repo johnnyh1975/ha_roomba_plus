@@ -361,6 +361,47 @@ class TestTranslationNullValues:
         assert not errors, f"strings.json has values that crash HA translation loader: {errors}"
 
 
+# hassfest's own rule (script/hassfest/translations.py,
+# RE_PLACEHOLDER_IN_SINGLE_QUOTES). The frontend formats strings as ICU
+# messages, where an apostrophe directly before "{" starts a quoted literal:
+# "'{command}'" renders the braces instead of the value. hassfest only
+# checks strings.json and en.json; the other locales break the same way, so
+# all of them are held to it.
+_HASSFEST_SINGLE_QUOTED_PLACEHOLDER = re.compile(r"'{\w+}'")
+
+
+def _single_quoted_placeholders(obj, prefix: str = "") -> list[str]:
+    if isinstance(obj, dict):
+        return [
+            hit
+            for k, v in obj.items()
+            for hit in _single_quoted_placeholders(v, f"{prefix}.{k}" if prefix else k)
+        ]
+    if isinstance(obj, str) and _HASSFEST_SINGLE_QUOTED_PLACEHOLDER.search(obj):
+        return [f"{prefix}: {obj}"]
+    return []
+
+
+class TestNoPlaceholderInSingleQuotes:
+    """hassfest rejected two exception messages in CI because they
+    wrapped their placeholder in single quotes."""
+
+    @pytest.mark.parametrize(
+        "path",
+        [_STRINGS] + [_TRANSLATIONS / f"{loc}.json" for loc in _TRANSLATION_LOCALES],
+        ids=lambda p: p.name,
+    )
+    def test_no_placeholder_in_single_quotes(self, path: Path) -> None:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        assert not _single_quoted_placeholders(data)
+
+    def test_the_rule_catches_the_original_message(self) -> None:
+        original = {"exceptions": {"command_not_delivered": {"message": (
+            "The '{command}' command was not accepted for delivery"
+        )}}}
+        assert _single_quoted_placeholders(original)
+
+
 class TestTranslationKeyFormat:
     """All translation keys must be ASCII a-z/0-9/underscore."""
 

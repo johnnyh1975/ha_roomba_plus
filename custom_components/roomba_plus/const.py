@@ -58,7 +58,7 @@ LOCAL_PLATFORMS: Final[list[Platform]] = [
 #
 # SECOND, BIGGER BUG FOUND AND FIXED (this session, caught by a new
 # structural test built specifically to prevent a THIRD occurrence of
-# this exact pattern -- test_prime_platform_coverage.py's own backward
+# this exact pattern -- test_const.py's own backward
 # check): image.py's PrimeMapImage (the live cleaning map) has had a
 # real, working CLOUD_ONLY branch since v4.0.0a0/a1 -- Platform.IMAGE
 # was NEVER in this list at all, meaning the live map has been

@@ -57,7 +57,7 @@ from .const import (
     is_braava,
     is_mop,
 )
-from .entity import IRobotEntity
+from .entity import IRobotEntity, mission_in_progress
 from .models import RoombaConfigEntry
 from .schedule_parser import (
     occurrences_from_schedule2,
@@ -66,7 +66,6 @@ from .schedule_parser import (
 )
 from .sensor_helpers import (
     recent_pause_reasons,
-    _ACTIVE_PHASES,
     _area_cleaned_today,
     _battery_age_days,
     _battery_capacity_retention,
@@ -120,7 +119,7 @@ class RoombaSensorDescription(SensorEntityDescription):
     # now. This field was introduced for the second case on the theory
     # that "unknown implies a data error" -- it does not, and the
     # distinction cost us thirteen entities that a fresh install showed
-    # as broken, which orphan-entity tooling duly reported (naveso).
+    # as broken, which orphan-entity tooling duly reported (nareso).
     #
     # Before reaching for it, take one of these instead:
     #   * the robot will NEVER report this -> filter_fn, so the entity is
@@ -471,7 +470,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         # robots -- which is what "hide it" actually requires. An
         # available_fn here created the entity and then marked it
         # unavailable forever, which orphan-entity tooling reports as
-        # broken (naveso).
+        # broken (nareso).
         filter_fn=lambda s: s.get("batInfo") is not None,
         entity_registry_enabled_default=False,
         value_fn=lambda e: e.vacuum_state.get("batInfo", {}).get("cCount"),
@@ -750,13 +749,14 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
         # No available_fn: between missions the robot is reachable, there is
         # simply no running mission, so the correct state is "unknown", not
-        # "unavailable" (reported by naveso -- unavailable trips orphan-entity
-        # checks such as Orphan Entity Cleaner). The value_fn below still
-        # gates on the phase, so this stays the LIVE mission's start time;
-        # the completed one lives in "Missions - Last".
+        # "unavailable" (reported by nareso -- unavailable trips orphan-entity
+        # checks such as Orphan Entity Cleaner). The value_fn below gates
+        # on mission_in_progress(), shared with Mission active and elapsed
+        # time, so this stays the LIVE mission's start time -- through a
+        # mid-mission recharge too; the completed one lives in "Missions - Last".
         value_fn=lambda e: (
             e.last_mission
-            if e.clean_mission_status.get("phase") in _ACTIVE_PHASES
+            if mission_in_progress(e.clean_mission_status)
             else None
         ),
     ),
@@ -771,9 +771,10 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
         # No available_fn, same reasoning as mission_start_time above.
-        # _mission_elapsed_value() already returns None when no mission is
-        # running, so the guard only ever converted a correct "unknown" into
-        # a misleading "unavailable". Keeping state_class MEASUREMENT is why
+        # _mission_elapsed_value() returns None when no mission is in
+        # progress -- judged by mission_in_progress(), not by mssnStrtTm,
+        # which the firmware keeps after the mission ends (nareso: the
+        # sensor kept counting on the dock). Keeping state_class MEASUREMENT is why
         # we do NOT retain the last value here: a frozen duration would be
         # recorded into long-term statistics as if the mission were still
         # running. The completed duration lives in "Missions - Last duration".
@@ -1249,7 +1250,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         # None for both an absent store and an empty record list, so the
         # sensor reads `unknown` until the first mission finishes. The
         # earlier guard reported `unavailable`, which orphan-entity
-        # tooling lists as broken on every fresh install (naveso).
+        # tooling lists as broken on every fresh install (nareso).
         # See the note on available_fn in RoombaSensorDescription.
     ),
     RoombaSensorDescription(
@@ -1268,7 +1269,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         # None for both an absent store and an empty record list, so the
         # sensor reads `unknown` until the first mission finishes. The
         # earlier guard reported `unavailable`, which orphan-entity
-        # tooling lists as broken on every fresh install (naveso).
+        # tooling lists as broken on every fresh install (nareso).
         # See the note on available_fn in RoombaSensorDescription.
     ),
     RoombaSensorDescription(
@@ -1292,7 +1293,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         # None for both an absent store and an empty record list, so the
         # sensor reads `unknown` until the first mission finishes. The
         # earlier guard reported `unavailable`, which orphan-entity
-        # tooling lists as broken on every fresh install (naveso).
+        # tooling lists as broken on every fresh install (nareso).
         # See the note on available_fn in RoombaSensorDescription.
     ),
 

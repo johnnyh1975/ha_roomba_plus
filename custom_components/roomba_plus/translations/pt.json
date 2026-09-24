@@ -2067,13 +2067,13 @@
       "message": "Não é possível identificar essa entrada de agendamento no robô."
     },
     "rrule_not_supported": {
-      "message": "Este robô não consegue representar '{rrule}'. Suporta agendamentos semanais, quinzenais, mensais e únicos. Para tudo o resto, use a ação roomba_plus.create_schedule."
+      "message": "Este robô não consegue representar «{rrule}». Suporta agendamentos semanais, quinzenais, mensais e únicos. Para tudo o resto, use a ação roomba_plus.create_schedule."
     },
     "schedule_change_rejected": {
       "message": "Não foi possível alterar o agendamento do robô: {reason}"
     },
     "command_not_delivered": {
-      "message": "O comando '{command}' não foi aceite para envio — nunca chegou à nuvem iRobot, por isso o robô não o recebeu. É um problema de ligação, não uma recusa do robô."
+      "message": "O comando «{command}» não foi aceite para envio — nunca chegou à nuvem iRobot, por isso o robô não o recebeu. É um problema de ligação, não uma recusa do robô."
     },
     "prime_shadows_unavailable": {
       "message": "Não foi possível ler nenhum estado da nuvem iRobot para o robô {blid}: {error}"

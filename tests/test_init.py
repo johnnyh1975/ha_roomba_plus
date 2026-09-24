@@ -224,7 +224,7 @@ class TestSavingAnEntityOptionTakesEffect:
     def test_entity_creating_options_trigger_a_reload(self) -> None:
         import inspect
 
-        from custom_components.roomba_plus import __init__ as module
+        import custom_components.roomba_plus as module
 
         source = inspect.getsource(module._async_reload_on_options_change)
 
@@ -240,7 +240,7 @@ class TestSavingAnEntityOptionTakesEffect:
         answer to a light question."""
         import inspect
 
-        from custom_components.roomba_plus import __init__ as module
+        import custom_components.roomba_plus as module
 
         source = inspect.getsource(module._async_reload_on_options_change)
 
@@ -994,7 +994,7 @@ class TestSeedL3FromArchive:
     ) -> MissionStore:
         if ms is None:
             ms = _make_ms()
-        from custom_components.roomba_plus.__init__ import _async_seed_l3_from_archive
+        from custom_components.roomba_plus import _async_seed_l3_from_archive
         await _async_seed_l3_from_archive(archive, ms)
         return ms
 
@@ -1044,7 +1044,7 @@ class TestSeedL5FromArchive:
         store_mock.async_save = AsyncMock(side_effect=save_side_effect)
         store_mock.async_load = AsyncMock(return_value=None)
 
-        from custom_components.roomba_plus.__init__ import _async_seed_l5_from_archive
+        from custom_components.roomba_plus import _async_seed_l5_from_archive
 
         with patch("custom_components.roomba_plus.robot_profile_store.Store",
                    return_value=store_mock):
@@ -1078,7 +1078,7 @@ class TestSeedL5FromArchive:
             _derived_v280_l5_arc(2, rooms={"19": {"passes": 3, "area": 100.0}}),
         ])
 
-        from custom_components.roomba_plus.__init__ import _async_seed_l5_from_archive
+        from custom_components.roomba_plus import _async_seed_l5_from_archive
         hass = _make_hass()
         store_mock = MagicMock()
         store_mock.async_save = AsyncMock()
@@ -1310,7 +1310,7 @@ class TestMqttStampCallbackRegisteredBeforePlatforms:
     setup.  If a future refactor moves the registration below
     async_forward_entry_setups, the false-"Problem"-blip race silently
     returns with every test still green — hence this explicit guard on
-    the source order itself (same style as test_locale_slug_guard).
+    the source order itself (same style as the locale-slug guard in test_translations.py).
     """
 
     def test_stamp_registration_precedes_platform_forwarding(self):

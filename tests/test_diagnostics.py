@@ -55,9 +55,10 @@ async def _run_diag(reported: dict) -> dict:
     hass = MagicMock()
     hass.config_entries.async_entries.return_value = []
 
-    # Patch the lazy-imported roomba_reported_state inside __init__.py
+    # diagnostics.py imports roomba_reported_state lazily from the package,
+    # so the patch goes on the package, not on a second copy of __init__.py.
     with patch(
-        "custom_components.roomba_plus.__init__.roomba_reported_state",
+        "custom_components.roomba_plus.roomba_reported_state",
         side_effect=lambda r: r.master_state["state"]["reported"],
     ):
         return await async_get_config_entry_diagnostics(hass, entry)

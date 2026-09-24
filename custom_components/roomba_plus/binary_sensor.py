@@ -41,7 +41,7 @@ from .const import (
     has_smart_map,
     is_mop,
 )
-from .entity import IRobotEntity
+from .entity import IRobotEntity, mission_in_progress
 from .models import ConnectionType, RoombaConfigEntry
 from .sensor_prime import _blocking_faults, get_localized_error_entry
 from .prime_schedule_switch import quiet_hours_windows
@@ -923,22 +923,16 @@ class RoombaMissionActive(IRobotEntity, BinarySensorEntity):
     _attr_device_class = BinarySensorDeviceClass.RUNNING
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
-    _FINAL_PHASES: frozenset[str] = frozenset({"stop", "cancelled", ""})
-
     def __init__(self, roomba: Any, blid: str) -> None:
         super().__init__(roomba, blid)
         self._attr_unique_id = f"{self.robot_unique_id}_mission_active"
 
     @property
     def is_on(self) -> bool:
-        status = roomba_reported_state(self.vacuum).get("cleanMissionStatus", {})
-        cycle = status.get("cycle", "none")
-        if cycle == "none":
-            return False
-        phase = status.get("phase", "")
-        # charge phase with cycle!="none" = mid-mission recharge → still ON
-        # charge phase with cycle=="none"  = caught by the guard above → OFF
-        return phase not in self._FINAL_PHASES or phase == "charge"
+        # Mid-mission recharge (charge with the cycle still set) stays ON.
+        return mission_in_progress(
+            roomba_reported_state(self.vacuum).get("cleanMissionStatus", {})
+        )
 
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:
         return "cleanMissionStatus" in new_state

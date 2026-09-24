@@ -2067,13 +2067,13 @@
       "message": "Dieser Zeitplaneintrag lässt sich auf dem Roboter nicht zuordnen."
     },
     "rrule_not_supported": {
-      "message": "Dieser Roboter kann '{rrule}' nicht abbilden. Möglich sind wöchentliche, zweiwöchentliche, monatliche und einmalige Zeitpläne. Für alles andere nutze die Aktion roomba_plus.create_schedule."
+      "message": "Dieser Roboter kann „{rrule}“ nicht abbilden. Möglich sind wöchentliche, zweiwöchentliche, monatliche und einmalige Zeitpläne. Für alles andere nutze die Aktion roomba_plus.create_schedule."
     },
     "schedule_change_rejected": {
       "message": "Der Roboter-Zeitplan konnte nicht geändert werden: {reason}"
     },
     "command_not_delivered": {
-      "message": "Der Befehl '{command}' wurde nicht zur Zustellung angenommen — er hat die iRobot-Cloud nie erreicht, der Roboter hat ihn also nicht gesehen. Das ist ein Verbindungsproblem, keine Ablehnung durch den Roboter."
+      "message": "Der Befehl „{command}“ wurde nicht zur Zustellung angenommen — er hat die iRobot-Cloud nie erreicht, der Roboter hat ihn also nicht gesehen. Das ist ein Verbindungsproblem, keine Ablehnung durch den Roboter."
     },
     "prime_shadows_unavailable": {
       "message": "Für Roboter {blid} ließ sich kein Zustand aus der iRobot-Cloud lesen: {error}"

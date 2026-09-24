@@ -9,6 +9,21 @@ note are listed — most releases need zero action beyond updating.
 
 ---
 
+## v4.2.12 — from v4.2.11
+
+**Mission elapsed time reads *Unknown* on the dock.** It kept a number
+between missions that was the time since the last mission started, not
+how long it ran. An automation or card that read it after a mission
+ends should use **Missions – Last duration** instead.
+
+**Mission start and elapsed time stay filled during a mid-mission
+recharge.** Mission start used to read *Unknown* while the robot topped
+up on the dock. An automation that treated that as "mission over" should
+use the **Mission active** binary sensor, which has always stayed on
+through a recharge.
+
+---
+
 ## v4.2.11 — from v4.2.10
 
 ### Config entries on schema versions 4 to 10 could not be migrated
@@ -295,19 +310,6 @@ cannot perform it — the selection was being quietly ignored before.
 **If you are on 4.1.2 or earlier**, cleaning passes and suction level
 never worked on i7/s9/j7-class robots. They do now; you may want to set
 them again.
-
----
-
-## v4.2.0b8 — from v4.2.0b7
-
-Nothing to do.
-
-**The readiness sensor reads differently.** Its states are worded for
-people now rather than after the robot's internal constants — "Bumper
-stuck" instead of "Bumped", "Near a virtual wall" instead of "In RCON".
-
-Only the displayed text changed. The state keys automations compare
-against are the same as in b7.
 
 ---
 

@@ -33,7 +33,7 @@ from .const import (
     active_charge_cycles,
     decode_not_ready,
 )
-from .entity import IRobotEntity
+from .entity import IRobotEntity, mission_in_progress
 
 
 def _carpet_boost_mode(entity: IRobotEntity) -> str:
@@ -58,9 +58,6 @@ def _clean_mode(entity: IRobotEntity) -> str:
     if no_auto and not two_pass:
         return CLEAN_MODE_LABELS["one"]
     return CLEAN_MODE_LABELS["auto"]
-
-
-_ACTIVE_PHASES = {"run", "hmMidMsn", "hmPostMsn", "hmUsrDock", "new", "resume"}
 
 
 # notReady bitmask — individual bit meanings for i7/s9/j-series
@@ -237,8 +234,11 @@ def _phase_value(entity: "IRobotEntity") -> str:
 
 
 def _mission_elapsed_value(entity: "IRobotEntity") -> float | None:
-    """Elapsed mission time in minutes; None if no active mission."""
-    ts = entity.clean_mission_status.get("mssnStrtTm")
+    """Elapsed mission time in minutes; None if no mission is in progress."""
+    status = entity.clean_mission_status
+    if not mission_in_progress(status):
+        return None
+    ts = status.get("mssnStrtTm")
     if not ts:
         return None
     try:

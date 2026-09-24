@@ -2,15 +2,6 @@
 
 Merged by the v2.8.x test reorganisation from multiple version-named
 test files; see git history for provenance.
-
-NOTE — ROOM-SEG Stage 4 classes added below (TestBuildZoneIndexOptions-
-Ephemeral onward) import custom_components.roomba_plus.config_flow,
-which itself imports homeassistant.helpers.service_info.dhcp and
-.zeroconf. Both are missing from this sandbox's pinned HA version (same
-pre-existing gap documented for test_rest980_migrate.py since v2.9.1 —
-"uncollectable in sandbox ... but passes in real env"). Verified locally
-with temporary stub modules before shipping (all 16 pass); verify again
-in a real HA environment before release, same as test_rest980_migrate.py.
 """
 
 

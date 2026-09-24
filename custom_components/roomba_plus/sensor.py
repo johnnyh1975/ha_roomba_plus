@@ -53,7 +53,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 # mock.patch("...sensor.dt_util.utcnow", ...) still resolve — both are
 # shared HA singleton modules, so patching a sub-attribute on them here
 # also affects the sensor_helpers.py code that actually calls them. Do not
-# remove as "unused" without checking test_repairs.py/test_sensors.py first.
+# remove as "unused" without checking test_repairs.py/test_sensor.py first.
 from homeassistant.helpers import issue_registry as ir  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
 from homeassistant.util import dt as dt_util  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
 

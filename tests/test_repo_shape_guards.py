@@ -590,3 +590,44 @@ def test_the_guard_catches_the_original_fault():
         "            new_eid = eid + '_level'\n"
     )
     assert _findings(fault, "fault.py")
+
+
+# ── the package is imported as the package, never as __init__ ───────────────
+#
+# ``from custom_components.roomba_plus import __init__ as module`` does not
+# return the package: without a prior import it returns the package's bound
+# ``__init__`` method, and ``custom_components.roomba_plus.__init__`` as a
+# dotted name loads a SECOND copy of __init__.py as its own module. Three
+# test files depended on another file having loaded that copy first, so they
+# failed when run alone, and a diagnostics patch landed on the copy instead
+# of the code under test and patched nothing.
+
+import re
+
+_INIT_IMPORT = re.compile(r"roomba_plus\.__init__\b|import\s+__init__\b")
+
+
+def _init_import_findings(source: str, filename: str) -> list[str]:
+    return [
+        f"{filename}:{no}: {line.strip()}"
+        for no, line in enumerate(source.splitlines(), start=1)
+        if _INIT_IMPORT.search(line) and not line.lstrip().startswith("#")
+    ]
+
+
+def test_no_test_imports_the_package_through_init() -> None:
+    findings: list[str] = []
+    for f in sorted(Path(__file__).parent.glob("*.py")):
+        if f.name == Path(__file__).name:
+            continue
+        findings += _init_import_findings(f.read_text(encoding="utf-8"), f.name)
+    assert not findings, findings
+
+
+def test_the_init_import_guard_catches_the_original_faults() -> None:
+    for fault in (
+        "        from custom_components.roomba_plus import __init__ as module\n",
+        "    from custom_components.roomba_plus.__init__ import _async_seed\n",
+        '        "custom_components.roomba_plus.__init__.roomba_reported_state",\n',
+    ):
+        assert _init_import_findings(fault, "fault.py"), fault

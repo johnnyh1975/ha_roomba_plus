@@ -609,3 +609,25 @@ class TestEntityEdges:
         await e._async_update_device_name()
 
         registry.async_update_device.assert_not_called()
+
+
+class TestMissionInProgress:
+    """One definition for Mission active and the two mission-time sensors."""
+
+    @pytest.mark.parametrize(
+        ("status", "expected"),
+        [
+            ({"cycle": "clean", "phase": "run"}, True),
+            ({"cycle": "clean", "phase": "charge"}, True),  # mid-mission recharge
+            ({"cycle": "clean", "phase": "stuck"}, True),
+            ({"cycle": "none", "phase": "charge", "mssnStrtTm": 1_700_000_000}, False),
+            ({"cycle": "clean", "phase": "stop"}, False),
+            ({"cycle": "clean", "phase": "cancelled"}, False),
+            ({"cycle": "none", "phase": "run"}, False),
+            ({}, False),
+        ],
+    )
+    def test_cycle_and_phase_decide_not_the_start_time(self, status, expected):
+        from custom_components.roomba_plus.entity import mission_in_progress
+
+        assert mission_in_progress(status) is expected

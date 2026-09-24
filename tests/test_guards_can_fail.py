@@ -339,3 +339,24 @@ def test_a_missing_report_fails_when_named_and_passes_when_not(tmp_path, monkeyp
     assert coverage_guard.main(["x", str(tmp_path / "nope.xml")]) == 1
     monkeypatch.chdir(tmp_path)
     assert coverage_guard.main(["x"]) == 0
+
+
+# ── a guard that skips in CI checks nothing ──────────────────────────────
+
+class TestAMissingLibraryFailsInCI:
+    """check_client_attributes and check_vendor_value_tables ran in a CI job
+    that installed neither library. Both skipped and exited 0, so in CI
+    they never checked anything. With CI set, a missing library now fails
+    them; locally it still skips."""
+
+    @pytest.mark.parametrize("script,blocked", [
+        ("check_client_attributes", "roombapy"),
+        ("check_vendor_value_tables", "roombapy_prime.vendor_reference"),
+    ])
+    def test_skips_locally_fails_in_ci(self, monkeypatch, script, blocked):
+        guard = _load(script)
+        monkeypatch.setitem(sys.modules, blocked, None)   # makes the import raise ImportError
+        monkeypatch.delenv("CI", raising=False)
+        assert guard.main() == 0
+        monkeypatch.setenv("CI", "true")
+        assert guard.main() == 1

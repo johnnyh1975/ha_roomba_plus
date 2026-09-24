@@ -17,7 +17,8 @@ def pytest_configure(config):
     requires Python ≥3.13). config_flow.py imports DhcpServiceInfo/
     ZeroconfServiceInfo from there; on 2025.1.4 the same classes still exist,
     just under homeassistant.components.dhcp/zeroconf. Needed the first time
-    a test imports config_flow.py directly (test_rest980_migrate.py) — every
+    a test imports config_flow.py directly (the REST980-MIGRATE tests, now in
+    test_config_flow.py) — every
     prior config_flow test used a hand-copied reference implementation
     instead, which is exactly the kind of drift risk this shim avoids going
     forward.

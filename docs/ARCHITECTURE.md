@@ -297,7 +297,7 @@ Recorded because a review that stays in one person's head is not a review.
 ### Test files follow source modules
 
 Reorganised August 2026. Sensor tests had accumulated in one
-`test_sensors.py` regardless of which module they exercised — it reached
+`test_sensor.py` regardless of which module they exercised — it reached
 5,351 lines while `test_sensor_rooms.py` had 51 for a 1,481-line module.
 
 Finding them took three passes, each catching what the last missed:
@@ -312,7 +312,7 @@ The third pass was the largest, and it existed only because
 `sensor_helpers.py` is almost entirely functions — a class-name search
 cannot see it.
 
-What remains in `test_sensors.py` is what belongs there: tests of the
+What remains in `test_sensor.py` is what belongs there: tests of the
 sensor list as a whole — that every description uses its helpers, that
 no `value_fn` raises on absent data, that translation keys stay
 consistent.

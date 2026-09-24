@@ -32,12 +32,12 @@ rules:
       sign-in, options flow, reconfigure and reauth. Every field of every
       setup and options step has a data_description in all eight languages,
       and option lists are translated (enforced by
-      tests/test_guard_gold_entities.py).
+      tests/test_translations.py).
   config-flow-test-coverage:
     status: done
     comment: >
       100% line coverage of config_flow.py, through Home Assistant's real flow
-      manager (tests/test_config_flow_real.py, test_config_flow_branches.py).
+      manager (tests/test_config_flow.py).
       Reached in 4.2.11; it had been 81%, and writing the missing tests found
       a manual zone-name step that closed silently on invalid input.
   dependency-transparency:
@@ -197,7 +197,7 @@ rules:
     comment: >
       Every Home Assistant exception the integration raises (123 raise sites)
       carries translation_domain and translation_key, with texts in all eight
-      languages. Enforced by tests/test_guard_exception_translations.py, which
+      languages. Enforced by tests/test_translations.py, which
       also checks that placeholders passed in code match the message in both
       directions, and formats every message through Home Assistant's own
       translation loader. In 4.2.11: 62 untranslated raises fixed, eight call
@@ -210,7 +210,7 @@ rules:
       static _attr_icon, one description icon=) moved there. One documented
       exception: the cloud room picker's icon follows the region type of the
       selected room, and its options are the household's own room names, which
-      icons.json cannot list. Enforced by tests/test_guard_gold_entities.py.
+      icons.json cannot list. Enforced by tests/test_quality_scale.py.
   reconfiguration-flow:
     status: done
     comment: >
@@ -223,7 +223,7 @@ rules:
       cloud authentication, MQTT silence, counter resets and observed obstacle
       zones. Every constant issue key exists in all eight languages with the
       placeholders the code passes
-      (tests/test_guard_exception_translations.py). In 4.2.11
+      (tests/test_translations.py). In 4.2.11
       observed_zones_detected carried the zone-naming text by mistake, in all
       languages; rewritten.
   stale-devices:
@@ -286,7 +286,7 @@ rules:
     comment: >
       Every sensor measuring a span of time uses SensorDeviceClass.DURATION
       (17 sensors added in 4.2.11; enforced by
-      tests/test_guard_gold_entities.py). Sensors without a device class have
+      tests/test_quality_scale.py). Sensors without a device class have
       no matching one in Home Assistant: fill levels and rates in percent,
       capacity in mAh, wear in hours per day, mission counts.
   strict-typing:

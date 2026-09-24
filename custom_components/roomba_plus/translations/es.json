@@ -2067,13 +2067,13 @@
       "message": "No se puede identificar esa entrada de programación en el robot."
     },
     "rrule_not_supported": {
-      "message": "Este robot no puede representar '{rrule}'. Admite programaciones semanales, cada dos semanas, mensuales y únicas. Para cualquier otra cosa, usa la acción roomba_plus.create_schedule."
+      "message": "Este robot no puede representar «{rrule}». Admite programaciones semanales, cada dos semanas, mensuales y únicas. Para cualquier otra cosa, usa la acción roomba_plus.create_schedule."
     },
     "schedule_change_rejected": {
       "message": "No se pudo cambiar la programación del robot: {reason}"
     },
     "command_not_delivered": {
-      "message": "El comando '{command}' no fue aceptado para su envío: nunca llegó a la nube de iRobot, así que el robot no lo ha recibido. Es un problema de conexión, no un rechazo del robot."
+      "message": "El comando «{command}» no fue aceptado para su envío: nunca llegó a la nube de iRobot, así que el robot no lo ha recibido. Es un problema de conexión, no un rechazo del robot."
     },
     "prime_shadows_unavailable": {
       "message": "No se pudo leer ningún estado de la nube de iRobot para el robot {blid}: {error}"

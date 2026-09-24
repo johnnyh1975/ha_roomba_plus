@@ -795,7 +795,7 @@ class TestLiveMissionSensorsAreUnknownNotUnavailableWhenIdle:
     user as `unknown`, not `unavailable`.
 
     `unavailable` made Home Assistant's orphan-entity tooling (Orphan
-    Entity Cleaner, reported by naveso) list these as broken entities
+    Entity Cleaner, reported by nareso) list these as broken entities
     every time a mission finished. HA reserves `unavailable` for "cannot
     reach the device"; the value simply not existing yet is `unknown`.
 
@@ -806,7 +806,13 @@ class TestLiveMissionSensorsAreUnknownNotUnavailableWhenIdle:
     a value would freeze a stale duration into long-term statistics.
     """
 
-    IDLE = {"phase": "charge", "cycle": "none"}
+    # As a real robot reports it after a mission: the firmware keeps the
+    # start time. Without it this fixture let the elapsed sensor pass while
+    # it kept counting on the dock (nareso).
+    IDLE = {"phase": "charge", "cycle": "none", "mssnStrtTm": 1_700_000_000}
+    MID_MISSION_RECHARGE = {
+        "phase": "charge", "cycle": "clean", "mssnStrtTm": 1_700_000_000,
+    }
 
     def test_neither_sensor_declares_an_availability_guard(self):
         for key in ("mission_start_time", "mission_elapsed_time"):
@@ -826,6 +832,17 @@ class TestLiveMissionSensorsAreUnknownNotUnavailableWhenIdle:
                 "values belong to 'Missions - Last' / '- Last duration', and "
                 "a retained MEASUREMENT would corrupt long-term statistics."
             )
+
+    def test_both_sensors_keep_their_value_through_a_mid_mission_recharge(self):
+        """The mission is not over while the robot tops up on the dock."""
+        import datetime as _dt
+
+        entity = _FakeEntity(clean_mission_status=dict(self.MID_MISSION_RECHARGE))
+        entity.last_mission = _dt.datetime.fromtimestamp(
+            1_700_000_000, _dt.timezone.utc
+        )
+        for key in ("mission_start_time", "mission_elapsed_time"):
+            assert _descriptor(key).value_fn(entity) is not None, key
 
 
 # ── formerly tests/test_coverage_sensor_core.py ─────────────────────────────────

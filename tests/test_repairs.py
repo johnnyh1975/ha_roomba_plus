@@ -2996,7 +2996,7 @@ class TestTheSharedLibraryConflictIsAnnounced:
     def test_the_check_exists_and_is_called_at_setup(self) -> None:
         import inspect
 
-        from custom_components.roomba_plus import __init__ as init
+        import custom_components.roomba_plus as init
         from custom_components.roomba_plus import repairs
 
         assert hasattr(repairs, "async_check_core_roomba_conflict")
