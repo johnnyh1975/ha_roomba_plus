@@ -60,7 +60,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Set up Python 3.14
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@v6
         with:
           python-version: "3.14"
           # This job installs a full Home Assistant and its dependency
@@ -131,7 +131,7 @@ jobs:
       # with it: it existed to freeze HA 2025.1.4, a version this
       # integration has not supported since its minimum became 2025.5.
       - name: Set up Python 3.13
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@v6
         with:
           python-version: "3.13"
           cache: "pip"
@@ -167,16 +167,30 @@ jobs:
       - name: Run full test suite with coverage
         run: |
           python -m pytest tests/ --cov=custom_components/roomba_plus \
+            --cov-branch \
             --cov-report=term-missing --cov-report=xml -q
 
-      # No coverage threshold/failure gate here, deliberately: this is the
-      # first time coverage has been measured in CI at all (previously
-      # pinned as a dependency, never actually run). 76% overall as of
-      # v3.4.2, ranging from 100% in several small modules down to 31% in
-      # sensor_core.py and 55% in vacuum.py. Setting a threshold now would
-      # mean picking a number with no real baseline behind it. Once a few
-      # releases' worth of real numbers exist, revisit whether a ratchet
-      # (must not decrease) or a floor makes sense.
+      # BRANCHES, NOT JUST LINES. Line coverage cannot see a condition
+      # whose true side never happens -- and that is what several of the
+      # worst faults here looked like. `cleaned_in_room` was read in a
+      # guard and assigned True nowhere, so the route behind that guard
+      # was dead while every line around it counted as covered.
+      #
+      # Branch coverage reports those as partial: 43 of them in
+      # room_cleaning.py alone the first time it was switched on. That
+      # number is information, not a target -- plenty are defensive
+      # branches nobody should manufacture a test for.
+      #
+      # THE GATE IS PER MODULE, AND ON LINES. The quality scale's
+      # test-coverage rule asks for more than 95 % in every module. Since
+      # 4.2.11 all 84 are there, so a floor is no longer a number without a
+      # baseline -- it is the rule itself. The check counts lines from
+      # coverage.xml rather than reading the rounded terminal report, which
+      # prints 94.6 % as 95 % and once let three short modules through.
+      # Branch coverage is printed per module for information only.
+      - name: Check 95 % line coverage in every module
+        run: python scripts/check_coverage_per_module.py coverage.xml
+
       - name: Upload coverage report
         uses: actions/upload-artifact@v6
         with:
@@ -192,7 +206,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: "pip"
@@ -220,7 +234,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -235,7 +249,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: "pip"
@@ -254,7 +268,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -284,7 +298,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -313,6 +327,20 @@ jobs:
 
       - name: Check command path parity
         run: python3 scripts/check_command_path_parity.py
+
+      # A field the UI offers and the schema refuses is worse than an
+      # undocumented one: Home Assistant validates before any handler
+      # runs, so the user is told a field we documented is invalid.
+      # Happened three times before this check existed.
+      - name: Documented service fields are accepted by their schemas
+        run: python3 scripts/check_service_schemas.py
+
+      # An attribute created empty and never filled is a feature that
+      # silently does nothing, and the suite passes either way -- tests
+      # check what a function does with its input, not whether it is
+      # ever given one. Four of these were found by users in one day.
+      - name: No attribute is created empty and never filled
+        run: python3 scripts/check_never_filled.py
 
       # Added with the 4.2 async migration, and the only thing that can
       # catch this mistake: neither mypy nor the tests see a roombapy
