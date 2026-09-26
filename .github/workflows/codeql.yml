@@ -9,7 +9,7 @@ name: CodeQL
 #
 # Motivated by this project handling real cloud credentials and auth
 # tokens (Gigya login flow, AWS Cognito, custom IoT authorizer token
-# handling in cloud_api.py) — exactly the kind of code where a static
+# handling, which moved into the library in 4.3) — exactly the kind of code where a static
 # security scan is worth having, even for a Home Assistant custom
 # integration that isn't itself internet-facing.
 

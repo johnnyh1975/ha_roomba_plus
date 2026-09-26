@@ -101,7 +101,7 @@ jobs:
       # Kept anyway, so both test jobs install it identically and the
       # roombapy-prime pin guard sees the same string in both.
       - name: Install roombapy-prime (--no-deps, for parity with the pinned job)
-        run: pip install --no-deps --no-cache-dir "roombapy-prime==0.3.4"
+        run: pip install --no-deps --no-cache-dir "roombapy-prime==0.4.0b2"
 
       - name: Run full test suite
         run: python -m pytest tests/ -q -p no:randomly
@@ -162,7 +162,7 @@ jobs:
 
       - name: Install roombapy and roombapy-prime
         run: |
-          pip install "roombapy==2.0.2" "roombapy-prime[map]==0.3.4"
+          pip install "roombapy==2.0.2" "roombapy-prime[map]==0.4.0b2"
 
       # THESE THREE NEED THE LIBRARIES. They ran in the markdown job, which
       # installs nothing: one failed on `import yaml`, and the other two
