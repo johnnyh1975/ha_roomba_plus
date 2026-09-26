@@ -792,7 +792,11 @@ async def _phase_cloud(ctx: _SetupContext) -> None:
                 _bf = ctx.mission_store.backfill_from_cloud(
                     cloud_coordinator.raw_records
                 )
-                if _bf.corrected or _bf.enriched:
+                # And the missions that were never recorded here (4.2.13).
+                _adopted = ctx.mission_store.adopt_missing_from_cloud(
+                    cloud_coordinator.raw_records
+                )
+                if _bf.corrected or _bf.enriched or _adopted:
                     await ctx.mission_store.async_save(hass, config_entry.entry_id)
 
                 if ctx.grid_store is not None:

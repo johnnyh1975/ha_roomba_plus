@@ -9,6 +9,21 @@ note are listed — most releases need zero action beyond updating.
 
 ---
 
+## v4.2.13 — from v4.2.12
+
+**Missions can appear in the history after the fact.** A Classic robot
+with a cloud account now records cloud missions that have no local
+record, at the next cloud refresh. Missions lost since 4.2.11 come back
+this way, so mission counts and statistics for the past days can go up
+once after updating. They do not fire the *mission completed* event.
+
+**A room the robot only reached is no longer recorded as cleaned.** The
+last room of a mission counts only if the robot cleaned there. Room
+history and overdue rooms can therefore list one room fewer than before
+for missions that ended early.
+
+---
+
 ## v4.2.12 — from v4.2.11
 
 **Mission elapsed time reads *Unknown* on the dock.** It kept a number

@@ -4362,9 +4362,10 @@ class TestLastCleanedRoomsReportsWhatWasCleaned:
         ]
 
     def test_nothing_tracked_yields_nothing(self) -> None:
-        """Empty means "fall back to the requested list", which the
-        caller handles -- not "no rooms were cleaned"."""
-        assert self._observed([], 0) == []
+        """None means "fall back to the requested list", which the
+        caller handles -- not "no rooms were cleaned". Since 4.2.13 an
+        empty list says the second (TestAReachedRoomIsNotACleanedRoom)."""
+        assert self._observed([], 0) is None
 
     def test_an_index_past_the_end_does_not_overrun(self) -> None:
         assert self._observed(["A", "B"], 99) == ["A", "B"]
@@ -4379,7 +4380,10 @@ class TestLastCleanedRoomsReportsWhatWasCleaned:
 
         source = inspect.getsource(callbacks.async_record_mission)
 
-        assert '"last_cleaned_rooms": observed_rooms or zones,' in source
+        assert (
+            '"last_cleaned_rooms": observed_rooms if observed_rooms is not None else zones,'
+            in source
+        )
 
 
 class TestMeasuredRoomTimesAverage:
@@ -5259,9 +5263,11 @@ class TestSmallHelpers:
         assert cb._observed_rooms(entry) == ["A", "B"]
 
     def test_observed_rooms_survive_a_broken_store(self):
+        """A broken store is "nothing tracked" -- None, so the record
+        falls back to the requested rooms -- not "nothing cleaned"."""
         entry = SimpleNamespace(runtime_data=SimpleNamespace(
             mission_timer_store=SimpleNamespace(planned_rooms=["A"], current_room_idx="x")))
-        assert cb._observed_rooms(entry) == []
+        assert cb._observed_rooms(entry) is None
 
     @pytest.mark.parametrize("room,seconds", [(None, 60), ("Kitchen", 0), ("Kitchen", -5)])
     def test_no_room_or_no_time_is_not_remembered(self, room, seconds):
@@ -5544,3 +5550,150 @@ class TestADockedEvacuationIsNotAMission:
 
         assert None not in _NON_MISSION_CYCLES
         assert "" not in _NON_MISSION_CYCLES
+
+
+
+class TestAReachedRoomIsNotACleanedRoom:
+    """4.2.13. A j7+ was sent to two rooms; the second one's door was
+    closed. The robot finished the first and went home -- and the room
+    tracker, which also advances on the phase the robot reports when it
+    heads home, moved to the room behind the door. The mission record
+    listed both rooms as cleaned. With a cloud account the cloud's room
+    events replace that a few minutes later; without one it stayed in the
+    room history for good.
+
+    The last room reached now counts only if the robot RAN there after
+    arriving.
+    """
+
+    @staticmethod
+    def _entry(planned, index):
+        return SimpleNamespace(runtime_data=SimpleNamespace(
+            mission_timer_store=SimpleNamespace(planned_rooms=planned, current_room_idx=index)))
+
+    def test_the_last_room_needs_work_to_count(self):
+        entry = self._entry(["Kitchen", "Office"], 1)
+        assert cb._observed_rooms(entry, last_room_worked=False) == ["Kitchen"]
+        assert cb._observed_rooms(entry, last_room_worked=True) == ["Kitchen", "Office"]
+
+    def test_a_mission_that_worked_nowhere_records_no_rooms(self):
+        """Not the requested list -- a 224 abort cleaned nothing."""
+        assert cb._observed_rooms(self._entry(["Kitchen"], 0), last_room_worked=False) == []
+
+    def test_no_plan_is_nothing_tracked(self):
+        assert cb._observed_rooms(self._entry([], 0), last_room_worked=False) is None
+
+    @staticmethod
+    def _cb():
+        from tests.conftest import entry_mock
+
+        entry = entry_mock()
+        entry.options = {}
+        entry.runtime_data.cloud_coordinator = None
+        entry.runtime_data.zone_store = None
+        entry.runtime_data.map_capability = None
+        entry.runtime_data.mission_store = MagicMock()
+        entry.runtime_data.prime_status_coordinator = None   # Classic
+        from custom_components.roomba_plus.mission_timer_store import MissionTimerStore
+
+        entry.runtime_data.mission_timer_store = MissionTimerStore()
+        return cb.make_mission_callback(MagicMock(), entry)
+
+    @staticmethod
+    def _msg(phase, operating_mode=None):
+        status = {"phase": phase, "cycle": "clean", "error": 0,
+                  "mssnStrtTm": 1700000000, "nMssn": 7}
+        if operating_mode is not None:
+            status["operatingMode"] = operating_mode
+        return {"state": {"reported": {"cleanMissionStatus": status, "bbrun": {"nStuck": 0}}}}
+
+    def test_running_marks_the_room_worked(self):
+        callback_ = self._cb()
+        callback_(self._msg("run"))
+        assert callback_.state.ran_in_room is True
+
+    def test_driving_does_not_mark_it_where_the_robot_says_so(self):
+        """operatingMode bit 0 is Traveling. A robot that reports it is
+        only driving has not worked anywhere yet."""
+        callback_ = self._cb()
+        callback_(self._msg("run", operating_mode=1))
+        assert callback_.state.ran_in_room is False
+        callback_(self._msg("run", operating_mode=0))
+        assert callback_.state.ran_in_room is True
+
+    def test_heading_home_does_not_mark_it(self):
+        callback_ = self._cb()
+        callback_.state.had_cleaning_phase = True
+        callback_.state.ran_in_room = False
+        callback_(self._msg("hmPostMsn"))
+        assert callback_.state.ran_in_room is False
+
+    def test_a_new_mission_starts_with_no_room_worked(self):
+        """A mission-start phase that is not `run` (hmMidMsn) must not
+        inherit the previous mission's flag."""
+        callback_ = self._cb()
+        callback_.state.ran_in_room = True
+        callback_.state.had_cleaning_phase = False
+        callback_(self._msg("hmMidMsn"))
+        assert callback_.state.had_cleaning_phase is True
+        assert callback_.state.ran_in_room is False
+
+    def test_arriving_in_the_next_room_starts_it_unworked(self):
+        """The room the tracker moves INTO has not been worked in yet --
+        the door-closed case depends on exactly this."""
+        advanced = []
+        mts = SimpleNamespace(
+            planned_rooms=["Kitchen", "Office"], current_room_idx=0,
+            time_in_current_room_sec=600.0, expected_room_sec=600.0,
+            advance_room=lambda *_a: advanced.append(1) or True,
+            current_room="Office",
+        )
+        ms = cb._MissionState()
+        ms.mission_start_ts = 1700000000
+        ms.cleaned_in_room = True
+        ms.ran_in_room = True
+        ms.last_phase = "run"
+        entry = MagicMock(entry_id="e", title="Roomba")
+        entry.runtime_data.robot_profile_store = None
+
+        cb._advance_room_on_drive_end(
+            ms, MagicMock(), entry, mts_upd=mts, returned_from_travel=False,
+            mission={"cycle": "clean", "error": 0}, phase="hmPostMsn",
+        )
+
+        assert advanced == [1]
+        assert ms.ran_in_room is False
+
+    def test_the_record_gets_the_rule(self, monkeypatch):
+        """End to end at the point where the record is written: the flag
+        reaches _observed_rooms, and the room behind the door stays out."""
+        captured = {}
+
+        def _record(*args, **kwargs):
+            captured.update(kwargs)
+            return MagicMock()
+
+        monkeypatch.setattr(cb, "async_record_mission", _record)
+        callback_ = self._cb()
+        ms = callback_.state
+        entry = SimpleNamespace(
+            runtime_data=SimpleNamespace(
+                mission_timer_store=SimpleNamespace(
+                    planned_rooms=["Kitchen", "Office"], current_room_idx=1,
+                    clear=lambda *_a: None,
+                ),
+                mission_store=None,
+            ),
+            async_create_task=lambda _hass, _coro, **_kw: None,
+            entry_id="e",
+        )
+        ms.had_cleaning_phase = True
+        ms.end_signal_streak = 99
+        ms.ran_in_room = False
+        cb._confirm_mission_end(
+            ms, MagicMock(), entry, end_gate_passes=True, looks_like_end=True,
+            mission={"phase": "charge", "cycle": "none", "error": 0},
+            phase="charge", reported={},
+        )
+        assert captured["observed_rooms"] == ["Kitchen"]
+        assert ms.ran_in_room is False, "reset for the next mission"

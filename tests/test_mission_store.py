@@ -4689,3 +4689,118 @@ async def test_a_mission_without_area_counts_for_duration_only(hass, monkeypatch
     ])
     assert len(stats["area"]) == 1
     assert [s["sum"] for s in stats["duration"]] == [25, 60]
+
+
+class TestMissionsMissingLocallyAreRecordedFromTheCloud:
+    """4.2.13. backfill_from_cloud() only enriches missions recorded
+    here. A mission lost to the 4.2.11/4.2.12 recording failure -- two
+    j7+ missions in a row -- stayed missing for good, and on Classic its
+    rooms with it, because the cloud's room events are merged INTO the
+    local record. adopt_missing_from_cloud() records such missions from
+    the cloud.
+    """
+
+    _NOW = 1_790_000_000
+
+    def _local(self, end):
+        from datetime import datetime, timezone
+
+        return {
+            "id": f"m_{end - 1800}",
+            "started_at": datetime.fromtimestamp(end - 1800, tz=timezone.utc).isoformat(),
+            "ended_at": datetime.fromtimestamp(end, tz=timezone.utc).isoformat(),
+            "duration_min": 30, "result": "completed",
+        }
+
+    def _cloud(self, end, **extra):
+        return {
+            "startTime": end - 1200, "timestamp": end, "done": "done",
+            "initiator": "localApp", "sqft": 180, "runM": 18,
+            "missionId": f"ULID{end}",
+            "timeline": {"finEvents": [{"type": "room", "room": {"rid": "4", "status": 1}}]},
+            **extra,
+        }
+
+    def _store(self, *ends):
+        store = MissionStore()
+        store._records = [self._local(e) for e in ends]
+        return store
+
+    def test_a_mission_with_no_local_record_is_recorded(self):
+        old = self._NOW - 86_400
+        lost = self._NOW - 3_600
+        store = self._store(old)
+
+        adopted = store.adopt_missing_from_cloud([self._cloud(lost)], now_ts=self._NOW)
+
+        assert adopted == 1
+        record = store.latest()
+        assert record["source"] == "cloud"
+        assert record["id"] == f"m_{lost - 1200}"
+        assert record["duration_min"] == 20
+        assert record["result"] == "completed"
+        assert record["initiator"] == "localApp"
+        assert record["area_sqft"] == 180
+        assert record["missionId"] == f"ULID{lost}"
+        assert record["timeline"]["finEvents"][0]["room"]["rid"] == "4", "its rooms come with it"
+        assert "zones" not in record and "bbrun_hr" not in record, "absent, not zero"
+
+    def test_a_mission_recorded_locally_is_not_recorded_twice(self):
+        end = self._NOW - 3_600
+        store = self._store(end)
+        assert store.adopt_missing_from_cloud([self._cloud(end + 90)], now_ts=self._NOW) == 0
+        assert len(store.records) == 1
+
+    def test_a_mission_that_just_ended_is_left_to_the_local_record(self):
+        """Its local record may still be on its way."""
+        store = self._store(self._NOW - 86_400)
+        fresh = self._cloud(self._NOW - 60)
+        assert store.adopt_missing_from_cloud([fresh], now_ts=self._NOW) == 0
+
+    def test_nothing_older_than_the_local_history_is_pulled_in(self):
+        """The first run must not import the robot's whole cloud history."""
+        store = self._store(self._NOW - 3_600)
+        ancient = self._cloud(self._NOW - 90 * 86_400)
+        assert store.adopt_missing_from_cloud([ancient], now_ts=self._NOW) == 0
+
+    def test_an_empty_store_adopts_nothing(self):
+        assert MissionStore().adopt_missing_from_cloud(
+            [self._cloud(self._NOW - 3_600)], now_ts=self._NOW
+        ) == 0
+
+    def test_an_adopted_older_mission_keeps_the_history_in_time_order(self):
+        newest = self._NOW - 600 - 3_600
+        store = self._store(self._NOW - 86_400, newest)
+        store.adopt_missing_from_cloud([self._cloud(self._NOW - 43_200)], now_ts=self._NOW)
+        ends = [r["ended_at"] for r in store.records]
+        assert ends == sorted(ends)
+        assert store.latest()["ended_at"] == self._local(newest)["ended_at"]
+
+    def test_outcomes_read_like_local_ones(self):
+        store = self._store(self._NOW - 86_400)
+        records = [
+            self._cloud(self._NOW - 20_000, done="stuck", pauseId=17),
+            self._cloud(self._NOW - 30_000, done="cncl", done_raw="usrEnd"),
+        ]
+        assert store.adopt_missing_from_cloud(records, now_ts=self._NOW) == 2
+        by_end = {r["ended_at"]: r for r in store.records if r.get("source") == "cloud"}
+        results = sorted((r["result"], r["error_code"]) for r in by_end.values())
+        assert results == [("cancelled", None), ("error", 17)]
+
+    def test_junk_and_local_fallback_records_are_skipped(self):
+        """raw_records can be the store's own records (CR3 fallback);
+        they carry no startTime and must not be adopted as new."""
+        store = self._store(self._NOW - 86_400)
+        junk = ["x", {"startTime": "a", "timestamp": 1}, {"timestamp": 5},
+                {"startTime": self._NOW - 3_000, "timestamp": self._NOW - 4_000},
+                self._local(self._NOW - 7_200)]
+        assert store.adopt_missing_from_cloud(junk, now_ts=self._NOW) == 0
+
+    def test_both_cloud_refresh_paths_adopt(self):
+        import inspect
+
+        import custom_components.roomba_plus as package
+        from custom_components.roomba_plus import callbacks
+
+        for module in (package, callbacks):
+            assert "adopt_missing_from_cloud(" in inspect.getsource(module), module.__name__

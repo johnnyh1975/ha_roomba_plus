@@ -138,15 +138,25 @@ _ROOM_TRANSITION_MIN_SECONDS: float = 60.0
 #: boundary crossing. Set under the shortest confirmed crossing.
 
 
-def _observed_rooms(entry: Any) -> list[str]:
-    """Rooms the tracker actually advanced through this mission.
+def _observed_rooms(entry: Any, last_room_worked: bool = True) -> list[str] | None:
+    """Rooms the tracker saw the robot work in this mission.
 
-    `planned_rooms[:current_room_idx + 1]` -- the current room included,
-    because reaching it means the robot worked there; advancing INTO a
-    room is what confirms the previous one finished.
+    Every room BEFORE the current one: advancing out of a room is what
+    confirms it finished. The current room only when `last_room_worked`
+    -- the robot ran there after arriving.
 
-    Empty when nothing was tracked, which the caller treats as "fall
-    back to the requested list" rather than "no rooms were cleaned".
+    REACHING A ROOM IS NOT WORKING IN IT (4.2.13). The current room was
+    always included, "because reaching it means the robot worked there".
+    But the tracker also advances on the phase the robot reports when it
+    heads home: a j7+ that found the second room's door closed went
+    home, the tracker moved to the room behind the door, and the mission
+    was recorded as having cleaned it. With a cloud account the cloud's
+    room events replace that a few minutes later; without one it stayed
+    in the room history for good.
+
+    None when nothing was tracked, which the caller treats as "fall back
+    to the requested list". An empty list means tracking ran and saw no
+    room worked in -- a mission that failed before cleaning anything.
     """
     try:
         store = getattr(
@@ -154,11 +164,11 @@ def _observed_rooms(entry: Any) -> list[str]:
         )
         planned = list(getattr(store, "planned_rooms", None) or [])
         if not planned:
-            return []
-        index = int(getattr(store, "current_room_idx", 0) or 0)
-        return planned[: max(0, min(index, len(planned) - 1)) + 1]
+            return None
+        index = max(0, min(int(getattr(store, "current_room_idx", 0) or 0), len(planned) - 1))
+        return planned[: index + 1] if last_room_worked else planned[:index]
     except Exception:  # noqa: BLE001
-        return []
+        return None
 
 
 def _remember_measured_room_time(
@@ -562,8 +572,8 @@ async def async_record_mission(
         mission:         cleanMissionStatus dict from the end-of-mission MQTT message.
         reported:        Full reported state dict from the same MQTT message.
         zones:           Zone names captured at mission START (not end).
-        observed_rooms:  Rooms the tracker advanced through -- what was
-                         actually worked in, where tracking ran.
+        observed_rooms:  Rooms the tracker saw worked in (_observed_rooms);
+                         None when tracking did not run.
         start_ts:        mssnStrtTm cached at mission START. The 980/900-series
                          firmware resets this field to 0 in the end MQTT message,
                          so it must be captured when the cleaning phase begins.
@@ -711,7 +721,7 @@ async def async_record_mission(
         # falls back to, so no new source is needed -- the timeline
         # still wins where it exists, because it reports real
         # completions with a status.
-        "last_cleaned_rooms": observed_rooms or zones,
+        "last_cleaned_rooms": observed_rooms if observed_rooms is not None else zones,
         "error_code": error_code if error_code else None,
         "bbrun_hr": bbrun_hr,
         "battery_cycles": battery_cycles,   # v2.9.0 DAILY-DIGEST
@@ -984,6 +994,13 @@ class _MissionState:
     #: Whether a working mode has been seen since the current room
     #: was entered; see the note in the advance block.
     cleaned_in_room: bool = False
+    #: Whether the robot has RUN since the current room was entered --
+    #: travelling excluded where the robot reports it, counted where it
+    #: does not (Braava). Decides whether the last room reached goes
+    #: into the mission record (_observed_rooms, 4.2.13). Separate from
+    #: `cleaned_in_room`, which needs the travel bit and would drop the
+    #: last room on every robot that does not send it.
+    ran_in_room: bool = False
     travel_started_at: float | None = None
     current_mission_zones: list[str] = dataclasses.field(default_factory=list)
     mission_start_ts: int = 0
@@ -1144,6 +1161,7 @@ def _handle_mission_start(
         ms.had_cleaning_phase = True
         ms.current_mission_zones = _capture_zone_names(entry, reported)
         ms.mission_start_ts = candidate_mission_start_ts
+        ms.ran_in_room = False
         bbrun = _merged_top_level(entry, reported, "bbrun")
         ms.nstuck_at_start = bbrun.get("nStuck", 0)
         ms.npicks_at_start = bbrun.get("nPicks", 0)
@@ -1647,7 +1665,7 @@ def _confirm_mission_end(
                 result_override = "stuck_and_abandoned"
 
         entry.async_create_task(
-            hass, async_record_mission(hass, entry, mission, reported, list(ms.current_mission_zones), observed_rooms=_observed_rooms(entry), start_ts=ms.mission_start_ts, nstuck_delta=nstuck_delta, mission_error_code=ms.mission_error_code, recharge_min=ms.recharge_min_accumulator + ms.current_leg_rechrgM, result_override=result_override, npicks_delta=npicks_delta)
+            hass, async_record_mission(hass, entry, mission, reported, list(ms.current_mission_zones), observed_rooms=_observed_rooms(entry, last_room_worked=ms.ran_in_room), start_ts=ms.mission_start_ts, nstuck_delta=nstuck_delta, mission_error_code=ms.mission_error_code, recharge_min=ms.recharge_min_accumulator + ms.current_leg_rechrgM, result_override=result_override, npicks_delta=npicks_delta)
         )
         # MP1 (v2.6.0): clear mission timer at end
         _mts = getattr(entry.runtime_data, "mission_timer_store", None)
@@ -1656,6 +1674,7 @@ def _confirm_mission_end(
 
         ms.current_mission_zones = []
         ms.mission_start_ts = 0
+        ms.ran_in_room = False
         ms.nstuck_at_start = 0
         ms.npicks_at_start = 0   # v3.2.0 bug-hunt fix — was missing here,
                                # inconsistent with nstuck_at_start's
@@ -1754,6 +1773,7 @@ def _advance_room_on_drive_end(
                 )
                 # The new room has not been cleaned yet.
                 ms.cleaned_in_room = False
+                ms.ran_in_room = False
                 _LOGGER.info(
                     "AUTO-ADVANCE-ROOM: advanced to room %d/%d (%s) "
                     "on phase=%s confidence signal",
@@ -2418,6 +2438,10 @@ def make_mission_callback(
         # generations report `phase` and the travel bit the same way.
         if phase == "run" and _travelling is False:
             ms.cleaned_in_room = True
+        # For the mission record: run counts unless the robot says it is
+        # only driving -- see `_MissionState.ran_in_room`.
+        if phase == "run" and _travelling is not True:
+            ms.ran_in_room = True
 
         if isinstance(_travelling, bool):
             ms.was_travelling = _travelling
@@ -3367,7 +3391,10 @@ def make_cloud_refresh_callback(
         if ms is None:
             return
         _bf = ms.backfill_from_cloud(cloud_coordinator.raw_records)
-        if _bf.corrected or _bf.enriched:
+        # And the missions that were never recorded here (4.2.13) --
+        # after backfill, so a mission recorded locally is paired first.
+        _adopted = ms.adopt_missing_from_cloud(cloud_coordinator.raw_records)
+        if _bf.corrected or _bf.enriched or _adopted:
             config_entry.async_create_task(
                 hass, ms.async_save(hass, config_entry.entry_id), name='roomba_plus_cloud_merge_save'
             )

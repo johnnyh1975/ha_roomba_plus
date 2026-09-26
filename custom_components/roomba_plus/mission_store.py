@@ -25,6 +25,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
+from .cloud_coordinator import classify_mission_result
 from .const import ROOM_EVENT_DONE_STATUSES, room_event_was_cleaned
 from .const import extract_region_id, SQFT_TO_M2
 
@@ -47,6 +48,31 @@ _SEGMENT_SUFFIX_RE = re.compile(r"_r\d+$")
 # segment resume happens after minutes of charging. Mirrors callbacks.py's
 # _CLOUD_CATCHUP_MISSION_MATCH_SEC (120 s).
 _MISSION_REPLAY_MATCH_SEC = 120
+
+#: How long after it ended a cloud mission may be recorded from the cloud
+#: (adopt_missing_from_cloud). Its local record is written when the robot
+#: reports the end, at the latest by the stuck-end recheck a few minutes
+#: later; ten minutes is past that and before the post-mission cloud
+#: catch-up gives up (CLOUD_CATCHUP_*, 690 s).
+ADOPT_SETTLE_SEC = 600
+
+
+def _adopted_result(cloud: dict[str, Any]) -> tuple[str, int | None]:
+    """A cloud mission's outcome in the words a local record uses.
+
+    classify_mission_result() is finer ("cancelled_by_user", "error_17");
+    the store understands both, but a mission recorded from the cloud
+    should read like the ones recorded here.
+    """
+    classified = classify_mission_result(cloud)
+    if classified.startswith("error_"):
+        try:
+            return "error", int(classified.removeprefix("error_"))
+        except ValueError:
+            return "error", None
+    if classified in ("cancelled", "cancelled_by_user"):
+        return "cancelled", None
+    return classified, None
 
 _TERMINAL_REPLAY_IMMUTABLE_FIELDS = frozenset({
     "id", "started_at", "ended_at", "duration_min", "initiator", "result",
@@ -1963,6 +1989,98 @@ class MissionStore:
                 corrected, enriched,
             )
         return BackfillResult(corrected=corrected, enriched=enriched)
+
+    def adopt_missing_from_cloud(
+        self,
+        cloud_records: list[dict[str, Any]],
+        *,
+        now_ts: float | None = None,
+        tolerance_sec: int = 120,
+        settle_sec: int = ADOPT_SETTLE_SEC,
+    ) -> int:
+        """Record the cloud's missions that were never recorded here.
+
+        WHY (4.2.13). backfill_from_cloud() only enriches missions that
+        were recorded locally. A mission with no local record -- lost to
+        the 4.2.11/4.2.12 recording failure, to a restart mid-mission, to
+        Home Assistant being down when the robot finished -- stayed
+        missing for good, and on Classic its rooms with it: the cloud's
+        room events are merged INTO the local record, so without one they
+        had nowhere to go. Two j7+ missions in a row, both lost, left the
+        room history empty. Prime reconciles its history this way already
+        (prime_mission_sync); Classic did not.
+
+        WHICH ONES:
+          - ended no earlier than the oldest local record, so the first
+            run does not pull in the robot's whole cloud history
+          - ended at least `settle_sec` ago, so a mission whose local
+            record is still being written is not recorded twice
+          - with no local record ending within `tolerance_sec`, the same
+            pairing backfill_from_cloud() uses
+
+        WHAT THEY CARRY: the fields the cloud has, merged exactly as
+        backfill merges them -- timeline included, so their rooms come
+        from the cloud's room events. `source` is "cloud". Fields only a
+        live mission produces (zones, bbrun_hr, error position) stay
+        absent rather than zero, as on Prime. No completion event is
+        fired: an automation must not run hours after the fact.
+
+        Returns the number recorded. Does not save.
+        """
+        if not cloud_records or not self._records:
+            return 0
+        local_ends: list[float] = []
+        for local in self._records:
+            parsed = dt_util.parse_datetime(str(local.get("ended_at") or ""))
+            if parsed is not None:
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+                local_ends.append(parsed.timestamp())
+        if not local_ends:
+            return 0
+        horizon = min(local_ends)
+        now = datetime.now(timezone.utc).timestamp() if now_ts is None else now_ts
+
+        adopted = 0
+        for cloud in cloud_records:
+            if not isinstance(cloud, dict):
+                continue
+            try:
+                start = int(cloud["startTime"])
+                end = int(cloud["timestamp"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if end < start or end < horizon or now - end < settle_sec:
+                continue
+            if any(abs(end - known) <= tolerance_sec for known in local_ends):
+                continue
+            result, error_code = _adopted_result(cloud)
+            record: dict[str, Any] = {
+                "id": f"m_{start}",
+                "started_at": datetime.fromtimestamp(start, tz=timezone.utc).isoformat(),
+                "ended_at": datetime.fromtimestamp(end, tz=timezone.utc).isoformat(),
+                "duration_min": max(0, round((end - start) / 60)),
+                "area_sqft": None,
+                "result": result,
+                "initiator": cloud.get("initiator") or "none",
+                "error_code": error_code,
+                "source": "cloud",
+            }
+            self._merge_cloud_fields(record, cloud)
+            self._backfill_area_sqft(record)
+            if not self.append_validated(record):
+                continue
+            local_ends.append(float(end))
+            adopted += 1
+            _LOGGER.info(
+                "MissionStore: recorded mission %s from the cloud -- it ended "
+                "without a local record", record["id"],
+            )
+        if adopted:
+            # IN TIME ORDER. latest() is the last element, and an adopted
+            # mission can be older than one recorded since.
+            self._records.sort(key=lambda r: str(r.get("ended_at") or ""))
+        return adopted
 
     def merge_latest_from_cloud(
         self,
