@@ -83,8 +83,163 @@ def pytest_configure(config):
         setattr(shim_mod, cls_name, cls)
         sys.modules[full_name] = shim_mod
 
+    # Speed only, no behaviour: see each function.
+    _parse_each_source_once()
+    _scan_new_fixtures_only()
 
-import pytest
+
+import pytest  # noqa: E402  (after pytest_configure, which needs none of it)
+
+
+# ── Test-suite speed (4.3.0b2) ─────────────────────────────────────────────
+#
+# The suite took nearly four minutes on GitHub. Two costs had nothing to
+# do with what the tests check; both are removed here, the rest by
+# running the suite on every CPU (`-n auto` in the workflows).
+
+#: Directories whose own `ast.parse` calls may share one tree per source.
+_PARSE_CACHE_ROOTS = ("tests", "scripts")
+
+#: {source: tree} handed out by the cached `ast.parse`, and
+#: {source: fingerprint of the tree as parsed}. Module level,
+#: so the session check below can see them.
+_PARSED_TREES: dict = {}
+_FINGERPRINTS: dict = {}
+
+
+def _tree_fingerprint(tree) -> bytes:
+    """Every field, position and attribute of every node. A pickle
+    carries each node's whole `__dict__`, so an attribute added later
+    (a parent link) changes it as much as a changed field does. About
+    ten times cheaper than comparing `ast.dump` output."""
+    import hashlib
+    import pickle
+
+    return hashlib.blake2b(pickle.dumps(tree, protocol=5)).digest()
+
+
+def _parse_each_source_once() -> None:
+    """The guard tests parsed the same files about 6500 times.
+
+    Measured on the full suite: 6506 `ast.parse` calls, 364 distinct
+    sources, 23 s of a 99 s run. Each guard reads the whole package and
+    parses it again, and there are dozens of guards.
+
+    A tree is cached per source text, and ONLY FOR CALLS MADE FROM
+    tests/ AND scripts/. Everyone else gets a fresh tree: pytest and
+    coverage.py parse sources too (pytest's assertion rewriter even
+    changes its tree in place), and none of that was checked for
+    whether it may share.
+
+    The trees handed out are shared, so our own code must not change
+    them. `_cached_trees_are_unchanged` below fails the run if one did.
+    """
+    import ast
+    import os
+    import sys
+
+    if getattr(ast.parse, "_roomba_plus_cached", False):
+        return
+    here = os.path.dirname(os.path.abspath(__file__))
+    roots = tuple(
+        os.path.join(os.path.dirname(here), name) + os.sep for name in _PARSE_CACHE_ROOTS
+    )
+    parse = ast.parse
+    trees = _PARSED_TREES
+
+    def cached_parse(source, filename="<unknown>", mode="exec", *args, **kwargs):
+        caller = sys._getframe(1).f_code.co_filename
+        if (
+            args
+            or set(kwargs) - {"filename"}
+            or mode != "exec"
+            or not isinstance(source, (str, bytes))
+            or not os.path.abspath(caller).startswith(roots)
+        ):
+            return parse(source, filename, mode, *args, **kwargs)
+        tree = trees.get(source)
+        if tree is None:
+            tree = trees[source] = parse(source, kwargs.get("filename", filename), mode)
+            _FINGERPRINTS[source] = _tree_fingerprint(tree)
+        return tree
+
+    cached_parse._roomba_plus_cached = True  # type: ignore[attr-defined]
+    ast.parse = cached_parse
+
+
+def _changed_cached_trees(only: "list | None" = None) -> list[str]:
+    """Cached trees that no longer match their source: a node changed
+    (fields or positions), or an attribute was added to one (the usual
+    way to add parent links). The first lines of each, for the report.
+    `only` limits the check to those sources."""
+    changed = []
+    for source, tree in list(_PARSED_TREES.items()):
+        if only is not None and source not in only:
+            continue
+        if _tree_fingerprint(tree) != _FINGERPRINTS.get(source):
+            text = source.decode(errors="replace") if isinstance(source, bytes) else source
+            changed.append(text.strip().splitlines()[0][:80] if text.strip() else "<empty>")
+    return changed
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _cached_trees_are_unchanged():
+    """At the end of the run (of each xdist worker): every tree handed
+    out by the cached `ast.parse` still matches its source. A test that
+    changed one would have changed it for every later test parsing the
+    same file. Reported as an error at teardown, which fails the run."""
+    yield
+    changed = _changed_cached_trees()
+    assert not changed, (
+        "A test or script changed a tree from ast.parse, which conftest.py "
+        f"shares between all callers. Parse a private copy instead. First lines: {changed}"
+    )
+
+
+def _scan_new_fixtures_only() -> None:
+    """pytest-asyncio 0.26 looked at every fixture once per test.
+
+    Before collecting each test function it walks every fixture pytest
+    knows -- Home Assistant's plugin brings hundreds -- and asks of each
+    whether it is async. A synchronous fixture is never marked as done,
+    so it is asked again for the next test: 7.9 million checks for
+    8500 tests, 15 of the 25 s that collection took on the HA 2025.5
+    job. pytest-asyncio 1.x no longer does this; HA 2025.5 pins 0.26.
+
+    The scan only has something to do after new fixtures were
+    registered, so it is skipped while the number of fixtures is
+    unchanged. Registering is the only way pytest changes that number.
+    Only 0.26 is patched: the wrapped function is internal, and this
+    is the version checked against.
+    """
+    try:
+        import pytest_asyncio
+        from pytest_asyncio import plugin
+    except ImportError:
+        return
+    if not str(getattr(pytest_asyncio, "__version__", "")).startswith("0.26."):
+        return
+    scan = getattr(plugin, "_preprocess_async_fixtures", None)
+    if scan is None or getattr(scan, "_roomba_plus_cached", False):
+        return
+    seen: dict[int, int] = {}
+
+    def scan_when_new(collector, processed_fixturedefs):
+        manager = collector.config.pluginmanager.get_plugin("funcmanage")
+        known = getattr(manager, "_arg2fixturedefs", None)
+        if known is None:
+            return scan(collector, processed_fixturedefs)
+        count = sum(map(len, known.values()))
+        if seen.get(id(manager)) == count:
+            return None
+        scan(collector, processed_fixturedefs)
+        seen[id(manager)] = count
+        return None
+
+    scan_when_new._roomba_plus_cached = True  # type: ignore[attr-defined]
+    plugin._preprocess_async_fixtures = scan_when_new
+
+
 from unittest.mock import MagicMock  # noqa: F401  (used in annotations)
 
 
@@ -130,6 +285,13 @@ from unittest.mock import MagicMock  # noqa: F401  (used in annotations)
 def enable_event_loop_debug():  # noqa: PT004
     """Neutralise the plugin's async autouse fixture. See note above."""
     return None
+
+
+#: Where the hand-made hass stubs keep their stores: one directory per
+#: process, so parallel workers (`-n auto`) do not share files.
+TEST_CONFIG_DIR = __import__("os").path.join(
+    __import__("tempfile").gettempdir(), f"roomba_plus_test_{__import__('os').getpid()}"
+)
 
 
 def robot_mock(**attrs: object) -> "MagicMock":

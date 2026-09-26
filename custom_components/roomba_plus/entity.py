@@ -15,7 +15,7 @@ from homeassistant.helpers.entity import Entity
 
 from . import roomba_reported_state
 from .availability import is_locally_available, local_availability_signal
-from .const import DOMAIN, maintenance_changed_signal
+from .const import DOMAIN, maintenance_changed_signal, mission_store_changed_signal
 
 if TYPE_CHECKING:
     from .models import RoombaConfigEntry
@@ -376,6 +376,17 @@ class IRobotEntity(Entity):
                 self._on_maintenance_changed,
             )
         )
+        # MISSION RECORDS CHANGED OUTSIDE A ROBOT MESSAGE (4.2.14): the
+        # cloud's room events and results merged in after a mission. Same
+        # reasoning as maintenance: every entity re-renders from its
+        # stores, and it happens a few times a day at most.
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass,
+                mission_store_changed_signal(self._blid),
+                self._on_maintenance_changed,
+            )
+        )
         # Patch DeviceInfo and the live DeviceRegistry entry
         await self._async_update_device_name()
         # Force a state write so sensors don't show 'unavailable' on first render
@@ -383,7 +394,8 @@ class IRobotEntity(Entity):
 
     @callback
     def _on_maintenance_changed(self) -> None:
-        """Re-render from the stores after a maintenance reset."""
+        """Re-render from the stores after a maintenance reset or a
+        cloud merge into the mission records."""
         self.async_write_ha_state()
 
     @callback

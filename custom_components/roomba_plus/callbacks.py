@@ -23,11 +23,13 @@ from typing import TYPE_CHECKING, Any
 from homeassistant.util import dt as dt_util
 from homeassistant.helpers.event import async_call_later
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 
 from .const import (
     ROOM_EVENT_CLOSED_AT_END_STATUSES,
     ROOM_EVENT_DONE_STATUSES,
     ROOM_EVENT_PASS_DONE_STATUSES,
+    mission_store_changed_signal,
 )
 from .const import CLEANING_PHASES, CONF_BLID, CONF_CORRELATION_ENTITIES, CONF_SMART_ZONE_DATA, END_SIGNAL_DEBOUNCE_COUNT, END_SIGNAL_MIN_HOLD_SECONDS, EVENT_MAP_RETRAIN_COMPLETED, EVENT_MAP_RETRAIN_STARTED, EVENT_MISSION_COMPLETED, EVENT_ROOM_COMPLETED, POSE_POINT_CM_TO_MM, ROOM_TRANSITION_CANDIDATE_PHASES, UNVISITED_ROOMS_MAX_SUPPRESSION_SECONDS, active_charge_cycles, estcap_to_mah
 from .map_renderer import ROBOT_DIAMETER_MM_ISJ_SERIES
@@ -3370,6 +3372,25 @@ async def _async_update_gs_smart_coverage(
         await gs.async_save(hass, entry.entry_id)
 
 
+def entry_created_ts(config_entry: Any) -> float | None:
+    """When this config entry was created, as a Unix time -- the earliest
+    a mission can have been lost by this integration (4.2.14). None when
+    the entry has no real creation time (a test double, for instance:
+    a mock's `timestamp()` would be a number near 1970 and import the
+    robot's whole cloud history).
+
+    Home Assistant gave entries created before it tracked this the time
+    of that storage upgrade, and a removed and re-added entry starts
+    again. Both only make the window shorter, never wider."""
+    created = getattr(config_entry, "created_at", None)
+    if not isinstance(created, datetime.datetime):
+        return None
+    try:
+        return created.timestamp()
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
 def make_cloud_refresh_callback(
     hass: HomeAssistant,
     config_entry: "RoombaConfigEntry",
@@ -3393,10 +3414,21 @@ def make_cloud_refresh_callback(
         _bf = ms.backfill_from_cloud(cloud_coordinator.raw_records)
         # And the missions that were never recorded here (4.2.13) --
         # after backfill, so a mission recorded locally is paired first.
-        _adopted = ms.adopt_missing_from_cloud(cloud_coordinator.raw_records)
-        if _bf.corrected or _bf.enriched or _adopted:
+        _adopted = ms.adopt_missing_from_cloud(
+            cloud_coordinator.raw_records, since_ts=entry_created_ts(config_entry)
+        )
+        # The cloud's rooms into the records' stored field (4.2.14).
+        _rooms = ms.store_rooms_from_timelines(
+            region_names_across_maps(cloud_coordinator),
+            getattr(cloud_coordinator, "regions_by_pmap", None),
+        )
+        if _bf.corrected or _bf.enriched or _adopted or _rooms:
             config_entry.async_create_task(
                 hass, ms.async_save(hass, config_entry.entry_id), name='roomba_plus_cloud_merge_save'
+            )
+            # And show it now, not at the robot's next message (4.2.14).
+            async_dispatcher_send(
+                hass, mission_store_changed_signal(config_entry.data[CONF_BLID])
             )
         _dtm = config_entry.runtime_data.dirt_threshold_manager
         if _dtm is not None:

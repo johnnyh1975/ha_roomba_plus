@@ -337,14 +337,15 @@ class TestLiveEntitiesListenForTheSignal:
 
         verbunden, e = await self._added(hass, RoombaMissionActive, monkeypatch)
 
-        from custom_components.roomba_plus.const import maintenance_changed_signal
+        from custom_components.roomba_plus.const import maintenance_changed_signal, mission_store_changed_signal
 
-        # The availability signal, plus the maintenance signal every entity
-        # of the robot listens to (a reset re-renders them all).
-        assert verbunden == [av.local_availability_signal(BLID), maintenance_changed_signal(BLID)]
+        # The availability signal, plus the two store signals every entity
+        # of the robot listens to (a reset or a cloud merge re-renders them all).
+        assert verbunden == [av.local_availability_signal(BLID), maintenance_changed_signal(BLID),
+                            mission_store_changed_signal(BLID)]
         # One removal per subscription, plus the message callback
         # (entity-event-setup).
-        assert e.async_on_remove.call_count == 3
+        assert e.async_on_remove.call_count == 4
 
     @pytest.mark.asyncio
     async def test_a_non_live_entity_does_not(self, hass, monkeypatch):
@@ -352,11 +353,12 @@ class TestLiveEntitiesListenForTheSignal:
 
         verbunden, _e = await self._added(hass, RoombaMaintenanceDue, monkeypatch)
 
-        from custom_components.roomba_plus.const import maintenance_changed_signal
+        from custom_components.roomba_plus.const import maintenance_changed_signal, mission_store_changed_signal
 
-        # Not the availability signal -- only the maintenance one, which
+        # Not the availability signal -- only the two store signals, which
         # every entity of the robot listens to.
-        assert verbunden == [maintenance_changed_signal(BLID)]
+        assert verbunden == [maintenance_changed_signal(BLID),
+                            mission_store_changed_signal(BLID)]
 
     def test_the_signal_makes_the_entity_re_render(self):
         from custom_components.roomba_plus.binary_sensor import RoombaMissionActive

@@ -769,3 +769,48 @@ def test_every_runtime_followed_target_has_its_test() -> None:
     text = "".join(p.read_text(encoding="utf-8") for p in tests.glob("test_*.py"))
     for test_name in _FOLLOWED_AT_RUNTIME.values():
         assert f"def {test_name}(" in text, test_name
+
+
+# ── the parse cache in conftest.py (4.3.0b2) ─────────────────────────────────
+
+
+def test_the_parse_cache_is_scoped_to_our_own_calls() -> None:
+    """Our calls share a tree; a call from anywhere else gets its own.
+    pytest and coverage.py parse sources too, and pytest's assertion
+    rewriter changes its tree in place."""
+    import ast
+
+    source = "x = 1  # the parse cache is scoped\n"
+    assert ast.parse(source) is ast.parse(source)
+    elsewhere = {"__name__": "elsewhere"}
+    exec(compile("import ast\ndef p(s): return ast.parse(s)", "/elsewhere/mod.py", "exec"), elsewhere)
+    assert elsewhere["p"](source) is not elsewhere["p"](source)
+
+
+@_pytest.mark.parametrize(
+    "change",
+    [
+        "tree.body[0].targets[0].id = 'y'",               # a field
+        "tree.body[0].lineno = 99",                        # a position
+        "tree.body[0].value.parent = tree.body[0]",        # an added attribute
+        "tree.body.append(ast.Pass())",                    # a list changed in place
+    ],
+)
+def test_a_changed_cached_tree_is_found(change: str) -> None:
+    """Counter-check for the session check in conftest.py. The tree is
+    taken out of the cache afterwards, or the check would fail the run
+    it is part of."""
+    import ast
+    import uuid
+
+    from tests import conftest
+
+    source = f"x = 1  # {uuid.uuid4()}\n"
+    tree = ast.parse(source)
+    try:
+        assert conftest._changed_cached_trees([source]) == []
+        exec(change, {"tree": tree, "ast": ast})
+        assert conftest._changed_cached_trees([source]) == [source.strip()[:80]]
+    finally:
+        del conftest._PARSED_TREES[source]
+        del conftest._FINGERPRINTS[source]

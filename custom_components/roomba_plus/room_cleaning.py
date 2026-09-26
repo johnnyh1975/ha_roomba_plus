@@ -2786,18 +2786,56 @@ def resolve_user_pmapv_id(
     and the repeat-last-mission button never asked it at all. On
     @cburrell16's robot all four sent the same wrong version (#183).
 
-    1. The cloud's committed version of THIS map -- the version the
-       iRobot app itself uses (committed_pmapv_id; which field, and why
-       the order changed: pmap_committed_version).
-    2. Without it, what the robot and the app have used for this map:
-       see _resolve_pmapv_id.
+    1. The version the app stored for this map, in a favourite or a
+       schedule (4.2.14). The one source right in every report so far:
+       @cburrell16's favourites (#183), @FJSoninC's j7+ and
+       @ScenicSystemsLLC's two S9+ -- and the app keeps it current,
+       since its own favourites run on it.
+    2. The cloud's committed version of THIS map (committed_pmapv_id;
+       which field, and why never the robot's own: pmap_committed_version).
+    3. Without cloud data, what the robot and the app have used for this
+       map: see _resolve_pmapv_id.
+
+    NOT THE VERSION THAT JUST FAILED. A favourite or schedule can predate
+    a map edit, and step 1 would then win on every attempt. When the
+    robot's last command for this map ended in error 224, its version is
+    passed over for the next source that differs -- so one failed clean
+    is enough for the next one to try something else. Only when every
+    source gives the failed version is it sent again: nothing better is
+    known.
     """
     if not pmap_id:
         return None
     favorites = cloud_data.get("favorites") if isinstance(cloud_data, dict) else None
-    return committed_pmapv_id(cloud_data, pmap_id) or _resolve_pmapv_id(
-        state, pmap_id, favorites=favorites
+    failed = _version_that_failed(state, pmap_id)
+    candidates = (
+        ("app favourite/schedule", _app_stored_pmapv_id(state, pmap_id, favorites)),
+        ("cloud map", committed_pmapv_id(cloud_data, pmap_id)),
+        ("robot state", _resolve_pmapv_id(state, pmap_id, favorites=favorites)),
     )
+    found = [(source, value) for source, value in candidates if value]
+    if not found:
+        return None
+    source, value = next(
+        ((s, v) for s, v in found if v != failed), found[0]
+    )
+    _LOGGER.debug(
+        "Map %s: version %s from %s%s", pmap_id, value, source,
+        f" (passed over {failed}, which failed with error 224)"
+        if failed and failed != value else "",
+    )
+    return value
+
+
+def _version_that_failed(state: dict[str, Any], pmap_id: str) -> str | None:
+    """The version of `pmap_id` the robot's last command carried, if that
+    command ended in error 224; otherwise None."""
+    if (state.get("cleanMissionStatus") or {}).get("error") != _ERROR_LOCALIZATION_FAILED:
+        return None
+    last = state.get("lastCommand") or {}
+    if last.get("pmap_id") != pmap_id or not last.get("user_pmapv_id"):
+        return None
+    return str(last["user_pmapv_id"])
 
 
 def cloud_data_of(entry: Any) -> Any:

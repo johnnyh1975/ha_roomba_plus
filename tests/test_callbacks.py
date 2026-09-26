@@ -23,7 +23,7 @@ from custom_components.roomba_plus.callbacks import make_mission_callback
 from custom_components.roomba_plus.callbacks import make_mission_complete_callback
 from custom_components.roomba_plus.const import CLEANING_PHASES
 from custom_components.roomba_plus.const import MISSION_END_PHASES
-from tests.conftest import hass_mock, entry_mock
+from tests.conftest import TEST_CONFIG_DIR, hass_mock, entry_mock
 
 
 @contextmanager
@@ -94,7 +94,7 @@ def _make_hass(loop=None):
     """Minimal hass stub."""
     class _FakeHass:
         class _FakeConfig:
-            config_dir = "/tmp/roomba_plus_test"
+            config_dir = TEST_CONFIG_DIR
             components: set = set()
             def path(self, *parts: str) -> str:
                 import os as _os
@@ -5697,3 +5697,78 @@ class TestAReachedRoomIsNotACleanedRoom:
         )
         assert captured["observed_rooms"] == ["Kitchen"]
         assert ms.ran_in_room is False, "reset for the next mission"
+
+
+class TestTheCloudMergeIsShownAtOnce:
+    """4.2.14, @FJSoninC: after the cloud's room events came in, the room
+    history and the last mission summary kept the pre-merge rooms until a
+    manual refresh -- they re-render on robot messages, and a docked
+    robot may send none for hours."""
+
+    def _run(self, *, changed: bool):
+        from datetime import datetime, timezone
+
+        from custom_components.roomba_plus import callbacks as cb
+
+        hass = hass_mock()
+        config_entry = entry_mock(schedule_on=hass)
+        config_entry.entry_id = "test_entry"
+        config_entry.data = {"blid": "BLID9"}
+        config_entry.created_at = datetime(2026, 9, 20, tzinfo=timezone.utc)
+        rd = config_entry.runtime_data
+        rd.mission_store = MagicMock()
+        rd.mission_store.backfill_from_cloud.return_value = MagicMock(corrected=0, enriched=0)
+        rd.mission_store.adopt_missing_from_cloud.return_value = 0
+        rd.mission_store.store_rooms_from_timelines.return_value = 1 if changed else 0
+        rd.dirt_threshold_manager = None
+        rd.grid_store = None
+        rd.robot_profile_store = None
+        cc = MagicMock()
+        cc.last_update_success = True
+        cc.umf_data = {}
+        with patch.object(cb, "async_dispatcher_send") as send, \
+             patch.object(cb, "region_names_across_maps", return_value={"6": "Office"}):
+            cb.make_cloud_refresh_callback(hass, config_entry, cc)()
+        return send, rd.mission_store, config_entry
+
+    def test_a_change_re_renders_the_robots_entities(self):
+        from custom_components.roomba_plus.const import mission_store_changed_signal
+
+        send, store, entry = self._run(changed=True)
+        send.assert_called_once()
+        assert send.call_args.args[1] == mission_store_changed_signal("BLID9")
+        store.store_rooms_from_timelines.assert_called_once()
+        assert store.adopt_missing_from_cloud.call_args.kwargs["since_ts"] == entry.created_at.timestamp()
+
+    def test_no_change_no_signal(self):
+        send, _store, _entry = self._run(changed=False)
+        send.assert_not_called()
+
+    def test_a_mock_entry_has_no_creation_time(self):
+        """A mock's timestamp() would be a number near 1970 -- a floor that
+        imports the whole cloud history."""
+        from datetime import datetime, timezone
+
+        from custom_components.roomba_plus.callbacks import entry_created_ts
+
+        assert entry_created_ts(MagicMock()) is None
+        assert entry_created_ts(object()) is None
+        entry = MagicMock()
+        entry.created_at = datetime(2026, 9, 20, tzinfo=timezone.utc)
+        assert entry_created_ts(entry) == entry.created_at.timestamp()
+
+    def test_setup_also_writes_the_cloud_rooms(self):
+        import inspect
+
+        import custom_components.roomba_plus as integration
+
+        source = inspect.getsource(integration._phase_cloud)
+        assert "store_rooms_from_timelines(" in source
+        assert "or _rooms:" in source
+
+    def test_every_entity_listens(self):
+        import inspect
+
+        from custom_components.roomba_plus import entity
+
+        assert "mission_store_changed_signal(self._blid)" in inspect.getsource(entity.IRobotEntity)
