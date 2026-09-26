@@ -2872,6 +2872,19 @@ class TestPeriodicStuckMissionRecheck:
             return clock[0]
         return clock, _fake_monotonic
 
+    def test_the_stuck_end_recheck_runs_on_the_loop(self):
+        """4.2.13. Home Assistant runs a timer target on the event loop
+        only when it is a coroutine or a @callback; a plain function goes
+        to the thread pool. From there `entry.async_create_task` raised
+        "is not the running loop" and the mission the recheck closed was
+        never recorded. HA's own HassJob says where it will run."""
+        from homeassistant.core import HassJob, HassJobType
+
+        mts = _make_mts_v280_inter_room_recharge()
+        cb = make_mission_callback(MagicMock(), _make_entry(mts))
+
+        assert HassJob(cb.recheck_stuck_end_state).job_type is HassJobType.Callback
+
     def test_noop_when_no_mission_active(self):
         """No mission currently held open — must not even touch
         roomba_reported_state(), let alone crash."""

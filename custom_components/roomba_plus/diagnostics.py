@@ -30,8 +30,27 @@ from .const import (
 )
 from .models import ConnectionType, RoombaConfigEntry
 from .binary_sensor import _prime_reports_tank
+from .cloud_coordinator import pmap_record_id, pmap_version_report
+from .room_cleaning import resolve_user_pmapv_id
 
 _CLOUD_REDACT = DIAG_REDACT_KEYS | {"irobot_username", "irobot_password"}
+
+
+def _room_command_versions(data: Any, state: dict[str, Any]) -> dict[str, Any]:
+    """{pmap_id: version a room command would carry} for every known map."""
+    coordinator = getattr(data, "cloud_coordinator", None)
+    cloud_data = getattr(coordinator, "data", None)
+    if not isinstance(cloud_data, dict):
+        cloud_data = None
+    map_ids = [
+        str(next(iter(p))) for p in state.get("pmaps") or [] if isinstance(p, dict) and p
+    ]
+    for pmap in (cloud_data or {}).get("pmaps") or []:
+        if isinstance(pmap, dict):
+            pid = pmap_record_id(pmap)
+            if pid and pid not in map_ids:
+                map_ids.append(pid)
+    return {pid: resolve_user_pmapv_id(state, cloud_data, pid) for pid in map_ids}
 
 
 def _cloud_diag(data: Any) -> dict[str, Any]:
@@ -78,6 +97,27 @@ def _cloud_diag(data: Any) -> dict[str, Any]:
             }
             for pm in (cc.data.get("pmaps") or [])
             if isinstance(pm, dict)
+        ]
+
+        # EVERY VERSION FIELD OF EVERY MAP (4.2.13, #183). A room command
+        # carries one version of its map, and the cloud record holds
+        # several -- the active one, the last one the user made, the
+        # robot's own. Which of them the app uses could not be read from
+        # this file, so "the wrong version was sent" could not be checked
+        # against the right one. Map ids and version stamps only.
+        result["pmap_versions"] = pmap_version_report(cc.data)
+        # And the version each favourite carries -- favourites run with
+        # it unchanged, so a favourite that works names a version the
+        # robot accepts.
+        result["favorite_map_versions"] = [
+            {"pmap_id": pmap_id, "user_pmapv_id": version}
+            for pmap_id, version in sorted({
+                (str(cmd.get("pmap_id")), str(cmd.get("user_pmapv_id")))
+                for fav in (cc.data.get("favorites") or [])
+                if isinstance(fav, dict)
+                for cmd in (fav.get("commanddefs") or [])
+                if isinstance(cmd, dict) and cmd.get("pmap_id") and cmd.get("user_pmapv_id")
+            })
         ]
     return result
 
@@ -2094,6 +2134,12 @@ async def _build_diagnostics(
                 for p in state.get("pmaps", [])
                 if isinstance(p, dict) and p
             },
+            # WHAT A ROOM COMMAND WOULD CARRY NOW, per map (4.2.13) --
+            # the one resolver every sender uses, run against the same
+            # state and cloud data. Next to `pmap_versions` in the cloud
+            # section and `clean_schedule2_pmaps` below, it shows which
+            # source won.
+            "version_for_room_commands": _room_command_versions(data, state),
             "last_command_summary": {
                 "command": state.get("lastCommand", {}).get("command"),
                 "pmap_id": state.get("lastCommand", {}).get("pmap_id"),

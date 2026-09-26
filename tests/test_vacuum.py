@@ -3087,7 +3087,7 @@ class TestRegionCommand:
     def test_the_first_map_and_its_version_are_used_when_none_given(self, monkeypatch):
         from custom_components.roomba_plus import room_cleaning
 
-        monkeypatch.setattr(room_cleaning, "_resolve_pmapv_id", lambda _s, _p: None)
+        monkeypatch.setattr(room_cleaning, "resolve_user_pmapv_id", lambda _s, _c, _p: None)
         v = _make_vacuum_entity({"pmaps": [{"p1": "v1"}]})
         cmd = v._build_region_command({"regions": ["3", {"region_id": "5", "type": "zid"}, "junk"]})
         assert (cmd["pmap_id"], cmd["user_pmapv_id"]) == ("p1", "v1")
@@ -3098,10 +3098,25 @@ class TestRegionCommand:
         would send the robot to rooms that no longer exist."""
         from custom_components.roomba_plus import room_cleaning
 
-        monkeypatch.setattr(room_cleaning, "_resolve_pmapv_id", lambda _s, _p: "v9")
+        monkeypatch.setattr(room_cleaning, "resolve_user_pmapv_id", lambda _s, _c, _p: "v9")
         v = _make_vacuum_entity({"pmaps": [{"p1": "v1"}]})
         cmd = v._build_region_command({"pmap_id": "p1", "user_pmapv_id": "v1", "regions": []})
         assert cmd["user_pmapv_id"] == "v9"
+
+    def test_the_cloud_version_wins_over_the_robots_own(self):
+        """#183: this path read the robot's `pmaps`, which reports the
+        uncommitted version. Unpatched here, so the real resolver runs
+        against a real cloud record."""
+        v = _make_vacuum_entity({"pmaps": [{"p1": "260913T011853"}]})
+        v._config_entry.runtime_data.cloud_coordinator.data = {"pmaps": [{
+            "active_pmap_id": "250610T143229",
+            "active_pmapv_details": {"active_pmapv": {
+                "pmap_id": "p1", "pmapv_id": "250610T143229",
+                "last_user_pmapv_id": "260913T011853",
+            }},
+        }]}
+        cmd = v._build_region_command({"pmap_id": "p1", "regions": ["3"]})
+        assert cmd["user_pmapv_id"] == "250610T143229"
 
 
 class TestBraavaFanSpeed:

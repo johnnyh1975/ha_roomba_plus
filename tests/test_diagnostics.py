@@ -2256,3 +2256,90 @@ class TestLastMissionRoomEvents:
         assert result["rids_seen_but_not_counted"] == []
         eins = next(e for e in result["room_events"] if e["rid"] == "1")
         assert eins["status"] == 1 and eins["passArea"] == 58
+
+
+class TestTheCloudMapVersionsAreVisible:
+    """#183: a single-map i-series sent 260913T011853 and failed with
+    error 224 on every room clean; the app and his favourites sent
+    250610T143229 and worked. Which cloud field held which could not be
+    read from the download: it listed the cloud's maps and their owners
+    and none of their versions.
+
+    Now every version field of every map is there, the favourites'
+    versions, and what a room command would carry per map.
+    """
+
+    _CLOUD = {
+        "pmaps": [{
+            "pmap_id": "ejhUEjqiTK2h2KedgFwzqQ",
+            "active_pmapv_id": "250610T143229",
+            "user_pmapv_id": "250610T143229",
+            "robot_pmapv_id": "260913T011853",
+            "active_pmapv_details": {"active_pmapv": {
+                "pmap_id": "ejhUEjqiTK2h2KedgFwzqQ",
+                "pmapv_id": "250610T143229",
+                "last_user_pmapv_id": "260913T011853",
+                "proc_state": "OK_Processed",
+                "creator": "user",
+            }},
+        }],
+        "favorites": [{"commanddefs": [{
+            "command": "start", "pmap_id": "ejhUEjqiTK2h2KedgFwzqQ",
+            "user_pmapv_id": "250610T143229", "regions": [{"region_id": "4"}],
+        }]}],
+    }
+
+    async def _dump(self):
+        from custom_components.roomba_plus.diagnostics import (
+            async_get_config_entry_diagnostics,
+        )
+
+        reported = {"pmaps": [{"ejhUEjqiTK2h2KedgFwzqQ": "260913T011853"}]}
+        entry = _make_entry(reported)
+        entry.runtime_data.cloud_coordinator = MagicMock()
+        entry.runtime_data.cloud_coordinator.data = self._CLOUD
+        entry.runtime_data.cloud_coordinator.last_exception = None
+        hass = MagicMock()
+        hass.config_entries.async_entries.return_value = []
+        with patch(
+            "custom_components.roomba_plus.roomba_reported_state",
+            side_effect=lambda r: r.master_state["state"]["reported"],
+        ):
+            return await async_get_config_entry_diagnostics(hass, entry)
+
+    @pytest.mark.asyncio
+    async def test_every_version_field_of_the_map_is_in_the_download(self) -> None:
+        cloud = (await self._dump())["cloud"]
+        (only,) = cloud["pmap_versions"]
+
+        assert only["pmap_id"] == "ejhUEjqiTK2h2KedgFwzqQ"
+        assert only["root"]["robot_pmapv_id"] == "260913T011853"
+        assert only["active_pmapv"]["pmapv_id"] == "250610T143229"
+        assert only["active_pmapv"]["last_user_pmapv_id"] == "260913T011853"
+        assert only["active_pmapv"]["proc_state"] == "OK_Processed"
+        assert only["committed_version_used"] == "250610T143229"
+        assert cloud["favorite_map_versions"] == [
+            {"pmap_id": "ejhUEjqiTK2h2KedgFwzqQ", "user_pmapv_id": "250610T143229"}
+        ]
+
+    @pytest.mark.asyncio
+    async def test_the_version_a_room_command_would_carry_is_in_the_download(self) -> None:
+        smart_map = (await self._dump())["smart_map"]
+
+        assert smart_map["version_for_room_commands"] == {
+            "ejhUEjqiTK2h2KedgFwzqQ": "250610T143229"
+        }
+
+    def test_a_map_only_the_cloud_knows_is_included(self) -> None:
+        """lewis firmware often reports no `pmaps` locally; the cloud's
+        maps must still be listed, and nothing breaks without either."""
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.diagnostics import _room_command_versions
+
+        data = SimpleNamespace(cloud_coordinator=SimpleNamespace(data=self._CLOUD))
+        assert _room_command_versions(data, {}) == {
+            "ejhUEjqiTK2h2KedgFwzqQ": "250610T143229"
+        }
+        no_cloud = SimpleNamespace(cloud_coordinator=None)
+        assert _room_command_versions(no_cloud, {"pmaps": [{"m": "v"}, {}, "junk"]}) == {"m": "v"}

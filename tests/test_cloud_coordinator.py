@@ -1461,14 +1461,17 @@ class TestCleanRoomCloudPmapvFirst:
         data.has_cloud = True
         data.cloud_coordinator.active_pmap_id = pmap_id
         data.cloud_coordinator.active_user_pmapv_id = cloud_pmapv  # ← cloud value
+        # What the version is read from since 4.2.13: the map's own cloud
+        # record, active version first (#183).
+        data.cloud_coordinator.data = {"pmaps": [{"active_pmapv_details": {"active_pmapv": {
+            "pmap_id": pmap_id, "pmapv_id": cloud_pmapv, "last_user_pmapv_id": live_pmapv,
+        }}}]}
         data.cloud_coordinator.regions = []
         data.cloud_coordinator.zones = []
         data.roomba_reported_state.return_value = {
             "pmaps": [{pmap_id: live_pmapv}],       # ← wrong live value
-            "lastCommand": {
-                "pmap_id": pmap_id,
-                "user_pmapv_id": cloud_pmapv,       # lastCommand also has correct value
-            },
+            # A dock replaced lastCommand -- the case #183 described.
+            "lastCommand": {"command": "dock"},
             "cleanMissionStatus": {"notReady": 0},
             "noAutoPasses": False,
             "twoPass": False,
@@ -2515,3 +2518,105 @@ class TestConfigFlowCloudMenu:
     def test_map_management_not_in_menu_for_none(self):
         menu = self._build_menu(MapCapability.NONE)
         assert "map_management" not in menu
+
+
+class TestTheCommittedVersionIsTheActiveOne:
+    """#183. A room command must carry the version of the map the robot
+    localises against. The cloud record holds several: the active one
+    (`active_pmapv.pmapv_id`, and the root `active_pmapv_id`) and the last
+    one the user made (`last_user_pmapv_id`).
+
+    The order read was "Variant A, B, C" -- `active_pmapv.active_pmapv_id`,
+    a key no record we hold contains, then `last_user_pmapv_id`. So the
+    intended "active first" fell through to the last user version every
+    time, and when the two differed the robot got a version it could not
+    localise against: error 224, never left the dock, on every room clean.
+    """
+
+    _MAP = "ejhUEjqiTK2h2KedgFwzqQ"
+
+    def _record(self, **pmapv):
+        return {"active_pmapv_details": {"active_pmapv": {"pmap_id": self._MAP, **pmapv}}}
+
+    def test_the_active_version_wins_over_the_last_user_version(self):
+        from custom_components.roomba_plus.cloud_coordinator import pmap_committed_version
+
+        record = self._record(pmapv_id="250610T143229", last_user_pmapv_id="260913T011853")
+        assert pmap_committed_version(record) == "250610T143229"
+
+    def test_the_root_active_version_also_wins_over_the_last_user_version(self):
+        from custom_components.roomba_plus.cloud_coordinator import pmap_committed_version
+
+        record = self._record(last_user_pmapv_id="260913T011853")
+        record["active_pmapv_id"] = "250610T143229"
+        assert pmap_committed_version(record) == "250610T143229"
+
+    def test_the_last_user_version_is_the_last_resort(self):
+        """Every record the field has shown carries it, so it must still
+        answer where nothing else does."""
+        from custom_components.roomba_plus.cloud_coordinator import pmap_committed_version
+
+        assert pmap_committed_version(self._record(last_user_pmapv_id="v")) == "v"
+        assert pmap_committed_version(self._record()) is None
+        assert pmap_committed_version({"active_pmapv_details": None}) is None
+        assert pmap_committed_version(
+            {"active_pmapv_details": {"active_pmapv": "junk"}, "active_pmapv_id": "r"}
+        ) == "r"
+
+    def test_the_active_user_pmapv_id_property_reads_the_same_way(self):
+        cc = IrobotCloudCoordinator.__new__(IrobotCloudCoordinator)
+        cc.blid = "TEST"
+        cc.data = {"pmaps": [self._record(
+            pmapv_id="250610T143229", last_user_pmapv_id="260913T011853"
+        )]}
+        assert cc.active_user_pmapv_id == "250610T143229"
+
+    def test_the_real_i3_record_is_unchanged(self):
+        """Where the fields agree -- every record held before #183 --
+        nothing changes."""
+        import json
+
+        from custom_components.roomba_plus.cloud_coordinator import pmap_committed_version
+
+        from pathlib import Path
+
+        fixture = Path(__file__).parent / "fixtures" / "irobot_pmaps_i3plus.json"
+        (record,) = json.loads(fixture.read_text())
+        pmapv = record["active_pmapv_details"]["active_pmapv"]
+        assert pmap_committed_version(record) == pmapv["last_user_pmapv_id"] == "251229T165154"
+
+    def test_any_map_is_looked_up_not_only_the_active_one(self):
+        from custom_components.roomba_plus.cloud_coordinator import committed_pmapv_id
+
+        data = {"pmaps": [
+            {"active_pmapv_details": {"active_pmapv": {"pmap_id": "A", "pmapv_id": "vA"}}},
+            {"pmap_id": "B", "active_pmapv_id": "vB"},
+            "junk",
+        ]}
+        assert committed_pmapv_id(data, "A") == "vA"
+        assert committed_pmapv_id(data, "B") == "vB"
+        assert committed_pmapv_id(data, "C") is None
+        assert committed_pmapv_id(None, "A") is None
+        assert committed_pmapv_id(data, None) is None
+        assert committed_pmapv_id(MagicMock(), "A") is None
+
+    def test_the_umf_fetch_reads_the_same_version(self):
+        """The geometry shown is the map the robot localises against."""
+        import inspect
+
+        source = inspect.getsource(IrobotCloudCoordinator)
+        assert "version_id = pmap_committed_version(pmap)" in source
+
+    def test_the_version_report_survives_junk(self):
+        from custom_components.roomba_plus.cloud_coordinator import pmap_version_report
+
+        assert pmap_version_report(None) == []
+        assert pmap_version_report({"pmaps": ["junk", {"active_pmapv_details": {"active_pmapv": 1}}]}) == [{
+            "pmap_id": None, "state": None,
+            "root": {"active_pmapv_id": None, "user_pmapv_id": None,
+                     "robot_pmapv_id": None, "last_pmapv_ts": None},
+            "active_pmapv": {k: None for k in (
+                "pmapv_id", "active_pmapv_id", "last_user_pmapv_id",
+                "last_user_ts", "proc_state", "creator", "create_time")},
+            "committed_version_used": None,
+        }]

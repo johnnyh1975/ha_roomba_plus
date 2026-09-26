@@ -56,6 +56,7 @@ from .const import (
 )
 from .structural_failures import record_failure, record_success
 from .models import ConnectionType, MapCapability
+from .cloud_coordinator import committed_pmapv_id
 
 if TYPE_CHECKING:
     from .cloud_coordinator import IrobotCloudCoordinator
@@ -2057,14 +2058,19 @@ class ClassicRoomCleaning(RoomCleaningBackend):
         #
         # Invisible on a one-map robot, where active and requested are
         # always the same map.
-        _cloud_pmapv = (
-            self._cloud.active_user_pmapv_id
-            if self._data.has_cloud
-            and pmap_id == self._cloud.active_pmap_id
-            else None
-        )
+        #
+        # 4.2.13: the version of THIS map from the cloud, whichever map
+        # it is, and the active version rather than the last one the
+        # user made (#183) -- resolve_user_pmapv_id().
         user_pmapv_id: str = (
-            _cloud_pmapv or _resolve_pmapv_id(state, pmap_id) or ""
+            resolve_user_pmapv_id(
+                state,
+                self._data.cloud_coordinator.data
+                if self._data.has_cloud and self._data.cloud_coordinator is not None
+                else None,
+                pmap_id,
+            )
+            or ""
         )
         # WHAT THE USER CHOSE, from the cleaning-mode select. None when
         # they never picked one, and then nothing is sent.
@@ -2601,22 +2607,18 @@ class ClassicRoomCleaning(RoomCleaningBackend):
             for zid in bare_zone_ids
         ]
 
-        from .room_cleaning import _resolve_pmapv_id  # moved there with the Classic send path
-        # Primary: cloud coordinator — always authoritative, never stale.
         # THE VERSION OF THE MAP BEING CLEANED, not of the active one.
         #
-        # `active_user_pmapv_id` is the version of whatever the cloud
-        # calls active. Pairing it with another map's id gives the robot
-        # a map and a version that do not belong together -- the same
-        # localisation failure from the other direction.
-        user_pmapv_id: str | None = (
-            self._cloud.active_user_pmapv_id
-            if _segment_map == active_pmap_id else None
+        # Pairing the active map's version with another map's id gives
+        # the robot a map and a version that do not belong together --
+        # error 224. Since 4.2.13 the cloud is asked for the segment's
+        # own map, and for its active version (#183):
+        # resolve_user_pmapv_id().
+        user_pmapv_id: str | None = resolve_user_pmapv_id(
+            self._data.roomba_reported_state(),
+            self._cloud.data,
+            _segment_map,
         )
-        if not user_pmapv_id:
-            user_pmapv_id = _resolve_pmapv_id(
-                self._data.roomba_reported_state(), _segment_map
-            )
         if user_pmapv_id is None:
             _LOGGER.warning(
                 "async_clean_segments: user_pmapv_id not found in cloud or "
@@ -2773,8 +2775,85 @@ def async_get_room_cleaning_backend(
 _ERROR_LOCALIZATION_FAILED: int = 224
 
 
-def _resolve_pmapv_id(state: dict[str, Any], pmap_id: str) -> str | None:
+def resolve_user_pmapv_id(
+    state: dict[str, Any], cloud_data: Any, pmap_id: str | None
+) -> str | None:
+    """The map version a room command for `pmap_id` must carry.
+
+    ONE ANSWER FOR EVERY SENDER (4.2.13). Four places built a room
+    command and resolved this in three different orders: `clean_room` and
+    `clean_area` asked the cloud (for the active map only), `send_command`
+    and the repeat-last-mission button never asked it at all. On
+    @cburrell16's robot all four sent the same wrong version (#183).
+
+    1. The cloud's committed version of THIS map -- the version the
+       iRobot app itself uses (committed_pmapv_id; which field, and why
+       the order changed: pmap_committed_version).
+    2. Without it, what the robot and the app have used for this map:
+       see _resolve_pmapv_id.
+    """
+    if not pmap_id:
+        return None
+    favorites = cloud_data.get("favorites") if isinstance(cloud_data, dict) else None
+    return committed_pmapv_id(cloud_data, pmap_id) or _resolve_pmapv_id(
+        state, pmap_id, favorites=favorites
+    )
+
+
+def cloud_data_of(entry: Any) -> Any:
+    """The cloud coordinator's data for a config entry, or None.
+
+    Read defensively: entities and backends reach it through
+    `runtime_data`, which is absent on a CLOUD_ONLY path and a bare mock
+    in many tests, and only a dict is data.
+    """
+    runtime = getattr(entry, "runtime_data", None)
+    coordinator = getattr(runtime, "cloud_coordinator", None)
+    data = getattr(coordinator, "data", None)
+    return data if isinstance(data, dict) else None
+
+
+def _app_stored_pmapv_id(
+    state: dict[str, Any], pmap_id: str, favorites: Any = None
+) -> str | None:
+    """The newest version of `pmap_id` in a command the app stored.
+
+    Schedules (`cleanSchedule2`, in the robot's own state) and favorites
+    (cloud) carry the version the app wrote when it saved them, and the
+    robot runs them: @cburrell16's favorites worked on every run while
+    the version from the robot's `pmaps` failed on every run (#183).
+
+    The NEWEST of them, because an older entry may predate a map edit.
+    Versions are fixed-width YYMMDDTHHMMSS, so string order is time
+    order.
+    """
+    found: list[str] = []
+
+    def _take(cmd: Any) -> None:
+        if (
+            isinstance(cmd, dict)
+            and cmd.get("pmap_id") == pmap_id
+            and cmd.get("user_pmapv_id")
+        ):
+            found.append(str(cmd["user_pmapv_id"]))
+
+    for entry in state.get("cleanSchedule2") or []:
+        if isinstance(entry, dict):
+            _take(entry.get("cmd"))
+    for favorite in favorites or []:
+        if isinstance(favorite, dict):
+            for cmd in favorite.get("commanddefs") or []:
+                _take(cmd)
+    return max(found) if found else None
+
+
+def _resolve_pmapv_id(
+    state: dict[str, Any], pmap_id: str, favorites: Any = None
+) -> str | None:
     """Return user_pmapv_id for pmap_id from local MQTT state.
+
+    NOT THE FIRST CHOICE. Senders call resolve_user_pmapv_id(), which
+    asks the cloud first; this is what remains without it.
 
     v2.7.4 (PMAP-PMAPV): prefers lastCommand.user_pmapv_id over state.pmaps.
 
@@ -2813,6 +2892,17 @@ def _resolve_pmapv_id(state: dict[str, Any], pmap_id: str) -> str | None:
         and not _last_failed
     ):
         return str(last["user_pmapv_id"])
+    # WHAT THE APP STORED, BEFORE WHAT THE ROBOT REPORTS (4.2.13).
+    #
+    # `pmaps` below is the robot's live version, which this docstring
+    # already calls not yet committed and a cause of error 224. It was
+    # nevertheless the next step after `lastCommand` -- and `lastCommand`
+    # is replaced by every dock, stop or whole-house start, so the
+    # uncommitted value was what most room commands without cloud data
+    # ended up carrying (#183).
+    stored = _app_stored_pmapv_id(state, pmap_id, favorites)
+    if stored:
+        return stored
     for pmap in state.get("pmaps", []):
         if pmap_id in pmap:
             return str(pmap[pmap_id])

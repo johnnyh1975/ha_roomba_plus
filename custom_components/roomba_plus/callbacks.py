@@ -2455,9 +2455,22 @@ def make_mission_callback(
 
         ms.last_phase = phase
 
+    @callback
     def _async_recheck_stuck_end_state(_now: Any = None) -> None:
         """v2.9.0 — periodic safety-net re-evaluation of the end-phase
         confirmation logic, independent of new MQTT traffic.
+
+        ON THE EVENT LOOP, which is what `@callback` is for (4.2.13).
+        `async_track_time_interval` runs a plain function in HA's thread
+        pool. That was harmless while `_on_mission_message` bridged every
+        loop call itself; 4.2.11 dropped the bridges, because MQTT
+        messages arrive on the loop since the async rewrite -- and this
+        timer was the one caller that still came from a thread.
+        `entry.async_create_task` then raised "is not the running loop"
+        and the mission this recheck closed was never recorded (two
+        missions on one i7+ in a single day). It also ran the whole mission
+        state machine on a worker thread, concurrently with MQTT messages
+        on the loop.
 
         Root cause this addresses (confirmed via Thonno's field log):
         _on_mission_message bails out immediately whenever a message's

@@ -3088,11 +3088,11 @@ class TestTheMapAndItsVersionTravelTogether:
     the same map. That is most robots, which is why it survived.
     """
 
-    def test_clean_rooms_only_takes_the_cloud_version_for_the_active_map(
-        self,
-    ) -> None:
+    def test_clean_rooms_asks_for_the_version_of_its_own_map(self) -> None:
         """Classic's `clean_rooms` -- Prime resolves its version through
-        a different path and never reaches for the active map's."""
+        a different path. Since 4.2.13 the cloud is asked for the map
+        being cleaned, whichever it is (resolve_user_pmapv_id), rather
+        than for the active map's version behind a map check."""
         import inspect
 
         from custom_components.roomba_plus.room_cleaning import (
@@ -3100,8 +3100,11 @@ class TestTheMapAndItsVersionTravelTogether:
         )
 
         source = inspect.getsource(ClassicRoomCleaning.clean_rooms)
+        call = source[source.index("resolve_user_pmapv_id("):]
+        call = call[: call.index(")\n")]
 
-        assert "pmap_id == self._cloud.active_pmap_id" in source
+        assert call.rstrip().endswith("pmap_id,"), call
+        assert "active_user_pmapv_id" not in source
 
     def test_clean_segments_sends_the_segments_own_map(self) -> None:
         import inspect
@@ -3124,9 +3127,28 @@ class TestTheMapAndItsVersionTravelTogether:
         )
 
         source = inspect.getsource(ClassicRoomCleaning.clean_segments)
+        call = source[source.index("resolve_user_pmapv_id("):]
+        call = call[: call.index(")\n")]
 
-        assert "_segment_map == active_pmap_id else None" in source
-        assert "_resolve_pmapv_id(\n                self._data.roomba_reported_state(), _segment_map" in source
+        assert call.rstrip().endswith("_segment_map,"), call
+        assert "active_user_pmapv_id" not in source
+
+    def test_each_map_gets_its_own_version_from_the_cloud(self) -> None:
+        """The behaviour the two source checks above stand for: on a
+        two-map account, each map is paired with its own version, and
+        neither with the other's."""
+        from custom_components.roomba_plus.room_cleaning import (
+            resolve_user_pmapv_id,
+        )
+
+        cloud = {"pmaps": [
+            {"active_pmapv_details": {"active_pmapv": {"pmap_id": "A", "pmapv_id": "vA"}}},
+            {"active_pmapv_details": {"active_pmapv": {"pmap_id": "B", "pmapv_id": "vB"}}},
+        ]}
+        state = {"pmaps": [{"A": "liveA"}, {"B": "liveB"}]}
+
+        assert resolve_user_pmapv_id(state, cloud, "A") == "vA"
+        assert resolve_user_pmapv_id(state, cloud, "B") == "vB"
 
     def test_neither_path_pairs_a_map_with_another_maps_version(self) -> None:
         """The shape to keep out, in either method: reaching for the
@@ -3904,6 +3926,11 @@ def _classic(*, regions=None, by_pmap=None, active="p1", pmapv="v7", labels=None
                                                      {"id": "5", "name": "Hall"}],
         regions_by_pmap=by_pmap if by_pmap is not None else {"p1": {}},
         active_user_pmapv_id=pmapv,
+        # What the version is read from since 4.2.13: the cloud record of
+        # the map itself (resolve_user_pmapv_id).
+        data={"pmaps": [
+            {"active_pmapv_details": {"active_pmapv": {"pmap_id": active, "pmapv_id": pmapv}}}
+        ] if pmapv and active else []},
     )
     b._config_entry = MagicMock()
     b._config_entry.options = {"smart_zone_labels": labels or {}}
@@ -4201,3 +4228,137 @@ class TestPrimeWithoutRobot:
         b._robot = None
         assert await b.map_names() == {}
         assert await b._named_regions_across_maps() == {}
+
+
+class TestOneVersionForEveryRoomCommand:
+    """#183 (@cburrell16): a single-map i-series on lewis 22.52.10 failed
+    every room clean with error 224 -- "Smart Map localization failed",
+    never left the dock -- because every room command carried the map's
+    uncommitted version 260913T011853. The iRobot app and his favourites
+    sent 250610T143229 and worked.
+
+    Four senders, three orders: `clean_room`/`clean_area` asked the cloud
+    (active map only, and the wrong field of it), `send_command` and the
+    repeat button never asked the cloud at all and fell through to the
+    robot's own `pmaps`. All of them go through resolve_user_pmapv_id now.
+    """
+
+    _MAP = "ejhUEjqiTK2h2KedgFwzqQ"
+    _GOOD = "250610T143229"
+    _BAD = "260913T011853"
+
+    def _cloud(self, **extra):
+        return {"pmaps": [{
+            "active_pmapv_details": {"active_pmapv": {
+                "pmap_id": self._MAP, "pmapv_id": self._GOOD, "last_user_pmapv_id": self._BAD,
+            }},
+        }], **extra}
+
+    def test_the_cloud_active_version_wins_over_everything_local(self):
+        state = {
+            "pmaps": [{self._MAP: self._BAD}],
+            "lastCommand": {"pmap_id": self._MAP, "user_pmapv_id": self._BAD},
+        }
+        assert rc.resolve_user_pmapv_id(state, self._cloud(), self._MAP) == self._GOOD
+
+    def test_without_cloud_a_stored_app_version_beats_the_robots_own(self):
+        """The robot's `pmaps` is the uncommitted version. A dock or stop
+        replaces `lastCommand`, so without the cloud this fell straight
+        through to it."""
+        state = {
+            "pmaps": [{self._MAP: self._BAD}],
+            "lastCommand": {"command": "dock"},
+            "cleanSchedule2": [{"cmd": {"pmap_id": self._MAP, "user_pmapv_id": self._GOOD}}],
+        }
+        assert rc.resolve_user_pmapv_id(state, None, self._MAP) == self._GOOD
+
+    def test_a_favourite_counts_as_a_stored_app_version(self):
+        """Cloud data without a version for the map, but with favourites."""
+        cloud = {"pmaps": [], "favorites": [
+            {"commanddefs": [{"pmap_id": self._MAP, "user_pmapv_id": self._GOOD}]},
+            {"commanddefs": [{"pmap_id": "other", "user_pmapv_id": "999999T999999"}]},
+            "junk",
+        ]}
+        state = {"pmaps": [{self._MAP: self._BAD}]}
+        assert rc.resolve_user_pmapv_id(state, cloud, self._MAP) == self._GOOD
+
+    def test_the_newest_stored_version_wins(self):
+        """An older favourite may predate a map edit."""
+        state = {"cleanSchedule2": [
+            {"cmd": {"pmap_id": self._MAP, "user_pmapv_id": "240101T000000"}},
+            {"cmd": {"pmap_id": self._MAP, "user_pmapv_id": self._GOOD}},
+            {"cmd": None}, "junk",
+        ]}
+        assert rc.resolve_user_pmapv_id(state, None, self._MAP) == self._GOOD
+
+    def test_a_matching_last_command_still_comes_before_stored_versions(self):
+        state = {
+            "lastCommand": {"pmap_id": self._MAP, "user_pmapv_id": "LAST"},
+            "cleanSchedule2": [{"cmd": {"pmap_id": self._MAP, "user_pmapv_id": self._GOOD}}],
+        }
+        assert rc.resolve_user_pmapv_id(state, None, self._MAP) == "LAST"
+
+    def test_the_robots_own_version_is_the_last_resort(self):
+        state = {"pmaps": [{self._MAP: self._BAD}]}
+        assert rc.resolve_user_pmapv_id(state, None, self._MAP) == self._BAD
+        assert rc.resolve_user_pmapv_id({}, None, self._MAP) is None
+        assert rc.resolve_user_pmapv_id(state, None, None) is None
+
+    def test_cloud_data_is_read_defensively(self):
+        entry = MagicMock()
+        entry.runtime_data.cloud_coordinator.data = {"pmaps": []}
+        assert rc.cloud_data_of(entry) == {"pmaps": []}
+        entry.runtime_data.cloud_coordinator.data = MagicMock()
+        assert rc.cloud_data_of(entry) is None
+        assert rc.cloud_data_of(None) is None
+
+    @pytest.mark.asyncio
+    async def test_clean_area_sends_the_active_version(self):
+        """The reported path, end to end through the Classic backend."""
+        b = _classic(active=self._MAP, by_pmap={self._MAP: {}})
+        b._data.cloud_coordinator.data = self._cloud()
+        b._data.roomba_reported_state.return_value = {"pmaps": [{self._MAP: self._BAD}]}
+
+        await b.clean_segments([f"{self._MAP}_3"])
+
+        assert _sent(b)["user_pmapv_id"] == self._GOOD
+
+    @pytest.mark.asyncio
+    async def test_repeat_last_mission_sends_the_active_version(self):
+        from custom_components.roomba_plus import button as btn
+
+        b = btn.RepeatLastMissionButton.__new__(btn.RepeatLastMissionButton)
+        b.vacuum = MagicMock(send_command=AsyncMock())
+        b.vacuum_state = {
+            "pmaps": [{self._MAP: self._BAD}],
+            "lastCommand": {"command": "start", "pmap_id": self._MAP,
+                            "user_pmapv_id": self._BAD, "regions": [{"region_id": "3"}]},
+            "cleanMissionStatus": {"error": 224},
+        }
+        b._config_entry = MagicMock()
+        b._config_entry.runtime_data.cloud_coordinator.data = self._cloud()
+
+        await b.async_press()
+
+        _cmd, params = b.vacuum.send_command.await_args.args
+        assert params["user_pmapv_id"] == self._GOOD
+
+    def test_no_sender_resolves_the_version_any_other_way(self):
+        """The four senders, and nothing else, call the resolver; none of
+        them reaches for the old pieces directly."""
+        import pathlib
+
+        root = pathlib.Path("custom_components/roomba_plus")
+        callers = sorted(
+            p.name for p in root.glob("*.py")
+            if "resolve_user_pmapv_id(" in p.read_text()
+            and p.name not in ("diagnostics.py",)
+        )
+        assert callers == ["button.py", "room_cleaning.py", "vacuum.py"]
+        for p in root.glob("*.py"):
+            text = p.read_text()
+            if p.name == "room_cleaning.py":
+                text = text.replace("def _resolve_pmapv_id(", "")
+                text = text.replace("or _resolve_pmapv_id(", "")
+            assert "_resolve_pmapv_id(" not in text, p.name
+            assert ".active_user_pmapv_id" not in text or p.name == "cloud_coordinator.py", p.name

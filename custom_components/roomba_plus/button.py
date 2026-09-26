@@ -372,7 +372,7 @@ async def async_setup_entry(
 
     # Repeat last mission: whenever lastCommand is present in state
     if state.get("lastCommand"):
-        entities.append(RepeatLastMissionButton(roomba, blid))
+        entities.append(RepeatLastMissionButton(roomba, blid, config_entry))
 
     # Smart zone button: for Smart Map robots (i/s/j/m-series)
     from .const import has_smart_map
@@ -878,9 +878,11 @@ class RepeatLastMissionButton(IRobotEntity, ButtonEntity):
     _attr_translation_key = "repeat_mission"
     _attr_entity_category = None   # primary action → Steuerelemente
 
-    def __init__(self, roomba: Any, blid: str) -> None:
+    def __init__(self, roomba: Any, blid: str, config_entry: RoombaConfigEntry) -> None:
         super().__init__(roomba, blid)
         self._attr_unique_id = f"{self.robot_unique_id}_repeat_mission"
+        # For the cloud's map version (4.2.13).
+        self._config_entry = config_entry
 
     async def async_press(self) -> None:
         last = self.vacuum_state.get("lastCommand", {})
@@ -899,11 +901,16 @@ class RepeatLastMissionButton(IRobotEntity, ButtonEntity):
             if key in last:
                 params[key] = last[key]
 
-        # If a pmap_id is present, refresh user_pmapv_id from live state.pmaps
-        # to avoid silent failures after a map retrain.
+        # If a pmap_id is present, resolve user_pmapv_id afresh to avoid
+        # silent failures after a map retrain -- the same way every room
+        # command does since 4.2.13, cloud first (#183). This read the
+        # robot's own `pmaps` once lastCommand no longer matched, and that
+        # is the uncommitted version the robot refuses with error 224.
         if params.get("pmap_id"):
-            from .room_cleaning import _resolve_pmapv_id
-            fresh = _resolve_pmapv_id(self.vacuum_state, params["pmap_id"])
+            from .room_cleaning import cloud_data_of, resolve_user_pmapv_id  # noqa: PLC0415
+            fresh = resolve_user_pmapv_id(
+                self.vacuum_state, cloud_data_of(self._config_entry), params["pmap_id"]
+            )
             if fresh:
                 params["user_pmapv_id"] = fresh
             else:

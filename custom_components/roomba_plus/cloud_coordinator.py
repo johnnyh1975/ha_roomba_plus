@@ -331,6 +331,106 @@ def _parse_time_estimates(raw: list[Any]) -> dict[str, int | None]:
     return result
 
 
+def pmap_committed_version(pmap: dict[str, Any]) -> str | None:
+    """The version of this cloud map that a room command must carry.
+
+    THE ACTIVE VERSION, NOT THE LAST ONE THE USER MADE. Until 4.2.13 this
+    read `active_pmapv.active_pmapv_id`, then `last_user_pmapv_id`, then
+    the root `active_pmapv_id`. The first key does not exist in any
+    record we have seen: on lewis firmware the active version sits under
+    `active_pmapv.pmapv_id`, which was never read. So the intended order
+    "active first" fell through to `last_user_pmapv_id` every time.
+
+    Harmless while the two agree, which they do in every record we hold.
+    They do not agree after an edit that never became active:
+    @cburrell16's single-map i-series sent 260913T011853 and failed to
+    localise (error 224) on every room clean, while the iRobot app and
+    his favorites sent 250610T143229 and worked (#183). The active
+    version is read first now, the last user version only when no
+    active one is present.
+    """
+    details = pmap.get("active_pmapv_details") or {}
+    pmapv = details.get("active_pmapv") or {}
+    if not isinstance(pmapv, dict):
+        pmapv = {}
+    for value in (
+        pmapv.get("active_pmapv_id"),      # Variant A -- not seen in the field
+        pmapv.get("pmapv_id"),             # the active version (lewis 22.52.x)
+        pmap.get("active_pmapv_id"),       # the same, at the root
+        pmapv.get("last_user_pmapv_id"),   # Variant B -- last resort
+    ):
+        if value:
+            return str(value)
+    return None
+
+
+def pmap_record_id(pmap: dict[str, Any]) -> str | None:
+    """The map id of one cloud pmap record, wherever the record keeps it."""
+    details = pmap.get("active_pmapv_details") or {}
+    pmapv = details.get("active_pmapv") or {}
+    if not isinstance(pmapv, dict):
+        pmapv = {}
+    value = pmapv.get("pmap_id") or pmap.get("pmap_id")
+    return str(value) if value else None
+
+
+def committed_pmapv_id(cloud_data: Any, pmap_id: str | None) -> str | None:
+    """The committed version of the map `pmap_id`, from cloud data.
+
+    ANY MAP, NOT ONLY THE ACTIVE ONE. The cloud lists every map with its
+    own active version, and a command for a second floor needs that
+    floor's version. Before 4.2.13 only the active map was looked up here
+    and every other map fell back to the robot's own `pmaps`, which
+    reports the uncommitted version.
+
+    None when there is no cloud data or no record for this map -- the
+    caller then falls back to what the robot and the app have used.
+    """
+    if not pmap_id or not isinstance(cloud_data, dict):
+        return None
+    for pmap in cloud_data.get("pmaps") or []:
+        if isinstance(pmap, dict) and pmap_record_id(pmap) == pmap_id:
+            return pmap_committed_version(pmap)
+    return None
+
+
+def pmap_version_report(cloud_data: Any) -> list[dict[str, Any]]:
+    """Every version field of every cloud map, for diagnostics.
+
+    ADDED FOR #183. The diagnostics listed which maps the cloud holds and
+    who owns them, and none of their versions -- so a report of "the
+    wrong version was sent" could not show which field held the right
+    one. Map ids and version stamps only.
+    """
+    if not isinstance(cloud_data, dict):
+        return []
+    report: list[dict[str, Any]] = []
+    for pmap in cloud_data.get("pmaps") or []:
+        if not isinstance(pmap, dict):
+            continue
+        details = pmap.get("active_pmapv_details") or {}
+        pmapv = details.get("active_pmapv") or {}
+        if not isinstance(pmapv, dict):
+            pmapv = {}
+        report.append({
+            "pmap_id": pmap_record_id(pmap),
+            "state": pmap.get("state"),
+            "root": {
+                key: pmap.get(key)
+                for key in ("active_pmapv_id", "user_pmapv_id", "robot_pmapv_id", "last_pmapv_ts")
+            },
+            "active_pmapv": {
+                key: pmapv.get(key)
+                for key in (
+                    "pmapv_id", "active_pmapv_id", "last_user_pmapv_id",
+                    "last_user_ts", "proc_state", "creator", "create_time",
+                )
+            },
+            "committed_version_used": pmap_committed_version(pmap),
+        })
+    return report
+
+
 class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """Coordinator for iRobot cloud data (pmaps, mission history, favorites).
 
@@ -868,29 +968,15 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         cloud data which is always authoritative — local MQTT pmaps may be
         stale for lewis firmware robots that do not broadcast pmaps updates.
 
-        Tries three cloud API variants in order (same logic as UMF fetch):
-          Variant A: active_pmapv_details.active_pmapv.active_pmapv_id
-          Variant B: active_pmapv_details.active_pmapv.last_user_pmapv_id
-                     (confirmed for lewis 22.52.10, veronoicc + Thonno)
-          Variant C: pmap root-level active_pmapv_id (ia74 fallback)
+        The active map's committed version, read the same way as for any
+        map (committed_pmapv_id) and the UMF fetch: the active version
+        first, `last_user_pmapv_id` only when none is present.
         """
         if not self.data:
             return None
-        active_id = self.active_pmap_id
-        if not active_id:
-            return None
-        for pmap in self.data.get("pmaps", []):
-            details = pmap.get("active_pmapv_details") or {}
-            pmapv = details.get("active_pmapv") or {}
-            pmap_id_candidate = pmapv.get("pmap_id") or pmap.get("pmap_id")
-            if pmap_id_candidate != active_id:
-                continue
-            return (
-                pmapv.get("active_pmapv_id")       # Variant A
-                or pmapv.get("last_user_pmapv_id") # Variant B (lewis 22.52.10)
-                or pmap.get("active_pmapv_id")     # Variant C
-            ) or None
-        return None
+        # Which field, and why the order changed in 4.2.13:
+        # pmap_committed_version().
+        return committed_pmapv_id(self.data, self.active_pmap_id)
 
     @property
     def learning_percentage(self) -> int | None:
@@ -1212,12 +1298,10 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if pmap_id_candidate != active_id:
                 continue
 
-            # version_id — try all three variants in order
-            version_id = (
-                pmapv.get("active_pmapv_id")       # Variant A
-                or pmapv.get("last_user_pmapv_id") # Variant B (lewis 22.52.10)
-                or pmap.get("active_pmapv_id")     # Variant C (ia74 source)
-            )
+            # version_id -- the same version a room command carries, so
+            # the geometry shown is the map the robot localises against.
+            # Order and reasoning: pmap_committed_version() (4.2.13).
+            version_id = pmap_committed_version(pmap)
             if not version_id:
                 _LOGGER.debug(
                     "iRobot cloud: UMF fetch skipped for %s — "

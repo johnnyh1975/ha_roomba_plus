@@ -631,3 +631,141 @@ def test_the_init_import_guard_catches_the_original_faults() -> None:
         '        "custom_components.roomba_plus.__init__.roomba_reported_state",\n',
     ):
         assert _init_import_findings(fault, "fault.py"), fault
+
+
+# ── 4.2.13: every HA-scheduled callable runs on the event loop ───────────────
+#
+# Home Assistant decides WHERE to run a timer, event or dispatcher target
+# from the callable itself: a coroutine function or a `@callback` runs on
+# the event loop, anything else in the thread pool.
+#
+# The stuck-end recheck was a plain function handed to
+# async_track_time_interval. It ran the whole mission state machine on a
+# worker thread, and since 4.2.11 -- which dropped the thread bridges once
+# MQTT arrived on the loop -- `entry.async_create_task` from there raised
+# "is not the running loop" and the mission was never recorded (two
+# missions on one i7+ in a day). The same shape sat in the Prime region
+# sensors, calling async_add_entities from the pool.
+
+import ast as _ast
+
+_SCHEDULERS = {
+    # name: position of the callable among the positional arguments
+    "async_track_time_interval": 1,
+    "async_call_later": 2,
+    "async_track_time_change": 1,
+    "async_track_utc_time_change": 1,
+    "async_track_point_in_time": 1,
+    "async_track_point_in_utc_time": 1,
+    "async_track_state_change_event": 2,
+    "async_dispatcher_connect": 2,
+    "async_listen": 1,
+    "async_listen_once": 1,
+}
+
+# Targets the AST cannot follow. Each is checked at runtime instead, in
+# the test named next to it.
+_FOLLOWED_AT_RUNTIME = {
+    "_mission_cb.recheck_stuck_end_state":
+        "test_the_stuck_end_recheck_runs_on_the_loop",
+}
+
+
+def _on_the_loop(fn: _ast.AST) -> bool:
+    if isinstance(fn, _ast.AsyncFunctionDef):
+        return True
+    return isinstance(fn, _ast.FunctionDef) and any(
+        (isinstance(d, _ast.Name) and d.id == "callback")
+        or (isinstance(d, _ast.Attribute) and d.attr == "callback")
+        for d in fn.decorator_list
+    )
+
+
+def off_loop_targets(source: str, filename: str) -> list[str]:
+    """Scheduler calls whose target would run in the thread pool."""
+    tree = _ast.parse(source, filename)
+    defs: dict[str, list[_ast.AST]] = {}
+    for node in _ast.walk(tree):
+        if isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+            defs.setdefault(node.name, []).append(node)
+    problems: list[str] = []
+    for node in _ast.walk(tree):
+        if not isinstance(node, _ast.Call):
+            continue
+        func = node.func
+        name = func.id if isinstance(func, _ast.Name) else getattr(func, "attr", "")
+        position = _SCHEDULERS.get(name)
+        if position is None or len(node.args) <= position:
+            continue
+        target = node.args[position]
+        where = f"{filename}:{node.lineno} {name}"
+        if (
+            isinstance(target, _ast.Call)
+            and isinstance(target.func, _ast.Name)
+            and target.func.id == "callback"
+        ):
+            continue
+        if isinstance(target, _ast.Lambda):
+            problems.append(f"{where}: a lambda runs in the thread pool")
+            continue
+        if isinstance(target, _ast.Name) or (
+            isinstance(target, _ast.Attribute)
+            and isinstance(target.value, _ast.Name)
+            and target.value.id == "self"
+        ):
+            target_name = target.id if isinstance(target, _ast.Name) else target.attr
+            found = defs.get(target_name)
+            if found and all(_on_the_loop(d) for d in found):
+                continue
+            if found:
+                problems.append(f"{where}: {target_name} is neither async nor @callback")
+                continue
+            # Not defined in this module (an HA method such as
+            # async_write_ha_state): HA's own methods are callbacks.
+            if target_name.startswith("async_"):
+                continue
+            problems.append(f"{where}: {target_name} cannot be followed")
+            continue
+        text = _ast.unparse(target)
+        if text not in _FOLLOWED_AT_RUNTIME:
+            problems.append(f"{where}: {text} cannot be followed")
+    return problems
+
+
+def test_every_scheduled_target_runs_on_the_event_loop() -> None:
+    root = Path(__file__).parent.parent / "custom_components" / "roomba_plus"
+    problems: list[str] = []
+    for path in sorted(root.glob("*.py")):
+        problems += off_loop_targets(path.read_text(encoding="utf-8"), path.name)
+    assert problems == []
+
+
+import pytest as _pytest  # noqa: E402
+
+
+@_pytest.mark.parametrize(
+    ("source", "found"),
+    [
+        ("def f(n): pass\nasync_track_time_interval(hass, f, t)", True),
+        ("@callback\ndef f(n): pass\nasync_track_time_interval(hass, f, t)", False),
+        ("async def f(n): pass\nasync_call_later(hass, 5, f)", False),
+        ("async_track_time_interval(hass, lambda _: x(), t)", True),
+        ("async_track_time_interval(hass, callback(lambda _: x()), t)", False),
+        ("def g(): pass\nasync_dispatcher_connect(hass, SIG, g)", True),
+        ("class A:\n def h(self, e): pass\n def s(self): self.hass.bus.async_listen('e', self.h)", True),
+        ("async_track_time_interval(hass, cb.attr, t)", True),
+        ("async_dispatcher_connect(hass, SIG, self.async_write_ha_state)", False),
+    ],
+)
+def test_the_loop_guard_can_fail(source: str, found: bool) -> None:
+    """Counter-check: each shape the guard exists for."""
+    assert bool(off_loop_targets(source, "example.py")) is found
+
+
+def test_every_runtime_followed_target_has_its_test() -> None:
+    """An allowlist entry names the test that stands in for the guard;
+    a renamed or deleted test would leave the target unchecked."""
+    tests = Path(__file__).parent
+    text = "".join(p.read_text(encoding="utf-8") for p in tests.glob("test_*.py"))
+    for test_name in _FOLLOWED_AT_RUNTIME.values():
+        assert f"def {test_name}(" in text, test_name

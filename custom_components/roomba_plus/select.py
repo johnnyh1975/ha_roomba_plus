@@ -988,7 +988,7 @@ class CloudSmartZoneSelect(IRobotEntity, SelectEntity):
     def selected_pmap_info(self) -> dict[str, str]:
         """Return {pmap_id, user_pmapv_id} — compatible with SmartZoneSelect."""
         # user_pmapv_id is intentionally left empty here: SmartZoneButton
-        # always re-reads it from live MQTT state via _resolve_pmapv_id.
+        # sends no version at all (see its async_press docstring).
         return {"pmap_id": self._pmap_id, "user_pmapv_id": ""}
 
     # ── Extra attributes ──────────────────────────────────────────────────────

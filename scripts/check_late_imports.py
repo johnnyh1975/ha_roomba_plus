@@ -169,6 +169,7 @@ NON_CYCLE_REASONS: dict[str, str] = {
         "the cleaning facade, reached only when a service actually runs"
     ),
     "vacuum -> room_cleaning": "as services -> room_cleaning",
+    "button -> room_cleaning": "as services -> room_cleaning",
     "device_tracker -> room_cleaning": "as services -> room_cleaning",
     "device_tracker -> area_resolver": (
         "only needed when an area is actually resolved, which is not on "

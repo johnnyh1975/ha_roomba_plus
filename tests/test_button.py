@@ -651,7 +651,8 @@ class TestRepeatLastMission:
         b = btn.RepeatLastMissionButton.__new__(btn.RepeatLastMissionButton)
         b.vacuum = MagicMock(send_command=AsyncMock())
         b.vacuum_state = state
-        monkeypatch.setattr(room_cleaning, "_resolve_pmapv_id", lambda _s, _p: fresh)
+        b._config_entry = None
+        monkeypatch.setattr(room_cleaning, "resolve_user_pmapv_id", lambda _s, _c, _p: fresh)
         return b
 
     @pytest.mark.asyncio

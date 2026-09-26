@@ -402,6 +402,10 @@ async def async_setup_entry(
         ):
             known: set[str] = set()
 
+            # ON THE LOOP (4.2.13): a dispatcher target that is neither a
+            # coroutine nor a @callback runs in HA's thread pool, and
+            # `async_add_entities` must not be called from there.
+            @callback
             def _sync_region_sensors() -> None:
                 new: list[SensorEntity] = []
                 # FLAT, not per-map. `prime_room_names` is

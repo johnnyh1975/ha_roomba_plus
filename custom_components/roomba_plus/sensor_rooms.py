@@ -967,7 +967,12 @@ class RoombaMissionProgress(IRobotEntity, SensorEntity):
         self.async_on_remove(
             async_track_time_interval(
                 self.hass,
-                lambda _: self.schedule_update_ha_state(),
+                # A bare lambda runs in HA's thread pool, so this did not
+                # run "from the event loop" as the docstring says. Harmless
+                # here -- schedule_update_ha_state is thread-safe -- but
+                # it is the shape of the 4.2.13 mission-record bug, and the
+                # guard that finds that shape accepts no exceptions.
+                callback(lambda _: self.async_schedule_update_ha_state()),
                 _dt.timedelta(seconds=30),
             )
         )

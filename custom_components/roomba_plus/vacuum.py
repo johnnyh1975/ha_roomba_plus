@@ -1357,11 +1357,17 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
     def _build_region_command(self, params: dict[str, Any]) -> dict[str, Any]:
         """Build the region-cleaning payload for send_command.
 
-        Resolves pmap_id and user_pmapv_id. user_pmapv_id is always read from
-        live state.pmaps via _resolve_pmapv_id so it is never stale after a
-        map retrain. Falls back to the first pmap in state if pmap_id is absent.
+        Resolves pmap_id and user_pmapv_id. user_pmapv_id is always
+        resolved afresh, overriding any supplied value, so it is never stale
+        after a map retrain. Falls back to the first pmap in state if pmap_id
+        is absent.
+
+        4.2.13: resolved like every other room command
+        (resolve_user_pmapv_id), cloud first. This path read the robot's
+        own `pmaps` instead, which carries the uncommitted version and
+        makes the robot refuse with error 224 (#183).
         """
-        from .room_cleaning import _resolve_pmapv_id  # moved there with the Classic send path
+        from .room_cleaning import cloud_data_of, resolve_user_pmapv_id  # noqa: PLC0415
 
         pmap_id: str | None = params.get("pmap_id")
         user_pmapv_id: str | None = params.get("user_pmapv_id")
@@ -1372,14 +1378,17 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
             first_pmap = pmaps[0]
             pmap_id = next(iter(first_pmap), None)
 
-        # Always refresh user_pmapv_id from live state — override any supplied value.
+        # Always resolve user_pmapv_id afresh — override any supplied value.
         if pmap_id:
-            fresh = _resolve_pmapv_id(self.vacuum_state, pmap_id)
+            fresh = resolve_user_pmapv_id(
+                self.vacuum_state, cloud_data_of(self._config_entry), pmap_id
+            )
             if fresh:
                 user_pmapv_id = fresh
             else:
                 _LOGGER.warning(
-                    "_build_region_command: pmap %s not in live state.pmaps — "
+                    "_build_region_command: no version for pmap %s in the cloud "
+                    "or live state — "
                     "map may have been retrained",
                     pmap_id,
                 )
