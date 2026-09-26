@@ -28,6 +28,25 @@ concurrency:
 # and each has its own concurrency group. Deliberately NOT badged as one
 # combined status for this file: ten jobs means ten unrelated ways to
 # put a red mark on the README.
+# SPEED (4.3.0b2). The two test jobs took nearly four minutes. Measured
+# locally on the HA 2025.5 set, the suite alone took 212 s serially with
+# branch coverage; the rest was installing Home Assistant with pip.
+#
+#   - uv installs the same packages as pip (143 of them, identical
+#     versions, checked side by side) in 19 s instead of 113 s cold
+#   - `-n auto` runs the suite on every CPU of the runner
+#   - coverage is measured in ONE job: the Python 3.14 one, where
+#     coverage.py can use sys.monitoring (COVERAGE_CORE=sysmon). There
+#     branch coverage costs about 10 % instead of doubling the run time,
+#     as the older tracer on the HA 2025.5 set does. Line and branch
+#     totals match between the two to within two lines
+#   - tests/conftest.py parses each source once for the guard tests
+#     (6500 parses, 364 sources; a check at the end of the run fails it
+#     if a test changed a shared tree) and skips a pytest-asyncio 0.26
+#     scan that repeated itself for every test
+#
+# Locally, with 2 CPUs: the coverage run 212 s -> 55 s, the HA 2025.5
+# run about 100 s -> 47 s. The runners have 4.
 jobs:
 
   # TWO COMBINATIONS, deliberately not a matrix. Each HA release fixes
@@ -63,10 +82,12 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.14"
-          # This job installs a full Home Assistant and its dependency
-          # tree from scratch, so it is the slowest one here and was
-          # the only large job without a cache.
-          cache: "pip"
+
+      # uv, NOT pip, for the packages below; pinned like every other
+      # tool here. No pip cache any more: uv's cold install is faster
+      # than pip's warm one, and the cache would only hold uv itself.
+      - name: Install uv
+        run: python -m pip install "uv==0.12.18"
 
       # ONE version number, not two. Every phahc release pins Home
       # Assistant EXACTLY (0.13.357 -> homeassistant==2026.8.3), so
@@ -91,8 +112,7 @@ jobs:
       # single line of what it changed.
       - name: Install a recent Home Assistant and test tooling
         run: |
-          python -m pip install --upgrade pip
-          pip install "pytest-homeassistant-custom-component==0.13.357" \
+          uv pip install --system "pytest-homeassistant-custom-component==0.13.357" \
                       "roombapy==2.0.2" aiohttp pillow
 
       # --no-deps is NOT required here:
@@ -101,10 +121,47 @@ jobs:
       # Kept anyway, so both test jobs install it identically and the
       # roombapy-prime pin guard sees the same string in both.
       - name: Install roombapy-prime (--no-deps, for parity with the pinned job)
-        run: pip install --no-deps --no-cache-dir "roombapy-prime==0.4.0b2"
+        run: uv pip install --system --no-deps "roombapy-prime==0.4.0b2"
 
-      - name: Run full test suite
-        run: python -m pytest tests/ -q -p no:randomly
+      # COVERAGE LIVES HERE since 4.3.0b2, not in the minimum-version
+      # job: see the note at the top of `jobs`. Every module is at 95 %
+      # on both HA versions, so the gate below means the same thing it
+      # did there.
+      - name: Run full test suite with coverage
+        env:
+          COVERAGE_CORE: sysmon
+        run: |
+          python -m pytest tests/ -q -p no:randomly -n auto \
+            --cov=custom_components/roomba_plus --cov-branch \
+            --cov-report=term-missing --cov-report=xml
+
+      # BRANCHES, NOT JUST LINES. Line coverage cannot see a condition
+      # whose true side never happens -- and that is what several of the
+      # worst faults here looked like. `cleaned_in_room` was read in a
+      # guard and assigned True nowhere, so the route behind that guard
+      # was dead while every line around it counted as covered.
+      #
+      # Branch coverage reports those as partial: 43 of them in
+      # room_cleaning.py alone the first time it was switched on. That
+      # number is information, not a target -- plenty are defensive
+      # branches nobody should manufacture a test for.
+      #
+      # THE GATE IS PER MODULE, AND ON LINES. The quality scale's
+      # test-coverage rule asks for more than 95 % in every module. Since
+      # 4.2.11 all 84 are there, so a floor is no longer a number without a
+      # baseline -- it is the rule itself. The check counts lines from
+      # coverage.xml rather than reading the rounded terminal report, which
+      # prints 94.6 % as 95 % and once let three short modules through.
+      # Branch coverage is printed per module for information only.
+      - name: Check 95 % line coverage in every module
+        run: python scripts/check_coverage_per_module.py coverage.xml
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v6
+        with:
+          name: coverage-report
+          path: coverage.xml
+          retention-days: 30
 
   test:
     name: Test Suite (HA 2025.5 / Python 3.13 — the supported minimum)
@@ -134,7 +191,9 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.13"
-          cache: "pip"
+
+      - name: Install uv
+        run: python -m pip install "uv==0.12.18"
 
       # pycares IS PINNED, and only on this combination.
       #
@@ -155,14 +214,13 @@ jobs:
       # it pinned and wrong about what else it held still.
       - name: Install Home Assistant 2025.5 and test tooling
         run: |
-          python -m pip install --upgrade pip
-          pip install "pytest-homeassistant-custom-component==0.13.245" \
+          uv pip install --system "pytest-homeassistant-custom-component==0.13.245" \
                       "pycares==4.11.0" \
                       aiohttp pillow
 
       - name: Install roombapy and roombapy-prime
         run: |
-          pip install "roombapy==2.0.2" "roombapy-prime[map]==0.4.0b2"
+          uv pip install --system "roombapy==2.0.2" "roombapy-prime[map]==0.4.0b2"
 
       # THESE THREE NEED THE LIBRARIES. They ran in the markdown job, which
       # installs nothing: one failed on `import yaml`, and the other two
@@ -195,39 +253,10 @@ jobs:
       - name: Check vendor value tables
         run: python3 scripts/check_vendor_value_tables.py
 
-      - name: Run full test suite with coverage
-        run: |
-          python -m pytest tests/ --cov=custom_components/roomba_plus \
-            --cov-branch \
-            --cov-report=term-missing --cov-report=xml -q
-
-      # BRANCHES, NOT JUST LINES. Line coverage cannot see a condition
-      # whose true side never happens -- and that is what several of the
-      # worst faults here looked like. `cleaned_in_room` was read in a
-      # guard and assigned True nowhere, so the route behind that guard
-      # was dead while every line around it counted as covered.
-      #
-      # Branch coverage reports those as partial: 43 of them in
-      # room_cleaning.py alone the first time it was switched on. That
-      # number is information, not a target -- plenty are defensive
-      # branches nobody should manufacture a test for.
-      #
-      # THE GATE IS PER MODULE, AND ON LINES. The quality scale's
-      # test-coverage rule asks for more than 95 % in every module. Since
-      # 4.2.11 all 84 are there, so a floor is no longer a number without a
-      # baseline -- it is the rule itself. The check counts lines from
-      # coverage.xml rather than reading the rounded terminal report, which
-      # prints 94.6 % as 95 % and once let three short modules through.
-      # Branch coverage is printed per module for information only.
-      - name: Check 95 % line coverage in every module
-        run: python scripts/check_coverage_per_module.py coverage.xml
-
-      - name: Upload coverage report
-        uses: actions/upload-artifact@v6
-        with:
-          name: coverage-report
-          path: coverage.xml
-          retention-days: 30
+      # Coverage is measured in the Python 3.14 job (see the top of
+      # `jobs`). Here the suite only has to pass.
+      - name: Run full test suite
+        run: python -m pytest tests/ -q -n auto
 
   lint:
     name: Lint (ruff)
