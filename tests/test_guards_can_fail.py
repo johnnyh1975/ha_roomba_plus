@@ -142,7 +142,7 @@ class TestRoombapyPrimePinGuard:
             json.dumps(
                 {
                     "domain": "roomba_plus",
-                    "requirements": ["roombapy-prime[map]==0.3.4"],
+                    "requirements": ["roombapy-prime[map]==0.4.0b2"],
                 }
             ),
             encoding="utf-8",

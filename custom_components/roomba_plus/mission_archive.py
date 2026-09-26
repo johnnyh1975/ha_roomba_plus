@@ -49,7 +49,7 @@ from homeassistant.util import dt as dt_util
 from .const import ROOM_EVENT_DONE_STATUSES
 
 if TYPE_CHECKING:
-    from .cloud_api import IrobotCloudApi
+    from roombapy_prime import ClassicRestClient
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -383,7 +383,7 @@ class MissionArchive:
 
     async def async_initial_load(
         self,
-        cloud_api: "IrobotCloudApi",
+        cloud_api: "ClassicRestClient",
         blid: str,
         hass: HomeAssistant,
         entry_id: str,
@@ -408,13 +408,14 @@ class MissionArchive:
             "MissionArchive: starting initial load for %s", entry_id
         )
         all_raw: list[dict[str, Any]] = []
+        seen: set[tuple[Any, Any]] = set()
         before_ts: int | None = None
         pages_fetched = 0
 
         while True:
             try:
                 batch = await cloud_api.get_mission_history(
-                    blid, count=_INITIAL_LOAD_BATCH, before_ts=before_ts
+                    blid, count=_INITIAL_LOAD_BATCH, before=before_ts
                 )
             except Exception as exc:  # noqa: BLE001
                 _LOGGER.warning(
@@ -431,9 +432,29 @@ class MissionArchive:
             if not mission_records:
                 break
 
-            all_raw.extend(mission_records)
+            # A PAGE WITH NOTHING NEW ENDS THE LOAD (4.3). Measured on a
+            # 980: the Classic cloud ignores `before` (and `count`) and
+            # answers every page with the same ~100-day window. This loop
+            # then asked for that same page again and again until the
+            # 800-record cap -- two dozen identical requests, two seconds
+            # apart, for one robot. Where the cloud does page, every page
+            # brings missions not seen before, so this changes nothing.
+            fresh = [
+                r for r in mission_records
+                if (r.get("nMssn"), r.get("startTime")) not in seen
+            ]
+            if not fresh:
+                _LOGGER.debug(
+                    "MissionArchive: page %d for %s repeated earlier missions "
+                    "only -- the cloud does not page further back",
+                    pages_fetched + 1, entry_id,
+                )
+                break
+            seen.update((r.get("nMssn"), r.get("startTime")) for r in fresh)
+
+            all_raw.extend(fresh)
             pages_fetched += 1
-            before_ts = int(mission_records[-1].get("startTime", 0) or 0)
+            before_ts = int(fresh[-1].get("startTime", 0) or 0)
             if not before_ts:
                 break
 

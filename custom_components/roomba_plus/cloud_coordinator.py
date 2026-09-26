@@ -21,16 +21,23 @@ import logging
 import statistics
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NoReturn
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
-from .cloud_api import AuthenticationError, CloudApiError, IrobotCloudApi
+from roombapy_prime import (
+    AuthCredentialsError,
+    ClassicRestClient,
+    CloudError,
+    CloudErrorReason,
+)
+
+from . import cloud_errors
+from .cloud_account import async_acquire, async_release, cloud_country
 from .const import DOMAIN, SQFT_TO_M2
 
 if TYPE_CHECKING:
@@ -43,6 +50,13 @@ _LOGGER = logging.getLogger(__name__)
 # Real-time mission state comes from MQTT push (callbacks.py), not cloud.
 # Post-mission cloud refresh is triggered explicitly by F4b, not by poll interval.
 _CLOUD_POLL_IDLE = timedelta(hours=24)
+
+# Without a login (it failed at setup), the next refresh is the one that
+# logs in -- and the next refresh would be a day away. @ScenicSystemsLLC
+# lost the rooms of three robots after a restart and found them still
+# missing ten minutes later; a network that was not up yet at boot must
+# not cost a day of room features.
+_CLOUD_LOGIN_RETRY = timedelta(minutes=10)
 
 # F-RB-4 — suppress UpdateFailed for this long after the last success.
 # Avoids entity unavailability on transient cloud outages (< 2 min).
@@ -469,13 +483,13 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._has_pmaps = has_pmaps
         self._mission_store = mission_store   # CR3 — fallback source
         self._mission_archive = mission_archive  # ARC1 — v2.8.0
-        country_code = (hass.config.country or "US").upper()
-        self.api = IrobotCloudApi(
-            username=username,
-            password=password,
-            session=async_get_clientsession(hass),
-            country_code=country_code,
-        )
+        self._username = username
+        self._password = password
+        self._entry_id = config_entry.entry_id
+        # The account's Classic client, once logged in. See `api`.
+        self._api: ClassicRestClient | None = None
+        self._unloaded = False
+        config_entry.async_on_unload(self._async_release_account)
         # F-RB-4 — track last successful update for failure-suppression grace period
         self._last_success_time: "datetime | None" = None
         # P4: cached per-day dirt density — populated after each successful fetch
@@ -484,43 +498,100 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._seeded_pmap_id: str | None = None
         _LOGGER.debug(
             "iRobot cloud: using country_code=%s, has_pmaps=%s for %s",
-            country_code, has_pmaps, blid,
+            cloud_country(hass), has_pmaps, blid,
         )
 
-    async def _async_setup(self) -> None:
-        """Authenticate once when the coordinator is first started."""
+    @property
+    def api(self) -> ClassicRestClient:
+        """The account's Classic REST client.
+
+        SHARED WITH EVERY ENTRY ON THE SAME ACCOUNT (4.3). Until then
+        each coordinator logged in on its own; now the login belongs to
+        the account (cloud_account.py), and this is one client of it.
+
+        Raises CloudError while there is no login yet -- setup failed
+        and the next refresh has not logged in. Every caller already
+        handles a cloud error here, since an unreachable cloud looks the
+        same to it."""
+        if self._api is None:
+            raise CloudError(
+                "not logged in to the iRobot cloud yet",
+                reason=CloudErrorReason.CONNECTION_FAILED,
+            )
+        return self._api
+
+    @property
+    def logged_in(self) -> bool:
+        """Whether `api` can be used."""
+        return self._api is not None
+
+    async def _async_ensure_api(self) -> None:
+        """Takes this entry's share of the account login, once.
+
+        A login that failed at setup is retried by the next refresh. Up
+        to 4.2 a failed setup left the client without credentials, and
+        the next daily refresh reported that as wrong credentials."""
+        if self._api is not None:
+            return
         try:
-            await self.api.authenticate()
-        except AuthenticationError as exc:
+            account = await async_acquire(
+                self.hass, self._entry_id, self._username, self._password
+            )
+        except Exception:
+            self.update_interval = _CLOUD_LOGIN_RETRY
+            raise
+        if getattr(self, "_unloaded", False):
+            # The entry unloaded while this waited for the account's
+            # login. A refresh requested by a button runs outside the
+            # entry's tasks, so unloading does not cancel it; without
+            # this it would hold a share of the account until restart.
+            async_release(self.hass, self._entry_id)
+            raise CloudError(
+                "entry unloaded during the iRobot cloud login",
+                reason=CloudErrorReason.CONNECTION_FAILED,
+            )
+        self._api = account.classic_rest()
+        self.update_interval = _CLOUD_POLL_IDLE
+
+    @callback
+    def _async_release_account(self) -> None:
+        """On unload: this entry's share of the account goes back."""
+        self._unloaded = True
+        self._api = None
+        async_release(self.hass, self._entry_id)
+
+    def _raise_for(self, exc: BaseException, what: str) -> NoReturn:
+        """A cloud failure as Home Assistant expects it: rejected
+        credentials (or a locked account) ask for reauthentication,
+        everything else is a failed update that the next refresh
+        retries.
+
+        The translated text comes from the error's reason
+        (cloud_errors.py); the English message stays for the log."""
+        if isinstance(exc, AuthCredentialsError):
             raise ConfigEntryAuthFailed(
-                f"iRobot cloud credentials are invalid: {exc}",
+                f"iRobot cloud {what}: {exc}",
                 translation_domain=DOMAIN,
-                translation_key="cloud_credentials_invalid",
-                translation_placeholders={"error": str(exc)},
+                translation_key=cloud_errors.translation_key(exc),
+                translation_placeholders=cloud_errors.translation_placeholders(exc),
             ) from exc
-        except (CloudApiError, aiohttp.ClientError, TimeoutError) as exc:
-            # v3.3.0 REVIEW-REMAINDER — transient network errors
-            # (aiohttp.ClientError incl. ContentTypeError) and the 30 s
-            # asyncio.timeout guard previously bypassed this handler —
-            # exactly the transient class the F-RB-4 grace period below
-            # was built for.
-            # Transient — let HA retry via ConfigEntryNotReady pathway
-            #
-            # NEW (this session): translation_key added for consistency/
-            # future-proofing, but currently INERT for UpdateFailed --
-            # verified against homeassistant.helpers.update_coordinator's
-            # actual source: it stores self.last_exception = err and
-            # never reads translation_key/translation_domain anywhere.
-            # No consumer renders this today. Kept anyway since the raw
-            # f-string fallback is unaffected either way, and this is
-            # where the fine-grained CloudApiError subclasses (SSL/
-            # connection/timeout/rate-limited) actually surface.
-            raise UpdateFailed(
-                f"iRobot cloud setup failed: {exc}",
-                translation_domain=DOMAIN,
-                translation_key="cloud_temporarily_unavailable",
-                translation_placeholders={"error": str(exc)},
-            ) from exc
+        # The translation is INERT for UpdateFailed: Home Assistant's
+        # coordinator stores the exception and never renders it. Kept so
+        # the reason is on the exception for anyone who looks.
+        raise UpdateFailed(
+            f"iRobot cloud {what}: {exc}",
+            translation_domain=DOMAIN,
+            translation_key=cloud_errors.translation_key(exc),
+            translation_placeholders=cloud_errors.translation_placeholders(exc),
+        ) from exc
+
+    async def _async_setup(self) -> None:
+        """Log in once when the coordinator is first started -- or take
+        the login another entry on the same account already made."""
+        try:
+            await self._async_ensure_api()
+        except (CloudError, aiohttp.ClientError, TimeoutError) as exc:
+            self._raise_for(exc, "setup failed")
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch current cloud data for this robot."""
@@ -534,6 +605,7 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "parts": {},                 # consumable counters from /v1/robots/{blid}/parts
         }
         try:
+            await self._async_ensure_api()
             async with asyncio.timeout(30):
                 # pmaps and favorites require cap.pmaps — SMART robots only.
                 # missionhistory is account-level and available for all robots.
@@ -544,7 +616,7 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 #
                 # @ScenicSystemsLLC: a ValueError from mission history
                 # escaped the handler below (which catches
-                # CloudApiError, ClientError and TimeoutError) and
+                # CloudError, ClientError and TimeoutError) and
                 # killed the whole coroutine -- **after** pmaps and
                 # favourites had been fetched successfully. Python
                 # returns nothing from a raising function, so both were
@@ -570,7 +642,7 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 # answered, and what it sent cannot be read.
                 try:
                     raw_history = await self.api.get_mission_history(self.blid)
-                except (CloudApiError, aiohttp.ClientError, TimeoutError):
+                except (CloudError, aiohttp.ClientError, TimeoutError):
                     raise
                 except Exception:  # noqa: BLE001
                     _LOGGER.warning(
@@ -600,7 +672,8 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 # a cap flag instead would need a flag that iRobot does
                 # not publish for this feature.
                 try:
-                    result["parts"] = await self.api.get_robot_parts(self.blid)
+                    parts = await self.api.get_robot_parts_raw(self.blid)
+                    result["parts"] = parts if isinstance(parts, dict) else {}
                 except Exception:  # noqa: BLE001
                     _LOGGER.debug(
                         "iRobot cloud: parts endpoint unavailable for %s "
@@ -608,14 +681,9 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         self.blid,
                     )
                     result["parts"] = {}
-        except AuthenticationError as exc:
-            raise ConfigEntryAuthFailed(
-                f"iRobot cloud authentication failed: {exc}",
-                translation_domain=DOMAIN,
-                translation_key="cloud_credentials_invalid",
-                translation_placeholders={"error": str(exc)},
-            ) from exc
-        except (CloudApiError, aiohttp.ClientError, TimeoutError) as exc:
+        except AuthCredentialsError as exc:
+            self._raise_for(exc, "authentication failed")
+        except (CloudError, aiohttp.ClientError, TimeoutError) as exc:
             # v3.3.0 REVIEW-REMAINDER — transient network errors
             # (aiohttp.ClientError incl. ContentTypeError) and the 30 s
             # asyncio.timeout guard previously bypassed this handler —
@@ -634,12 +702,7 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     self.blid, exc,
                 )
                 return self.data
-            raise UpdateFailed(
-                f"iRobot cloud update failed: {exc}",
-                translation_domain=DOMAIN,
-                translation_key="cloud_temporarily_unavailable",
-                translation_placeholders={"error": str(exc)},
-            ) from exc
+            self._raise_for(exc, "update failed")
 
         # F-RB-4 — stamp last success time for future failure-suppression checks.
         self._last_success_time = datetime.now(UTC)

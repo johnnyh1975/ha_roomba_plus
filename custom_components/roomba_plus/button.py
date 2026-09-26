@@ -45,6 +45,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import roomba_reported_state
+from . import cloud_errors
 from .entity_cleanup import async_remove_stale_entities
 from .const import (
     maintenance_changed_signal,
@@ -675,7 +676,9 @@ class _CloudPartResetButton(_MaintenanceResetButton):
             raise HomeAssistantError(
                 translation_domain=DOMAIN,
                 translation_key="cloud_part_reset_failed",
-                translation_placeholders={"error": type(exc).__name__},
+                translation_placeholders={
+                    "reason": await cloud_errors.async_reason_text(self.hass, exc)
+                },
             ) from exc
         if not result.get("num_parts"):
             _LOGGER.warning(

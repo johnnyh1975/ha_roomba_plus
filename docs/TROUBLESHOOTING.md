@@ -198,7 +198,17 @@ This used to suggest turning off continuous mode to free the slot. **That option
 
 **Cloud authentication fails**
 
-Check your iRobot app email and password. If you see an "mqtt slot" error, close the iRobot app on all devices and wait a few minutes before retrying.
+Since 4.3 the message says which of these it is, in your language:
+
+- **The login was rejected:** check the email address and password of your iRobot account.
+- **The account is temporarily locked:** do *not* re-enter your password. The lock clears by itself, usually within minutes, and every new attempt can extend it. Disable the Roomba+ entries of that account, wait about ten minutes, then enable them again.
+- **Too many active sessions:** close the iRobot app on all devices and wait a few minutes before retrying.
+- **Home Assistant cannot check iRobot's certificate:** the certificate store of the system Home Assistant runs on is missing or out of date. Waiting does not fix this one; updating the system's CA certificates does.
+- **iRobot's certificate has expired**, or **iRobot's cloud has a problem of its own:** on iRobot's side, usually fixed within hours.
+
+All robots on one iRobot account share one cloud login since 4.3, so a failed login is tried once for all of them, not once per robot.
+
+**After changing the iRobot password**, every robot of the account asks for the new one. Enter it for any one of them: the others that had the same old password take the new one and restart by themselves.
 
 ---
 
@@ -661,6 +671,10 @@ automatically, whatever its model.
 
 The wording before v4.0.0a47 suggested the option was only for newer
 models. It was not.
+
+Since 4.3 a robot found on your network needs no password at all when
+another robot of the same iRobot account is already running here: the
+password comes from the account.
 
 ## The per-room sensors did not appear after enabling the option
 

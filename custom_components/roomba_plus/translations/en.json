@@ -17,7 +17,7 @@
           "host": "Select robot"
         },
         "data_description": {
-          "host": "The robot to set up. Robots found on your network are listed; choose manual entry if yours is missing."
+          "host": "The robot to set up. Setting up with your iRobot account is recommended: it works for every robot, finds all robots on the account and needs no button press. Robots found on your network are listed too; choose manual entry if yours is missing."
         }
       },
       "manual": {
@@ -93,7 +93,7 @@
       },
       "prime_robot_picker": {
         "title": "Choose a robot",
-        "description": "Robots found on this account. Pick one to set up — add additional robots by starting this setup again.",
+        "description": "Robots on this account. Pick one to set up; the others will then appear under Discovered, one click each. Already set up: {configured}.",
         "data": {
           "blid": "Robot"
         },
@@ -111,26 +111,42 @@
           "host": "The robot's local IP address on your network, for example as shown in your router."
         }
       },
-      "prime_classic_analytics": {
-        "title": "Cloud features for {name}",
-        "description": "Keep your iRobot account credentials for this robot too, to enable room names, mission history, and favorites read from the cloud? All commands still run locally over MQTT either way.",
+      "known_account": {
+        "title": "iRobot account",
+        "description": "Another robot here already uses an iRobot account. Use it for this one too, so you do not have to enter it again, or choose another account.",
         "data": {
-          "enable_cloud_analytics": "Enable cloud features for this robot"
+          "account": "Account"
         },
         "data_description": {
-          "enable_cloud_analytics": "Keeps your iRobot credentials for this robot to add room names, mission history and favourites. The robot itself is still controlled locally."
+          "account": "Choosing a known account still logs in once, to list robots added since and to check that the stored password still works."
         }
+      },
+      "integration_discovery_confirm": {
+        "title": "Add {name}?",
+        "description": "{name} ({model}) is on the iRobot account {account}, which another robot here already uses. Add it with the same account? Nothing needs to be entered; a Classic robot is looked up on your network."
       }
     },
     "error": {
       "cannot_connect": "Failed to connect to the robot. Verify it is powered on and reachable.",
       "invalid_auth": "Invalid credentials. Check your BLID and password.",
       "unknown": "Unexpected error. Check the Home Assistant logs for details.",
-      "cloud_auth_failed": "Cloud authentication failed. Check your iRobot email and password.",
-      "cloud_unavailable": "Could not reach iRobot cloud. Check your internet connection and try again.",
-      "invalid_cloud_credentials": "Cloud authentication failed. Check your iRobot email and password.",
-      "cloud_rate_limited": "iRobot's cloud login is temporarily rate-limited. Close the iRobot app on your phone, then try again.",
-      "cloud_ssl_certificate_error": "Could not verify iRobot's cloud server certificate. This is almost always temporary on iRobot's end — try again in a few hours."
+      "cloud_connection_failed": "Could not reach iRobot's cloud. Check that Home Assistant is connected to the internet; if it is, iRobot's servers may be unreachable for a while.",
+      "cloud_connection_broken": "The connection to iRobot's cloud broke off before the answer was complete. This is usually temporary.",
+      "cloud_timeout": "iRobot's cloud did not answer in time. This is usually temporary.",
+      "cloud_ssl_local_trust_store": "Home Assistant cannot check iRobot's certificate because its own list of trusted certificates is missing or out of date. Waiting will not fix this: update the CA certificates of the system Home Assistant runs on.",
+      "cloud_ssl_certificate_expired": "iRobot's server certificate has expired. This is on iRobot's side and is usually fixed within a few hours.",
+      "cloud_ssl_unverified": "iRobot's server certificate could not be verified. If this persists, check the date and time of the system Home Assistant runs on.",
+      "cloud_credentials_rejected": "iRobot rejected the login. Check the email address and password of your iRobot account.",
+      "cloud_account_locked": "Do not re-enter your password: your iRobot account is temporarily locked after too many login attempts. The lock clears by itself, usually within minutes, and every new attempt can extend it. Wait about ten minutes before trying again.",
+      "cloud_too_many_sessions": "Your iRobot account has too many active sessions. Close the iRobot app on your phone, then try again.",
+      "cloud_no_robots": "Your iRobot account has no robots.",
+      "cloud_robot_ambiguous": "Your iRobot account has several robots and none was chosen.",
+      "cloud_request_refused": "iRobot's cloud refused the login request.",
+      "cloud_rate_limited": "iRobot's cloud has received too many requests. Try again later.",
+      "cloud_server_error": "iRobot's cloud has a problem of its own. This is on iRobot's side and usually temporary; try again later.",
+      "cloud_response_malformed": "iRobot's cloud sent an answer that could not be read. If this persists, please report it with a diagnostics download.",
+      "cloud_unknown": "iRobot's cloud reported an error without a known cause.",
+      "account_password_refused": "The robot did not accept the password from your iRobot account, so it has to be fetched from the robot itself."
     },
     "abort": {
       "already_configured": "This robot is already configured.",
@@ -146,8 +162,10 @@
       "room_schedule_not_supported": "Room schedules need a robot that reports room data.",
       "no_rooms_to_name": "No rooms were found to name. This robot's rooms appear once it has cleaned specific rooms at least once, or once its map is available from your iRobot account.",
       "all_rooms_named": "Every room already has a name. Rename one from the zone selector on the device page.",
-      "wrong_roombapy": "Roomba+ needs the asynchronous `roombapy` 2.x, and the copy Home Assistant has installed is an older one:\n\n`{error}`\n\n**Restart Home Assistant first** — that makes it install the version Roomba+ asks for.\n\nIf it comes back after a restart, Home Assistant's **built-in Roomba integration** is installing the older library over it. Both cannot be present: remove the built-in one (Settings → Devices & Services → Roomba → delete) and restart again. Roomba+ covers everything it does.\n\nThe Roomba+ version makes no difference here — every 4.2.x release needs the same library."
-    }
+      "wrong_roombapy": "Roomba+ needs the asynchronous `roombapy` 2.x, and the copy Home Assistant has installed is an older one:\n\n`{error}`\n\n**Restart Home Assistant first** — that makes it install the version Roomba+ asks for.\n\nIf it comes back after a restart, Home Assistant's **built-in Roomba integration** is installing the older library over it. Both cannot be present: remove the built-in one (Settings → Devices & Services → Roomba → delete) and restart again. Roomba+ covers everything it does.\n\nThe Roomba+ version makes no difference here — every 4.2.x release needs the same library.",
+      "robot_not_on_account": "This robot is no longer on the iRobot account. If it was moved to another account, set it up with that one."
+    },
+    "flow_title": "{name}"
   },
   "options": {
     "step": {
@@ -317,14 +335,24 @@
       }
     },
     "error": {
-      "cloud_auth_failed": "Cloud authentication failed. Check your iRobot email and password.",
-      "cloud_unavailable": "Could not reach iRobot cloud. Check your internet connection and try again.",
-      "invalid_cloud_credentials": "Cloud authentication failed. Check your iRobot email and password.",
-      "cannot_connect": "Could not connect. Check your internet connection and try again.",
       "no_valid_ids": "No valid entries found. Use the format id=Name, one per line.",
       "pmap_not_resolved": "Could not resolve the map ID. Ensure the robot is docked and connected, then try again.",
-      "cloud_rate_limited": "iRobot's cloud login is temporarily rate-limited. Close the iRobot app on your phone, then try again.",
-      "cloud_ssl_certificate_error": "Could not verify iRobot's cloud server certificate. This is almost always temporary on iRobot's end — try again in a few hours."
+      "cloud_connection_failed": "Could not reach iRobot's cloud. Check that Home Assistant is connected to the internet; if it is, iRobot's servers may be unreachable for a while.",
+      "cloud_connection_broken": "The connection to iRobot's cloud broke off before the answer was complete. This is usually temporary.",
+      "cloud_timeout": "iRobot's cloud did not answer in time. This is usually temporary.",
+      "cloud_ssl_local_trust_store": "Home Assistant cannot check iRobot's certificate because its own list of trusted certificates is missing or out of date. Waiting will not fix this: update the CA certificates of the system Home Assistant runs on.",
+      "cloud_ssl_certificate_expired": "iRobot's server certificate has expired. This is on iRobot's side and is usually fixed within a few hours.",
+      "cloud_ssl_unverified": "iRobot's server certificate could not be verified. If this persists, check the date and time of the system Home Assistant runs on.",
+      "cloud_credentials_rejected": "iRobot rejected the login. Check the email address and password of your iRobot account.",
+      "cloud_account_locked": "Do not re-enter your password: your iRobot account is temporarily locked after too many login attempts. The lock clears by itself, usually within minutes, and every new attempt can extend it. Wait about ten minutes before trying again.",
+      "cloud_too_many_sessions": "Your iRobot account has too many active sessions. Close the iRobot app on your phone, then try again.",
+      "cloud_no_robots": "Your iRobot account has no robots.",
+      "cloud_robot_ambiguous": "Your iRobot account has several robots and none was chosen.",
+      "cloud_request_refused": "iRobot's cloud refused the login request.",
+      "cloud_rate_limited": "iRobot's cloud has received too many requests. Try again later.",
+      "cloud_server_error": "iRobot's cloud has a problem of its own. This is on iRobot's side and usually temporary; try again later.",
+      "cloud_response_malformed": "iRobot's cloud sent an answer that could not be read. If this persists, please report it with a diagnostics download.",
+      "cloud_unknown": "iRobot's cloud reported an error without a known cause."
     },
     "abort": {
       "integration_not_loaded": "The integration could not be loaded. Check the logs and reload before opening settings.",
@@ -1979,12 +2007,6 @@
     "backup_entity_not_found": {
       "message": "The entity \"{entity_id}\" could not be resolved to a Roomba+ robot. Check the entity ID and try again."
     },
-    "cloud_credentials_invalid": {
-      "message": "iRobot cloud credentials are invalid: {error}"
-    },
-    "cloud_temporarily_unavailable": {
-      "message": "iRobot cloud is temporarily unavailable: {error}"
-    },
     "unknown_rooms": {
       "message": "Unknown room(s) for {entity_id}: {rooms}. Known rooms: {known}."
     },
@@ -2042,12 +2064,6 @@
     "cannot_connect_local": {
       "message": "Cannot connect to the robot at {host}."
     },
-    "prime_login_rejected": {
-      "message": "The iRobot cloud rejected the login for robot {blid}: {error}"
-    },
-    "prime_login_failed": {
-      "message": "Could not log in to the iRobot cloud for robot {blid}: {error}"
-    },
     "start_time_required": {
       "message": "A start time is required."
     },
@@ -2075,14 +2091,8 @@
     "command_not_delivered": {
       "message": "The “{command}” command was not accepted for delivery — it never reached iRobot's cloud, so the robot has not seen it. This is a connection problem, not a refusal by the robot."
     },
-    "prime_shadows_unavailable": {
-      "message": "Could not read any state from the iRobot cloud for robot {blid}: {error}"
-    },
     "schedules_unreadable": {
       "message": "Could not read the schedules from the iRobot cloud — nothing was written."
-    },
-    "prime_cannot_connect": {
-      "message": "Could not connect to robot {blid} through the iRobot cloud: {error}"
     },
     "parts_unreadable": {
       "message": "Could not read the consumable parts from the iRobot cloud: {error}"
@@ -2172,7 +2182,7 @@
       "message": "iRobot's cloud does not list the part {part} for this robot, so its counter cannot be reset there."
     },
     "cloud_part_reset_failed": {
-      "message": "iRobot's cloud did not reset the counter ({error}). The local counter was left unchanged; try again later."
+      "message": "iRobot's cloud did not reset the counter. {reason} The local counter was left unchanged."
     },
     "cloud_part_reset_not_confirmed": {
       "message": "iRobot's cloud accepted the request but did not confirm the reset. The local counter was left unchanged."
@@ -2185,6 +2195,72 @@
     },
     "favorite_has_no_commands": {
       "message": "The favourite {name} contains no commands to run."
+    },
+    "cloud_connection_failed": {
+      "message": "Could not reach iRobot's cloud. Check that Home Assistant is connected to the internet; if it is, iRobot's servers may be unreachable for a while."
+    },
+    "cloud_connection_broken": {
+      "message": "The connection to iRobot's cloud broke off before the answer was complete. This is usually temporary."
+    },
+    "cloud_timeout": {
+      "message": "iRobot's cloud did not answer in time. This is usually temporary."
+    },
+    "cloud_ssl_local_trust_store": {
+      "message": "Home Assistant cannot check iRobot's certificate because its own list of trusted certificates is missing or out of date. Waiting will not fix this: update the CA certificates of the system Home Assistant runs on."
+    },
+    "cloud_ssl_certificate_expired": {
+      "message": "iRobot's server certificate has expired. This is on iRobot's side and is usually fixed within a few hours."
+    },
+    "cloud_ssl_unverified": {
+      "message": "iRobot's server certificate could not be verified. If this persists, check the date and time of the system Home Assistant runs on."
+    },
+    "cloud_credentials_rejected": {
+      "message": "iRobot rejected the login. Check the email address and password of your iRobot account."
+    },
+    "cloud_account_locked": {
+      "message": "Do not re-enter your password: your iRobot account is temporarily locked after too many login attempts. The lock clears by itself, usually within minutes, and every new attempt can extend it. Wait about ten minutes before trying again."
+    },
+    "cloud_too_many_sessions": {
+      "message": "Your iRobot account has too many active sessions. Close the iRobot app on your phone, then try again."
+    },
+    "cloud_no_robots": {
+      "message": "Your iRobot account has no robots."
+    },
+    "cloud_robot_ambiguous": {
+      "message": "Your iRobot account has several robots and none was chosen."
+    },
+    "cloud_request_refused": {
+      "message": "iRobot's cloud refused the request."
+    },
+    "cloud_rate_limited": {
+      "message": "iRobot's cloud has received too many requests. Try again later."
+    },
+    "cloud_server_error": {
+      "message": "iRobot's cloud has a problem of its own. This is on iRobot's side and usually temporary."
+    },
+    "cloud_response_malformed": {
+      "message": "iRobot's cloud sent an answer that could not be read. If this persists, please report it with a diagnostics download."
+    },
+    "cloud_unknown": {
+      "message": "iRobot's cloud reported an error without a known cause."
+    },
+    "cloud_not_connected": {
+      "message": "The connection to iRobot's cloud is not open yet."
+    },
+    "cloud_connect_refused": {
+      "message": "iRobot's cloud refused the robot's live connection."
+    },
+    "cloud_publish_not_delivered": {
+      "message": "A message to the robot could not be sent through iRobot's cloud."
+    },
+    "cloud_subscription_not_sent": {
+      "message": "The subscription to the robot's updates could not be sent to iRobot's cloud."
+    },
+    "cloud_subscription_rejected": {
+      "message": "iRobot's cloud did not allow the subscription to the robot's updates."
+    },
+    "cloud_shadow_rejected": {
+      "message": "iRobot's cloud refused to read or change the robot's state."
     }
   },
   "selector": {
@@ -2207,6 +2283,12 @@
       "options": {
         "away_only": "Unfreeze when all away",
         "always_ask": "Fire event (manual control)"
+      }
+    },
+    "known_account": {
+      "options": {
+        "__other__": "Another iRobot account",
+        "__none__": "No cloud features for this robot (local control only)"
       }
     }
   }

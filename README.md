@@ -1,7 +1,7 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Default-blue.svg)](https://github.com/hacs/default)
-[![Version](https://img.shields.io/badge/Version-4.2.13-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-4.3.0b1-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2025.5%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Platinum-blueviolet.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
@@ -24,6 +24,7 @@ Roomba+ is a Platinum-quality Home Assistant custom integration for iRobot Roomb
 | **Any supported robot** | **v4.2.13** (stable) — the default in HACS | One line for both generations. No beta channel needed. |
 | **Roomba Max · Combo/Plus 400-series** and other newer cloud robots | **v4.2.13** | Earlier stable lines **cannot connect to your robot at all** |
 | Still on the 4.1 line | **v4.2.13** | Everything fixed in 4.1.1 through 4.1.8 is in it. That line has ended |
+| Willing to test a beta | **v4.3.0b1** — needs *Show beta versions* in HACS | One iRobot account for all your robots: one cloud login instead of one per robot, the other robots offered after the first, no HOME button for a known account, and cloud errors explained in your language. Robot behaviour is unchanged |
 | Not sure | Check your model number against the [supported hardware](#supported-hardware--capability-matrix) table below | |
 
 > ⚠️ If HACS shows you only `main` and downloading it hangs, see
@@ -539,7 +540,11 @@ is about.
 
 ### Multiple robots
 
-Each robot is a separate integration entry with its own device, entities, and storage. Repeat the Add Integration flow for each robot. Cloud credentials are stored per robot.
+Each robot is a separate integration entry with its own device, entities, and storage.
+
+Since 4.3, set up the first robot with **"Set up with my iRobot account"**. The account's other robots then appear under **Discovered** in Settings → Devices & services, and each one is added with a single click; nothing needs to be entered again. Robots on the same account share one cloud login.
+
+A robot Home Assistant finds on your network needs no press of the HOME button when another robot of its iRobot account is already running here: its password comes from the account. Local-only setup, without any cloud account, still works as before.
 
 ---
 

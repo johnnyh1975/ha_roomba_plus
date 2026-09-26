@@ -25,7 +25,7 @@ from datetime import datetime
 from datetime import timedelta
 from unittest.mock import patch
 from custom_components.roomba_plus.cloud_coordinator import _MIN_UNAVAILABLE
-from custom_components.roomba_plus.cloud_api import CloudApiError
+from roombapy_prime import CloudError as CloudApiError
 from homeassistant.helpers.update_coordinator import UpdateFailed
 from custom_components.roomba_plus.cloud_coordinator import _CLOUD_POLL_IDLE
 from custom_components.roomba_plus.dirt_threshold_manager import MIN_GAP_HOURS
@@ -41,7 +41,7 @@ import asyncio
 import time
 from types import SimpleNamespace
 from homeassistant.exceptions import ConfigEntryAuthFailed
-from custom_components.roomba_plus.cloud_api import AuthenticationError
+from roombapy_prime import AuthCredentialsError as AuthenticationError
 import tests.conftest
 from custom_components.roomba_plus.cloud_coordinator import _normalize_mission_history
 from custom_components.roomba_plus.cloud_coordinator import _aggregate_history
@@ -106,7 +106,7 @@ def _make_coordinator_v240_coordinator() -> IrobotCloudCoordinator:
     coord._has_pmaps = False
     coord._mission_store = None
     coord._last_success_time = None
-    coord.api = AsyncMock()
+    coord._api = AsyncMock()
     coord.api.get_mission_history = AsyncMock(return_value=[])
     coord.api.get_automations = AsyncMock(return_value={})
     return coord
@@ -141,24 +141,84 @@ def _make_manager(options: dict | None = None) -> DirtThresholdManager:
 
 
 def _make_coordinator_v250_coordinator() -> IrobotCloudCoordinator:
-    """Build a coordinator with minimal mocks, patching the aiohttp session."""
+    """Build a coordinator with minimal mocks. Since 4.3 construction
+    touches no session: the login is the account's, taken at setup."""
     hass = hass_mock()
     hass.config.country = "US"
     entry = entry_mock()
-    with patch(
-        "custom_components.roomba_plus.cloud_coordinator.async_get_clientsession",
-        return_value=MagicMock(),
-    ):
-        coord = IrobotCloudCoordinator(
-            hass=hass,
-            config_entry=entry,
-            blid="test_blid",
-            username="user@test.com",
-            password="secret",
-            has_pmaps=True,
-            mission_store=None,
-        )
+    coord = IrobotCloudCoordinator(
+        hass=hass,
+        config_entry=entry,
+        blid="test_blid",
+        username="user@test.com",
+        password="secret",
+        has_pmaps=True,
+        mission_store=None,
+    )
     return coord
+
+
+class TestConstructionTakesNoLogin:
+
+    def test_there_is_no_client_until_setup(self):
+        coord = _make_coordinator_v250_coordinator()
+        assert not coord.logged_in
+
+    def test_the_accounts_share_is_released_on_unload(self):
+        coord = _make_coordinator_v250_coordinator()
+        registered = [c.args[0] for c in coord.config_entry.async_on_unload.call_args_list]
+        assert coord._async_release_account in registered
+        coord._api = MagicMock()
+        with patch(
+            "custom_components.roomba_plus.cloud_coordinator.async_release"
+        ) as release:
+            coord._async_release_account()
+        release.assert_called_once_with(coord.hass, coord.config_entry.entry_id)
+        assert not coord.logged_in
+
+    @pytest.mark.asyncio
+    async def test_an_entry_unloaded_during_its_login_gives_its_share_back(self):
+        """A refresh requested by a button runs outside the entry's own
+        tasks, so unloading does not cancel it. If it was waiting for the
+        account's login when the entry unloaded, it must not add the
+        entry back to the account for good."""
+        from roombapy_prime import CloudError
+
+        coord = _make_coordinator_v250_coordinator()
+
+        async def acquire(*_a, **_k):
+            coord._async_release_account()      # the unload happens meanwhile
+            return MagicMock()
+
+        with patch(
+            "custom_components.roomba_plus.cloud_coordinator.async_acquire", new=acquire
+        ), patch(
+            "custom_components.roomba_plus.cloud_coordinator.async_release"
+        ) as release:
+            with pytest.raises(CloudError):
+                await coord._async_ensure_api()
+        assert release.call_count == 2         # the unload's, and the late one
+        assert not coord.logged_in
+
+    @pytest.mark.asyncio
+    async def test_without_a_login_the_next_refresh_is_minutes_away_not_a_day(self):
+        """@ScenicSystemsLLC lost the rooms of three robots after a
+        restart and found them still missing ten minutes later: the
+        refresh that would log in was the daily one."""
+        from roombapy_prime import AuthTimeoutError
+        from custom_components.roomba_plus.cloud_coordinator import _CLOUD_LOGIN_RETRY
+
+        coord = _make_coordinator_v250_coordinator()
+        assert coord.update_interval == _CLOUD_POLL_IDLE
+        with patch(
+            "custom_components.roomba_plus.cloud_coordinator.async_acquire",
+            new=AsyncMock(side_effect=[AuthTimeoutError("boot"), MagicMock()]),
+        ):
+            with pytest.raises(AuthTimeoutError):
+                await coord._async_ensure_api()
+            assert coord.update_interval == _CLOUD_LOGIN_RETRY
+            await coord._async_ensure_api()
+        assert coord.update_interval == _CLOUD_POLL_IDLE
 
 
 def _raw_record(dirt: float, sqft: float, ts: int = 1748786400) -> dict:
@@ -1610,62 +1670,48 @@ class TestReviewRemainderErrorPaths:
         assert result.get("sentinel") == "last_good"
 
     @pytest.mark.asyncio
-    async def test_content_type_error_becomes_cloud_api_error(self):
-        """Fix A, API side: a 200 response with a non-JSON body raises the
-        typed CloudApiError from _aws_get, not aiohttp.ContentTypeError."""
-        import aiohttp
-        from unittest.mock import MagicMock, AsyncMock, patch
-        from custom_components.roomba_plus.cloud_api import (
-            CloudApiError, IrobotCloudApi,
+    async def test_an_unreadable_answer_uses_grace_period(self):
+        """Fix A, API side: a 200 with a body that is not JSON. Since 4.3
+        the library raises it as RestError (reason RESPONSE_MALFORMED),
+        a CloudError like any other, so it takes the grace period
+        instead of escaping untyped."""
+        from roombapy_prime import RestError
+
+        coord = self._grace_coordinator()
+        coord.api.get_mission_history = AsyncMock(
+            side_effect=RestError("Non-JSON response from https://x", status=200)
         )
-        api = IrobotCloudApi.__new__(IrobotCloudApi)
-        api._credentials = {
-            "CognitoId": "eu-west-1:abc", "AccessKeyId": "AK",
-            "SecretKey": "SK", "SessionToken": "ST",
-        }
-        resp = MagicMock()
-        resp.status = 200
-        resp.json = AsyncMock(
-            side_effect=aiohttp.ContentTypeError(MagicMock(), ())
-        )
-        ctx = MagicMock()
-        ctx.__aenter__ = AsyncMock(return_value=resp)
-        ctx.__aexit__ = AsyncMock(return_value=False)
-        api._session = MagicMock()
-        api._session.get = MagicMock(return_value=ctx)
-        with pytest.raises(CloudApiError, match="Non-JSON"):
-            await api._aws_get("https://api.example/x")
+        result = await coord._async_update_data()
+        assert result.get("sentinel") == "last_good"
 
     @pytest.mark.asyncio
     async def test_login_rejects_incomplete_credentials(self):
-        """Fix B: missing CognitoId (or any of the four signing keys) must
-        raise at login, not KeyError at first request. The actual gate
-        logic now lives in roombapy-prime (see its own
-        test_login_irobot_missing_single_credential_key_raises) --
-        this test's job since the v3.6.0 login consolidation is only to
-        confirm this module correctly propagates that failure.
+        """Fix B: a login response missing CognitoId (or any of the four
+        signing keys) fails at login, not with a KeyError at the first
+        request -- the gate lives in roombapy-prime.
 
-        DELIBERATE BEHAVIOR CHANGE (v3.6.0): previously expected
-        AuthenticationError here -- same bucket as "your password is
-        wrong". That was misleading: a malformed/incomplete server
-        response isn't fixed by re-entering the same, correct
-        credentials. Now expects the generic CloudApiError instead,
-        matching roombapy-prime's own categorization (this gate raises
-        plain AuthError there, not AuthCredentialsError)."""
-        from unittest.mock import AsyncMock, MagicMock, patch
-        from custom_components.roomba_plus.cloud_api import (
-            AuthenticationError, CloudApiError, IrobotCloudApi,
-        )
-        from roombapy_prime import AuthError as PrimeAuthError
+        AND IT IS NOT A PASSWORD PROBLEM. Re-entering the same, correct
+        credentials would not fix a malformed server response, so it
+        must not ask for reauthentication: a plain AuthError is a failed
+        update, only AuthCredentialsError is ConfigEntryAuthFailed."""
+        from roombapy_prime import AuthError
 
-        api = IrobotCloudApi("user@test.com", "pass123", MagicMock())
+        coord = _make_coordinator_v240_coordinator()
+        coord._api = None
+        coord.hass = MagicMock()
+        coord.config_entry = MagicMock(entry_id="E1")
+        coord._entry_id = "E1"
+        coord._username, coord._password = "user@test.com", "pass123"
         with patch(
-            "custom_components.roomba_plus.cloud_api._prime_login",
-            new=AsyncMock(side_effect=PrimeAuthError("Missing 'CognitoId' in iRobot credentials response")),
+            "custom_components.roomba_plus.cloud_coordinator.async_acquire",
+            new=AsyncMock(side_effect=AuthError(
+                "Missing 'CognitoId' in iRobot credentials response"
+            )),
         ):
-            with pytest.raises(CloudApiError, match="CognitoId") as excinfo:
-                await api.authenticate()
-            assert not isinstance(excinfo.value, AuthenticationError)
+            with pytest.raises(UpdateFailed, match="CognitoId") as excinfo:
+                await coord._async_setup()
+        assert not isinstance(excinfo.value, ConfigEntryAuthFailed)
+        assert excinfo.value.translation_key == "cloud_response_malformed"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1792,9 +1838,9 @@ class TestMissionHistoryIsNotWrappedInDict:
     def test_the_response_is_returned_unwrapped(self):
         import inspect
 
-        from custom_components.roomba_plus.cloud_api import IrobotCloudApi
+        from roombapy_prime import ClassicRestClient
 
-        source = inspect.getsource(IrobotCloudApi.get_mission_history)
+        source = inspect.getsource(ClassicRestClient.get_mission_history)
 
         assert "dict(await" not in source, (
             "the endpoint returns a list of records; dict() reads each "
@@ -1825,7 +1871,7 @@ def _coordinator(hass, umf=None, error=None):
     c = IrobotCloudCoordinator.__new__(IrobotCloudCoordinator)
     c.hass = hass
     c.blid = "CLOUDBLID1"
-    c.api = MagicMock()
+    c._api = MagicMock()
     c.api.get_pmap_umf = AsyncMock(side_effect=error, return_value=umf)
     return c
 
@@ -1836,10 +1882,10 @@ def _pmap(pid="p1", vid="v7"):
 
 def _full(hass, **api):
     c = _coordinator(hass)
-    c.api = MagicMock()
-    for name in ("authenticate", "get_pmaps", "get_favorites", "get_mission_history",
-                 "get_automations", "get_robot_parts"):
-        setattr(c.api, name, AsyncMock(**api.get(name, {"return_value": {} if name in ("get_automations", "get_robot_parts") else []})))
+    c._api = MagicMock()
+    for name in ("get_pmaps", "get_favorites", "get_mission_history",
+                 "get_automations", "get_robot_parts_raw"):
+        setattr(c.api, name, AsyncMock(**api.get(name, {"return_value": {} if name in ("get_automations", "get_robot_parts_raw") else []})))
     c._has_pmaps = True
     c._last_success_time = None
     c._mission_archive = None
@@ -1886,19 +1932,86 @@ class TestFetchActiveUmf:
         assert geo["observed_zones"] == [{"id": "o1", "space": "umf"}]
 
 
+def _not_logged_in(hass, acquire):
+    """A coordinator whose entry has no share of the account yet, with
+    cloud_account.async_acquire() replaced by `acquire`."""
+    c = _full(hass)
+    c._api = None
+    c._username, c._password = "user@example.com", "pw"
+    c.config_entry = MagicMock(entry_id="E1")
+    c._entry_id = "E1"
+    return c, patch(
+        "custom_components.roomba_plus.cloud_coordinator.async_acquire", new=acquire
+    )
+
+
 class TestCloudSetup:
 
     @pytest.mark.asyncio
     async def test_wrong_credentials_ask_for_reauthentication(self, hass):
-        c = _full(hass, authenticate={"side_effect": AuthenticationError("bad")})
-        with pytest.raises(ConfigEntryAuthFailed):
+        c, acquire = _not_logged_in(hass, AsyncMock(side_effect=AuthenticationError("bad")))
+        with acquire, pytest.raises(ConfigEntryAuthFailed) as excinfo:
             await c._async_setup()
+        assert excinfo.value.translation_key == "cloud_credentials_rejected"
+
+    @pytest.mark.asyncio
+    async def test_a_locked_account_says_so(self, hass):
+        """Still a reauthentication (no retry loop against a lock), but
+        the text is the lockout's, which starts with "do not re-enter
+        your password"."""
+        from roombapy_prime import CloudErrorReason
+
+        locked = AuthenticationError("locked", reason=CloudErrorReason.ACCOUNT_LOCKED)
+        c, acquire = _not_logged_in(hass, AsyncMock(side_effect=locked))
+        with acquire, pytest.raises(ConfigEntryAuthFailed) as excinfo:
+            await c._async_setup()
+        assert excinfo.value.translation_key == "cloud_account_locked"
 
     @pytest.mark.asyncio
     async def test_an_unreachable_cloud_is_a_retryable_failure(self, hass):
-        c = _full(hass, authenticate={"side_effect": CloudApiError("down")})
-        with pytest.raises(UpdateFailed):
+        c, acquire = _not_logged_in(hass, AsyncMock(side_effect=CloudApiError("down")))
+        with acquire, pytest.raises(UpdateFailed):
             await c._async_setup()
+
+    @pytest.mark.asyncio
+    async def test_setup_takes_the_accounts_classic_client(self, hass):
+        account = MagicMock()
+        c, acquire = _not_logged_in(hass, AsyncMock(return_value=account))
+        with acquire:
+            await c._async_setup()
+        assert c.api is account.classic_rest.return_value
+        assert c.logged_in
+
+    @pytest.mark.asyncio
+    async def test_a_failed_setup_logs_in_on_the_next_refresh(self, hass):
+        """Up to 4.2 a failed setup left the client without credentials,
+        and the next refresh reported that as WRONG CREDENTIALS -- a
+        reauthentication request a day after a network blip. Now the
+        refresh logs in."""
+        account = MagicMock()
+        account.classic_rest.return_value = c_api = MagicMock()
+        for name in ("get_pmaps", "get_favorites", "get_mission_history"):
+            setattr(c_api, name, AsyncMock(return_value=[]))
+        c_api.get_automations = AsyncMock(return_value={})
+        c_api.get_robot_parts_raw = AsyncMock(return_value={})
+        acquire_mock = AsyncMock(side_effect=[CloudApiError("down"), account])
+        c, acquire = _not_logged_in(hass, acquire_mock)
+        with acquire:
+            with pytest.raises(UpdateFailed):
+                await c._async_setup()
+            assert not c.logged_in
+            await c._async_update_data()
+        assert c.api is c_api
+        assert acquire_mock.await_count == 2
+
+    def test_without_a_login_the_client_is_a_cloud_error(self, hass):
+        """Callers (the part-reset button, the mission map view) already
+        handle a cloud error; a None would have been an AttributeError."""
+        from roombapy_prime import CloudError
+
+        c, _acquire = _not_logged_in(hass, AsyncMock())
+        with pytest.raises(CloudError):
+            _ = c.api
 
 
 class TestCloudUpdate:
@@ -1909,10 +2022,29 @@ class TestCloudUpdate:
         c = _full(hass,
                   get_mission_history={"return_value": [{"nMssn": 1, "timeline": {"a": 1}, "evts": [1, 2]}, "junk"]},
                   get_automations={"side_effect": RuntimeError("x")},
-                  get_robot_parts={"side_effect": RuntimeError("y")})
+                  get_robot_parts_raw={"side_effect": RuntimeError("y")})
         data = await c._async_update_data()
         assert data["automations"] == {} and data["parts"] == {}
         assert c._last_success_time is not None
+
+    @pytest.mark.asyncio
+    async def test_parts_of_an_odd_shape_are_empty(self, hass):
+        """The raw answer is kept whole for the maintenance store, which
+        reads keys the library's parsed model would drop -- so the shape
+        check stays here, as it was in cloud_api."""
+        c = _full(hass, get_robot_parts_raw={"return_value": ["not", "a", "dict"]})
+        data = await c._async_update_data()
+        assert data["parts"] == {}
+        c.api.get_robot_parts_raw.assert_awaited_once_with("CLOUDBLID1")
+
+    @pytest.mark.asyncio
+    async def test_mission_history_is_the_classic_apps_request(self, hass):
+        """No arguments: the library's defaults ARE the request the
+        integration sent up to 4.2 (filter, done codes, count 100, the
+        account's app id), pinned byte for byte in roombapy-prime."""
+        c = _full(hass)
+        await c._async_update_data()
+        c.api.get_mission_history.assert_awaited_once_with("CLOUDBLID1")
 
     @pytest.mark.asyncio
     async def test_an_unexpected_history_error_leaves_history_empty(self, hass):
@@ -2103,7 +2235,7 @@ class _FakeApi:
 
 async def _run_update(coordinator: IrobotCloudCoordinator, api: _FakeApi) -> dict:
     """Run _async_update_data with a fake API injected."""
-    coordinator.api = api
+    coordinator._api = api
     return await coordinator._async_update_data()
 
 
@@ -2620,3 +2752,119 @@ class TestTheCommittedVersionIsTheActiveOne:
                 "last_user_ts", "proc_state", "creator", "create_time")},
             "committed_version_used": None,
         }]
+
+
+# ── formerly tests/test_cloud_api.py (removed in 4.3 with cloud_api.py) ───────
+#
+# The grace period lives in the coordinator, so its tests moved here.
+
+
+def _make_grace_coordinator() -> IrobotCloudCoordinator:
+    """Create a coordinator instance without HA infrastructure."""
+    coord = object.__new__(IrobotCloudCoordinator)
+    coord.data = None
+    coord.blid = "TEST_BLID"
+    coord._has_pmaps = False
+    coord._mission_store = None
+    coord._last_success_time = None
+    coord._api = AsyncMock()
+    coord.api.get_mission_history = AsyncMock(return_value=[])
+    coord.api.get_automations = AsyncMock(return_value={})
+    return coord
+
+
+class TestUpdateFailureSuppression:
+
+    def test_min_unavailable_is_two_minutes(self):
+        """_MIN_UNAVAILABLE constant must be exactly 2 minutes."""
+        assert _MIN_UNAVAILABLE == timedelta(minutes=2)
+
+    def test_last_success_time_initialises_to_none(self):
+        """_last_success_time must be None before any successful update."""
+        coord = _make_grace_coordinator()
+        assert coord._last_success_time is None
+
+    @pytest.mark.asyncio
+    async def test_success_stamps_last_success_time(self):
+        """A successful `_async_update_data` sets `_last_success_time`.
+
+        THIS TEST USED TO ASSERT NOTHING AND SAY SO. It swallowed every
+        exception and closed with a comment -- "confirmed via logic trace
+        of _async_update_data" -- in place of the assertion its own
+        docstring promised. It could not fail, and it counted towards
+        coverage while covering nothing.
+
+        The timestamp is what the grace-period logic reads, so a
+        regression here would silently change how long stale data is
+        served after the cloud goes away.
+        """
+        coord = _make_grace_coordinator()
+        coord._last_success_time = None
+        with patch(
+            "custom_components.roomba_plus.cloud_coordinator.asyncio.timeout"
+        ), patch.object(
+            coord, "_normalize_and_merge", return_value=_GOOD_DATA, create=True
+        ):
+            coord.api.get_mission_history = AsyncMock(return_value=[])
+            coord.api.get_automations = AsyncMock(return_value={})
+            await coord._async_update_data()
+
+        assert coord._last_success_time is not None
+
+    @pytest.mark.asyncio
+    async def test_cloud_error_within_grace_period_returns_last_data(self):
+        """CloudError within grace period → return last data, no UpdateFailed."""
+        coord = _make_grace_coordinator()
+        coord._last_success_time = datetime.now(UTC) - timedelta(seconds=30)
+        coord.data = _GOOD_DATA.copy()
+        coord.api.get_mission_history = AsyncMock(side_effect=CloudApiError("timeout"))
+
+        with patch("custom_components.roomba_plus.cloud_coordinator.asyncio.timeout"):
+            result = await coord._async_update_data()
+
+        assert result is coord.data
+
+    @pytest.mark.asyncio
+    async def test_cloud_error_after_grace_period_raises_update_failed(self):
+        """CloudError after grace period expires → raises UpdateFailed."""
+        coord = _make_grace_coordinator()
+        coord._last_success_time = datetime.now(UTC) - timedelta(minutes=5)
+        coord.data = _GOOD_DATA.copy()
+        coord.api.get_mission_history = AsyncMock(side_effect=CloudApiError("timeout"))
+
+        with patch("custom_components.roomba_plus.cloud_coordinator.asyncio.timeout"):
+            with pytest.raises(UpdateFailed):
+                await coord._async_update_data()
+
+    @pytest.mark.asyncio
+    async def test_cloud_error_with_no_prior_success_raises_update_failed(self):
+        """CloudError with _last_success_time=None → UpdateFailed immediately."""
+        coord = _make_grace_coordinator()
+        assert coord._last_success_time is None
+        coord.api.get_mission_history = AsyncMock(side_effect=CloudApiError("network error"))
+
+        with patch("custom_components.roomba_plus.cloud_coordinator.asyncio.timeout"):
+            with pytest.raises(UpdateFailed):
+                await coord._async_update_data()
+
+    @pytest.mark.asyncio
+    async def test_cloud_error_with_no_cached_data_raises_update_failed(self):
+        """CloudError within grace period but coord.data is None → UpdateFailed.
+
+        Must not return None — if there is nothing safe to return, propagate.
+        """
+        coord = _make_grace_coordinator()
+        coord._last_success_time = datetime.now(UTC) - timedelta(seconds=10)
+        coord.data = None
+        coord.api.get_mission_history = AsyncMock(side_effect=CloudApiError("error"))
+
+        with patch("custom_components.roomba_plus.cloud_coordinator.asyncio.timeout"):
+            with pytest.raises(UpdateFailed):
+                await coord._async_update_data()
+
+    def test_grace_period_boundary_exactly_two_minutes(self):
+        """Exactly 2 minutes elapsed = outside grace period."""
+        coord = _make_grace_coordinator()
+        coord._last_success_time = datetime.now(UTC) - timedelta(minutes=2, seconds=1)
+        elapsed = datetime.now(UTC) - coord._last_success_time
+        assert elapsed >= _MIN_UNAVAILABLE

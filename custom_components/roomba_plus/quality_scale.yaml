@@ -43,7 +43,7 @@ rules:
   dependency-transparency:
     status: done
     comment: >
-      roombapy==2.0.2 and roombapy-prime[map]==0.3.4, pinned in manifest
+      roombapy==2.0.2 and roombapy-prime[map]==0.4.0b2, pinned in manifest
       requirements; both are published on PyPI with public source.
   docs-actions:
     status: done

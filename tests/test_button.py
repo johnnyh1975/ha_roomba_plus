@@ -645,6 +645,32 @@ class TestCloudPartReset:
         b._save.assert_not_awaited()
 
 
+class TestCloudPartResetSaysWhy:
+
+    @pytest.mark.asyncio
+    async def test_the_message_carries_the_reason_as_a_sentence(self, monkeypatch):
+        """Until 4.3 the placeholder held the exception's class name --
+        "RestServerError" in a German sentence."""
+        from roombapy_prime import RestServerError
+
+        from custom_components.roomba_plus import cloud_errors
+
+        b, _store, _cc, _slot = TestCloudPartReset()._b(
+            record={"part_id": "p7"}, error=RestServerError("x", 503)
+        )
+        seen = []
+
+        async def reason_text(hass, exc):
+            seen.append(exc)
+            return "SENTENCE."
+
+        monkeypatch.setattr(cloud_errors, "async_reason_text", reason_text)
+        with pytest.raises(HomeAssistantError) as exc_info:
+            await b.async_press()
+        assert exc_info.value.translation_placeholders == {"reason": "SENTENCE."}
+        assert isinstance(seen[0], RestServerError)
+
+
 class TestRepeatLastMission:
 
     def _b(self, state, monkeypatch, fresh="v9"):

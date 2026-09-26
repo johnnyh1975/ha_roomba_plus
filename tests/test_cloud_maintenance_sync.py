@@ -17,7 +17,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from custom_components.roomba_plus.cloud_api import IrobotCloudApi
+from roombapy_prime import ClassicRestClient
+from roombapy_prime.auth import CloudCredentials
 from custom_components.roomba_plus.const import (
     IROBOT_PART_ROLE_CLEAN_BASE_BAG,
     IROBOT_PART_ROLE_FILTER,
@@ -104,14 +105,24 @@ class TestSetRobotPartCounter:
     Static analysis of the app suggested PUT with a flat {"part_id": ...}
     body; both are wrong. PUT/PATCH are unrouted (403), and the flat body
     is accepted with 200 but silently applies nothing (num_parts 0).
+
+    The request lives in roombapy-prime since 4.3 (ClassicRestClient),
+    which pins the bytes and the signature itself. What stays pinned here
+    is the part this integration relies on.
     """
 
-    def _api(self) -> tuple[IrobotCloudApi, AsyncMock]:
-        api = IrobotCloudApi.__new__(IrobotCloudApi)
-        api._deployment = {"httpBaseAuth": "https://auth3.example.invalid"}
+    def _api(self) -> tuple[ClassicRestClient, AsyncMock]:
+        api = ClassicRestClient(
+            MagicMock(),
+            "https://auth3.example.invalid",
+            CloudCredentials(
+                access_key_id="AK", secret_key="SK", session_token="ST",
+                cognito_id="us-east-1:abc",
+            ),
+        )
         posted = AsyncMock(return_value={"num_parts": 1, "parts": [
             {"part_id": "35", "counter": 0}]})
-        api._aws_post = posted  # type: ignore[method-assign]
+        api._request = posted  # type: ignore[method-assign]
         return api, posted
 
     @pytest.mark.asyncio
@@ -119,22 +130,18 @@ class TestSetRobotPartCounter:
         api, posted = self._api()
         await api.set_robot_part_counter("BLID1", "35", 0)
 
-        url, body = posted.await_args.args
+        method, url = posted.await_args.args
+        assert method == "POST"
         assert url == "https://auth3.example.invalid/v1/robots/BLID1/parts"
-        # The array form is the only one the API applies.
-        assert body == {"parts": [{"part_id": "35", "counter": 0}]}
-
-    @pytest.mark.asyncio
-    async def test_defaults_to_zero_meaning_brand_new(self):
-        api, posted = self._api()
-        await api.set_robot_part_counter("BLID1", "35")
-        assert posted.await_args.args[1]["parts"][0]["counter"] == 0
+        # The array form is the only one the API applies, sent compact.
+        assert posted.await_args.kwargs["body"] == {"parts": [{"part_id": "35", "counter": 0}]}
+        assert posted.await_args.kwargs["compact_body"] is True
 
     @pytest.mark.asyncio
     async def test_coerces_part_id_and_counter_types(self):
         api, posted = self._api()
         await api.set_robot_part_counter("BLID1", 35, True)  # type: ignore[arg-type]
-        entry = posted.await_args.args[1]["parts"][0]
+        entry = posted.await_args.kwargs["body"]["parts"][0]
         assert entry["part_id"] == "35"
         assert entry["counter"] == 1
 
@@ -142,24 +149,26 @@ class TestSetRobotPartCounter:
     async def test_non_dict_response_becomes_empty_dict(self):
         api, posted = self._api()
         posted.return_value = ["unexpected"]
-        assert await api.set_robot_part_counter("BLID1", "35") == {}
+        assert await api.set_robot_part_counter("BLID1", "35", 0) == {}
 
+    def test_every_caller_writes_zero(self):
+        """The integration only ever records a replacement: 0 percent
+        used. The old client defaulted to 0; the library's method takes
+        the value explicitly, so each caller must pass it."""
+        import ast
+        import pathlib
 
-class TestSigV4SignsTheBody:
-    def test_body_is_included_in_the_payload_hash(self):
-        """A POST body must be hashed into the signature; signing an empty
-        payload while sending a real one yields a 403 that reads like an
-        auth failure."""
-        from custom_components.roomba_plus.cloud_api import _AWSSignatureV4
-
-        signer = _AWSSignatureV4("AKIA", "secret", "token")
-        common = {
-            "method": "POST", "service": "execute-api", "region": "us-east-1",
-            "host": "auth3.example.invalid", "path": "/v1/robots/B/parts",
-        }
-        empty = signer.signed_headers(**common)
-        with_body = signer.signed_headers(**common, payload='{"parts":[]}')
-        assert empty["Authorization"] != with_body["Authorization"]
+        calls = []
+        for path in pathlib.Path("custom_components/roomba_plus").glob("*.py"):
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                if (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "set_robot_part_counter"
+                ):
+                    calls.append((path.name, ast.unparse(node.args[-1])))
+        assert calls, "no caller found -- the check would pass vacuously"
+        assert all(last == "0" for _name, last in calls), calls
 
 
 class TestPushResetToCloud:

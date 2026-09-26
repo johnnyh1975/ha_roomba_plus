@@ -131,7 +131,7 @@ async def async_fetch_mission_map(
     """Fetch + verify the coverage payload for one mission record.
 
     Raises MissionMapUnavailable / MissionMapMismatch; cloud transport
-    errors (CloudApiError) propagate for the caller's 502 handling.
+    errors (roombapy_prime.CloudError) propagate for the caller's 502 handling.
     Results are cached in-memory (TTL 24 h, max 10 missions) — repeated
     card/browser hits cost no second cloud call.
     """

@@ -17,7 +17,7 @@
           "host": "Robot selecteren"
         },
         "data_description": {
-          "host": "De robot die je wilt instellen. Robots op je netwerk worden getoond; ontbreekt de jouwe, kies dan handmatige invoer."
+          "host": "De robot die je wilt instellen. Instellen met je iRobot-account wordt aanbevolen: het werkt voor elke robot, vindt alle robots op het account en je hoeft geen knop in te drukken. Robots die in je netwerk zijn gevonden staan er ook bij; kies handmatige invoer als de jouwe ontbreekt."
         }
       },
       "manual": {
@@ -93,7 +93,7 @@
       },
       "prime_robot_picker": {
         "title": "Kies een robot",
-        "description": "Robots gevonden op dit account. Kies er één om in te stellen — voeg extra robots toe door deze installatie opnieuw te starten.",
+        "description": "Robots op dit account. Kies er één om in te stellen; de andere verschijnen daarna onder Ontdekt, met één klik per robot. Al ingesteld: {configured}.",
         "data": {
           "blid": "Robot"
         },
@@ -111,26 +111,42 @@
           "host": "Het lokale IP-adres van de robot op je netwerk, bijvoorbeeld zoals je router het toont."
         }
       },
-      "prime_classic_analytics": {
-        "title": "Cloudfuncties voor {name}",
-        "description": "Wil je de inloggegevens van je iRobot-account ook voor deze robot behouden, om kamernamen, missiegeschiedenis en favorieten uit de cloud te lezen? Alle opdrachten blijven hoe dan ook lokaal via MQTT verlopen.",
+      "known_account": {
+        "title": "iRobot-account",
+        "description": "Een andere robot hier gebruikt al een iRobot-account. Gebruik het ook voor deze, dan hoef je het niet opnieuw in te voeren, of kies een ander account.",
         "data": {
-          "enable_cloud_analytics": "Cloudfuncties voor deze robot inschakelen"
+          "account": "Account"
         },
         "data_description": {
-          "enable_cloud_analytics": "Bewaart je iRobot-gegevens voor deze robot om kamernamen, missiegeschiedenis en favorieten toe te voegen. De robot zelf wordt nog steeds lokaal bediend."
+          "account": "Ook een bekend account meldt zich één keer aan, om robots te zien die sindsdien zijn toegevoegd en te controleren of het opgeslagen wachtwoord nog werkt."
         }
+      },
+      "integration_discovery_confirm": {
+        "title": "{name} toevoegen?",
+        "description": "{name} ({model}) staat op het iRobot-account {account}, dat een andere robot hier al gebruikt. Toevoegen met hetzelfde account? Je hoeft niets in te voeren; een Classic-robot wordt in je netwerk gezocht."
       }
     },
     "error": {
       "cannot_connect": "Verbinding met de robot mislukt. Controleer of deze is ingeschakeld en bereikbaar is.",
       "invalid_auth": "Ongeldige inloggegevens. Controleer je BLID en wachtwoord.",
       "unknown": "Onverwachte fout. Bekijk de Home Assistant-logboeken voor meer informatie.",
-      "cloud_auth_failed": "Cloud-authenticatie mislukt. Controleer je iRobot e-mailadres en wachtwoord.",
-      "cloud_unavailable": "Kan de iRobot-cloud niet bereiken. Controleer je internetverbinding en probeer opnieuw.",
-      "invalid_cloud_credentials": "Cloud-authenticatie mislukt. Controleer uw iRobot e-mailadres en wachtwoord.",
-      "cloud_rate_limited": "De iRobot-cloudlogin is tijdelijk beperkt. Sluit de iRobot-app op je telefoon en probeer het opnieuw.",
-      "cloud_ssl_certificate_error": "Het certificaat van de iRobot-cloudserver kon niet worden geverifieerd. Dit is bijna altijd een tijdelijk probleem bij iRobot — probeer het over een paar uur opnieuw."
+      "cloud_connection_failed": "De iRobot-cloud is niet bereikbaar. Controleer of Home Assistant met internet is verbonden; als dat zo is, zijn de servers van iRobot misschien tijdelijk onbereikbaar.",
+      "cloud_connection_broken": "De verbinding met de iRobot-cloud werd verbroken voordat het antwoord volledig was. Dit is meestal tijdelijk.",
+      "cloud_timeout": "De iRobot-cloud antwoordde niet op tijd. Dit is meestal tijdelijk.",
+      "cloud_ssl_local_trust_store": "Home Assistant kan het certificaat van iRobot niet controleren, omdat de eigen lijst met vertrouwde certificaten ontbreekt of verouderd is. Wachten lost dit niet op: werk de CA-certificaten bij van het systeem waarop Home Assistant draait.",
+      "cloud_ssl_certificate_expired": "Het servercertificaat van iRobot is verlopen. Dit ligt aan iRobot en is meestal binnen een paar uur opgelost.",
+      "cloud_ssl_unverified": "Het servercertificaat van iRobot kon niet worden gecontroleerd. Als dit blijft, controleer dan de datum en tijd van het systeem waarop Home Assistant draait.",
+      "cloud_credentials_rejected": "iRobot heeft de aanmelding geweigerd. Controleer het e-mailadres en wachtwoord van je iRobot-account.",
+      "cloud_account_locked": "Voer je wachtwoord niet opnieuw in: je iRobot-account is tijdelijk vergrendeld na te veel aanmeldpogingen. De vergrendeling heft zichzelf op, meestal binnen enkele minuten, en elke nieuwe poging kan haar verlengen. Wacht ongeveer tien minuten voordat je het opnieuw probeert.",
+      "cloud_too_many_sessions": "Je iRobot-account heeft te veel actieve sessies. Sluit de iRobot-app op je telefoon en probeer het opnieuw.",
+      "cloud_no_robots": "Je iRobot-account heeft geen robots.",
+      "cloud_robot_ambiguous": "Je iRobot-account heeft meerdere robots en er is er geen gekozen.",
+      "cloud_request_refused": "De iRobot-cloud heeft het aanmeldverzoek geweigerd.",
+      "cloud_rate_limited": "De iRobot-cloud heeft te veel verzoeken ontvangen. Probeer het later opnieuw.",
+      "cloud_server_error": "De iRobot-cloud heeft zelf een probleem. Dit ligt aan iRobot en is meestal tijdelijk; probeer het later opnieuw.",
+      "cloud_response_malformed": "De iRobot-cloud stuurde een antwoord dat niet kon worden gelezen. Als dit blijft, meld het dan met een diagnostische download.",
+      "cloud_unknown": "De iRobot-cloud meldde een fout zonder bekende oorzaak.",
+      "account_password_refused": "De robot accepteerde het wachtwoord uit je iRobot-account niet, dus moet het van de robot zelf worden opgehaald."
     },
     "abort": {
       "already_configured": "Deze robot is al geconfigureerd.",
@@ -146,8 +162,10 @@
       "room_schedule_not_supported": "Kamerschema's vereisen een robot die kamergegevens rapporteert.",
       "no_rooms_to_name": "Geen kamers gevonden om te benoemen. De kamers van deze robot verschijnen zodra hij minstens één keer specifieke kamers heeft schoongemaakt, of zodra zijn kaart beschikbaar is via je iRobot-account.",
       "all_rooms_named": "Elke kamer heeft al een naam. Hernoem er een via de zoneselector op de apparaatpagina.",
-      "wrong_roombapy": "Roomba+ heeft het asynchrone `roombapy` 2.x nodig; de door Home Assistant geïnstalleerde versie is ouder:\n\n`{error}`\n\n**Start Home Assistant eerst opnieuw op** — dan wordt de versie geïnstalleerd die Roomba+ vraagt.\n\nKomt de fout daarna terug, dan installeert de **ingebouwde Roomba-integratie** van Home Assistant de oude bibliotheek eroverheen. Beide kunnen niet naast elkaar: verwijder de ingebouwde (Instellingen → Apparaten en diensten → Roomba → verwijderen) en start opnieuw op. Roomba+ doet alles wat zij doet.\n\nDe Roomba+-versie maakt hier niets uit — elke 4.2.x vraagt dezelfde bibliotheek."
-    }
+      "wrong_roombapy": "Roomba+ heeft het asynchrone `roombapy` 2.x nodig; de door Home Assistant geïnstalleerde versie is ouder:\n\n`{error}`\n\n**Start Home Assistant eerst opnieuw op** — dan wordt de versie geïnstalleerd die Roomba+ vraagt.\n\nKomt de fout daarna terug, dan installeert de **ingebouwde Roomba-integratie** van Home Assistant de oude bibliotheek eroverheen. Beide kunnen niet naast elkaar: verwijder de ingebouwde (Instellingen → Apparaten en diensten → Roomba → verwijderen) en start opnieuw op. Roomba+ doet alles wat zij doet.\n\nDe Roomba+-versie maakt hier niets uit — elke 4.2.x vraagt dezelfde bibliotheek.",
+      "robot_not_on_account": "Deze robot staat niet meer op het iRobot-account. Als hij naar een ander account is verplaatst, stel hem dan daarmee in."
+    },
+    "flow_title": "{name}"
   },
   "options": {
     "step": {
@@ -317,14 +335,24 @@
       }
     },
     "error": {
-      "cloud_auth_failed": "Cloud-authenticatie mislukt. Controleer je iRobot e-mailadres en wachtwoord.",
-      "cloud_unavailable": "Kan de iRobot-cloud niet bereiken. Controleer je internetverbinding en probeer opnieuw.",
-      "invalid_cloud_credentials": "Cloud-authenticatie mislukt. Controleer uw iRobot e-mailadres en wachtwoord.",
-      "cannot_connect": "Kan geen verbinding maken. Controleer uw internetverbinding en probeer opnieuw.",
       "no_valid_ids": "Geen geldige invoer gevonden. Gebruik het formaat id=Naam, één per regel.",
       "pmap_not_resolved": "Kan de kaart-ID niet oplossen. Zorg ervoor dat de robot gedockt en verbonden is en probeer het opnieuw.",
-      "cloud_rate_limited": "De iRobot-cloudlogin is tijdelijk beperkt. Sluit de iRobot-app op je telefoon en probeer het opnieuw.",
-      "cloud_ssl_certificate_error": "Het certificaat van de iRobot-cloudserver kon niet worden geverifieerd. Dit is bijna altijd een tijdelijk probleem bij iRobot — probeer het over een paar uur opnieuw."
+      "cloud_connection_failed": "De iRobot-cloud is niet bereikbaar. Controleer of Home Assistant met internet is verbonden; als dat zo is, zijn de servers van iRobot misschien tijdelijk onbereikbaar.",
+      "cloud_connection_broken": "De verbinding met de iRobot-cloud werd verbroken voordat het antwoord volledig was. Dit is meestal tijdelijk.",
+      "cloud_timeout": "De iRobot-cloud antwoordde niet op tijd. Dit is meestal tijdelijk.",
+      "cloud_ssl_local_trust_store": "Home Assistant kan het certificaat van iRobot niet controleren, omdat de eigen lijst met vertrouwde certificaten ontbreekt of verouderd is. Wachten lost dit niet op: werk de CA-certificaten bij van het systeem waarop Home Assistant draait.",
+      "cloud_ssl_certificate_expired": "Het servercertificaat van iRobot is verlopen. Dit ligt aan iRobot en is meestal binnen een paar uur opgelost.",
+      "cloud_ssl_unverified": "Het servercertificaat van iRobot kon niet worden gecontroleerd. Als dit blijft, controleer dan de datum en tijd van het systeem waarop Home Assistant draait.",
+      "cloud_credentials_rejected": "iRobot heeft de aanmelding geweigerd. Controleer het e-mailadres en wachtwoord van je iRobot-account.",
+      "cloud_account_locked": "Voer je wachtwoord niet opnieuw in: je iRobot-account is tijdelijk vergrendeld na te veel aanmeldpogingen. De vergrendeling heft zichzelf op, meestal binnen enkele minuten, en elke nieuwe poging kan haar verlengen. Wacht ongeveer tien minuten voordat je het opnieuw probeert.",
+      "cloud_too_many_sessions": "Je iRobot-account heeft te veel actieve sessies. Sluit de iRobot-app op je telefoon en probeer het opnieuw.",
+      "cloud_no_robots": "Je iRobot-account heeft geen robots.",
+      "cloud_robot_ambiguous": "Je iRobot-account heeft meerdere robots en er is er geen gekozen.",
+      "cloud_request_refused": "De iRobot-cloud heeft het aanmeldverzoek geweigerd.",
+      "cloud_rate_limited": "De iRobot-cloud heeft te veel verzoeken ontvangen. Probeer het later opnieuw.",
+      "cloud_server_error": "De iRobot-cloud heeft zelf een probleem. Dit ligt aan iRobot en is meestal tijdelijk; probeer het later opnieuw.",
+      "cloud_response_malformed": "De iRobot-cloud stuurde een antwoord dat niet kon worden gelezen. Als dit blijft, meld het dan met een diagnostische download.",
+      "cloud_unknown": "De iRobot-cloud meldde een fout zonder bekende oorzaak."
     },
     "abort": {
       "integration_not_loaded": "De integratie kon niet worden geladen. Controleer de logboeken en herlaad voordat je de instellingen opent.",
@@ -1979,12 +2007,6 @@
     "backup_entity_not_found": {
       "message": "De entiteit \"{entity_id}\" kon niet aan een Roomba+-robot worden gekoppeld. Controleer de entity-ID en probeer opnieuw."
     },
-    "cloud_credentials_invalid": {
-      "message": "De iRobot-cloudgegevens zijn ongeldig: {error}"
-    },
-    "cloud_temporarily_unavailable": {
-      "message": "De iRobot-cloud is tijdelijk niet beschikbaar: {error}"
-    },
     "unknown_rooms": {
       "message": "Onbekende kamer(s) voor {entity_id}: {rooms}. Bekende kamers: {known}."
     },
@@ -2042,12 +2064,6 @@
     "cannot_connect_local": {
       "message": "Kan geen verbinding maken met de robot op {host}."
     },
-    "prime_login_rejected": {
-      "message": "De iRobot-cloud heeft de aanmelding voor robot {blid} geweigerd: {error}"
-    },
-    "prime_login_failed": {
-      "message": "Aanmelden bij de iRobot-cloud voor robot {blid} is mislukt: {error}"
-    },
     "start_time_required": {
       "message": "Een begintijd is vereist."
     },
@@ -2075,14 +2091,8 @@
     "command_not_delivered": {
       "message": "Het commando “{command}” werd niet voor verzending geaccepteerd — het heeft de iRobot-cloud nooit bereikt, dus de robot heeft het niet ontvangen. Dit is een verbindingsprobleem, geen weigering door de robot."
     },
-    "prime_shadows_unavailable": {
-      "message": "Kon voor robot {blid} geen status uit de iRobot-cloud lezen: {error}"
-    },
     "schedules_unreadable": {
       "message": "Kon de schema's niet uit de iRobot-cloud lezen — er is niets geschreven."
-    },
-    "prime_cannot_connect": {
-      "message": "Kon via de iRobot-cloud geen verbinding maken met robot {blid}: {error}"
     },
     "parts_unreadable": {
       "message": "Kon de verbruiksonderdelen niet uit de iRobot-cloud lezen: {error}"
@@ -2172,7 +2182,7 @@
       "message": "De iRobot-cloud kent het onderdeel {part} voor deze robot niet, dus de teller kan daar niet worden gereset."
     },
     "cloud_part_reset_failed": {
-      "message": "De iRobot-cloud heeft de teller niet gereset ({error}). De lokale teller is ongewijzigd; probeer het later opnieuw."
+      "message": "De iRobot-cloud heeft de teller niet gereset. {reason} De lokale teller is ongewijzigd."
     },
     "cloud_part_reset_not_confirmed": {
       "message": "De iRobot-cloud heeft het verzoek aangenomen, maar de reset niet bevestigd. De lokale teller is ongewijzigd."
@@ -2185,6 +2195,72 @@
     },
     "favorite_has_no_commands": {
       "message": "De favoriet {name} bevat geen commando's om uit te voeren."
+    },
+    "cloud_connection_failed": {
+      "message": "De iRobot-cloud is niet bereikbaar. Controleer of Home Assistant met internet is verbonden; als dat zo is, zijn de servers van iRobot misschien tijdelijk onbereikbaar."
+    },
+    "cloud_connection_broken": {
+      "message": "De verbinding met de iRobot-cloud werd verbroken voordat het antwoord volledig was. Dit is meestal tijdelijk."
+    },
+    "cloud_timeout": {
+      "message": "De iRobot-cloud antwoordde niet op tijd. Dit is meestal tijdelijk."
+    },
+    "cloud_ssl_local_trust_store": {
+      "message": "Home Assistant kan het certificaat van iRobot niet controleren, omdat de eigen lijst met vertrouwde certificaten ontbreekt of verouderd is. Wachten lost dit niet op: werk de CA-certificaten bij van het systeem waarop Home Assistant draait."
+    },
+    "cloud_ssl_certificate_expired": {
+      "message": "Het servercertificaat van iRobot is verlopen. Dit ligt aan iRobot en is meestal binnen een paar uur opgelost."
+    },
+    "cloud_ssl_unverified": {
+      "message": "Het servercertificaat van iRobot kon niet worden gecontroleerd. Als dit blijft, controleer dan de datum en tijd van het systeem waarop Home Assistant draait."
+    },
+    "cloud_credentials_rejected": {
+      "message": "iRobot heeft de aanmelding geweigerd. Controleer het e-mailadres en wachtwoord van je iRobot-account."
+    },
+    "cloud_account_locked": {
+      "message": "Voer je wachtwoord niet opnieuw in: je iRobot-account is tijdelijk vergrendeld na te veel aanmeldpogingen. De vergrendeling heft zichzelf op, meestal binnen enkele minuten, en elke nieuwe poging kan haar verlengen. Wacht ongeveer tien minuten voordat je het opnieuw probeert."
+    },
+    "cloud_too_many_sessions": {
+      "message": "Je iRobot-account heeft te veel actieve sessies. Sluit de iRobot-app op je telefoon en probeer het opnieuw."
+    },
+    "cloud_no_robots": {
+      "message": "Je iRobot-account heeft geen robots."
+    },
+    "cloud_robot_ambiguous": {
+      "message": "Je iRobot-account heeft meerdere robots en er is er geen gekozen."
+    },
+    "cloud_request_refused": {
+      "message": "De iRobot-cloud heeft het verzoek geweigerd."
+    },
+    "cloud_rate_limited": {
+      "message": "De iRobot-cloud heeft te veel verzoeken ontvangen. Probeer het later opnieuw."
+    },
+    "cloud_server_error": {
+      "message": "De iRobot-cloud heeft zelf een probleem. Dit ligt aan iRobot en is meestal tijdelijk."
+    },
+    "cloud_response_malformed": {
+      "message": "De iRobot-cloud stuurde een antwoord dat niet kon worden gelezen. Als dit blijft, meld het dan met een diagnostische download."
+    },
+    "cloud_unknown": {
+      "message": "De iRobot-cloud meldde een fout zonder bekende oorzaak."
+    },
+    "cloud_not_connected": {
+      "message": "De verbinding met de iRobot-cloud is nog niet geopend."
+    },
+    "cloud_connect_refused": {
+      "message": "De iRobot-cloud heeft de liveverbinding van de robot geweigerd."
+    },
+    "cloud_publish_not_delivered": {
+      "message": "Een bericht aan de robot kon niet via de iRobot-cloud worden verzonden."
+    },
+    "cloud_subscription_not_sent": {
+      "message": "Het abonnement op de updates van de robot kon niet naar de iRobot-cloud worden verzonden."
+    },
+    "cloud_subscription_rejected": {
+      "message": "De iRobot-cloud stond het abonnement op de updates van de robot niet toe."
+    },
+    "cloud_shadow_rejected": {
+      "message": "De iRobot-cloud weigerde de status van de robot te lezen of te wijzigen."
     }
   },
   "selector": {
@@ -2207,6 +2283,12 @@
       "options": {
         "away_only": "Vrijgeven als iedereen weg is",
         "always_ask": "Gebeurtenis afvuren (handmatige bediening)"
+      }
+    },
+    "known_account": {
+      "options": {
+        "__other__": "Een ander iRobot-account",
+        "__none__": "Geen cloudfuncties voor deze robot (alleen lokale bediening)"
       }
     }
   }

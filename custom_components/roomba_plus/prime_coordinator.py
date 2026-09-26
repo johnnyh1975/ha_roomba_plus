@@ -54,6 +54,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
+from . import cloud_errors
 from .const import DOMAIN, EVENT_ROOM_COMPLETED
 
 from roombapy_prime import (
@@ -141,7 +142,10 @@ class PrimeCoordinator(DataUpdateCoordinator[MissionTimelineReport]):
             await self.prime_robot.connect()
         except (ShadowSSLError, ShadowConnectionError, ShadowError) as exc:
             raise ConfigEntryNotReady(
-                f"Could not connect to V4/Prime robot {self.blid}: {exc}", translation_domain=DOMAIN, translation_key="prime_cannot_connect", translation_placeholders={"blid": str(self.blid), "error": str(exc)}
+                f"Could not connect to V4/Prime robot {self.blid}: {exc}",
+                translation_domain=DOMAIN,
+                translation_key=cloud_errors.translation_key(exc),
+                translation_placeholders=cloud_errors.translation_placeholders(exc),
             ) from exc
 
         self.entry.async_create_background_task(
@@ -764,7 +768,10 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
 
         if not seeded and last_exc is not None:
             raise ConfigEntryNotReady(
-                f"Could not fetch any named shadow for V4/Prime robot {self.blid}: {last_exc}", translation_domain=DOMAIN, translation_key="prime_shadows_unavailable", translation_placeholders={"blid": str(self.blid), "error": str(last_exc)}
+                f"Could not fetch any named shadow for V4/Prime robot {self.blid}: {last_exc}",
+                translation_domain=DOMAIN,
+                translation_key=cloud_errors.translation_key(last_exc),
+                translation_placeholders=cloud_errors.translation_placeholders(last_exc),
             )
 
         # NEW (this session): one-time seed of the classic/unnamed shadow

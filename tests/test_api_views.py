@@ -1989,8 +1989,8 @@ class TestMissionMapViews:
     @pytest.mark.asyncio
     async def test_cloud_error_is_502(self):
         from custom_components.roomba_plus.api_views import _mission_map_payload
-        from custom_components.roomba_plus.cloud_api import CloudApiError
-        entry = self._entry([self._rec()], side_effect=CloudApiError("boom"))
+        from roombapy_prime import RestServerError
+        entry = self._entry([self._rec()], side_effect=RestServerError("boom", 503))
         payload, data, err = await _mission_map_payload(
             self._request(entry), "e1", "m_1")
         assert payload is None and err[0] == 502

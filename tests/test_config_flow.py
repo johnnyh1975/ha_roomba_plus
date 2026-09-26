@@ -28,6 +28,35 @@ from custom_components.roomba_plus.const import (
     CONF_CORRELATION_ENTITIES,
     CONF_ROOM_SCHEDULE,
 )
+import contextlib
+from roombapy_prime import (
+    AuthCredentialsError,
+    AuthError,
+    AuthRateLimitedError,
+    AuthSSLError,
+    AuthTimeoutError,
+)
+
+
+def _fake_account(robots: dict | None = None) -> MagicMock:
+    """What cloud_account.async_login() returns: a CloudAccount whose
+    login response lists `robots`."""
+    account = MagicMock()
+    account.login_result.raw = {"robots": robots if robots is not None else {}}
+    return account
+
+
+@contextlib.contextmanager
+def _cloud_login(exc: BaseException | None = None, robots: dict | None = None):
+    """Replaces the flow's cloud login and the hand-over of that login
+    to the entry. Yields (login mock, offer mock, account)."""
+    from custom_components.roomba_plus import config_flow
+
+    account = _fake_account(robots)
+    login = AsyncMock(side_effect=exc, return_value=account)
+    with patch.object(config_flow, "async_login", new=login), \
+         patch.object(config_flow, "async_offer") as offer:
+        yield login, offer, account
 
 
 class TestCF2PmapResolution:
@@ -400,24 +429,18 @@ class TestReauthConfirmForm:
             CONF_IROBOT_USERNAME: "old@example.com",
             CONF_IROBOT_PASSWORD: "old_password",
         })
-        mock_api = MagicMock()
-        mock_api.authenticate = AsyncMock()
         with patch.object(
             type(flow), "async_update_reload_and_abort",
             return_value={"type": "abort", "reason": "reauth_successful"},
-        ) as mock_update, patch(
-            "custom_components.roomba_plus.config_flow.IrobotCloudApi",
-            return_value=mock_api,
-        ), patch(
-            "homeassistant.helpers.aiohttp_client.async_get_clientsession",
-            return_value=MagicMock(),
-        ):
+        ) as mock_update, _cloud_login() as (login, offer, account):
             result = await flow.async_step_reauth_confirm({
                 CONF_IROBOT_USERNAME: "new@example.com",
                 CONF_IROBOT_PASSWORD: "new_password",
             })
 
-        mock_api.authenticate.assert_awaited_once()
+        login.assert_awaited_once()
+        # The entry reloads with the new credentials and takes this login.
+        offer.assert_called_once_with(flow.hass, account, "new@example.com", "new_password")
         assert result["type"] == "abort"
         # WHAT THIS TEST IS ABOUT: the reauth step must UPDATE the
         # existing entry rather than create a new one, and pass the new
@@ -444,44 +467,29 @@ class TestReauthConfirmForm:
 
     @pytest.mark.asyncio
     async def test_invalid_credentials_show_error_not_abort(self):
-        from custom_components.roomba_plus.cloud_api import AuthenticationError
         flow, _entry = _make_reauth_flow()
-        mock_api = MagicMock()
-        mock_api.authenticate = AsyncMock(side_effect=AuthenticationError("bad creds"))
-        with patch(
-            "custom_components.roomba_plus.config_flow.IrobotCloudApi",
-            return_value=mock_api,
-        ), patch(
-            "homeassistant.helpers.aiohttp_client.async_get_clientsession",
-            return_value=MagicMock(),
-        ):
+        with _cloud_login(AuthCredentialsError("bad creds")) as (_login, offer, _acc):
             result = await flow.async_step_reauth_confirm({
                 "irobot_username": "wrong@example.com",
                 "irobot_password": "wrong_password",
             })
         assert result["type"] == "form"
         assert result["step_id"] == "reauth_confirm"
-        assert result["errors"] == {"base": "invalid_cloud_credentials"}
+        assert result["errors"] == {"base": "cloud_credentials_rejected"}
         flow.hass.config_entries.async_update_entry.assert_not_called()
+        offer.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_cloud_unreachable_shows_cannot_connect_error(self):
-        from custom_components.roomba_plus.cloud_api import CloudApiError
+    async def test_cloud_unreachable_says_so_not_robot(self):
+        """Up to 4.2 this showed `cannot_connect`, whose text tells the
+        user to check the ROBOT -- which a cloud login never touches."""
         flow, _entry = _make_reauth_flow()
-        mock_api = MagicMock()
-        mock_api.authenticate = AsyncMock(side_effect=CloudApiError("timeout"))
-        with patch(
-            "custom_components.roomba_plus.config_flow.IrobotCloudApi",
-            return_value=mock_api,
-        ), patch(
-            "homeassistant.helpers.aiohttp_client.async_get_clientsession",
-            return_value=MagicMock(),
-        ):
+        with _cloud_login(AuthTimeoutError("timeout")):
             result = await flow.async_step_reauth_confirm({
                 "irobot_username": "user@example.com",
                 "irobot_password": "password",
             })
-        assert result["errors"] == {"base": "cannot_connect"}
+        assert result["errors"] == {"base": "cloud_timeout"}
         flow.hass.config_entries.async_update_entry.assert_not_called()
 
 
@@ -663,30 +671,26 @@ class TestCloudCredentialsStep:
         return flow
 
     async def _submit(self, flow, exc=None):
-        from custom_components.roomba_plus import config_flow
         from custom_components.roomba_plus.const import (
             CONF_IROBOT_PASSWORD, CONF_IROBOT_USERNAME,
         )
 
-        api = MagicMock()
-        api.authenticate = AsyncMock(side_effect=exc)
-        with patch.object(config_flow, "IrobotCloudApi", return_value=api), \
-             patch("homeassistant.helpers.aiohttp_client.async_get_clientsession", MagicMock()):
-            return await flow.async_step_cloud_credentials({
+        with _cloud_login(exc) as (_login, offer, _account):
+            result = await flow.async_step_cloud_credentials({
                 CONF_IROBOT_USERNAME: "user@example.com",
                 CONF_IROBOT_PASSWORD: "pw",
             })
+        flow.offer = offer
+        return result
 
     @pytest.mark.asyncio
     async def test_a_wrong_password_says_so_specifically(self):
-        from custom_components.roomba_plus.cloud_api import AuthenticationError
-
         flow = self._flow()
 
-        await self._submit(flow, AuthenticationError())
+        await self._submit(flow, AuthCredentialsError("bad"))
 
         assert flow.async_show_form.call_args.kwargs["errors"] == {
-            "base": "invalid_cloud_credentials"
+            "base": "cloud_credentials_rejected"
         }
 
     @pytest.mark.asyncio
@@ -695,39 +699,41 @@ class TestCloudCredentialsStep:
         been rate-limiting aggressively since late 2024. Telling that
         user their password is wrong sends them changing a working
         password, which makes things worse."""
-        from custom_components.roomba_plus.cloud_api import RateLimitedError
-
         flow = self._flow()
 
-        await self._submit(flow, RateLimitedError())
+        await self._submit(flow, AuthRateLimitedError("slow down"))
 
         assert flow.async_show_form.call_args.kwargs["errors"] == {
-            "base": "cloud_rate_limited"
+            "base": "cloud_too_many_sessions"
         }
 
     @pytest.mark.asyncio
     async def test_a_certificate_problem_gets_its_own_message(self):
         """Local trust-store problems look like auth failures and are
         not -- the fix is on the user's machine, not in their account."""
-        from custom_components.roomba_plus.cloud_api import SSLCertificateError
+        from roombapy_prime import CloudErrorReason
 
         flow = self._flow()
 
-        await self._submit(flow, SSLCertificateError())
+        await self._submit(flow, AuthSSLError(
+            "trust store", reason=CloudErrorReason.SSL_LOCAL_TRUST_STORE))
 
+        # AND IT SAYS WHICH ONE: until 4.3 every certificate failure was
+        # "temporary on iRobot's end", including this one, which waiting
+        # never fixes.
         assert flow.async_show_form.call_args.kwargs["errors"] == {
-            "base": "cloud_ssl_certificate_error"
+            "base": "cloud_ssl_local_trust_store"
         }
 
     @pytest.mark.asyncio
-    async def test_any_other_api_failure_falls_back_to_cannot_connect(self):
-        from custom_components.roomba_plus.cloud_api import CloudApiError
-
+    async def test_any_other_api_failure_names_its_own_cause(self):
         flow = self._flow()
 
-        await self._submit(flow, CloudApiError())
+        await self._submit(flow, AuthError("Missing 'CognitoId'"))
 
-        assert flow.async_show_form.call_args.kwargs["errors"] == {"base": "cannot_connect"}
+        assert flow.async_show_form.call_args.kwargs["errors"] == {
+            "base": "cloud_response_malformed"
+        }
 
     @pytest.mark.asyncio
     async def test_valid_credentials_create_the_entry(self):
@@ -736,6 +742,8 @@ class TestCloudCredentialsStep:
         await self._submit(flow, exc=None)
 
         flow.async_create_entry.assert_called_once()
+        # The entry takes this login instead of making a second one.
+        flow.offer.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_leaving_it_blank_still_creates_the_entry(self):
@@ -757,12 +765,11 @@ class TestCloudCredentialsStep:
     async def test_a_failed_login_does_not_store_the_credentials(self):
         """Storing credentials that are known not to work would make
         every later cloud call fail for a reason nobody can see."""
-        from custom_components.roomba_plus.cloud_api import AuthenticationError
         from custom_components.roomba_plus.const import CONF_IROBOT_USERNAME
 
         flow = self._flow()
 
-        await self._submit(flow, AuthenticationError())
+        await self._submit(flow, AuthCredentialsError("bad"))
 
         flow.async_create_entry.assert_not_called()
         assert CONF_IROBOT_USERNAME not in flow._pending_config
@@ -1793,26 +1800,17 @@ class TestCloudConnectionTestStep:
     async def test_bad_credentials_go_back_to_the_form(self, monkeypatch):
         from unittest.mock import AsyncMock
 
-        from custom_components.roomba_plus import config_flow as cf
-        from custom_components.roomba_plus.cloud_api import AuthenticationError
-
-        api = MagicMock()
-        api.authenticate = AsyncMock(side_effect=AuthenticationError("nope"))
-        monkeypatch.setattr(cf, "IrobotCloudApi", lambda *_a, **_kw: api)
-        monkeypatch.setattr(
-            "homeassistant.helpers.aiohttp_client.async_get_clientsession",
-            lambda _hass: MagicMock(),
-        )
-
         flow = self._flow()
         flow.async_step_cloud_credentials = AsyncMock(
             return_value={"type": "form"}
         )
 
-        result = await flow.async_step_test_cloud_connection()
+        with _cloud_login(AuthCredentialsError("nope")) as (_login, offer, _acc):
+            result = await flow.async_step_test_cloud_connection()
 
         assert result["type"] == "form"
-        assert flow._cloud_cred_errors == {"base": "invalid_cloud_credentials"}
+        assert flow._cloud_cred_errors == {"base": "cloud_credentials_rejected"}
+        offer.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_a_rate_limit_is_not_reported_as_wrong_credentials(
@@ -1822,45 +1820,47 @@ class TestCloudConnectionTestStep:
         password is wrong when it is not sends them to reset it."""
         from unittest.mock import AsyncMock
 
-        from custom_components.roomba_plus import config_flow as cf
-        from custom_components.roomba_plus.cloud_api import RateLimitedError
-
-        api = MagicMock()
-        api.authenticate = AsyncMock(side_effect=RateLimitedError("slow down"))
-        monkeypatch.setattr(cf, "IrobotCloudApi", lambda *_a, **_kw: api)
-        monkeypatch.setattr(
-            "homeassistant.helpers.aiohttp_client.async_get_clientsession",
-            lambda _hass: MagicMock(),
-        )
-
         flow = self._flow()
         flow.async_step_cloud_credentials = AsyncMock(
             return_value={"type": "form"}
         )
 
-        await flow.async_step_test_cloud_connection()
+        with _cloud_login(AuthRateLimitedError("slow down")):
+            await flow.async_step_test_cloud_connection()
 
-        assert flow._cloud_cred_errors != {"base": "invalid_cloud_credentials"}
+        assert flow._cloud_cred_errors == {"base": "cloud_too_many_sessions"}
 
     @pytest.mark.asyncio
     async def test_success_writes_the_entry(self, monkeypatch):
         from unittest.mock import AsyncMock
 
-        from custom_components.roomba_plus import config_flow as cf
-
-        api = MagicMock()
-        api.authenticate = AsyncMock(return_value=True)
-        monkeypatch.setattr(cf, "IrobotCloudApi", lambda *_a, **_kw: api)
-        monkeypatch.setattr(
-            "homeassistant.helpers.aiohttp_client.async_get_clientsession",
-            lambda _hass: MagicMock(),
-        )
-
         flow = self._flow()
 
-        result = await flow.async_step_test_cloud_connection()
+        with _cloud_login() as (_login, offer, account):
+            result = await flow.async_step_test_cloud_connection()
 
         assert result["type"] == "create_entry"
+        # The reload that follows takes this login.
+        offer.assert_called_once_with(flow.hass, account, "u", "p")
+
+    @pytest.mark.asyncio
+    async def test_the_other_robots_of_the_account_follow(self, monkeypatch):
+        """New credentials entered in one robot's options reach the
+        robots that had the same old ones (4.3) -- asked BEFORE this
+        entry is written, while it still holds the old ones."""
+        from custom_components.roomba_plus import config_flow as cf
+
+        flow = self._flow()
+        calls = []
+        monkeypatch.setattr(
+            cf, "_async_update_account_siblings",
+            lambda hass, entry, u, p: calls.append((hass, entry, u, p, dict(entry.data))),
+        )
+        before = dict(flow.config_entry.data)
+        with _cloud_login():
+            await flow.async_step_test_cloud_connection()
+        assert calls and calls[0][:4] == (flow.hass, flow.config_entry, "u", "p")
+        assert calls[0][4] == before
 
 
 class TestZoneIndexOptions:
@@ -2465,20 +2465,17 @@ class TestCloudCredentialsOptions:
         assert flow._pending_cloud_creds == {"username": "new@example.com", "password": "pw"}
 
     @pytest.mark.parametrize("fehler,schluessel", [
-        ("SSLCertificateError", "cloud_ssl_certificate_error"),
-        ("CloudApiError", "cannot_connect"),
+        (AuthSSLError("x"), "cloud_ssl_unverified"),
+        (AuthError("x"), "cloud_response_malformed"),
+        (AuthTimeoutError("x"), "cloud_timeout"),
     ])
     @pytest.mark.asyncio
-    async def test_connection_errors_go_back_to_the_form(self, fehler, schluessel, monkeypatch):
+    async def test_connection_errors_go_back_to_the_form(self, fehler, schluessel):
         flow = self._flow()
         flow._pending_cloud_creds = {"username": "u", "password": "p"}
-        api = MagicMock()
-        api.authenticate = AsyncMock(side_effect=getattr(cf, fehler)("x"))
-        monkeypatch.setattr(cf, "IrobotCloudApi", lambda *a, **k: api)
-        monkeypatch.setattr("homeassistant.helpers.aiohttp_client.async_get_clientsession",
-                            lambda _h: MagicMock())
         flow.async_step_cloud_credentials = AsyncMock(return_value={"type": "form"})
-        await flow.async_step_test_cloud_connection()
+        with _cloud_login(fehler):
+            await flow.async_step_test_cloud_connection()
         assert flow._cloud_cred_errors == {"base": schluessel}
 
     @pytest.mark.asyncio
@@ -2498,18 +2495,14 @@ class TestCloudCredentialsOptions:
 class TestReauthErrors:
 
     @pytest.mark.parametrize("fehler,schluessel", [
-        ("RateLimitedError", "cloud_rate_limited"),
-        ("SSLCertificateError", "cloud_ssl_certificate_error"),
+        (AuthRateLimitedError("x"), "cloud_too_many_sessions"),
+        (AuthSSLError("x"), "cloud_ssl_unverified"),
     ])
     @pytest.mark.asyncio
     async def test_the_error_is_shown_and_the_form_stays(self, fehler, schluessel):
         flow, _entry = _make_reauth_flow(reauth_entry_data={
             CONF_IROBOT_USERNAME: "u@example.com", CONF_IROBOT_PASSWORD: "old"})
-        api = MagicMock()
-        api.authenticate = AsyncMock(side_effect=getattr(cf, fehler)("x"))
-        with patch.object(cf, "IrobotCloudApi", return_value=api), \
-             patch("homeassistant.helpers.aiohttp_client.async_get_clientsession",
-                   return_value=MagicMock()):
+        with _cloud_login(fehler):
             result = await flow.async_step_reauth_confirm(
                 {CONF_IROBOT_USERNAME: "u@example.com", CONF_IROBOT_PASSWORD: "new"})
         assert result["type"] == "form"
@@ -2565,17 +2558,19 @@ class TestLastBranches:
 
     @pytest.mark.asyncio
     async def test_the_account_login_is_handed_to_the_setup_step(self):
-        """The login from the config flow is stored for the first setup, so
-        the robot is not logged in twice in a row."""
+        """The login from the config flow is handed to the entry, so the
+        robot is not logged in twice in a row -- keyed by the account's
+        credentials since 4.3, not by the robot."""
 
         flow = _make_flow()
-        flow._prime_account_login_result = object()
+        flow._prime_account = account = _fake_account()
+        flow._prime_account_username, flow._prime_account_password = "u@example.com", "pw"
         flow.async_set_unique_id = AsyncMock()
         flow._abort_if_unique_id_configured = MagicMock()
         flow.async_create_entry = MagicMock(return_value={"type": "create_entry"})
-        with patch.object(cf, "store_pending_login") as gespeichert:
+        with patch.object(cf, "async_offer") as angeboten:
             await flow._async_create_prime_entry("G1", {"sku": "G185020", "name": "Prime"})
-        gespeichert.assert_called_once_with("G1", flow._prime_account_login_result)
+        angeboten.assert_called_once_with(flow.hass, account, "u@example.com", "pw")
 
 
 # ── formerly tests/test_prime_config_flow.py ──────────────────────────
@@ -2610,16 +2605,17 @@ def _make_flow() -> RoombaPlusConfigFlow:
     flow._prime_account_password = ""
     flow._prime_account_robots = {}
     flow._prime_selected_blid = None
-    flow._prime_account_login_result = None
+    flow._prime_account = None
     return flow
 
 
 def _auth_error(name: str) -> Exception:
-    """Builds a real instance of the named cloud_api exception, so the
-    except-clause matching in async_step_prime_account() is exercised
-    against real types, not a generic stand-in."""
-    from custom_components.roomba_plus import cloud_api
-    return getattr(cloud_api, name)("boom")
+    """A real instance of the library's named login error, so the error
+    mapping in async_step_prime_account() is exercised against real
+    types, not a generic stand-in."""
+    import roombapy_prime
+
+    return getattr(roombapy_prime, name)("boom")
 
 
 @pytest.fixture(autouse=False)
@@ -2715,12 +2711,7 @@ class TestAsyncStepPrimeAccount:
         flow = _make_flow()
         fake_robots = {"BLID1": {"sku": "G185020", "password": "pw1", "name": "Combo"}}
 
-        with patch(
-            "custom_components.roomba_plus.config_flow.IrobotCloudApi"
-        ) as mock_api_cls:
-            mock_api = mock_api_cls.return_value
-            mock_api.authenticate = AsyncMock()
-            mock_api.robots = fake_robots
+        with _cloud_login(robots=fake_robots) as (_login, _offer, account):
             with patch.object(flow, "_async_current_ids", return_value=set()):
                 result = await flow.async_step_prime_account({
                     CONF_IROBOT_USERNAME: "user@example.com",
@@ -2730,71 +2721,58 @@ class TestAsyncStepPrimeAccount:
         assert flow._prime_account_username == "user@example.com"
         assert flow._prime_account_password == "hunter2"
         assert flow._prime_account_robots == fake_robots
+        assert flow._prime_account is account
         assert result["step_id"] == "prime_robot_picker"
 
     @pytest.mark.asyncio
-    async def test_credentials_error_shows_invalid_cloud_credentials(self):
+    async def test_a_login_response_without_robots_is_no_robots(self):
+        """The raw response is the cloud's; a missing or odd `robots`
+        must not crash the picker."""
         flow = _make_flow()
-        with patch(
-            "custom_components.roomba_plus.config_flow.IrobotCloudApi"
-        ) as mock_api_cls:
-            mock_api_cls.return_value.authenticate = AsyncMock(
-                side_effect=_auth_error("AuthenticationError")
-            )
-            result = await flow.async_step_prime_account({
-                CONF_IROBOT_USERNAME: "user@example.com",
-                CONF_IROBOT_PASSWORD: "wrong",
-            })
+        with _cloud_login() as (_login, _offer, account):
+            account.login_result.raw = {"robots": "odd"}
+            with patch.object(flow, "_async_current_ids", return_value=set()):
+                result = await flow.async_step_prime_account({
+                    CONF_IROBOT_USERNAME: "user@example.com",
+                    CONF_IROBOT_PASSWORD: "hunter2",
+                })
+        assert flow._prime_account_robots == {}
+        assert result["reason"] == "no_new_robots_found"
 
-        assert result["errors"]["base"] == "invalid_cloud_credentials"
-
+    @pytest.mark.parametrize("name,key", [
+        ("AuthCredentialsError", "cloud_credentials_rejected"),
+        ("AuthRateLimitedError", "cloud_too_many_sessions"),
+        ("AuthSSLError", "cloud_ssl_unverified"),
+        ("AuthConnectionError", "cloud_connection_failed"),
+        ("AuthTimeoutError", "cloud_timeout"),
+        ("AuthError", "cloud_response_malformed"),
+    ])
     @pytest.mark.asyncio
-    async def test_rate_limited_error_shows_cloud_rate_limited(self):
+    async def test_each_login_error_shows_its_own_cause(self, name, key):
         flow = _make_flow()
-        with patch(
-            "custom_components.roomba_plus.config_flow.IrobotCloudApi"
-        ) as mock_api_cls:
-            mock_api_cls.return_value.authenticate = AsyncMock(
-                side_effect=_auth_error("RateLimitedError")
-            )
+        with _cloud_login(_auth_error(name)):
             result = await flow.async_step_prime_account({
                 CONF_IROBOT_USERNAME: "user@example.com",
                 CONF_IROBOT_PASSWORD: "hunter2",
             })
 
-        assert result["errors"]["base"] == "cloud_rate_limited"
+        assert result["errors"]["base"] == key
 
     @pytest.mark.asyncio
-    async def test_ssl_error_shows_cloud_ssl_certificate_error(self):
+    async def test_a_locked_account_is_not_a_wrong_password(self):
+        """Same class as a wrong password, different advice: the lock
+        clears by itself and every attempt extends it."""
+        from roombapy_prime import CloudErrorReason
+
         flow = _make_flow()
-        with patch(
-            "custom_components.roomba_plus.config_flow.IrobotCloudApi"
-        ) as mock_api_cls:
-            mock_api_cls.return_value.authenticate = AsyncMock(
-                side_effect=_auth_error("SSLCertificateError")
-            )
+        locked = AuthCredentialsError("locked", reason=CloudErrorReason.ACCOUNT_LOCKED)
+        with _cloud_login(locked):
             result = await flow.async_step_prime_account({
                 CONF_IROBOT_USERNAME: "user@example.com",
                 CONF_IROBOT_PASSWORD: "hunter2",
             })
 
-        assert result["errors"]["base"] == "cloud_ssl_certificate_error"
-
-    @pytest.mark.asyncio
-    async def test_generic_cloud_api_error_shows_cannot_connect(self):
-        flow = _make_flow()
-        with patch(
-            "custom_components.roomba_plus.config_flow.IrobotCloudApi"
-        ) as mock_api_cls:
-            mock_api_cls.return_value.authenticate = AsyncMock(
-                side_effect=_auth_error("CloudApiError")
-            )
-            result = await flow.async_step_prime_account({
-                CONF_IROBOT_USERNAME: "user@example.com",
-                CONF_IROBOT_PASSWORD: "hunter2",
-            })
-
-        assert result["errors"]["base"] == "cannot_connect"
+        assert result["errors"]["base"] == "cloud_account_locked"
 
     @pytest.mark.asyncio
     async def test_blank_submission_shows_error_instead_of_silent_reshow(self):
@@ -2808,7 +2786,7 @@ class TestAsyncStepPrimeAccount:
             CONF_IROBOT_PASSWORD: "",
         })
         assert result["type"] == "form"
-        assert result["errors"]["base"] == "invalid_cloud_credentials"
+        assert result["errors"]["base"] == "cloud_credentials_rejected"
 
 
 @pytest.mark.usefixtures('_mock_clientsession')
@@ -2878,6 +2856,7 @@ class TestAsyncStepPrimeClassicIp:
     @pytest.mark.asyncio
     async def test_local_scan_match_skips_form_and_validates(self):
         flow = _make_flow()
+        flow._prime_account_username, flow._prime_account_password = "user@example.com", "hunter2"
         flow._prime_selected_blid = "BLID1"
         flow._prime_account_robots = {"BLID1": {"password": "pw123", "name": "Bogdana"}}
         fake_device = MagicMock()
@@ -2900,7 +2879,11 @@ class TestAsyncStepPrimeClassicIp:
         call_config = mock_validate.call_args.args[1]
         assert call_config[CONF_HOST] == "192.168.1.50"
         assert call_config[CONF_PASSWORD] == "pw123"
-        assert result["step_id"] == "prime_classic_analytics"
+        # No separate "keep the credentials?" step since 4.3: the entry
+        # is created at once, with the account.
+        assert result["type"] == "create_entry"
+        assert result["data"][CONF_IROBOT_USERNAME] == "user@example.com"
+        assert result["data"][CONF_IROBOT_PASSWORD] == "hunter2"
 
     @pytest.mark.asyncio
     async def test_no_local_match_shows_manual_ip_form(self):
@@ -2920,7 +2903,7 @@ class TestAsyncStepPrimeClassicIp:
         assert result["step_id"] == "prime_classic_ip"
 
     @pytest.mark.asyncio
-    async def test_manual_ip_submission_validates_and_routes_to_analytics(self):
+    async def test_manual_ip_submission_validates_and_creates_the_entry(self):
         flow = _make_flow()
         flow._prime_selected_blid = "BLID1"
         flow._prime_account_robots = {"BLID1": {"password": "pw123", "name": "Bogdana"}}
@@ -2935,8 +2918,8 @@ class TestAsyncStepPrimeClassicIp:
                         {CONF_HOST: "10.0.0.5"}
                     )
 
-        assert result["step_id"] == "prime_classic_analytics"
-        assert flow._pending_config[CONF_HOST] == "10.0.0.5"
+        assert result["type"] == "create_entry"
+        assert result["data"][CONF_HOST] == "10.0.0.5"
 
     @pytest.mark.asyncio
     async def test_validate_input_failure_shows_cannot_connect(self):
@@ -2973,45 +2956,34 @@ class TestAsyncStepPrimeClassicIp:
 
 @pytest.mark.usefixtures('_mock_clientsession')
 class TestAsyncStepPrimeClassicAnalytics:
+    """The step that asked whether to keep the account for a Classic
+    robot added from it is gone (4.3): the answer, defaulting to yes,
+    was given by choosing the account. Cloud features stay switchable
+    in the options."""
+
+    def test_the_step_is_gone(self):
+        import json
+        import pathlib
+
+        assert not hasattr(RoombaPlusConfigFlow, "async_step_prime_classic_analytics")
+        strings = json.loads(pathlib.Path(
+            "custom_components/roomba_plus/strings.json").read_text(encoding="utf-8"))
+        assert "prime_classic_analytics" not in strings["config"]["step"]
+
     @pytest.mark.asyncio
-    async def test_checkbox_true_keeps_credentials(self):
+    async def test_the_classic_entry_keeps_the_account_and_hands_over_the_login(self):
         flow = _make_flow()
         flow.name = "Bogdana"
         flow._pending_config = {CONF_HOST: "10.0.0.5", CONF_BLID: "BLID1"}
-        flow._prime_account_username = "user@example.com"
-        flow._prime_account_password = "hunter2"
+        account = _fake_account({"BLID1": {"name": "Bogdana"}})
+        with patch.object(cf, "async_offer") as offer, \
+             patch.object(cf.discovery_flow, "async_create_flow") as announced:
+            result = flow._async_create_local_entry("user@example.com", "hunter2", account)
 
-        result = await flow.async_step_prime_classic_analytics(
-            {"enable_cloud_analytics": True}
-        )
-
-        assert result["type"] == "create_entry"
         assert result["data"][CONF_IROBOT_USERNAME] == "user@example.com"
         assert result["data"][CONF_IROBOT_PASSWORD] == "hunter2"
-
-    @pytest.mark.asyncio
-    async def test_checkbox_false_discards_credentials(self):
-        flow = _make_flow()
-        flow.name = "Bogdana"
-        flow._pending_config = {CONF_HOST: "10.0.0.5", CONF_BLID: "BLID1"}
-        flow._prime_account_username = "user@example.com"
-        flow._prime_account_password = "hunter2"
-
-        result = await flow.async_step_prime_classic_analytics(
-            {"enable_cloud_analytics": False}
-        )
-
-        assert result["type"] == "create_entry"
-        assert CONF_IROBOT_USERNAME not in result["data"]
-        assert CONF_IROBOT_PASSWORD not in result["data"]
-
-    @pytest.mark.asyncio
-    async def test_default_shows_form_with_checkbox_default_true(self):
-        flow = _make_flow()
-        flow.name = "Bogdana"
-        result = await flow.async_step_prime_classic_analytics()
-        assert result["type"] == "form"
-        assert result["step_id"] == "prime_classic_analytics"
+        offer.assert_called_once_with(flow.hass, account, "user@example.com", "hunter2")
+        announced.assert_not_called()     # the account has no other robot
 
 
 @pytest.mark.usefixtures('_mock_clientsession')

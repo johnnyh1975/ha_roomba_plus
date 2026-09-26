@@ -1268,13 +1268,43 @@ class TestInitialLoad:
         ])
         a = _archive()
         await a.async_initial_load(api, "B", MagicMock(), "e1")
-        befores = [c.kwargs.get("before_ts") for c in api.get_mission_history.await_args_list]
+        befores = [c.kwargs.get("before") for c in api.get_mission_history.await_args_list]
         assert befores == [None, 200, 100], "each page continues before the last one's oldest"
         # The archive keeps the NEWEST first (each mission is inserted at
         # the front). Reversing the fetched pages before appending is what
         # makes the initial load end in that same order.
         assert [d["nMssn"] for d in a._derived] == [3, 2, 1]
         a.async_save.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_a_cloud_that_ignores_before_is_asked_twice_not_two_dozen_times(self):
+        """Measured on a 980: the Classic cloud ignores `before` and
+        answers every page with the same window. The load asked for it
+        again until the 800-record cap -- 24 identical requests."""
+        window = [_raw_m(n, 1000 - n) for n in range(33, 0, -1)]
+        api = MagicMock()
+        api.get_mission_history = AsyncMock(side_effect=lambda *_a, **_k: list(window))
+        a = _archive()
+        await a.async_initial_load(api, "B", MagicMock(), "e1")
+        assert api.get_mission_history.await_count == 2
+        assert len(a._derived) == 33
+
+    @pytest.mark.asyncio
+    async def test_an_overlapping_page_adds_only_what_is_new(self):
+        """A cloud that pages with an overlap -- the boundary mission on
+        both pages -- must not store that mission twice, even one
+        without a mission number."""
+        api = MagicMock()
+        api.get_mission_history = AsyncMock(side_effect=[
+            [_raw_m(3, 300), _raw_m(None, 200)],
+            [_raw_m(None, 200), _raw_m(1, 100)],
+            [_raw_m(1, 100)],
+        ])
+        a = _archive()
+        await a.async_initial_load(api, "B", MagicMock(), "e1")
+        befores = [c.kwargs.get("before") for c in api.get_mission_history.await_args_list]
+        assert befores == [None, 200, 100]
+        assert len(a._derived) == 3
 
     @pytest.mark.asyncio
     async def test_a_failing_page_keeps_what_was_fetched(self):

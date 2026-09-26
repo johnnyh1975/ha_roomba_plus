@@ -54,6 +54,16 @@ a few times a day would be rude.
 Classic's own live state does not go through a coordinator at all — it arrives via callbacks
 registered on the `roombapy` client (`callbacks.py`).
 
+**One cloud login per account, as of v4.3.** Every cloud request of both generations goes through
+roombapy-prime; the integration no longer has a cloud client of its own (`cloud_api.py` is gone).
+`cloud_account.py` keeps one `CloudAccount` per set of credentials for as long as an entry uses
+it: the first entry to start logs in, the others take that login, and the last one to unload
+drops it. `IrobotCloudCoordinator` gets its `ClassicRestClient` from the account, and a 403 seen by
+several robots at once costs one relogin. A Prime entry takes its *first* login from the account;
+`PrimeRobot` keeps its own relogin for the MQTT token until roombapy-prime 0.5. Why a cloud call
+failed reaches the user through the error's `reason`, one translated text per reason
+(`cloud_errors.py`).
+
 **Both halves are async as of v4.2.** The Classic side ran on roombapy 1.x, a synchronous library
 driven from a paho-mqtt thread, so every command went through `hass.async_add_executor_job()` — 46
 call sites of it. roombapy 2.x is async throughout (aiomqtt), so those are plain `await` now, and

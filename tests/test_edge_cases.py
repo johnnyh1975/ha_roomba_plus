@@ -182,7 +182,7 @@ def _make_coordinator_with_archive(mission_archive) -> IrobotCloudCoordinator:
     coord._last_success_time = None
     coord.hass = MagicMock()
     coord.config_entry = MagicMock(entry_id="test_entry_id")
-    coord.api = AsyncMock()
+    coord._api = AsyncMock()
     coord.api.get_pmaps = AsyncMock(return_value=[])
     coord.api.get_favorites = AsyncMock(return_value=[])
     coord.api.get_automations = AsyncMock(return_value={})

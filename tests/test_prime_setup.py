@@ -72,6 +72,21 @@ def _mock_clientsession():
         yield
 
 
+@pytest.fixture(autouse=True)
+def _account():
+    """The account login every Prime entry takes its first login from
+    (cloud_account.async_acquire, 4.3). Replaced with one whose
+    login_result is a marker, so a test can see it handed on."""
+    account = MagicMock()
+    account.login_result = MagicMock(name="shared_login_result")
+    with patch(
+        "custom_components.roomba_plus.async_acquire",
+        new=AsyncMock(return_value=account),
+    ) as acquire:
+        acquire.account = account
+        yield acquire
+
+
 class TestConnectionType:
     def test_defaults_to_local_push_when_absent(self) -> None:
         config_entry = entry_mock()
@@ -269,6 +284,84 @@ class TestAsyncSetupEntryPrime:
         ):
             with pytest.raises(ConfigEntryNotReady):
                 await _async_setup_entry_prime(hass, config_entry)
+
+
+class TestPrimeTakesTheAccountLogin:
+    """4.3: the first login of a Prime entry is the account's, shared
+    with every other entry on it -- no login of its own."""
+
+    @pytest.mark.asyncio
+    async def test_the_account_login_is_handed_to_the_robot(self, _account) -> None:
+        hass, config_entry = _make_hass_and_entry()
+        with patch(
+            "custom_components.roomba_plus.PrimeFactory.create_prime_robot",
+            new=AsyncMock(side_effect=AuthConnectionError("stop here")),
+        ) as create:
+            with pytest.raises(Exception):
+                await _async_setup_entry_prime(hass, config_entry)
+
+        _account.assert_awaited_once_with(
+            hass, config_entry.entry_id, "user@example.com", "hunter2",
+            mqtt_blid="BLID123",
+        )
+        assert create.call_args.kwargs["login_result"] is _account.account.login_result
+
+    @pytest.mark.asyncio
+    async def test_the_share_is_released_on_unload(self, _account) -> None:
+        """Registered before the login, so a setup that fails after it
+        releases too: Home Assistant runs on_unload callbacks for a
+        failed setup."""
+        from custom_components.roomba_plus import cloud_account
+
+        hass, config_entry = _make_hass_and_entry()
+        with patch(
+            "custom_components.roomba_plus.PrimeFactory.create_prime_robot",
+            new=AsyncMock(side_effect=AuthConnectionError("stop here")),
+        ):
+            with pytest.raises(Exception):
+                await _async_setup_entry_prime(hass, config_entry)
+
+        registered = [c.args[0] for c in config_entry.async_on_unload.call_args_list]
+        releases = [f for f in registered if getattr(f, "func", None) is cloud_account.async_release]
+        assert len(releases) == 1
+        assert releases[0].args == (hass, config_entry.entry_id)
+
+    @pytest.mark.parametrize("error,exc_name,key", [
+        (AuthCredentialsError("wrong"), "ConfigEntryAuthFailed", "cloud_credentials_rejected"),
+        (AuthRateLimitedError("close the app"), "ConfigEntryNotReady", "cloud_too_many_sessions"),
+        (AuthConnectionError("dns"), "ConfigEntryNotReady", "cloud_connection_failed"),
+    ])
+    @pytest.mark.asyncio
+    async def test_a_failed_account_login_is_translated_by_reason(
+        self, _account, error, exc_name, key
+    ) -> None:
+        """What the integration card shows comes from the error's reason,
+        in the user's language -- no English library text in a German
+        sentence any more."""
+        from homeassistant import exceptions
+
+        hass, config_entry = _make_hass_and_entry()
+        _account.side_effect = error
+        with pytest.raises(getattr(exceptions, exc_name)) as excinfo:
+            await _async_setup_entry_prime(hass, config_entry)
+        assert excinfo.value.translation_key == key
+        assert excinfo.value.translation_placeholders == {}
+
+    @pytest.mark.asyncio
+    async def test_a_locked_account_asks_and_does_not_retry(self, _account) -> None:
+        """A lockout stays ConfigEntryAuthFailed: zero automatic
+        attempts against an account locked BECAUSE of attempts. The text
+        is the lockout's own."""
+        from homeassistant.exceptions import ConfigEntryAuthFailed
+        from roombapy_prime import CloudErrorReason
+
+        hass, config_entry = _make_hass_and_entry()
+        _account.side_effect = AuthCredentialsError(
+            "locked", reason=CloudErrorReason.ACCOUNT_LOCKED
+        )
+        with pytest.raises(ConfigEntryAuthFailed) as excinfo:
+            await _async_setup_entry_prime(hass, config_entry)
+        assert excinfo.value.translation_key == "cloud_account_locked"
 
 
 class TestAsyncUnloadEntryCloudOnly:

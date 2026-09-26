@@ -30,6 +30,7 @@ from .const import (
 )
 from .models import ConnectionType, RoombaConfigEntry
 from .binary_sensor import _prime_reports_tank
+from .cloud_account import async_diagnostics as cloud_account_diagnostics
 from .cloud_coordinator import pmap_record_id, pmap_version_report
 from .room_cleaning import resolve_user_pmapv_id
 
@@ -1493,6 +1494,8 @@ async def _build_diagnostics(
             "connection_type": data.connection_type.value,
             "config": async_redact_data(dict(config_entry.data), _CLOUD_REDACT),
             "options": async_redact_data(dict(config_entry.options), _CLOUD_REDACT),
+            # The account login this entry shares (4.3).
+            "cloud_account": cloud_account_diagnostics(hass, config_entry.entry_id),
             "prime": {
                 "household_id_resolved": data.prime_household_id is not None,
                 # WHETHER THE LOGIN TELLS US WHEN IT EXPIRES.
@@ -2302,6 +2305,8 @@ async def _build_diagnostics(
 
         # Cloud coordinator status
         "cloud": _cloud_diag(data),
+        # The account login this entry shares with others (4.3).
+        "cloud_account": cloud_account_diagnostics(hass, config_entry.entry_id),
 
         # All top-level keys in master_state (for debugging unknown models)
         "master_state_keys": sorted(state.keys()),
