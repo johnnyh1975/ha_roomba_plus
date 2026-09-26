@@ -811,14 +811,91 @@ class MissionStore:
         caller falls back to the active map, the behaviour that was
         there before.
         """
+        pmap_id = MissionStore._record_pmap_id(rec)
+        if not by_pmap or pmap_id is None:
+            return None
+        return by_pmap.get(pmap_id)
+
+    @staticmethod
+    def _record_pmap_id(rec: dict[str, Any]) -> str | None:
+        """The map this mission ran on, from its `pmaps_info`, or None."""
         pmaps_info = rec.get("pmaps_info")
-        if not by_pmap or not isinstance(pmaps_info, list) or not pmaps_info:
+        if not isinstance(pmaps_info, list) or not pmaps_info:
             return None
         first = pmaps_info[0] if isinstance(pmaps_info[0], dict) else {}
         pmap_id = first.get("pmap_id")
-        if not pmap_id:
-            return None
-        return by_pmap.get(str(pmap_id))
+        return str(pmap_id) if pmap_id else None
+
+    @staticmethod
+    def _timeline_cleaned_rids(rec: dict[str, Any]) -> list[str]:
+        """Region ids the cloud's room events count as cleaned, in
+        completion order, each once. Empty without a timeline."""
+        timeline = rec.get("timeline")
+        if not isinstance(timeline, dict):
+            return []
+        ordered: list[str] = []
+        for ev in timeline.get("finEvents") or []:
+            if not isinstance(ev, dict) or ev.get("type") != "room":
+                continue
+            room = ev.get("room") or {}
+            if not room_event_was_cleaned(room):   # history: finished OR cleaned floor
+                continue
+            rid = str(room.get("rid", ""))
+            if rid and rid not in ordered:
+                ordered.append(rid)
+        return ordered
+
+    def store_rooms_from_timelines(
+        self,
+        effective_map: dict[str, str],
+        by_pmap: dict[str, dict[str, str]] | None = None,
+    ) -> int:
+        """Writes the cloud's answer into each record's `last_cleaned_rooms`
+        once the timeline has arrived (4.2.14).
+
+        The field held what room tracking OBSERVED during the mission, and
+        kept it after the cloud's room events came in. Every reader that
+        derives rooms (room history, last mission summary, the vacuum)
+        already preferred the timeline -- but the stored field went out
+        unchanged through the REST export and the diagnostics.
+        @FJSoninC's closed-door test: the tracker moved past the closed
+        bathroom and recorded Bathroom + Office, the cloud said Office
+        only, and the record kept both.
+
+        ONLY WHEN EVERY ROOM HAS A NAME. The field holds names; a map not
+        loaded yet would turn them into bare ids, which is worse than the
+        observation it replaces. The next refresh tries again. A timeline
+        with no cleaned room keeps the observation too -- that absence is
+        the cloud's, not an answer.
+
+        ONLY FROM THE MISSION'S OWN MAP when the record names one. Room
+        ids are per map: on a robot with several maps, the same id is a
+        different room on each, and a room split or a deleted map leaves
+        ids that exist only elsewhere. The display path may fall back to
+        every map's names; a WRITE into the stored record must not, or it
+        replaces a right observation with a wrong name. A record whose
+        map is not among the cloud's maps keeps what it has. Records with
+        no map recorded (older entries, EPHEMERAL tier) are named from
+        `effective_map`, as they are everywhere else.
+
+        Returns how many records changed. Does not save.
+        """
+        changed = 0
+        for rec in self._records:
+            rids = self._timeline_cleaned_rids(rec)
+            if not rids:
+                continue
+            if self._record_pmap_id(rec) is not None:
+                lookup = self._record_region_map(rec, by_pmap) or {}
+            else:
+                lookup = effective_map
+            if any(rid not in lookup for rid in rids):
+                continue
+            names = [lookup[rid] for rid in rids]
+            if rec.get("last_cleaned_rooms") != names:
+                rec["last_cleaned_rooms"] = names
+                changed += 1
+        return changed
 
     def _record_room_names(
         self,
@@ -865,30 +942,14 @@ class MissionStore:
         1. timeline.finEvents room events, status in ROOM_EVENT_DONE_STATUSES — live path
         2. rec["last_cleaned_rooms"] — imported records keep working
         """
-        timeline = rec.get("timeline")
-        if isinstance(timeline, dict):
-            fin_events = timeline.get("finEvents") or []
-            seen: dict[str, int] = {}   # rid → index in ordered list
-            ordered: list[str] = []
-            for ev in fin_events:
-                if not isinstance(ev, dict) or ev.get("type") != "room":
-                    continue
-                room = ev.get("room") or {}
-                if not room_event_was_cleaned(room):   # history: finished OR cleaned floor
-                    continue
-                rid = str(room.get("rid", ""))
-                if not rid:
-                    continue
-                if rid not in seen:
-                    seen[rid] = len(ordered)
-                    ordered.append(rid)
-            if ordered:
-                # THE MISSION'S OWN MAP, from the pmaps_info this record
-                # already stores. Falls back to the active map when the
-                # record has none -- older entries and EPHEMERAL tier.
-                return self._resolve_region_ids(
-                    ordered, effective_map, self._record_region_map(rec, by_pmap)
-                )
+        ordered = self._timeline_cleaned_rids(rec)
+        if ordered:
+            # THE MISSION'S OWN MAP, from the pmaps_info this record
+            # already stores. Falls back to the active map when the
+            # record has none -- older entries and EPHEMERAL tier.
+            return self._resolve_region_ids(
+                ordered, effective_map, self._record_region_map(rec, by_pmap)
+            )
         imported = rec.get("last_cleaned_rooms")
         if isinstance(imported, list) and imported:
             return [str(r) for r in imported if isinstance(r, str)]
@@ -1997,6 +2058,7 @@ class MissionStore:
         now_ts: float | None = None,
         tolerance_sec: int = 120,
         settle_sec: int = ADOPT_SETTLE_SEC,
+        since_ts: float | None = None,
     ) -> int:
         """Record the cloud's missions that were never recorded here.
 
@@ -2012,7 +2074,13 @@ class MissionStore:
 
         WHICH ONES:
           - ended no earlier than the oldest local record, so the first
-            run does not pull in the robot's whole cloud history
+            run does not pull in the robot's whole cloud history -- or,
+            when `since_ts` is given (the entry's creation, 4.2.14), no
+            earlier than whichever of the two is older. A store with no
+            records at all, or one whose first missions were lost, was a
+            dead end: @FJSoninC installed, lost the first missions, and
+            once a later one was recorded, the lost ones were older than
+            it and never came back
           - ended at least `settle_sec` ago, so a mission whose local
             record is still being written is not recorded twice
           - with no local record ending within `tolerance_sec`, the same
@@ -2027,7 +2095,7 @@ class MissionStore:
 
         Returns the number recorded. Does not save.
         """
-        if not cloud_records or not self._records:
+        if not cloud_records:
             return 0
         local_ends: list[float] = []
         for local in self._records:
@@ -2036,9 +2104,12 @@ class MissionStore:
                 if parsed.tzinfo is None:
                     parsed = parsed.replace(tzinfo=timezone.utc)
                 local_ends.append(parsed.timestamp())
-        if not local_ends:
+        floors = [min(local_ends)] if local_ends else []
+        if since_ts is not None:
+            floors.append(float(since_ts))
+        if not floors:
             return 0
-        horizon = min(local_ends)
+        horizon = min(floors)
         now = datetime.now(timezone.utc).timestamp() if now_ts is None else now_ts
 
         adopted = 0

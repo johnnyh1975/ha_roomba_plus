@@ -4768,6 +4768,47 @@ class TestMissionsMissingLocallyAreRecordedFromTheCloud:
             [self._cloud(self._NOW - 3_600)], now_ts=self._NOW
         ) == 0
 
+    def test_an_empty_store_adopts_what_ended_since_the_integration_was_set_up(self):
+        """4.2.14, @FJSoninC: installed, lost the first missions -- an
+        empty store adopted nothing, and later the lost ones were older
+        than the first record. The entry's creation is the floor now."""
+        set_up = self._NOW - 2 * 86_400
+        lost = self._cloud(self._NOW - 86_400)
+        before_setup = self._cloud(self._NOW - 3 * 86_400)
+        store = MissionStore()
+        assert store.adopt_missing_from_cloud(
+            [lost, before_setup], now_ts=self._NOW, since_ts=set_up
+        ) == 1
+        assert store.latest()["ended_at"].startswith(
+            __import__("datetime").datetime.fromtimestamp(
+                self._NOW - 86_400, tz=__import__("datetime").timezone.utc
+            ).isoformat()[:19]
+        )
+
+    def test_missions_lost_before_the_first_record_come_back(self):
+        set_up = self._NOW - 5 * 86_400
+        store = self._store(self._NOW - 3_600)               # the first one recorded
+        lost = self._cloud(self._NOW - 2 * 86_400)            # older, but after set-up
+        assert store.adopt_missing_from_cloud([lost], now_ts=self._NOW, since_ts=set_up) == 1
+
+    def test_the_floor_is_the_older_of_the_two(self):
+        """A store older than the entry (restored from a backup) keeps
+        its own floor."""
+        store = self._store(self._NOW - 10 * 86_400)
+        between = self._cloud(self._NOW - 8 * 86_400)
+        assert store.adopt_missing_from_cloud(
+            [between], now_ts=self._NOW, since_ts=self._NOW - 86_400
+        ) == 1
+
+    def test_both_refresh_paths_pass_the_entrys_creation(self):
+        import inspect
+
+        import custom_components.roomba_plus as package
+        from custom_components.roomba_plus import callbacks
+
+        for module in (package, callbacks):
+            assert "since_ts=entry_created_ts(config_entry)" in inspect.getsource(module), module.__name__
+
     def test_an_adopted_older_mission_keeps_the_history_in_time_order(self):
         newest = self._NOW - 600 - 3_600
         store = self._store(self._NOW - 86_400, newest)
@@ -4804,3 +4845,78 @@ class TestMissionsMissingLocallyAreRecordedFromTheCloud:
 
         for module in (package, callbacks):
             assert "adopt_missing_from_cloud(" in inspect.getsource(module), module.__name__
+
+
+class TestTheStoredRoomsFollowTheCloud:
+    """4.2.14, @FJSoninC's closed-door test: order Bathroom then Office,
+    bathroom door closed. Room tracking moved past the bathroom and
+    stored Bathroom + Office; the cloud's room events said Office only.
+    Every derived view preferred the cloud, but the record's own field
+    kept both, and that field is what the REST export and the
+    diagnostics hand out."""
+
+    _MAP = {"3": "Bathroom", "6": "Office"}
+
+    def _record(self, events, stored=("Bathroom", "Office")):
+        return {
+            "id": "m_1", "ended_at": "2026-09-26T08:00:00+00:00",
+            "last_cleaned_rooms": list(stored),
+            "timeline": {"finEvents": [
+                {"type": "room", "room": {"rid": rid, "status": status, "passCount": 1}}
+                for rid, status in events
+            ]},
+        }
+
+    def _store(self, *records):
+        store = MissionStore()
+        store._records = list(records)
+        return store
+
+    def test_the_closed_room_leaves_the_record(self):
+        rec = self._record([("6", 0)])
+        store = self._store(rec)
+        assert store.store_rooms_from_timelines(self._MAP) == 1
+        assert rec["last_cleaned_rooms"] == ["Office"]
+        assert store.store_rooms_from_timelines(self._MAP) == 0, "only once"
+
+    def test_an_unnamed_room_waits_for_the_map(self):
+        """Names, not bare ids: a map not loaded yet keeps the observation."""
+        rec = self._record([("6", 0), ("9", 0)])
+        assert self._store(rec).store_rooms_from_timelines(self._MAP) == 0
+        assert rec["last_cleaned_rooms"] == ["Bathroom", "Office"]
+
+    def test_a_timeline_without_a_cleaned_room_keeps_the_observation(self):
+        rec = self._record([])
+        assert self._store(rec).store_rooms_from_timelines(self._MAP) == 0
+        assert rec["last_cleaned_rooms"] == ["Bathroom", "Office"]
+
+    def test_a_record_without_timeline_is_left_alone(self):
+        rec = {"id": "m_2", "last_cleaned_rooms": ["Bathroom"]}
+        assert self._store(rec).store_rooms_from_timelines(self._MAP) == 0
+        assert rec["last_cleaned_rooms"] == ["Bathroom"]
+
+    def test_the_missions_own_map_names_its_rooms(self):
+        rec = self._record([("6", 0)])
+        rec["pmaps_info"] = [{"pmap_id": "upstairs"}]
+        store = self._store(rec)
+        assert store.store_rooms_from_timelines({}, {"upstairs": {"6": "Study"}}) == 1
+        assert rec["last_cleaned_rooms"] == ["Study"]
+
+    def test_another_maps_name_is_never_written(self):
+        """Review, room split: rid 6 no longer exists on the mission's map
+        but does on another. The display may fall back; the record keeps
+        what it has."""
+        rec = self._record([("6", 0)], stored=("Study",))
+        rec["pmaps_info"] = [{"pmap_id": "upstairs"}]
+        store = self._store(rec)
+        assert store.store_rooms_from_timelines(
+            {"6": "Primary Bathroom"}, {"upstairs": {"2": "Study"}, "downstairs": {"6": "Primary Bathroom"}}
+        ) == 0
+        assert rec["last_cleaned_rooms"] == ["Study"]
+
+    def test_a_deleted_map_keeps_its_records(self):
+        rec = self._record([("6", 0)], stored=("Study",))
+        rec["pmaps_info"] = [{"pmap_id": "gone"}]
+        store = self._store(rec)
+        assert store.store_rooms_from_timelines({"6": "Primary Bathroom"}, {"downstairs": {"6": "Primary Bathroom"}}) == 0
+        assert rec["last_cleaned_rooms"] == ["Study"]

@@ -2620,3 +2620,66 @@ class TestTheCommittedVersionIsTheActiveOne:
                 "last_user_ts", "proc_state", "creator", "create_time")},
             "committed_version_used": None,
         }]
+
+
+# ── 4.2.14: a version the robot made is not a room-command version ─────────
+#
+# Field records, verbatim where it matters (ids shortened, BLIDs out).
+
+from custom_components.roomba_plus.cloud_coordinator import pmap_committed_version  # noqa: E402
+
+
+def _field_pmap(pmap_id, *, active, creator, user, last_user, robot=None):
+    return {
+        "pmap_id": pmap_id,
+        "state": "active",
+        "active_pmapv_id": active,
+        "user_pmapv_id": user,
+        "robot_pmapv_id": robot or active,
+        "active_pmapv_details": {"active_pmapv": {
+            "pmap_id": pmap_id, "pmapv_id": active, "last_user_pmapv_id": last_user,
+            "proc_state": "OK_Processed", "creator": creator,
+        }},
+    }
+
+
+class TestARobotMadeVersionIsNotSent:
+    """@FJSoninC's j7+ and @ScenicSystemsLLC's two S9+: the cloud made
+    the robot's own end-of-mission version the active one, and a room
+    command carrying it failed with error 224 every time. The app, the
+    favourites and every command that worked carried the root
+    `user_pmapv_id`."""
+
+    @pytest.mark.parametrize("record,working", [
+        # @FJSoninC, j7+, one map
+        (_field_pmap("j7map", active="260926T064058", creator="robot",
+                     user="260925T175356", last_user="260925T175356"), "260925T175356"),
+        # @ScenicSystemsLLC, Walle (S9+)
+        (_field_pmap("9HqCcpz", active="260918T205534", creator="robot",
+                     user="260901T160723", last_user="260901T160723"), "260901T160723"),
+        # @ScenicSystemsLLC, Robby (S9+), both maps -- the first has no favourite
+        (_field_pmap("4jlhiuj", active="260909T163820", creator="robot",
+                     user="260816T105241", last_user="260816T105241"), "260816T105241"),
+        (_field_pmap("R-xavAh", active="260106T141943", creator="robot",
+                     user="251217T181058", last_user="251217T181058"), "251217T181058"),
+    ], ids=["j7+", "walle", "robby_map1", "robby_map2"])
+    def test_the_committed_user_version_is_used(self, record, working):
+        assert pmap_committed_version(record) == working
+
+    def test_a_user_made_active_version_is_still_first(self):
+        """#183: the active version was the app's, `last_user_pmapv_id`
+        an edit that never became active."""
+        record = _field_pmap("p", active="250610T143229", creator="user",
+                             user="250610T143229", last_user="260913T011853")
+        assert pmap_committed_version(record) == "250610T143229"
+
+    def test_a_record_without_creator_keeps_the_4_2_13_answer(self):
+        record = _field_pmap("p", active="250610T143229", creator=None,
+                             user=None, last_user="260913T011853")
+        del record["active_pmapv_details"]["active_pmapv"]["creator"]
+        assert pmap_committed_version(record) == "250610T143229"
+
+    def test_with_nothing_else_the_robots_version_is_sent_rather_than_none(self):
+        record = _field_pmap("p", active="260918T205534", creator="robot",
+                             user=None, last_user=None)
+        assert pmap_committed_version(record) == "260918T205534"

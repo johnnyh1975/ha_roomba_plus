@@ -3031,3 +3031,15 @@ def maintenance_changed_signal(blid: str) -> str:
     appeared only when the robot next sent a message.
     """
     return f"{DOMAIN}_maintenance_changed_{blid}"
+
+
+def mission_store_changed_signal(blid: str) -> str:
+    """Dispatcher signal: this robot's mission records changed outside a
+    robot message -- the cloud's data was merged in after a mission.
+
+    Until 4.2.14 the room history and the last mission summary kept what
+    they showed at the dock until the robot next sent something, which a
+    docked robot may not do for hours (@FJSoninC: the closed bathroom
+    stayed "cleaned" until a manual refresh).
+    """
+    return f"{DOMAIN}_mission_store_changed_{blid}"

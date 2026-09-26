@@ -4291,11 +4291,20 @@ class TestOneVersionForEveryRoomCommand:
         ]}
         assert rc.resolve_user_pmapv_id(state, None, self._MAP) == self._GOOD
 
-    def test_a_matching_last_command_still_comes_before_stored_versions(self):
+    def test_a_version_the_app_stored_comes_before_the_last_command(self):
+        """4.2.14: the app's stored version is the one source right in
+        every report (#183, @FJSoninC's j7+, @ScenicSystemsLLC's S9+).
+        The last command may be one of ours, with a version the robot
+        took but will fail on the next time."""
         state = {
             "lastCommand": {"pmap_id": self._MAP, "user_pmapv_id": "LAST"},
             "cleanSchedule2": [{"cmd": {"pmap_id": self._MAP, "user_pmapv_id": self._GOOD}}],
         }
+        assert rc.resolve_user_pmapv_id(state, None, self._MAP) == self._GOOD
+
+    def test_without_a_stored_version_a_matching_last_command_still_counts(self):
+        state = {"lastCommand": {"pmap_id": self._MAP, "user_pmapv_id": "LAST"},
+                 "pmaps": [{self._MAP: self._BAD}]}
         assert rc.resolve_user_pmapv_id(state, None, self._MAP) == "LAST"
 
     def test_the_robots_own_version_is_the_last_resort(self):
@@ -4359,6 +4368,92 @@ class TestOneVersionForEveryRoomCommand:
             text = p.read_text()
             if p.name == "room_cleaning.py":
                 text = text.replace("def _resolve_pmapv_id(", "")
-                text = text.replace("or _resolve_pmapv_id(", "")
+                text = text.replace('("robot state", _resolve_pmapv_id(', "")
             assert "_resolve_pmapv_id(" not in text, p.name
             assert ".active_user_pmapv_id" not in text or p.name == "cloud_coordinator.py", p.name
+
+
+class TestTheAppsStoredVersionComesFirst:
+    """4.2.14. The version in a favourite or schedule was right in every
+    report: #183, @FJSoninC's j7+, @ScenicSystemsLLC's S9+."""
+
+    def _cloud(self, favourite_version):
+        return {
+            "pmaps": [{
+                "pmap_id": "9HqCcpz", "active_pmapv_id": "260918T205534",
+                "user_pmapv_id": "260901T160723",
+                "active_pmapv_details": {"active_pmapv": {
+                    "pmap_id": "9HqCcpz", "pmapv_id": "260918T205534",
+                    "last_user_pmapv_id": "260901T160723", "creator": "robot",
+                }},
+            }],
+            "favorites": [{"commanddefs": [
+                {"pmap_id": "9HqCcpz", "user_pmapv_id": favourite_version,
+                 "regions": [{"region_id": "10"}]},
+            ]}],
+        }
+
+    def test_walle_sends_what_its_favourites_send(self):
+        """@ScenicSystemsLLC: clean_room sent the robot's 260918T205534 and
+        failed; the favourite sent 260901T160723 and worked."""
+        state = {"lastCommand": {"pmap_id": "9HqCcpz", "user_pmapv_id": "260918T205534"},
+                 "cleanMissionStatus": {"error": 224}}
+        assert rc.resolve_user_pmapv_id(state, self._cloud("260901T160723"), "9HqCcpz") == "260901T160723"
+
+    def test_a_favourite_for_another_map_is_not_taken(self):
+        cloud = self._cloud("260901T160723")
+        cloud["favorites"][0]["commanddefs"][0]["pmap_id"] = "other"
+        assert rc.resolve_user_pmapv_id({}, cloud, "9HqCcpz") == "260901T160723"   # root user_pmapv_id
+
+    def test_the_app_version_beats_the_cloud_when_they_disagree(self):
+        """The order itself: with cloud data present, a stored version
+        that differs from the cloud's is the one sent."""
+        cloud = self._cloud("260801T000000")
+        cloud["pmaps"][0]["active_pmapv_details"]["active_pmapv"]["creator"] = "user"
+        assert rc.resolve_user_pmapv_id({}, cloud, "9HqCcpz") == "260801T000000"
+
+
+class TestAVersionThatFailedIsPassedOver:
+    """4.2.14, review: a favourite can predate a map edit. Without an
+    escape, step 1 would send its version on every attempt, and each
+    attempt would end in error 224."""
+
+    _STALE = "250101T000000"
+    _ACTIVE = "260920T100000"
+
+    def _cloud(self):
+        return {
+            "pmaps": [{
+                "pmap_id": "P", "active_pmapv_id": self._ACTIVE,
+                "active_pmapv_details": {"active_pmapv": {
+                    "pmap_id": "P", "pmapv_id": self._ACTIVE, "creator": "user",
+                }},
+            }],
+            "favorites": [{"commanddefs": [
+                {"pmap_id": "P", "user_pmapv_id": self._STALE},
+            ]}],
+        }
+
+    def _state(self, version, error=224, pmap_id="P"):
+        return {"lastCommand": {"pmap_id": pmap_id, "user_pmapv_id": version},
+                "cleanMissionStatus": {"error": error}}
+
+    def test_the_stale_favourite_goes_first(self):
+        assert rc.resolve_user_pmapv_id({}, self._cloud(), "P") == self._STALE
+
+    def test_after_it_failed_the_cloud_is_tried(self):
+        assert rc.resolve_user_pmapv_id(self._state(self._STALE), self._cloud(), "P") == self._ACTIVE
+
+    def test_a_failure_with_another_error_changes_nothing(self):
+        assert rc.resolve_user_pmapv_id(self._state(self._STALE, error=0), self._cloud(), "P") == self._STALE
+
+    def test_a_failure_on_another_map_changes_nothing(self):
+        assert rc.resolve_user_pmapv_id(self._state(self._STALE, pmap_id="Q"), self._cloud(), "P") == self._STALE
+
+    def test_when_every_source_says_the_same_it_is_sent_again(self):
+        cloud = self._cloud()
+        cloud["favorites"][0]["commanddefs"][0]["user_pmapv_id"] = self._ACTIVE
+        assert rc.resolve_user_pmapv_id(self._state(self._ACTIVE), cloud, "P") == self._ACTIVE
+
+    def test_without_a_version_nothing_is_sent(self):
+        assert rc.resolve_user_pmapv_id({}, {}, "P") is None

@@ -332,32 +332,54 @@ def _parse_time_estimates(raw: list[Any]) -> dict[str, int | None]:
 
 
 def pmap_committed_version(pmap: dict[str, Any]) -> str | None:
-    """The version of this cloud map that a room command must carry.
+    """The version of this cloud map that a room command must carry, as
+    far as the map record itself can tell. What comes first is the
+    resolver's business (room_cleaning, `resolve_user_pmapv_id`).
 
-    THE ACTIVE VERSION, NOT THE LAST ONE THE USER MADE. Until 4.2.13 this
-    read `active_pmapv.active_pmapv_id`, then `last_user_pmapv_id`, then
-    the root `active_pmapv_id`. The first key does not exist in any
-    record we have seen: on lewis firmware the active version sits under
-    `active_pmapv.pmapv_id`, which was never read. So the intended order
-    "active first" fell through to `last_user_pmapv_id` every time.
+    NEVER A VERSION THE ROBOT MADE, UNLESS NOTHING ELSE IS LEFT (4.2.14).
+    On many robots the cloud makes each robot-created version the active
+    one: the robot saves its map at the end of every mission, and that
+    version becomes `active_pmapv.pmapv_id` with `creator: "robot"`. A
+    room command carrying it fails with error 224 ("Smart Map
+    localization failed"), every time:
 
-    Harmless while the two agree, which they do in every record we hold.
-    They do not agree after an edit that never became active:
-    @cburrell16's single-map i-series sent 260913T011853 and failed to
-    localise (error 224) on every room clean, while the iRobot app and
-    his favorites sent 250610T143229 and worked (#183). The active
-    version is read first now, the last user version only when no
-    active one is present.
+      - @FJSoninC's j7+: active 260926T064058 (robot), the app and the
+        favourites sent 260925T175356 -- the root `user_pmapv_id`
+      - @ScenicSystemsLLC's two S9+, three maps: active = the robot's
+        version each time, and each time the app, the favourites and
+        the last command that worked carried the root `user_pmapv_id`
+
+    4.2.13 read the active version first -- right for @cburrell16 (#183),
+    whose active version was a user one and whose `last_user_pmapv_id`
+    was an edit that never became active, and wrong for every robot
+    whose active version is its own.
+
+    So, in this order:
+      1. the active version, unless the ROBOT made it
+      2. the root `user_pmapv_id` -- the committed user version, and the
+         same name as the command field it goes into
+      3. `last_user_pmapv_id`
+      4. the active version, robot-made -- nothing else is known
+
+    Only an explicit `creator: "robot"` moves the active version back. A
+    record without `creator` keeps the 4.2.13 answer: no report has
+    shown that answer to be wrong for it.
     """
     details = pmap.get("active_pmapv_details") or {}
     pmapv = details.get("active_pmapv") or {}
     if not isinstance(pmapv, dict):
         pmapv = {}
+    active = (
+        pmapv.get("active_pmapv_id")      # Variant A -- not seen in the field
+        or pmapv.get("pmapv_id")          # the active version (lewis, soho)
+        or pmap.get("active_pmapv_id")    # the same, at the root
+    )
+    robot_made = pmapv.get("creator") == "robot"
     for value in (
-        pmapv.get("active_pmapv_id"),      # Variant A -- not seen in the field
-        pmapv.get("pmapv_id"),             # the active version (lewis 22.52.x)
-        pmap.get("active_pmapv_id"),       # the same, at the root
-        pmapv.get("last_user_pmapv_id"),   # Variant B -- last resort
+        None if robot_made else active,
+        pmap.get("user_pmapv_id"),
+        pmapv.get("last_user_pmapv_id"),
+        active,
     ):
         if value:
             return str(value)

@@ -887,7 +887,7 @@ PASS_DONE = {
 
 
 CLEANED = {
-    ("mission_store.py", "_record_room_names"),             # room history
+    ("mission_store.py", "_timeline_cleaned_rids"),         # room history (the rids of it)
     ("mission_store.py", "record_region_ids"),              # per-region last cleaned
     ("diagnostics.py", "_last_mission_room_events"),        # shows both
 }

@@ -50,12 +50,14 @@ from homeassistant.helpers.typing import ConfigType
 from homeassistant.helpers.event import async_track_time_interval
 
 from .callbacks import (
+    entry_created_ts,
     make_map_retrain_callback,
     make_map_updating_callback,
     make_mission_callback,
     make_mission_complete_callback,
     make_cloud_refresh_callback,
 )
+from .room_cleaning import region_names_across_maps
 from .const import (
     ISSUE_TRACKER_URL,
     CONF_BLID,
@@ -794,9 +796,15 @@ async def _phase_cloud(ctx: _SetupContext) -> None:
                 )
                 # And the missions that were never recorded here (4.2.13).
                 _adopted = ctx.mission_store.adopt_missing_from_cloud(
-                    cloud_coordinator.raw_records
+                    cloud_coordinator.raw_records,
+                    since_ts=entry_created_ts(config_entry),
                 )
-                if _bf.corrected or _bf.enriched or _adopted:
+                # The cloud's rooms into the stored field (4.2.14).
+                _rooms = ctx.mission_store.store_rooms_from_timelines(
+                    region_names_across_maps(cloud_coordinator),
+                    cloud_coordinator.regions_by_pmap,
+                )
+                if _bf.corrected or _bf.enriched or _adopted or _rooms:
                     await ctx.mission_store.async_save(hass, config_entry.entry_id)
 
                 if ctx.grid_store is not None:
