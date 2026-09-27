@@ -947,10 +947,18 @@ class TestClassicShapedReadsOnPrime:
         # own implementation reading `cleanMissionStatus.p2mapId`, so
         # the Classic-shaped read below is only ever executed by a
         # Classic backend. No Prime fallback is needed.
-        assert count == 29, (
-            f"{count} call sites, expected 29 — a new one needs a decision "
+        # 31 since callbacks.learn_room_times_from_store() and the live
+        # room-time measurement in _advance_room_on_drive_end (4.2.15).
+        #
+        # DECIDED: no Prime entry reaches either. The first runs from the
+        # Classic cloud refresh callback, registered on the local path
+        # only; the second from the Classic mission callback. Both read
+        # the state for one thing -- whether the robot is a Braava or has
+        # a pad -- and fall back to "unknown mode" when they get nothing.
+        assert count == 31, (
+            f"{count} call sites, expected 31 — a new one needs a decision "
             "about whether a Prime entry reaches it, and a Prime fallback "
-            "if it does. Four of the 29 are inside the fallback helpers "
+            "if it does. Four of the 31 are inside the fallback helpers "
             "themselves, which read Classic first on purpose."
         )
 

@@ -308,15 +308,16 @@ class SmartZoneNamingRepairFlow(RepairsFlow):
         if len(unlabelled) <= _MAX_ZONE_FIELDS:
             schema = vol.Schema(
                 {
-                    # THE KEY IS THE LABEL. Field labels come from
-                    # `step.data` in strings.json, keyed by field name --
-                    # and these names are built from the robot's zone
-                    # ids at runtime, so no translation can exist for
-                    # them. Home Assistant falls back to showing the key
-                    # itself, so the key is written to read as a label:
-                    # "Zone 20", not "zone_20".
+                    # THE ID GOES INSIDE THE FIELD (4.2.15). Field labels
+                    # come from `step.data` in strings.json, keyed by
+                    # field name -- and these names are built from the
+                    # robot's zone ids at runtime, so no translation can
+                    # exist for them. The assumption was that Home
+                    # Assistant then shows the key. It does not in a
+                    # repair dialog: @liblit got six empty, unlabelled
+                    # boxes. The prefix is drawn inside the field itself.
                     vol.Optional(f"Zone {rid}"): selector.TextSelector(
-                        selector.TextSelectorConfig()
+                        selector.TextSelectorConfig(prefix=f"{rid}:")
                     )
                     for rid in unlabelled
                 }

@@ -29,10 +29,18 @@ from .const import (
     ROOM_EVENT_CLOSED_AT_END_STATUSES,
     ROOM_EVENT_DONE_STATUSES,
     ROOM_EVENT_PASS_DONE_STATUSES,
+    ROOMS_AWAITING_CLOUD,
     mission_store_changed_signal,
 )
 from .const import CLEANING_PHASES, CONF_BLID, CONF_CORRELATION_ENTITIES, CONF_SMART_ZONE_DATA, END_SIGNAL_DEBOUNCE_COUNT, END_SIGNAL_MIN_HOLD_SECONDS, EVENT_MAP_RETRAIN_COMPLETED, EVENT_MAP_RETRAIN_STARTED, EVENT_MISSION_COMPLETED, EVENT_ROOM_COMPLETED, POSE_POINT_CM_TO_MM, ROOM_TRANSITION_CANDIDATE_PHASES, UNVISITED_ROOMS_MAX_SUPPRESSION_SECONDS, active_charge_cycles, estcap_to_mah
 from .map_renderer import ROBOT_DIAMETER_MM_ISJ_SERIES
+from .room_times import (
+    cleaning_mode,
+    current_cleaning_mode,
+    learn_via,
+    remember as remember_room_time,
+    robot_default_mode,
+)
 from .mission_map import (
     MissionMapMismatch,
     MissionMapUnavailable,
@@ -173,9 +181,26 @@ def _observed_rooms(entry: Any, last_room_worked: bool = True) -> list[str] | No
         return None
 
 
+def _rooms_are_guesses(entry: Any, *, saw_travelling: bool) -> bool:
+    """Whether the rooms room tracking recorded for this mission are a
+    guess to be replaced by the cloud's (4.2.15): the robot never reported
+    travelling, the plan had more than one room, and a cloud account is
+    configured to deliver the real answer. One planned room needs no
+    room change to be right; without a cloud account the guess is all
+    there is, and stays."""
+    if saw_travelling:
+        return False
+    runtime = getattr(entry, "runtime_data", None)
+    if getattr(runtime, "cloud_coordinator", None) is None:
+        return False
+    store = getattr(runtime, "mission_timer_store", None)
+    planned = getattr(store, "planned_rooms", None) or []
+    return isinstance(planned, list) and len(planned) > 1
+
+
 def _remember_measured_room_time(
     entry: Any, room: str | None, seconds: float | None,
-    mode: int | None = None,
+    mode: int | str | None = None,
 ) -> None:
     """Keep what a room actually took, so the next mission has a figure.
 
@@ -228,22 +253,14 @@ def _remember_measured_room_time(
         #
         # An unknown mode gets its own bucket rather than being folded
         # into a known one -- mixing is the thing being avoided.
-        _key = f"{room}|measured|{mode if mode is not None else 'unknown'}"
-        _count_key = f"{_key}|count"
-
-        _n = int(cache.get(_count_key, 0) or 0)
-        _mean = float(cache.get(_key, 0.0) or 0.0)
-        if _n > 0 and _mean > 0:
-            _mean = (_mean * _n + float(seconds)) / (_n + 1)
-            _n += 1
-        else:
-            _mean, _n = float(seconds), 1
-
-        # STORED UNROUNDED. Rounding at each step compounds: four runs
-        # averaging 224.75 came out as 224.7 because every intermediate
-        # mean lost a digit. The readers round when they present it.
-        cache[_key] = _mean
-        cache[_count_key] = float(_n)
+        # THE MODE BY WHAT THE ROBOT DOES (4.2.15), not the raw
+        # `operatingMode`: its bit 0 is travel, so one room could land
+        # under two numbers. room_times holds the key, the mean and the
+        # reading side, shared with what the cloud's room events teach.
+        remember_room_time(
+            cache, room, float(seconds),
+            mode if isinstance(mode, str) else cleaning_mode(mode),
+        )
         _LOGGER.debug(
             "AUTO-ADVANCE-ROOM: measured %s at %.0fs, kept for next time "
             "(the cloud offers no per-room estimate in auto pass mode)",
@@ -561,6 +578,7 @@ async def async_record_mission(
     start_ts: int,
     nstuck_delta: int,
     observed_rooms: list[str] | None = None,
+    rooms_are_guesses: bool = False,
     mission_error_code: int = 0,
     recharge_min: int = 0,
     result_override: str | None = None,
@@ -576,6 +594,9 @@ async def async_record_mission(
         zones:           Zone names captured at mission START (not end).
         observed_rooms:  Rooms the tracker saw worked in (_observed_rooms);
                          None when tracking did not run.
+        rooms_are_guesses: The robot gave no room-change signal, and the
+                         cloud's room events will follow (_rooms_are_guesses):
+                         the tracked rooms are kept aside, not recorded.
         start_ts:        mssnStrtTm cached at mission START. The 980/900-series
                          firmware resets this field to 0 in the end MQTT message,
                          so it must be captured when the cleaning phase begins.
@@ -723,7 +744,10 @@ async def async_record_mission(
         # falls back to, so no new source is needed -- the timeline
         # still wins where it exists, because it reports real
         # completions with a status.
-        "last_cleaned_rooms": observed_rooms if observed_rooms is not None else zones,
+        "last_cleaned_rooms": (
+            [] if rooms_are_guesses and observed_rooms is not None
+            else observed_rooms if observed_rooms is not None else zones
+        ),
         "error_code": error_code if error_code else None,
         "bbrun_hr": bbrun_hr,
         "battery_cycles": battery_cycles,   # v2.9.0 DAILY-DIGEST
@@ -736,9 +760,30 @@ async def async_record_mission(
         "npicks_delta": npicks_delta,   # v3.2.0 ANOMALY-EXPLAIN
     }
 
+    # GUESSES WAIT FOR THE CLOUD (4.2.15). A robot that reports no room
+    # change (no travel signal, no position) leaves room tracking to the
+    # clock, and the rooms it names are a guess. @ScenicSystemsLLC's
+    # Braava recorded two rooms of a five-room plan after a run that
+    # ended stranded -- neither confirmed by anything. With a cloud
+    # account the real answer arrives minutes later as room events
+    # (store_rooms_from_timelines); until then the record claims no
+    # rooms, and the guess is kept beside it for a mission the cloud
+    # never reports (MissionStore._record_room_names).
+    if rooms_are_guesses and observed_rooms is not None:
+        record["tracked_rooms"] = list(observed_rooms)
+        record["rooms_source"] = ROOMS_AWAITING_CLOUD
+
     if not data.mission_store.update_terminal_fields(record["id"], record):
         await data.mission_store.async_append(record)
     await data.mission_store.async_save(hass, entry.entry_id)
+    # AND SHOW IT NOW (4.2.15). Entities re-render on robot messages,
+    # and a robot that has just docked sends few: the vacuum's
+    # `last_cleaned_rooms` kept an earlier mission's ["Guest Bathroom"]
+    # after @ScenicSystemsLLC's Braava had recorded a five-room run. The
+    # cloud merge got this signal in 4.2.14; a local record needs it too.
+    _blid = (getattr(entry, "data", None) or {}).get(CONF_BLID)
+    if _blid:
+        async_dispatcher_send(hass, mission_store_changed_signal(_blid))
 
     # v3.1.0 L9-MAP — update the personal relocalisation baseline.
     # Same gate as the MissionStore record itself (this function only runs
@@ -993,6 +1038,11 @@ class _MissionState:
 
     last_phase: str = ""
     was_travelling: bool = False
+    #: Whether the robot reported travelling at any point in this mission
+    #: (4.2.15). A robot that never does -- a Braava -- gives room
+    #: tracking no room change to see, so the rooms it records are
+    #: guesses (_rooms_are_guesses).
+    saw_travelling: bool = False
     #: Whether a working mode has been seen since the current room
     #: was entered; see the note in the advance block.
     cleaned_in_room: bool = False
@@ -1164,6 +1214,7 @@ def _handle_mission_start(
         ms.current_mission_zones = _capture_zone_names(entry, reported)
         ms.mission_start_ts = candidate_mission_start_ts
         ms.ran_in_room = False
+        ms.saw_travelling = False
         bbrun = _merged_top_level(entry, reported, "bbrun")
         ms.nstuck_at_start = bbrun.get("nStuck", 0)
         ms.npicks_at_start = bbrun.get("nPicks", 0)
@@ -1667,7 +1718,7 @@ def _confirm_mission_end(
                 result_override = "stuck_and_abandoned"
 
         entry.async_create_task(
-            hass, async_record_mission(hass, entry, mission, reported, list(ms.current_mission_zones), observed_rooms=_observed_rooms(entry, last_room_worked=ms.ran_in_room), start_ts=ms.mission_start_ts, nstuck_delta=nstuck_delta, mission_error_code=ms.mission_error_code, recharge_min=ms.recharge_min_accumulator + ms.current_leg_rechrgM, result_override=result_override, npicks_delta=npicks_delta)
+            hass, async_record_mission(hass, entry, mission, reported, list(ms.current_mission_zones), observed_rooms=_observed_rooms(entry, last_room_worked=ms.ran_in_room), rooms_are_guesses=_rooms_are_guesses(entry, saw_travelling=ms.saw_travelling), start_ts=ms.mission_start_ts, nstuck_delta=nstuck_delta, mission_error_code=ms.mission_error_code, recharge_min=ms.recharge_min_accumulator + ms.current_leg_rechrgM, result_override=result_override, npicks_delta=npicks_delta)
         )
         # MP1 (v2.6.0): clear mission timer at end
         _mts = getattr(entry.runtime_data, "mission_timer_store", None)
@@ -1768,11 +1819,26 @@ def _advance_room_on_drive_end(
                 else None
             )
             _advanced = mts_upd.advance_room(hass, entry.entry_id)
-            if _advanced:
+            # NOT WITH A CLOUD ACCOUNT (4.2.15): the cloud's room events
+            # teach the same room after the mission, with its real start
+            # and end (room_times). Both would put two samples of one
+            # visit into one mean.
+            if _advanced and getattr(entry.runtime_data, "cloud_coordinator", None) is None:
+                try:
+                    _reported = entry.runtime_data.roomba_reported_state()
+                except Exception:  # noqa: BLE001 -- only the mode's fallback is lost
+                    _reported = {}
+                if not isinstance(_reported, dict):
+                    _reported = {}
                 _remember_measured_room_time(
                     entry, _finished_room, _measured,
-                    mode=mission.get("operatingMode"),
+                    mode=(
+                        cleaning_mode(mission.get("operatingMode"))
+                        or current_cleaning_mode(_reported)
+                        or robot_default_mode(_reported)
+                    ),
                 )
+            if _advanced:
                 # The new room has not been cleaned yet.
                 ms.cleaned_in_room = False
                 ms.ran_in_room = False
@@ -2447,6 +2513,8 @@ def make_mission_callback(
 
         if isinstance(_travelling, bool):
             ms.was_travelling = _travelling
+        if _travelling is True:
+            ms.saw_travelling = True
 
         _update_room_progress(ms, hass, entry, mts_upd=_mts_upd, phase=phase)
 
@@ -3391,6 +3459,37 @@ def entry_created_ts(config_entry: Any) -> float | None:
         return None
 
 
+def learn_room_times_from_store(
+    config_entry: Any,
+    store: Any,
+    names: dict[str, str],
+    by_pmap: dict[str, dict[str, str]] | None,
+) -> tuple[int, int]:
+    """Learn per-room times from the store's cloud timelines into the
+    robot profile's estimate cache (4.2.15, room_times). Returns
+    (figures learned, missions added); either non-zero means the profile
+    store needs saving. (0, 0) without a profile store."""
+    runtime = getattr(config_entry, "runtime_data", None)
+    profile = getattr(runtime, "robot_profile_store", None)
+    cache = getattr(profile, "room_estimate_cache", None)
+    learned_keys = getattr(profile, "room_times_learned", None)
+    if cache is None or not isinstance(learned_keys, list) or store is None or runtime is None:
+        return 0, 0
+    try:
+        state = runtime.roomba_reported_state()
+    except Exception:  # noqa: BLE001 -- a missing state only loses the default mode
+        state = {}
+    learned, marked = learn_via(
+        store, cache, learned_keys, names, by_pmap,
+        robot_default_mode(state if isinstance(state, dict) else {}),
+    )
+    if learned:
+        _LOGGER.debug(
+            "roomba_plus: learned %d room time(s) from the cloud's room events", learned
+        )
+    return learned, marked
+
+
 def make_cloud_refresh_callback(
     hass: HomeAssistant,
     config_entry: "RoombaConfigEntry",
@@ -3418,10 +3517,20 @@ def make_cloud_refresh_callback(
             cloud_coordinator.raw_records, since_ts=entry_created_ts(config_entry)
         )
         # The cloud's rooms into the records' stored field (4.2.14).
-        _rooms = ms.store_rooms_from_timelines(
-            region_names_across_maps(cloud_coordinator),
-            getattr(cloud_coordinator, "regions_by_pmap", None),
+        _names = region_names_across_maps(cloud_coordinator)
+        _by_pmap = getattr(cloud_coordinator, "regions_by_pmap", None)
+        _rooms = ms.store_rooms_from_timelines(_names, _by_pmap)
+        # And how long each room took, from the same events (4.2.15).
+        _learned, _added = learn_room_times_from_store(
+            config_entry, ms, _names, _by_pmap
         )
+        if _learned or _added:
+            _rps = getattr(config_entry.runtime_data, "robot_profile_store", None)
+            if _rps is not None:
+                config_entry.async_create_task(
+                    hass, _rps.async_save(hass, config_entry.entry_id),
+                    name="roomba_plus_room_times_save",
+                )
         if _bf.corrected or _bf.enriched or _adopted or _rooms:
             config_entry.async_create_task(
                 hass, ms.async_save(hass, config_entry.entry_id), name='roomba_plus_cloud_merge_save'

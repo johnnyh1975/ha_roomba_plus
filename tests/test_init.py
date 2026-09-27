@@ -435,6 +435,21 @@ class TestPhaseCloudWithCoordinator:
         ctx.maintenance_store.async_save.assert_awaited()
 
     @pytest.mark.asyncio
+    async def test_setup_learns_room_times_from_the_stored_history(self, hass, monkeypatch):
+        """4.2.15: the next cloud refresh may be a mission away, so the
+        room times already in the history are learned at setup."""
+        from custom_components.roomba_plus import _phase_cloud, _phase_spatial
+
+        ctx = _cloud_ctx(hass, monkeypatch)
+        await _phase_spatial(ctx)
+        ctx.grid_store = ctx.grid_store or MagicMock()
+        ctx.mission_store.learn_room_times.return_value = (2, 1)
+        await _phase_cloud(ctx)
+        args = ctx.mission_store.learn_room_times.call_args.args
+        assert args[0] is ctx.robot_profile_store.room_estimate_cache
+        assert args[1] is ctx.robot_profile_store.room_times_learned
+
+    @pytest.mark.asyncio
     async def test_a_failing_first_refresh_is_logged_with_its_cause_and_setup_goes_on(
         self, hass, monkeypatch, caplog
     ):

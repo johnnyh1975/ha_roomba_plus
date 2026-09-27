@@ -2706,6 +2706,28 @@ def _classic_has_room_data(data: RoombaData, config_entry: RoombaConfigEntry) ->
     return coordinator is not None and coordinator.data is not None
 
 
+def keeps_no_persistent_map(state: dict[str, Any]) -> bool:
+    """True for a robot that cannot keep a map between missions (a 900- or
+    600-series): it cannot be sent to a single room, whatever room list
+    exists.
+
+    DECIDED BY WHAT THE ROBOT SAYS IT CAN DO, not by `map_capability`.
+    That one is also NONE when the map option is off and EPHEMERAL on an
+    i-series whose maps have not arrived yet -- robots that could clean
+    rooms. The test is the one the connect wait uses: a robot with
+    `cap.pmaps`, or more than one `cap.maps`, keeps maps. Without a
+    capability block nothing is concluded.
+    """
+    cap = state.get("cap") if isinstance(state, dict) else None
+    if not isinstance(cap, dict) or not cap:
+        return False
+    pmaps = cap.get("pmaps", 0)
+    maps = cap.get("maps", 0)
+    return not (
+        (isinstance(pmaps, int) and pmaps > 0) or (isinstance(maps, int) and maps > 1)
+    )
+
+
 def async_get_room_cleaning_backend(
     config_entry: RoombaConfigEntry, hass: Any = None
 ) -> RoomCleaningBackend | None:

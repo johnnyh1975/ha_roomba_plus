@@ -3362,6 +3362,33 @@ class TestNamingFlowShape:
         assert keys == {"Zone 3", "Zone 5"}
 
     @pytest.mark.asyncio
+    async def test_each_field_shows_its_zone_id(self, hass):
+        """4.2.15, @liblit: Home Assistant shows no label for a field whose
+        key has no translation, so six boxes appeared with nothing to say
+        which zone each was. The id is drawn inside the field."""
+        f, _e = _flow(hass, options={"discovered_zone_ids": ["20", "9"]})
+        result = await f.async_step_init()
+        prefixes = {
+            str(k): v.config.get("prefix")
+            for k, v in result["data_schema"].schema.items()
+        }
+        assert prefixes == {"Zone 20": "20:", "Zone 9": "9:"}
+
+    def test_the_text_no_longer_sends_them_to_a_map_they_cannot_have(self):
+        """The notice is raised only for robots without an iRobot account,
+        and the rooms map draws only what the account provides -- so the
+        pointer to it led to a black image every time (@liblit)."""
+        import json
+        import pathlib
+
+        for path in pathlib.Path("custom_components/roomba_plus/translations").glob("*.json"):
+            text = json.loads(path.read_text(encoding="utf-8"))["issues"][
+                "smart_zones_need_naming"]["fix_flow"]["step"]["init"]["description"]
+            assert "rooms_map" not in text, path.name
+            assert "id=" not in text, path.name
+            assert "last_command_summary" in text, path.name
+
+    @pytest.mark.asyncio
     async def test_many_zones_get_one_text_box(self, hass):
         ids = [str(i) for i in range(rp._MAX_ZONE_FIELDS + 1)]
         f, _e = _flow(hass, options={"discovered_zone_ids": ids})

@@ -98,8 +98,8 @@ async def async_setup_entry(
 
     # Determine device class using capability helpers.
     # is_mop() detects Braava by presence of 'detectedPad' in state.
-    # has_carpet_boost() handles both 900-series (top-level key, absent from cap{})
-    # and i/s/j-series (cap.carpetBoost == 1) correctly.
+    # has_carpet_boost() decides by cap.carpetBoost (4.2.15): the 980 and
+    # the s9 declare it; an i7 reports the setting keys without it.
     constructor: type[IRobotVacuum]
     # `is_braava`, NOT `is_mop` -- AND THIS IS THE SECOND TIME.
     #
@@ -795,28 +795,14 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
                 if _rooms:
                     self._last_resolved_rooms = _rooms
                     self._last_resolved_coverage = _coverage
-                # LAGS THE INTERNAL RECORD BY ONE MQTT MESSAGE.
-                #
-                # This is computed while HA writes the entity's state,
-                # and nothing triggers a write when the mission record
-                # is stored. So between `MissionStore: recorded ...
-                # zones=[A, B]` and the next status message, the
-                # attribute still shows what it showed before.
-                #
-                # @ScenicSystemsLLC caught exactly that: the record read
-                # `zones=['Guest Bathroom', 'Hallway']` and the
-                # attribute, checked seconds later, still showed one
-                # room. Stale, not wrong -- the next message corrects
-                # it, and on a robot that has just docked those are
-                # sparse.
-                #
-                # NOT FIXED HERE ON PURPOSE. Closing it means giving
-                # this entity a dispatcher subscription, which it does
-                # not have at all today: a signal constant, a send site
-                # in the mission callback, a subscribe in
-                # `async_added_to_hass` and an unsubscribe. That is new
-                # infrastructure for a bounded, self-correcting lag, and
-                # it deserves its own change rather than a late edit.
+                # RE-RENDERED WHEN A MISSION IS RECORDED (4.2.15). This
+                # is computed while HA writes the entity's state, and
+                # until 4.2.15 nothing triggered a write when the mission
+                # record was stored -- the attribute lagged until the
+                # robot's next message (@ScenicSystemsLLC, twice). The
+                # record path and the cloud merge now both send
+                # `mission_store_changed_signal`, which every entity of
+                # the robot answers with a state write.
                 attrs["last_cleaned_rooms"] = _rooms
                 attrs["room_coverage"]      = _coverage
             elif (
@@ -1212,6 +1198,22 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
             return  # Home Assistant older than 2026.3; nothing to explain
         if is_braava(self.vacuum_state):
             return  # a Braava targets rooms by pad wetness, by design
+
+        # ONLY A ROBOT THAT COULD CLEAN ROOMS IS WARNED ABOUT (4.2.15).
+        # A 900-series or 600-series robot keeps no map between missions
+        # and cannot be sent to a room at all. The warning told the owner
+        # of a 980 at every start that credentials or smart zones would
+        # make rooms available; neither can. Whether the robot can is
+        # what its capability block says (keeps_no_persistent_map).
+        from .room_cleaning import keeps_no_persistent_map  # noqa: PLC0415
+
+        if keeps_no_persistent_map(self.vacuum_state):
+            _LOGGER.debug(
+                "roomba_plus: room cleaning is not offered for %s: the robot "
+                "keeps no persistent map, so it cannot clean single rooms",
+                getattr(self, "_blid", "this robot"),
+            )
+            return
 
         _LOGGER.warning(
             "roomba_plus: room cleaning (vacuum.clean_area) is not offered for "

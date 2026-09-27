@@ -91,3 +91,29 @@ def async_remove_stale_entities(
             removed, prefix.strip("_"), "y" if removed == 1 else "ies",
         )
     return removed
+
+
+@callback
+def async_remove_entities_by_suffix(
+    hass: HomeAssistant,
+    config_entry: Any,
+    suffixes: dict[str, str],
+    reason: str,
+) -> int:
+    """Remove this entry's entities whose unique id ends in a suffix
+    given for their domain ({domain: suffix}).
+
+    For entities an earlier version created on a capability the robot
+    does not have. The CALLER decides that the robot lacks it, from data
+    that arrived -- never from an empty or missing state, for the same
+    reason as above.
+    """
+    registry = er.async_get(hass)
+    removed = 0
+    for entry in er.async_entries_for_config_entry(registry, config_entry.entry_id):
+        suffix = suffixes.get(entry.domain)
+        if suffix and (entry.unique_id or "").endswith(f"_{suffix}"):
+            _LOGGER.info("roomba_plus: removing %s -- %s", entry.entity_id, reason)
+            registry.async_remove(entry.entity_id)
+            removed += 1
+    return removed

@@ -29,7 +29,7 @@ from typing import Any
 from homeassistant.components.vacuum import VacuumEntityFeature
 
 from .const import is_braava
-from .room_cleaning import async_get_room_cleaning_backend
+from .room_cleaning import async_get_room_cleaning_backend, keeps_no_persistent_map
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -59,6 +59,20 @@ def clean_area_status(config_entry: Any, state: dict[str, Any]) -> dict[str, Any
                 "A Braava targets rooms through pad wetness rather than "
                 "region segments, so there is nothing for clean_area to "
                 "address."
+            ),
+        }
+    if keeps_no_persistent_map(state):
+        return {
+            "offered": False,
+            "reason": "no_persistent_map",
+            "detail": (
+                "This robot keeps no map between missions (900- or "
+                "600-series, per its capability block: no cap.pmaps and "
+                "at most one cap.maps), so it cannot be sent to a single "
+                "room. No account, credentials or smart-zone data changes "
+                "that. "
+                "The rooms shown elsewhere in this download are derived "
+                "from coverage, for display."
             ),
         }
     try:

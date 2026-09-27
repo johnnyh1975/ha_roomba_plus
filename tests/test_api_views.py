@@ -498,6 +498,30 @@ class TestRecordsUnionWithLocal:
         return json.loads(resp.body)
 
     @pytest.mark.asyncio
+    async def test_the_view_names_room_coverage(self):
+        """4.2.15: the list passes room names down, so `room_coverage`
+        carries names rather than region ids (@FJSoninC)."""
+        from custom_components.roomba_plus import api_views
+
+        rec = {
+            **_cloud_rec(start_ts=1782457275, end_ts=1782458295),
+            "pmaps_info": [{"pmap_id": "up"}],
+            "timeline": {"finEvents": [
+                {"type": "room", "room": {"rid": "6", "status": 0, "area": 160, "passArea": 97}},
+                {"type": "room", "room": {"rid": "6", "status": 0, "area": 160, "passArea": 20}},
+                {"type": "room", "room": {"rid": "3", "status": 0, "area": 106, "passArea": 4}},
+            ]},
+        }
+        entry = self._make_entry([rec], [])
+        entry.runtime_data.cloud_coordinator.regions_by_pmap = {"up": {"6": "Office"}}
+        with patch.object(api_views, "region_names_across_maps", return_value={"3": "Bathroom"}):
+            view = MissionHistoryView()
+            resp = await view.get(_make_request(self._hass_for(entry), fmt="records"), "abc123")
+        rows = json.loads(resp.body)
+        # The office's larger event counts, not whichever came last.
+        assert rows[0]["room_coverage"] == {"Office": 0.606, "Bathroom": 0.038}
+
+    @pytest.mark.asyncio
     async def test_unmatched_local_record_is_included(self):
         """Field bug repro: cloud has 2 records for the day, local
         MissionStore has 3 (one never matched any cloud record) --
@@ -788,13 +812,30 @@ class TestHazardsFormat:
 
 class TestApiViewsRecordsV23:
     def test_cloud_record_has_room_coverage_key(self):
+        """4.2.15: from the record's own room events. This test used to
+        put a ready-made `room_coverage` on the record -- a field nothing
+        in production writes -- and so passed while every real row was
+        null (@FJSoninC)."""
         from custom_components.roomba_plus.api_views import _cloud_record_to_unified
         rec = {"startTime": 1700000000, "timestamp": 1700003600,
                "durationM": 60, "classified_result": "completed",
-               "initiator": "schedule", "room_coverage": {"Kitchen": 0.8}}
-        u = _cloud_record_to_unified(rec)
-        assert "room_coverage" in u
-        assert u["room_coverage"] == {"Kitchen": 0.8}
+               "initiator": "schedule",
+               "timeline": {"finEvents": [
+                   {"type": "room", "room": {"rid": "6", "status": 0, "area": 160, "passArea": 97}},
+                   {"type": "room", "room": {"rid": "3", "status": 0, "area": 106, "passArea": 4}},
+               ]}}
+        u = _cloud_record_to_unified(rec, {"6": "Office", "3": "Bathroom"})
+        assert u["room_coverage"] == {"Office": 0.606, "Bathroom": 0.038}
+
+    def test_the_missions_own_map_names_the_rooms(self):
+        from custom_components.roomba_plus.api_views import _cloud_record_to_unified
+        rec = {"startTime": 1700000000, "timestamp": 1700003600,
+               "pmaps_info": [{"pmap_id": "up"}],
+               "timeline": {"finEvents": [
+                   {"type": "room", "room": {"rid": "6", "status": 0, "area": 100, "passArea": 50}},
+               ]}}
+        u = _cloud_record_to_unified(rec, {"6": "Kitchen"}, {"up": {"6": "Study"}})
+        assert u["room_coverage"] == {"Study": 0.5}
 
     def test_cloud_record_room_coverage_null_when_absent(self):
         from custom_components.roomba_plus.api_views import _cloud_record_to_unified
@@ -817,9 +858,10 @@ class TestApiViewsRecordsV23:
         rec = {"id": "m_1", "started_at": "2026-01-01T00:00:00+00:00",
                "ended_at": "2026-01-01T01:00:00+00:00", "duration_min": 60,
                "result": "completed", "initiator": "schedule", "zones": [],
-               "room_coverage": {"Hallway": 0.6}}
-        u = _local_record_to_unified(rec)
-        assert "room_coverage" in u
+               "timeline": {"finEvents": [
+                   {"type": "room", "room": {"rid": "4", "status": 0, "area": 50, "passArea": 30}},
+               ]}}
+        u = _local_record_to_unified(rec, {"4": "Hallway"})
         assert u["room_coverage"] == {"Hallway": 0.6}
 
     def test_local_record_alignment_confidence_always_none(self):

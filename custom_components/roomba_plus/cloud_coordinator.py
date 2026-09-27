@@ -363,10 +363,14 @@ def pmap_committed_version(pmap: dict[str, Any]) -> str | None:
         version each time, and each time the app, the favourites and
         the last command that worked carried the root `user_pmapv_id`
 
-    4.2.13 read the active version first -- right for @cburrell16 (#183),
-    whose active version was a user one and whose `last_user_pmapv_id`
-    was an edit that never became active, and wrong for every robot
-    whose active version is its own.
+      - @cburrell16's i-series (#183), confirmed on 4.2.14: active
+        260913T011853 (robot), root `user_pmapv_id` and
+        `last_user_pmapv_id` both 250610T143229 -- his favourites'
+
+    4.2.13 read the active version first, on the belief that #183's
+    active version was a user one and 260913T011853 an edit that never
+    became active. His 4.2.14 diagnostics showed the opposite: #183 was
+    the same case as the others, four robots, no counter-example.
 
     So, in this order:
       1. the active version, unless the ROBOT made it

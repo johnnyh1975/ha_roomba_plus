@@ -116,6 +116,10 @@ def _make_hass(loop=None):
             import asyncio as _asyncio
             if _asyncio.iscoroutine(coro):
                 coro.close()
+        def verify_event_loop_thread(self, what):
+            """The dispatcher's own thread check (4.2.15: a recorded
+            mission sends a signal). The stub runs on its loop."""
+
         def __init__(self):
             self.loop = loop
             self.data = {}
@@ -4381,7 +4385,7 @@ class TestLastCleanedRoomsReportsWhatWasCleaned:
         source = inspect.getsource(callbacks.async_record_mission)
 
         assert (
-            '"last_cleaned_rooms": observed_rooms if observed_rooms is not None else zones,'
+            "else observed_rooms if observed_rooms is not None else zones"
             in source
         )
 
@@ -4419,10 +4423,10 @@ class TestMeasuredRoomTimesAverage:
         # The exact mean of the four, not a rounded running one:
         # rounding at each step compounded and produced 224.7.
         assert profile.room_estimate_cache[
-            "Guest Bathroom|measured|2"
+            "Guest Bathroom|measured|vacuum"
         ] == 224.75
         assert profile.room_estimate_cache[
-            "Guest Bathroom|measured|2|count"
+            "Guest Bathroom|measured|vacuum|count"
         ] == 4.0
 
     def test_modes_do_not_mix(self) -> None:
@@ -4434,8 +4438,22 @@ class TestMeasuredRoomTimesAverage:
         _remember_measured_room_time(entry, "Bath", 200.0, mode=2)
         _remember_measured_room_time(entry, "Bath", 900.0, mode=6)
 
-        assert profile.room_estimate_cache["Bath|measured|2"] == 200.0
-        assert profile.room_estimate_cache["Bath|measured|6"] == 900.0
+        assert profile.room_estimate_cache["Bath|measured|vacuum"] == 200.0
+        assert profile.room_estimate_cache["Bath|measured|vacuum_mop"] == 900.0
+
+    def test_the_travel_bit_does_not_split_a_mode(self) -> None:
+        """4.2.15: bit 0 of operatingMode is travel. Vacuuming while
+        driving (3) and vacuuming (2) are the same job, and were two
+        buckets."""
+        from custom_components.roomba_plus.callbacks import (
+            _remember_measured_room_time,
+        )
+
+        profile, entry = self._store()
+        _remember_measured_room_time(entry, "Bath", 200.0, mode=2)
+        _remember_measured_room_time(entry, "Bath", 300.0, mode=3)
+
+        assert profile.room_estimate_cache["Bath|measured|vacuum"] == 250.0
 
     def test_the_count_is_not_read_as_a_duration(self) -> None:
         """Counts and durations share the room prefix, and the lookup
@@ -4464,7 +4482,7 @@ class TestMeasuredRoomTimesAverage:
         _remember_measured_room_time(entry, "Bath", 200.0, mode=2)
         _remember_measured_room_time(entry, "Bath", 400.0, mode=None)
 
-        assert profile.room_estimate_cache["Bath|measured|2"] == 200.0
+        assert profile.room_estimate_cache["Bath|measured|vacuum"] == 200.0
         assert profile.room_estimate_cache["Bath|measured|unknown"] == 400.0
 
 
@@ -4512,6 +4530,19 @@ class TestTravelEdgeDrivenThroughTheCallback:
         mts = TestRoomCompletedEvent()._make_real_mts(entry)
         entry.runtime_data.mission_timer_store = mts
         return hass, entry, mts, make_mission_callback(hass, entry)
+
+    def test_a_travel_signal_is_remembered_for_the_record(self):
+        """4.2.15: whether the robot ever reported travelling decides
+        whether its recorded rooms are a guess (_rooms_are_guesses)."""
+        hass, _entry, _mts, cb = self._setup()
+
+        cb(self._msg(travelling=False))
+        hass.loop.run_until_complete(asyncio.sleep(0))
+        assert cb.state.saw_travelling is False
+        cb(self._msg(travelling=True))
+        cb(self._msg(travelling=False))
+        hass.loop.run_until_complete(asyncio.sleep(0))
+        assert cb.state.saw_travelling is True
 
     def test_a_departure_alone_does_not_advance(self):
         """Leaving is not arriving. The drive has only begun."""
@@ -5744,6 +5775,60 @@ class TestTheCloudMergeIsShownAtOnce:
         send, _store, _entry = self._run(changed=False)
         send.assert_not_called()
 
+    def test_a_state_that_cannot_be_read_only_loses_the_default_mode(self):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.callbacks import learn_room_times_from_store
+
+        def _broken():
+            raise RuntimeError("no state")
+
+        store = MagicMock()
+        store.learn_room_times.return_value = (1, 1)
+        entry = SimpleNamespace(runtime_data=SimpleNamespace(
+            robot_profile_store=SimpleNamespace(room_estimate_cache={}, room_times_learned=[]),
+            roomba_reported_state=_broken,
+        ))
+        assert learn_room_times_from_store(entry, store, {}, None) == (1, 1)
+        assert store.learn_room_times.call_args.args[4] is None
+        assert learn_room_times_from_store(SimpleNamespace(runtime_data=None), store, {}, None) == (0, 0)
+
+    def test_room_times_are_learned_and_saved(self):
+        """4.2.15: the refresh learns room times from the timelines it
+        merged; the profile store holds the figures and the missions they
+        came from, so one save keeps them together."""
+        from unittest.mock import AsyncMock
+
+        from custom_components.roomba_plus import callbacks as cb
+
+        hass = hass_mock()
+        config_entry = entry_mock(schedule_on=hass)
+        config_entry.entry_id = "test_entry"
+        config_entry.data = {"blid": "BLID9"}
+        rd = config_entry.runtime_data
+        rd.mission_store = MagicMock()
+        rd.mission_store.backfill_from_cloud.return_value = MagicMock(corrected=0, enriched=0)
+        rd.mission_store.adopt_missing_from_cloud.return_value = 0
+        rd.mission_store.store_rooms_from_timelines.return_value = 0
+        rd.mission_store.learn_room_times.return_value = (3, 1)
+        rd.robot_profile_store = MagicMock(room_estimate_cache={}, room_times_learned=[], async_save=AsyncMock())
+        rd.roomba_reported_state = lambda: {"sku": "m611020"}
+        rd.dirt_threshold_manager = None
+        rd.grid_store = None
+        cc = MagicMock(last_update_success=True, umf_data={})
+        with patch.object(cb, "async_dispatcher_send") as send, \
+             patch.object(cb, "region_names_across_maps", return_value={"1": "A"}):
+            cb.make_cloud_refresh_callback(hass, config_entry, cc)()
+
+        args = rd.mission_store.learn_room_times.call_args.args
+        assert args[0] is rd.robot_profile_store.room_estimate_cache
+        assert args[1] is rd.robot_profile_store.room_times_learned
+        assert args[4] == "mop", "a Braava's records are mop runs"
+        names = [c.kwargs.get("name") for c in config_entry.async_create_task.call_args_list]
+        assert "roomba_plus_room_times_save" in names, "figures and learned missions, one save"
+        send.assert_not_called()
+
     def test_a_mock_entry_has_no_creation_time(self):
         """A mock's timestamp() would be a number near 1970 -- a floor that
         imports the whole cloud history."""
@@ -5772,3 +5857,140 @@ class TestTheCloudMergeIsShownAtOnce:
         from custom_components.roomba_plus import entity
 
         assert "mission_store_changed_signal(self._blid)" in inspect.getsource(entity.IRobotEntity)
+
+
+class TestARecordedMissionIsShownAtOnce:
+    """4.2.15, @ScenicSystemsLLC's Braava: after a five-room mission was
+    recorded, the vacuum's `last_cleaned_rooms` still showed an earlier
+    mission's room -- the attribute is computed on a state write, and a
+    docked robot sends few messages to trigger one."""
+
+    def _record(self, data):
+        from unittest.mock import patch
+
+        from custom_components.roomba_plus import callbacks as cb
+
+        store = _make_store()
+        loop = asyncio.new_event_loop()
+        entry = _make_entry(store)
+        entry.data = data
+        hass = _make_hass(loop)
+        try:
+            with patch.object(cb, "async_dispatcher_send") as send:
+                loop.run_until_complete(cb.async_record_mission(
+                    hass, entry, {"phase": "charge", "error": 0, "sqft": 100}, {}, [],
+                    int(loop.time()) - 3600, 0,
+                ))
+        finally:
+            loop.close()
+        return send
+
+    def test_every_entity_of_the_robot_re_renders(self):
+        from custom_components.roomba_plus.const import mission_store_changed_signal
+
+        send = self._record({"blid": "EVA"})
+        send.assert_called_once()
+        assert send.call_args.args[1] == mission_store_changed_signal("EVA")
+
+    def test_an_entry_without_a_blid_sends_nothing(self):
+        self._record({}).assert_not_called()
+
+
+class TestGuessedRoomsWaitForTheCloud:
+    """4.2.15, @ScenicSystemsLLC's Braava m6: no travel signal, no
+    position, so room tracking can only guess. It recorded two rooms of a
+    five-room plan after a run that ended stranded. With a cloud account
+    the real answer follows within minutes; until then the record claims
+    none, and keeps the guess aside."""
+
+    @staticmethod
+    def _entry(planned, cloud=True):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(runtime_data=SimpleNamespace(
+            cloud_coordinator=object() if cloud else None,
+            mission_timer_store=SimpleNamespace(planned_rooms=planned),
+        ))
+
+    def test_a_multi_room_run_without_a_travel_signal_is_a_guess(self):
+        from custom_components.roomba_plus.callbacks import _rooms_are_guesses
+
+        assert _rooms_are_guesses(self._entry(["A", "B"]), saw_travelling=False) is True
+
+    def test_a_robot_that_reports_travel_is_not_guessing(self):
+        from custom_components.roomba_plus.callbacks import _rooms_are_guesses
+
+        assert _rooms_are_guesses(self._entry(["A", "B"]), saw_travelling=True) is False
+
+    def test_one_room_needs_no_room_change(self):
+        from custom_components.roomba_plus.callbacks import _rooms_are_guesses
+
+        assert _rooms_are_guesses(self._entry(["A"]), saw_travelling=False) is False
+
+    def test_without_a_cloud_account_the_guess_is_all_there_is(self):
+        from custom_components.roomba_plus.callbacks import _rooms_are_guesses
+
+        assert _rooms_are_guesses(self._entry(["A", "B"], cloud=False), saw_travelling=False) is False
+
+    def test_the_record_holds_the_guess_aside(self):
+        from custom_components.roomba_plus.callbacks import async_record_mission
+
+        store = _make_store()
+        loop = asyncio.new_event_loop()
+        entry = _make_entry(store)
+        hass = _make_hass(loop)
+        try:
+            loop.run_until_complete(async_record_mission(
+                hass, entry, {"phase": "charge", "error": 0, "sqft": 100}, {}, ["A", "B", "C"],
+                int(loop.time()) - 3600, 0,
+                observed_rooms=["A", "B"], rooms_are_guesses=True,
+            ))
+        finally:
+            loop.close()
+        rec = store.latest()
+        assert rec["last_cleaned_rooms"] == []
+        assert rec["tracked_rooms"] == ["A", "B"]
+        assert rec["rooms_source"] == "awaiting_cloud"
+
+
+class TestLiveRoomTimesOnlyWithoutACloudAccount:
+    """4.2.15: with an account the cloud's room events teach every room
+    after the mission; a live measurement as well would put two samples
+    of one visit into one mean. Without one, the live figure is kept,
+    under the mission's cleaning mode."""
+
+    def _advance(self, cloud, state, op_mode):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock, patch
+
+        from custom_components.roomba_plus import callbacks as cb
+
+        ms = cb._MissionState()
+        ms.mission_start_ts = 1
+        ms.last_phase = "run"
+        mts = MagicMock(planned_rooms=["Kitchen", "Hall"], current_room_idx=0,
+                        time_in_current_room_sec=600.0)
+        mts.advance_room.return_value = True
+        entry = MagicMock(entry_id="e", title="Robot")
+        entry.runtime_data = SimpleNamespace(
+            cloud_coordinator=object() if cloud else None,
+            roomba_reported_state=lambda: state,
+        )
+        with patch.object(cb, "_room_transition_confidence_ok", return_value=True), \
+             patch.object(cb, "_remember_measured_room_time") as remember:
+            cb._advance_room_on_drive_end(
+                ms, MagicMock(), entry, mts_upd=mts, returned_from_travel=False,
+                mission={"operatingMode": op_mode, "phase": "charge"}, phase="charge",
+            )
+        return remember
+
+    def test_with_an_account_nothing_is_measured_live(self):
+        self._advance(True, {"sku": "i755840"}, 2).assert_not_called()
+
+    def test_without_one_the_live_figure_carries_the_mode(self):
+        remember = self._advance(False, {"sku": "i755840"}, 3)
+        assert remember.call_args.kwargs["mode"] == "vacuum"
+
+    def test_a_braava_reporting_no_mode_mops(self):
+        remember = self._advance(False, {"sku": "m611020"}, 0)
+        assert remember.call_args.kwargs["mode"] == "mop"

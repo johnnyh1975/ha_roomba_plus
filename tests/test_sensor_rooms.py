@@ -1529,7 +1529,8 @@ class TestEveryEstimateLookupReadsOurMeasurements:
             ):
                 continue
             checked += 1
-            assert "cached_room_seconds" in ast.unparse(node), (
+            source = ast.unparse(node)
+            assert "cached_room_seconds" in source or "measured_room_seconds" in source, (
                 f"{node.name} answers a room-duration question without "
                 f"consulting what the robot measured itself"
             )
@@ -1815,6 +1816,15 @@ class TestSmartTierRoomState:
         assert state.get("next_room") == "Bath"
         # 540 s left of Hall plus 600 s for Bath
         assert state.get("estimated_remaining_min") == 19
+
+    def test_the_clock_never_shows_a_room_the_robot_was_seen_to_leave(self, monkeypatch):
+        """4.2.15, review: learned room times put the clock in charge on
+        far more robots. A robot seen (travel signal) to enter the third
+        room is not shown in the second because the clock says so."""
+        mts = _mts_full(effective_elapsed_min=11, current_room_idx=2)
+        state = sr._resolve_smart_tier_room_state(self._entry_with(monkeypatch, mts, [600, 600, 600]))
+        assert state.get("current_room") == "Bath"
+        assert state.get("next_room") is None
 
     def test_past_every_estimate_the_reported_room_index_decides(self, monkeypatch):
         """Longer than estimated: the robot's own room index is believed

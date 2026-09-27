@@ -3317,3 +3317,45 @@ class TestBraavaMopMode:
         b = _braava()
         b.vacuum_state = {"rankOverlap": overlap, "padWetness": {"disposable": spray}}
         assert b.fan_speed == mode
+
+
+class TestTheCleanAreaWarningIsForRobotsThatCould:
+    """4.2.15: the owner of a 980 was told at every start that credentials
+    or smart zones would make room cleaning available. A robot without a
+    persistent map cannot clean single rooms; nothing he adds changes that."""
+
+    def _explain(self, caplog, cap):
+        import logging
+        import types
+
+        from custom_components.roomba_plus.vacuum import IRobotVacuum, VacuumEntityFeature
+
+        if not hasattr(VacuumEntityFeature, "CLEAN_AREA"):
+            pytest.skip("Home Assistant without CLEAN_AREA explains nothing")
+        fake = types.SimpleNamespace(
+            _config_entry=types.SimpleNamespace(runtime_data=types.SimpleNamespace()),
+            vacuum_state={"cap": cap} if cap is not None else {}, _blid="BLID980",
+        )
+        caplog.clear()
+        with caplog.at_level(logging.DEBUG, logger="custom_components.roomba_plus.vacuum"):
+            IRobotVacuum._log_clean_area_absent(fake)
+        return [r for r in caplog.records if "BLID980" in r.getMessage()]
+
+    def test_a_980_gets_no_warning(self, caplog):
+        records = self._explain(caplog, {"pose": 1, "maps": 1, "carpetBoost": 1})
+        assert [r.levelname for r in records] == ["DEBUG"]
+        assert "no persistent map" in records[0].getMessage()
+
+    def test_a_600_gets_no_warning(self, caplog):
+        assert [r.levelname for r in self._explain(caplog, {"ota": 1})] == ["DEBUG"]
+
+    def test_a_smart_map_robot_without_rooms_still_does(self, caplog):
+        records = self._explain(caplog, {"pose": 2, "maps": 3, "pmaps": 4})
+        assert [r.levelname for r in records] == ["WARNING"]
+        assert "iRobot account" in records[0].getMessage()
+
+    def test_an_i3_with_maps_but_no_pmaps_key_counts_as_mapping(self, caplog):
+        assert [r.levelname for r in self._explain(caplog, {"maps": 3})] == ["WARNING"]
+
+    def test_without_a_capability_block_it_still_warns(self, caplog):
+        assert [r.levelname for r in self._explain(caplog, None)] == ["WARNING"]

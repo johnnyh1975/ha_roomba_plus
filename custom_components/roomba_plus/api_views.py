@@ -40,6 +40,7 @@ from homeassistant.util import dt as dt_util
 from roombapy_prime import CloudError
 
 from .const import DOMAIN, SQFT_TO_M2
+from .mission_store import MissionStore
 from .room_cleaning import region_names_across_maps
 
 if TYPE_CHECKING:
@@ -184,7 +185,33 @@ def _safe_int(value: Any) -> int | None:
         return None
 
 
-def _cloud_record_to_unified(record: dict[str, Any]) -> dict[str, Any]:
+def _room_coverage(
+    record: dict[str, Any],
+    names: dict[str, str] | None = None,
+    by_pmap: dict[str, dict[str, str]] | None = None,
+) -> dict[str, float] | None:
+    """{room: covered share 0.0-1.0} for one mission, or None (4.2.15).
+
+    The mission list's `room_coverage` read a field nothing ever wrote,
+    so it was null on every row (@FJSoninC). It comes from the record's
+    own room events now -- the same rule as the last mission summary --
+    named from the mission's own map where the record says which.
+    """
+    coverage = MissionStore.record_room_coverage(record)
+    if not coverage:
+        return None
+    lookup = dict(names or {})
+    pmaps_info = record.get("pmaps_info")
+    if by_pmap and isinstance(pmaps_info, list) and pmaps_info and isinstance(pmaps_info[0], dict):
+        lookup.update(by_pmap.get(str(pmaps_info[0].get("pmap_id")), {}) or {})
+    return {lookup.get(rid, rid): round(share, 3) for rid, share in coverage.items()}
+
+
+def _cloud_record_to_unified(
+    record: dict[str, Any],
+    names: dict[str, str] | None = None,
+    by_pmap: dict[str, dict[str, str]] | None = None,
+) -> dict[str, Any]:
     """Convert a raw cloud /missionhistory record to the unified per-mission shape."""
     start_ts = record.get("startTime")
     end_ts   = record.get("timestamp")
@@ -224,7 +251,7 @@ def _cloud_record_to_unified(record: dict[str, Any]) -> dict[str, Any]:
         "wifi_signal":  record.get("wlBars"),
         "source":       "cloud",
         # v2.3.0 — from CR4 timeline merge; alignment_confidence injected in get()
-        "room_coverage":        record.get("room_coverage"),
+        "room_coverage":        _room_coverage(record, names, by_pmap),
         "alignment_confidence": None,
         # v3.2.1 — lifetime mission counter, the key of MissionPathView
         # (/mission/{n_mssn}/path).  Unblocks card F4 (path replay): the
@@ -350,7 +377,11 @@ def _resolve_cloud_mission_map_record(
     return None
 
 
-def _local_record_to_unified(record: dict[str, Any]) -> dict[str, Any]:
+def _local_record_to_unified(
+    record: dict[str, Any],
+    names: dict[str, str] | None = None,
+    by_pmap: dict[str, dict[str, str]] | None = None,
+) -> dict[str, Any]:
     """Convert a local MissionStore record to the unified per-mission shape.
 
     After v2.1.3 CR1/CR2: dirt_events, wifi_signal, and evacuations are
@@ -376,7 +407,7 @@ def _local_record_to_unified(record: dict[str, Any]) -> dict[str, Any]:
         "wifi_signal":  record.get("wlBars"),        # from CR1 merge
         "source":       "local",
         # v2.3.0 — from CR4 timeline merge; alignment_confidence always null for local
-        "room_coverage":        record.get("room_coverage"),
+        "room_coverage":        _room_coverage(record, names, by_pmap),
         "alignment_confidence": None,
         # v3.2.1 — card F4 (path replay), see _cloud_record_to_unified.
         # Local records never get nMssn at creation (callbacks.py); it
@@ -624,9 +655,13 @@ class MissionHistoryView(RoombaPlusView):
             list(data.mission_store.records) if data.mission_store else []
         )
 
+        # Room names for `room_coverage` (4.2.15).
+        _names = region_names_across_maps(_cc) if _cc is not None else {}
+        _by_pmap = (getattr(_cc, "regions_by_pmap", None) or {}) if _cc is not None else {}
+
         if _cc is not None and _cc.data is not None and _cc.raw_records:
             unified = [
-                _cloud_record_to_unified(r)
+                _cloud_record_to_unified(r, _names, _by_pmap)
                 for r in _cc.raw_records
             ]
             # F4a -- inject zone names from local store into cloud records
@@ -651,7 +686,7 @@ class MissionHistoryView(RoombaPlusView):
                 except (ValueError, TypeError):
                     union_days = 90
                 unmatched_local = [
-                    _local_record_to_unified(r)
+                    _local_record_to_unified(r, _names, _by_pmap)
                     for r in data.mission_store.query(union_days)
                     if not _local_record_has_cloud_merge_signal(r)
                 ]
@@ -667,7 +702,7 @@ class MissionHistoryView(RoombaPlusView):
             except (ValueError, TypeError):
                 days = 90
             local = data.mission_store.query(days)
-            records = [_local_record_to_unified(r) for r in local]
+            records = [_local_record_to_unified(r, _names, _by_pmap) for r in local]
         else:
             records = []
 

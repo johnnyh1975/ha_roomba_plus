@@ -354,6 +354,29 @@ class TestRoombaRoomsImage:
         assert isinstance(png, bytes)
         assert len(png) > 0
 
+    def test_without_an_account_the_image_says_why(self):
+        """4.2.15, @liblit: the rooms map stayed black for good on a robot
+        without an iRobot account -- the only source of room shapes -- and
+        the zone-naming notice sent him there. The placeholder says so."""
+        import io
+
+        from PIL import Image
+
+        without = self._entity(aligner=None)
+        without._config_entry.runtime_data.cloud_coordinator = None
+        waiting = self._entity(aligner=None)
+        waiting._config_entry.runtime_data.cloud_coordinator = MagicMock()
+
+        blank = Image.new("RGB", (600, 600), (30, 30, 30))
+        images = [
+            Image.open(io.BytesIO(e._render_rooms_png())).convert("RGB")
+            for e in (without, waiting)
+        ]
+        for img in images:
+            assert img.size == (600, 600)
+            assert img.tobytes() != blank.tobytes(), "text was drawn"
+        assert images[0].tobytes() != images[1].tobytes(), "each case says its own thing"
+
     def test_not_aligned_returns_blank(self):
         entity = self._entity(aligner=_make_aligner(aligned=False))
         png = entity._render_rooms_png()

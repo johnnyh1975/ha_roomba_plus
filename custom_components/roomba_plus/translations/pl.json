@@ -1777,7 +1777,7 @@
         "step": {
           "init": {
             "title": "Nazwij strefy Smart Map",
-            "description": "{robot}: {zone_count} stref(y) bez nazwy. Wpisz po jednej w wierszu jako `id=Nazwa`. Identyfikatory: {zone_ids}\n\nNazwy należą do Ciebie i pozostają w Home Assistant — nic nie jest zmieniane w aplikacji iRobot ani wysyłane do robota.\n\nNie wiesz, która jest która? Otwórz obraz mapy tego robota (`image.{robot_slug}_rooms_map`): strefy bez nazwy mają na sobie swój numer.",
+            "description": "{robot}: {zone_count} stref(y) bez nazwy: {zone_ids}. Wpisz nazwę w polu każdej strefy, którą chcesz nazwać; liczba przed polem to ID strefy. Puste pola są pomijane.\n\nNazwy należą do Ciebie i pozostają w Home Assistant — nic nie jest zmieniane w aplikacji iRobot ani wysyłane do robota.\n\nNie wiesz, która jest która? Uruchom pojedynczy pokój lub strefę z aplikacji iRobot: robot zgłosi wtedy jej ID, a pobrana diagnostyka pokaże je w `smart_map` → `last_command_summary` → `region_ids`. Albo dodaj swoje konto iRobot do tego robota (Konfiguruj → dane logowania chmury iRobot): Roomba+ pobierze wtedy wszystkie nazwy z konta, a to powiadomienie zniknie.",
             "data": {
               "zones": "Przypisania stref"
             },

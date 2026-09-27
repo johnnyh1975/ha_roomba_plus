@@ -56,6 +56,30 @@ class TestEachReasonIsNamed:
         assert status["reason"] == "no_room_data"
         assert "iRobot cloud login" in status["detail"]
 
+    def test_a_robot_without_a_persistent_map_is_told_so(self):
+        """4.2.15, the maintainer's 980: "no_room_data" and a pointer to
+        the cloud login, on a robot with a working cloud login that can
+        never clean single rooms."""
+        from custom_components.roomba_plus import withheld_features as wf
+
+        state = {"sku": "R980040", "cap": {"pose": 1, "maps": 1, "carpetBoost": 1}}
+        with patch.object(wf, "async_get_room_cleaning_backend", return_value=None):
+            status = wf.clean_area_status(MagicMock(), state)
+
+        assert status["reason"] == "no_persistent_map"
+        assert "iRobot cloud login" not in status["detail"]
+
+    def test_an_i7_with_the_map_option_off_is_not_called_mapless(self):
+        """Review: the map option off makes map_capability NONE on any
+        robot. The robot's capability block says whether it keeps maps."""
+        from custom_components.roomba_plus import withheld_features as wf
+
+        state = {"sku": "i755840", "cap": {"pose": 2, "maps": 3, "pmaps": 4}}
+        with patch.object(wf, "async_get_room_cleaning_backend", return_value=None):
+            status = wf.clean_area_status(MagicMock(), state)
+
+        assert status["reason"] == "no_room_data"
+
     def test_an_old_home_assistant_says_which_version(self):
         status = _status({"sku": "i755840"}, has_flag=False)
 

@@ -264,6 +264,41 @@ class TestHasCarpetBoost:
         assert has_carpet_boost(state) is False
 
 
+class TestTheCapabilityBlockDecidesCarpetBoost:
+    """4.2.15, @azrael-229: an i7 (lewis 22.52.10) reports `carpetBoost`
+    and `vacHigh`, has no carpet boost, and drops every write to them.
+    The select was offered because the keys were there."""
+
+    #: His robot's shape: both keys, a capability block without the flag.
+    I7_LEWIS = {
+        "carpetBoost": False, "vacHigh": False,
+        "cap": {"pose": 2, "maps": 3, "pmaps": 4, "eco": 1, "edge": 1, "multiPass": 2},
+    }
+
+    def test_his_i7_gets_no_carpet_boost(self):
+        assert has_carpet_boost(self.I7_LEWIS) is False
+
+    def test_the_flag_still_turns_it_on(self):
+        state = {**self.I7_LEWIS, "cap": {**self.I7_LEWIS["cap"], "carpetBoost": 1}}
+        assert has_carpet_boost(state) is True
+
+    def test_a_robot_without_a_capability_block_keeps_the_keys_rule(self):
+        assert has_carpet_boost({"carpetBoost": True, "vacHigh": False}) is True
+        assert has_carpet_boost({"carpetBoost": True, "vacHigh": False, "cap": {}}) is True
+
+    def test_iRobots_own_sample_states(self):
+        """Only the s9 declares carpet boost. The i7, j7, j9, Braava m6
+        and the others report the key all the same."""
+        found = {}
+        for name, data in _platforms().items():
+            state = {**data, "vacHigh": False}     # as a live robot reports it
+            found[name] = has_carpet_boost(state)
+        assert found == {
+            "atlantis": False, "lewis": False, "ruby": False, "san_marino": False,
+            "sapphire": False, "soho": True, "stingray": False,
+        }
+
+
 class TestHasSmartMap:
     def test_i7_has_smart_map(self):
         assert has_smart_map(STATE_I7) is True
@@ -866,7 +901,8 @@ _PKG = pathlib.Path("custom_components/roomba_plus")
 #: asks. A new reader has to be placed here, which makes it a decision.
 FINISHED = {
     ("callbacks.py", "_async_update_robot_profile_store"),  # learned area/time
-    ("mission_store.py", "latest_room_coverage"),          # measurement
+    ("mission_store.py", "record_room_coverage"),          # measurement
+    ("room_times.py", "timeline_room_seconds"),            # learned room times
     ("mission_archive.py", "_parse_derived"),               # completed/interrupted split
     ("mission_archive.py", "_parse_timeline"),              # done/enter/interrupted split
 }
@@ -1681,3 +1717,98 @@ class TestBraavaDetectionAgainstRealSkus:
 
         assert is_mop(state) is True
         assert is_braava(state) is False
+
+
+class TestARoomOnlyReachedIntoIsNotCleaned:
+    """4.2.15, @FJSoninC's second closed-door test (door verified shut):
+    the cloud reported the bathroom as finished with 4 of 106 sq ft,
+    the doorway strip, and room history counted it as cleaned."""
+
+    OFFICE = {"rid": "6", "status": 0, "area": 160, "passArea": 97}
+    BATHROOM = {"rid": "3", "status": 0, "area": 106, "passArea": 4}
+
+    def test_the_doorway_strip_is_not_a_cleaned_room(self):
+        from custom_components.roomba_plus.const import room_event_was_cleaned
+
+        assert room_event_was_cleaned(self.BATHROOM) is False
+
+    def test_the_office_still_is(self):
+        from custom_components.roomba_plus.const import room_event_was_cleaned
+
+        assert room_event_was_cleaned(self.OFFICE) is True
+
+    def test_the_line_itself_counts(self):
+        from custom_components.roomba_plus.const import MIN_CLEANED_ROOM_SHARE, room_event_was_cleaned
+
+        assert room_event_was_cleaned({"status": 0, "area": 100, "passArea": 100 * MIN_CLEANED_ROOM_SHARE})
+
+    def test_the_union_of_passes_is_the_covered_floor(self):
+        """totalArea exists only from the second pass on; it wins then."""
+        from custom_components.roomba_plus.const import room_event_covered_share
+
+        assert room_event_covered_share({"area": 100, "passArea": 5, "totalArea": 60}) == 0.6
+
+    def test_without_area_figures_the_status_decides_as_before(self):
+        from custom_components.roomba_plus.const import room_event_covered_share, room_event_was_cleaned
+
+        assert room_event_covered_share({"status": 0}) is None
+        assert room_event_was_cleaned({"status": 0}) is True
+        assert room_event_was_cleaned({"status": 5, "passArea": 3}) is True   # no room size known
+
+    def test_nonsense_figures_are_no_share(self):
+        from custom_components.roomba_plus.const import room_event_covered_share
+
+        assert room_event_covered_share({"area": 0, "passArea": 4}) is None
+        assert room_event_covered_share({"area": True, "passArea": 4}) is None
+        assert room_event_covered_share({"area": 100, "passArea": "4"}) is None
+        assert room_event_covered_share(None) is None
+
+    def test_room_history_and_the_stored_list_leave_it_out(self):
+        from custom_components.roomba_plus.mission_store import MissionStore
+
+        rec = {
+            "id": "m_1", "ended_at": "2026-09-26T08:00:00+00:00",
+            "last_cleaned_rooms": ["Bathroom", "Office"],
+            "timeline": {"finEvents": [
+                {"type": "room", "room": self.OFFICE},
+                {"type": "room", "room": self.BATHROOM},
+            ]},
+        }
+        store = MissionStore()
+        store._records = [rec]
+        names = {"6": "Office", "3": "Bathroom"}
+        assert store.store_rooms_from_timelines(names) == 1
+        assert rec["last_cleaned_rooms"] == ["Office"]
+        assert set(store.room_cleaning_history(names)) == {"Office"}
+
+    def test_a_mission_to_the_closed_room_alone_cleaned_nothing(self):
+        """Review: with only the closed room in the timeline, nothing
+        counted -- and the tracker's "Bathroom" came back as the answer.
+        Room events present means the cloud's answer stands, even empty."""
+        from custom_components.roomba_plus.mission_store import MissionStore
+
+        rec = {
+            "id": "m_2", "ended_at": "2026-09-26T09:00:00+00:00",
+            "last_cleaned_rooms": ["Bathroom"],
+            "timeline": {"finEvents": [{"type": "room", "room": self.BATHROOM}]},
+        }
+        store = MissionStore()
+        store._records = [rec]
+        names = {"3": "Bathroom"}
+        assert store.store_rooms_from_timelines(names) == 1
+        assert rec["last_cleaned_rooms"] == []
+        assert store.room_cleaning_history(names) == {}
+        assert store.latest_cleaned_rooms(names) == []
+
+    def test_a_whole_home_mission_keeps_the_tracked_rooms(self):
+        from custom_components.roomba_plus.mission_store import MissionStore
+
+        rec = {
+            "id": "m_3", "ended_at": "2026-09-26T10:00:00+00:00",
+            "last_cleaned_rooms": ["Office"],
+            "timeline": {"finEvents": [{"type": "evac"}]},
+        }
+        store = MissionStore()
+        store._records = [rec]
+        assert store.store_rooms_from_timelines({"6": "Office"}) == 0
+        assert rec["last_cleaned_rooms"] == ["Office"]
