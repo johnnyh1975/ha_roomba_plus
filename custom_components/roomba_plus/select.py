@@ -29,6 +29,7 @@ from .const import (
     has_smart_map,
 )
 from .entity import IRobotEntity
+from .entity_cleanup import async_remove_entities_by_suffix
 from .models import ConnectionType, RoombaConfigEntry
 from .zone_naming import collect_region_ids, unlabelled_zone_ids
 
@@ -218,6 +219,18 @@ async def async_setup_entry(
     # v2.2.0 — Carpet boost select (card fix P2)
     if has_carpet_boost(state):
         entities.append(CarpetBoostSelect(roomba, blid))
+    elif isinstance(state.get("cap"), dict) and state["cap"]:
+        # 4.2.15: until 4.2.14 this select and the carpet boost sensor
+        # were also created on robots whose capability block has no
+        # carpet boost (why: has_carpet_boost). Their registry rows would
+        # stay as "unavailable" forever. Removed only when the robot's
+        # capability block is actually here to say so.
+        async_remove_entities_by_suffix(
+            hass,
+            config_entry,
+            {"select": "carpet_boost_select", "sensor": "carpet_boost_mode"},
+            "this robot has no carpet boost (cap.carpetBoost is not 1)",
+        )
 
     # v3.2.1 REMOVED — ZoneSelect used to be created for EPHEMERAL
     # (900-series) robots too. Confirmed dead weight, not just

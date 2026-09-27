@@ -1016,10 +1016,10 @@ class TestPrimeAdvancesFromItsOwnTimeline:
         tree = ast.parse(
             inspect.getsource(PrimeCoordinator._advance_display_if_next).strip()
         )
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant):
-                node.value = ast.Constant(value="")
-        code = ast.unparse(tree)
+        # (The docstring's words are no problem below: only names are
+        # compared, and a docstring holds none. The tree is not changed,
+        # because conftest.py shares it with every other parse of this
+        # source.)
 
         # NAMES READ, not words appearing. The debug line says "no
         # estimate consulted", so a substring search finds the word in

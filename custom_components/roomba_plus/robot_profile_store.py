@@ -255,6 +255,12 @@ class RobotProfileStore:
     #: another. A cache keyed by room alone would hand back the
     #: two-pass figure for a one-pass mission, silently.
     room_estimate_cache: dict[str, float] = field(default_factory=dict)
+    #: Missions whose cloud room events have been learned into
+    #: `room_estimate_cache` (4.2.15, room_times), newest last. Kept HERE,
+    #: saved with the figures themselves, so one save covers both -- a
+    #: mark on the mission record, saved separately, could be lost and
+    #: the mission counted twice.
+    room_times_learned: list[str] = field(default_factory=list)
     mission_duration_std: float | None = None
     mission_area_mean: float | None = None
 
@@ -382,6 +388,10 @@ class RobotProfileStore:
                 for k, v in raw_cache.items()
                 if isinstance(v, (int, float)) and v > 0
             }
+            raw_learned = data.get("room_times_learned") or []
+            self.room_times_learned = [
+                str(k) for k in raw_learned if isinstance(k, (str, int))
+            ] if isinstance(raw_learned, list) else []
             raw_ts = data.get("room_dirt_last_ts") or {}
             self.room_dirt_last_ts = {str(k): float(v) for k, v in raw_ts.items()}
             # v3.3.0 CROSS-CORR — additive fields, old dumps lack them
@@ -474,6 +484,7 @@ class RobotProfileStore:
             "learned_brush_hours": self.learned_brush_hours,
             "baseline_by_weekday": {str(k): v for k, v in self.baseline_by_weekday.items()},
             "room_estimate_cache": self.room_estimate_cache,
+            "room_times_learned": self.room_times_learned,
             "room_dirt_index": self.room_dirt_index,
             "room_dirt_velocity": self.room_dirt_velocity,
             "room_dirt_last_ts": self.room_dirt_last_ts,

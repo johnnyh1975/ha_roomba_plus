@@ -1208,6 +1208,54 @@ ROOM_EVENT_CLOSED_AT_END_STATUSES: Final[frozenset[int]] = frozenset({0, 5, 6})
 ROOM_EVENT_PASS_DONE_STATUSES: Final[frozenset[int]] = frozenset({0, 1})
 
 
+#: A record's `rooms_source` while its rooms are a guess waiting for the
+#: cloud's room events (4.2.15, callbacks._rooms_are_guesses), and once
+#: the cloud has answered.
+ROOMS_AWAITING_CLOUD: Final[str] = "awaiting_cloud"
+ROOMS_FROM_CLOUD: Final[str] = "cloud"
+#: The cloud reported the mission without room events: the guess stands.
+ROOMS_TRACKED: Final[str] = "tracked"
+
+#: How long a guessed record waits for the cloud before its guess is used
+#: after all -- a mission the cloud never reports keeps some answer.
+ROOMS_AWAITING_CLOUD_MAX_SEC: Final[int] = 24 * 3600
+
+#: Below this share of a room's floor, a room event does not count as a
+#: cleaned room, whatever its status (4.2.15). @FJSoninC's closed-door
+#: test: the bathroom behind the closed door came back as status 0 with
+#: 4 of 106 sq ft -- the doorway strip -- while the office cleaned in the
+#: same mission had 97 of 160 (61 %), and a one-pass room in our data 96
+#: of 173 (55 %). Furniture keeps real cleans far below 100 %, so the
+#: line sits low: it separates "reached into the room" from "cleaned it".
+MIN_CLEANED_ROOM_SHARE: Final[float] = 0.10
+
+
+def room_event_covered_share(room: object) -> float | None:
+    """The share of the room's floor this event covered, 0.0-1.0, or
+    None when the event carries no area figures.
+
+    `totalArea` (the union over all passes) when present -- the firmware
+    writes it only from the second pass on -- else `passArea`, which for
+    one pass is the same thing. `area` is the room's size.
+    """
+    if not isinstance(room, dict):
+        return None
+    covered = _number(room.get("totalArea"))
+    if covered is None:
+        covered = _number(room.get("passArea"))
+    area = _number(room.get("area"))
+    if covered is None or area is None or area <= 0:
+        return None
+    return min(1.0, max(0.0, covered / area))
+
+
+def _number(value: object) -> float | None:
+    """A JSON number as float; None for anything else, booleans included."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
 def room_event_was_cleaned(room: object) -> bool:
     """Whether a `room` event says the robot cleaned in that room.
 
@@ -1231,8 +1279,17 @@ def room_event_was_cleaned(room: object) -> bool:
 
     NOT for the end gate or for learned figures — see
     ROOM_EVENT_DONE_STATUSES.
+
+    AND NOT A ROOM THE ROBOT ONLY REACHED INTO (4.2.15). An event whose
+    covered share is below MIN_CLEANED_ROOM_SHARE does not count, even
+    with a finished status: the cloud reports a room behind a closed
+    door as finished when the robot cleaned its doorway strip. An event
+    without area figures is judged as before.
     """
     if not isinstance(room, dict):
+        return False
+    share = room_event_covered_share(room)
+    if share is not None and share < MIN_CLEANED_ROOM_SHARE:
         return False
     if room.get("status") in ROOM_EVENT_PASS_DONE_STATUSES:
         return True
@@ -2388,15 +2445,32 @@ DIAG_REDACT_KEYS: Final[set[str]] = {
 
 # ── Capability detection ───────────────────────────────────────────────────────
 def has_carpet_boost(state: dict[str, Any]) -> bool:
-    """Return True if this robot supports carpet boost / fan speed control."""
-    cap = state.get("cap") or {}
-    if cap.get("carpetBoost") == 1:
-        return True
-    return (
-        "carpetBoost" in state
-        and "vacHigh" in state
-        and cap.get("carpetBoost") is None
-    )
+    """Return True if this robot supports carpet boost / fan speed control.
+
+    THE CAPABILITY BLOCK DECIDES, NOT THE KEYS (4.2.15). `carpetBoost`
+    and `vacHigh` are reported by robots that have no carpet boost and
+    ignore a write to them:
+
+      - @azrael-229's i7 (lewis 22.52.10): the select was offered, every
+        change snapped back to eco, nothing was logged
+      - @AlakazipLabs' i3 (daredevil 2.6.0): both keys "silently
+        dropped", measured on the wire (see switch.py)
+      - iRobot's own sample states (tests/fixtures): `carpetBoost` is
+        present on the i7, j7, j9 and even the Braava m6, and
+        `cap.carpetBoost` is 1 only on the s9
+
+    Until 4.2.14 the keys alone were enough whenever `cap` did not
+    mention carpet boost -- which is exactly the case on all of those.
+    Now a robot that reports a capability block needs
+    `cap.carpetBoost == 1`, as the 980 in our captures and the s9 have.
+    Only a robot with no capability block at all (firmware older than
+    capability reporting) still falls back to the keys: nothing says
+    those robots lack it.
+    """
+    cap = state.get("cap")
+    if isinstance(cap, dict) and cap:
+        return cap.get("carpetBoost") == 1
+    return "carpetBoost" in state and "vacHigh" in state
 
 
 def has_pose(state: dict[str, Any]) -> bool:

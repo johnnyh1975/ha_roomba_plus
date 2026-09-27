@@ -26,7 +26,16 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from .cloud_coordinator import classify_mission_result
-from .const import ROOM_EVENT_DONE_STATUSES, room_event_was_cleaned
+from .const import (
+    ROOM_EVENT_DONE_STATUSES,
+    ROOMS_AWAITING_CLOUD,
+    ROOMS_AWAITING_CLOUD_MAX_SEC,
+    ROOMS_FROM_CLOUD,
+    ROOMS_TRACKED,
+    room_event_covered_share,
+    room_event_was_cleaned,
+)
+from .room_times import learn_from_records
 from .const import extract_region_id, SQFT_TO_M2
 
 _LOGGER = logging.getLogger(__name__)
@@ -359,6 +368,14 @@ class MissionStore:
                     field in _TERMINAL_REPLAY_IMMUTABLE_FIELDS
                     or field == "npicks_delta"
                     or value is None
+                ):
+                    continue
+                # A REPLAY DOES NOT TURN RECORDED ROOMS INTO A GUESS
+                # (4.2.15): after a restart mid-mission the replay has
+                # seen no travel and would mark the rooms as awaiting the
+                # cloud, hiding rooms already recorded.
+                if field in ("rooms_source", "tracked_rooms") and existing.get(
+                    "last_cleaned_rooms"
                 ):
                     continue
                 if existing.get(field) is None or (
@@ -788,6 +805,8 @@ class MissionStore:
 
         Returns None for whole-home missions (no 'room' events) or when
         the timeline field is absent (non-SMART robot or pre-merge record).
+        An empty list when the timeline has room events and none counts
+        as cleaned (4.2.15).
         """
         effective_map = region_map if region_map else (umf_regions or {})
         latest = self.latest()
@@ -827,6 +846,22 @@ class MissionStore:
         return str(pmap_id) if pmap_id else None
 
     @staticmethod
+    def _timeline_has_room_events(rec: dict[str, Any]) -> bool:
+        """Whether the cloud's timeline for this mission lists any room
+        event. If it does, its cleaned rooms are the answer even when
+        there are none (4.2.15): a mission sent only to a room behind a
+        closed door has one event, below the cleaned share, and nothing
+        cleaned is what happened. A whole-home mission without room
+        events has no answer here, and the tracked rooms stand."""
+        timeline = rec.get("timeline")
+        if not isinstance(timeline, dict):
+            return False
+        return any(
+            isinstance(ev, dict) and ev.get("type") == "room"
+            for ev in timeline.get("finEvents") or []
+        )
+
+    @staticmethod
     def _timeline_cleaned_rids(rec: dict[str, Any]) -> list[str]:
         """Region ids the cloud's room events count as cleaned, in
         completion order, each once. Empty without a timeline."""
@@ -864,9 +899,13 @@ class MissionStore:
 
         ONLY WHEN EVERY ROOM HAS A NAME. The field holds names; a map not
         loaded yet would turn them into bare ids, which is worse than the
-        observation it replaces. The next refresh tries again. A timeline
-        with no cleaned room keeps the observation too -- that absence is
-        the cloud's, not an answer.
+        observation it replaces. The next refresh tries again.
+
+        NO CLEANED ROOM IS AN ANSWER WHEN THE CLOUD LISTED ROOM EVENTS
+        (4.2.15): the list becomes empty. A mission sent only to a room
+        behind a closed door has one event, below the cleaned share. A
+        timeline without room events (a whole-home mission) keeps the
+        observation.
 
         ONLY FROM THE MISSION'S OWN MAP when the record names one. Room
         ids are per map: on a robot with several maps, the same id is a
@@ -883,7 +922,28 @@ class MissionStore:
         changed = 0
         for rec in self._records:
             rids = self._timeline_cleaned_rids(rec)
+            if not rids and rec.get("rooms_source") == ROOMS_AWAITING_CLOUD and isinstance(
+                rec.get("timeline"), dict
+            ) and not self._timeline_has_room_events(rec):
+                # THE CLOUD HAS NO ROOMS FOR IT (4.2.15): the mission is
+                # known, its timeline lists no room events -- a robot
+                # whose timelines carry none. The guess is all there is.
+                tracked = rec.get("tracked_rooms")
+                rec["last_cleaned_rooms"] = list(tracked) if isinstance(tracked, list) else []
+                rec["rooms_source"] = ROOMS_TRACKED
+                changed += 1
+                continue
             if not rids:
+                # No cleaned room: an answer only when the cloud listed
+                # room events (4.2.15), otherwise no answer yet.
+                if self._timeline_has_room_events(rec) and (
+                    rec.get("last_cleaned_rooms") != []
+                    or rec.get("rooms_source") == ROOMS_AWAITING_CLOUD
+                ):
+                    rec["last_cleaned_rooms"] = []
+                    if "rooms_source" in rec:
+                        rec["rooms_source"] = ROOMS_FROM_CLOUD
+                    changed += 1
                 continue
             if self._record_pmap_id(rec) is not None:
                 lookup = self._record_region_map(rec, by_pmap) or {}
@@ -892,10 +952,55 @@ class MissionStore:
             if any(rid not in lookup for rid in rids):
                 continue
             names = [lookup[rid] for rid in rids]
-            if rec.get("last_cleaned_rooms") != names:
+            if rec.get("last_cleaned_rooms") != names or rec.get("rooms_source") == ROOMS_AWAITING_CLOUD:
                 rec["last_cleaned_rooms"] = names
+                if "rooms_source" in rec:
+                    rec["rooms_source"] = ROOMS_FROM_CLOUD
                 changed += 1
         return changed
+
+    @staticmethod
+    def _stale_guess(rec: dict[str, Any]) -> list[str] | None:
+        """The tracked rooms of a record still waiting for the cloud,
+        once it has waited ROOMS_AWAITING_CLOUD_MAX_SEC; None before."""
+        ended = rec.get("ended_at")
+        if not isinstance(ended, str):
+            return None
+        try:
+            parsed = datetime.fromisoformat(ended)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        age = datetime.now(timezone.utc).timestamp() - parsed.timestamp()
+        if age < ROOMS_AWAITING_CLOUD_MAX_SEC:
+            return None
+        tracked = rec.get("tracked_rooms")
+        if not isinstance(tracked, list) or not tracked:
+            return None
+        return [str(r) for r in tracked if isinstance(r, str)]
+
+    def learn_room_times(
+        self,
+        cache: dict[str, float],
+        learned_keys: list[str],
+        effective_map: dict[str, str],
+        by_pmap: dict[str, dict[str, str]] | None,
+        default_mode: str | None,
+    ) -> tuple[int, int]:
+        """Learn per-room times from the cloud's room events of every
+        record not learned from yet (4.2.15, room_times). Names come from
+        the mission's own map when the record names one, as for the
+        stored rooms. `learned_keys` (the profile store's
+        room_times_learned) says which missions are already in `cache`.
+        Returns (figures learned, missions added); either non-zero means
+        the profile store needs saving."""
+        def names_for(rec: dict[str, Any]) -> dict[str, str]:
+            if self._record_pmap_id(rec) is not None:
+                return self._record_region_map(rec, by_pmap) or {}
+            return effective_map
+
+        return learn_from_records(self._records, cache, learned_keys, names_for, default_mode)
 
     def _record_room_names(
         self,
@@ -950,6 +1055,13 @@ class MissionStore:
             return self._resolve_region_ids(
                 ordered, effective_map, self._record_region_map(rec, by_pmap)
             )
+        if self._timeline_has_room_events(rec):
+            return []   # the cloud's answer is "none" (4.2.15)
+        if rec.get("rooms_source") == ROOMS_AWAITING_CLOUD:
+            # A GUESS WAITING FOR THE CLOUD (4.2.15): no answer yet --
+            # unless the cloud never reported this mission, in which case
+            # the guess is all there is.
+            return self._stale_guess(rec)
         imported = rec.get("last_cleaned_rooms")
         if isinstance(imported, list) and imported:
             return [str(r) for r in imported if isinstance(r, str)]
@@ -1000,6 +1112,36 @@ class MissionStore:
         planned = self.latest_planned_order(region_map, umf_regions)
         return planned[-1] if planned else None
 
+    @staticmethod
+    def record_room_coverage(rec: dict[str, Any]) -> dict[str, float]:
+        """{region id: covered share 0.0-1.0} for one mission, from the
+        cloud's room events; rooms with a finished pass (status 0 and 6)
+        only. Empty without a timeline or without such events.
+
+        One rule for the last mission summary and the REST mission list
+        (4.2.15), which read a `room_coverage` field nothing ever wrote
+        and so was always null. Where a room has several events, the
+        largest share counts.
+        """
+        timeline = rec.get("timeline")
+        if not isinstance(timeline, dict):
+            return {}
+        coverage: dict[str, float] = {}
+        for ev in timeline.get("finEvents") or []:
+            if not isinstance(ev, dict) or ev.get("type") != "room":
+                continue
+            room = ev.get("room") or {}
+            if not isinstance(room, dict):
+                continue
+            if room.get("status") not in ROOM_EVENT_DONE_STATUSES:   # 0=complete, 6=complete-after-recovery
+                continue
+            rid = str(room.get("rid", ""))
+            share = room_event_covered_share(room)
+            if not rid or share is None:
+                continue
+            coverage[rid] = max(share, coverage.get(rid, 0.0))
+        return coverage
+
     def latest_room_coverage(
         self,
         region_map: dict[str, str],
@@ -1031,29 +1173,7 @@ class MissionStore:
         latest = self.latest()
         if latest is None:
             return None
-        timeline = latest.get("timeline")
-        if not isinstance(timeline, dict):
-            return None
-        fin_events = timeline.get("finEvents") or []
-        coverage: dict[str, float] = {}
-        for ev in fin_events:
-            if ev.get("type") != "room":
-                continue
-            room = ev.get("room", {})
-            if room.get("status") not in ROOM_EVENT_DONE_STATUSES:   # 0=complete, 6=complete-after-recovery
-                continue
-            rid = str(room.get("rid", ""))
-            total_area = room.get("totalArea")
-            if total_area is None:
-                total_area = room.get("passArea")   # single pass: the same thing
-            area = room.get("area")
-            if not rid or total_area is None or not area:
-                continue
-            try:
-                fraction = min(1.0, max(0.0, float(total_area) / float(area)))
-            except (ZeroDivisionError, TypeError, ValueError):
-                continue
-            coverage[rid] = fraction
+        coverage = self.record_room_coverage(latest)
         if not coverage:
             return None
         return {effective_map.get(rid, rid): frac for rid, frac in coverage.items()}

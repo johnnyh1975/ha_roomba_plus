@@ -78,7 +78,7 @@ from .segment_anchoring import anchor_segment
 from .trajectory_segments import split_into_segments
 from .structural_failures import record_failure, record_success
 from .grid_store import GridStore, CELL_SIZE_MM, DECAY, VISIT_INCREMENT
-from .map_renderer import MapRenderer
+from .map_renderer import MapRenderer, _load_font
 from .mission_map import (
     MissionMapMismatch,
     MissionMapUnavailable,
@@ -3165,11 +3165,11 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
         data    = self._config_entry.runtime_data
         aligner = data.umf_aligner
         if not aligner:
-            return self._blank_png()
+            return self._no_layout_png()
 
         polygons_umf = aligner.room_polygons_umf
         if not polygons_umf:
-            return self._blank_png()
+            return self._no_layout_png()
 
         aligned = aligner.aligned
 
@@ -3532,11 +3532,19 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
         return attrs
 
     @staticmethod
-    def _blank_png() -> bytes:
-        """Return a dark 600×600 PNG placeholder."""
+    def _blank_png(lines: tuple[str, ...] = ()) -> bytes:
+        """Return a dark 600×600 PNG placeholder, with `lines` of text."""
         try:
-            from PIL import Image
+            from PIL import Image, ImageDraw
             img = Image.new("RGB", (600, 600), (30, 30, 30))
+            if lines:
+                font = _load_font(20)
+                draw = ImageDraw.Draw(img)
+                y = 290 - 16 * len(lines)
+                for line in lines:
+                    width = draw.textlength(line, font=font)
+                    draw.text(((600 - width) / 2, y), line, fill=(200, 200, 200), font=font)
+                    y += 32
             buf = io.BytesIO()
             img.save(buf, format="PNG")
             return buf.getvalue()
@@ -3546,6 +3554,23 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
                 b"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIABQ"
                 b"AABjkB6QAAAABJRU5ErkJggg=="
             )
+
+    def _no_layout_png(self) -> bytes:
+        """The placeholder when there is no room layout to draw, SAYING WHY
+        (4.2.15). The layout comes only from the iRobot account; without
+        one this image stayed black for good, and the zone-naming notice
+        sent people here to identify their zones (@liblit)."""
+        runtime = getattr(self._config_entry, "runtime_data", None)
+        if getattr(runtime, "cloud_coordinator", None) is None:
+            return self._blank_png((
+                "No room layout.",
+                "Room shapes come from the iRobot account:",
+                "Configure > iRobot cloud credentials.",
+            ))
+        return self._blank_png((
+            "No room layout yet.",
+            "Waiting for it from the iRobot cloud.",
+        ))
 
 class PrimeRoomsImage(IRobotEntity, ImageEntity):
     """V4/Prime static floor plan or live cleaning map.

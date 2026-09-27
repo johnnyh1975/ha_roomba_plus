@@ -1749,7 +1749,7 @@
         "step": {
           "init": {
             "title": "Smart Map-zones een naam geven",
-            "description": "{robot}: {zone_count} zone(s) hebben nog geen naam. Voer er één per regel in als `id=Naam`. Zone-ID's: {zone_ids}\n\nDe namen zijn van u en blijven in Home Assistant — er wordt niets hernoemd in de iRobot-app en niets naar de robot gestuurd.\n\nWeet u niet welke zone welke is? Open de kaartafbeelding van deze robot (`image.{robot_slug}_rooms_map`): naamloze zones tonen hun nummer.",
+            "description": "{robot}: {zone_count} zone(s) hebben nog geen naam: {zone_ids}. Typ een naam in het veld van elke zone die u wilt benoemen; het getal voor het veld is de ID van de zone. Lege velden worden overgeslagen.\n\nDe namen zijn van u en blijven in Home Assistant — er wordt niets hernoemd in de iRobot-app en niets naar de robot gestuurd.\n\nWeet u niet welke zone welke is? Start één kamer of zone apart vanuit de iRobot-app: de robot meldt dan de ID, en de diagnostische download toont die onder `smart_map` → `last_command_summary` → `region_ids`. Of voeg uw iRobot-account toe aan deze robot (Configureren → iRobot-cloudgegevens): Roomba+ neemt dan alle namen over uit het account, en deze melding verdwijnt.",
             "data": {
               "zones": "Zonetoewijzingen"
             },

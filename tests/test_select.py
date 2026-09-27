@@ -1778,3 +1778,63 @@ class TestClassicSelectSetup:
         added = []
         await sel.async_setup_entry(hass, entry, lambda ents, *a, **k: added.extend(ents))
         assert not {"CleaningPassesSelect", "DisposablePadWetnessSelect"} & {type(e).__name__ for e in added}
+
+
+class TestAnUnsupportedCarpetBoostIsRemoved:
+    """4.2.15: robots whose capability block has no carpet boost got the
+    select (and the mode sensor) until 4.2.14. Their registry rows are
+    removed -- but only when the capability block is there to say so."""
+
+    def _run(self, state):
+        import asyncio
+        from custom_components.roomba_plus.select import async_setup_entry
+
+        hass = MagicMock()
+        config_entry = MagicMock()
+        config_entry.runtime_data.blid = "TESTBLID"
+        config_entry.runtime_data.map_capability = None
+        config_entry.runtime_data.room_seg_store = None
+        config_entry.runtime_data.has_cloud = False
+        with patch("custom_components.roomba_plus.select.roomba_reported_state", return_value=state), \
+             patch("custom_components.roomba_plus.select.async_remove_entities_by_suffix") as remove:
+            asyncio.get_event_loop().run_until_complete(
+                async_setup_entry(hass, config_entry, lambda *a, **k: None)
+            )
+        return remove
+
+    def test_a_robot_that_declares_none_loses_both(self):
+        remove = self._run({"carpetBoost": False, "vacHigh": False, "cap": {"pose": 2}})
+        remove.assert_called_once()
+        assert remove.call_args.args[2] == {"select": "carpet_boost_select", "sensor": "carpet_boost_mode"}
+
+    def test_nothing_is_removed_without_a_capability_block(self):
+        self._run({}).assert_not_called()
+
+    def test_nothing_is_removed_from_a_robot_that_has_it(self):
+        self._run({"carpetBoost": True, "vacHigh": False, "cap": {"carpetBoost": 1}}).assert_not_called()
+
+
+class TestRemovingBySuffix:
+    def test_only_the_named_domain_and_suffix_go(self):
+        from custom_components.roomba_plus import entity_cleanup
+
+        def row(domain, uid):
+            r = MagicMock(); r.domain = domain; r.unique_id = uid; r.entity_id = f"{domain}.{uid}"
+            return r
+        rows = [
+            row("select", "roomba_plus_B_carpet_boost_select"),
+            row("sensor", "roomba_plus_B_carpet_boost_mode"),
+            row("select", "roomba_plus_B_cleaning_passes"),
+            row("sensor", "roomba_plus_B_carpet_boost_select"),   # wrong domain
+        ]
+        registry = MagicMock()
+        with patch.object(entity_cleanup.er, "async_get", return_value=registry), \
+             patch.object(entity_cleanup.er, "async_entries_for_config_entry", return_value=rows):
+            removed = entity_cleanup.async_remove_entities_by_suffix(
+                MagicMock(), MagicMock(),
+                {"select": "carpet_boost_select", "sensor": "carpet_boost_mode"}, "test",
+            )
+        assert removed == 2
+        assert [c.args[0] for c in registry.async_remove.call_args_list] == [
+            "select.roomba_plus_B_carpet_boost_select", "sensor.roomba_plus_B_carpet_boost_mode",
+        ]

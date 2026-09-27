@@ -358,7 +358,7 @@ def _make_hass(loop=None):
     """Minimal hass stub."""
     class _FakeHass:
         class _FakeConfig:
-            config_dir = "/tmp/roomba_plus_test"
+            config_dir = tests.conftest.TEST_CONFIG_DIR
             components: set = set()
             def path(self, *parts: str) -> str:
                 import os as _os
@@ -2888,7 +2888,11 @@ class TestLatestCleanedRooms:
 
     def test_status_5_with_no_cleaned_floor_still_excluded(self):
         """The line the new rule draws: an early end WITHOUT cleaned floor
-        is not a clean. This is what keeps a skipped room out."""
+        is not a clean. This is what keeps a skipped room out.
+
+        EMPTY, NOT None, since 4.2.15: the timeline lists a room event, so
+        "no room cleaned" is its answer. None stays for missions without
+        room events, where the tracked rooms stand."""
         ms = _ms_with_timeline({
             "plan": {"upcoming": []},
             "finEvents": [
@@ -2897,7 +2901,7 @@ class TestLatestCleanedRooms:
                 }},
             ],
         })
-        assert ms.latest_cleaned_rooms(REGION_MAP) is None
+        assert ms.latest_cleaned_rooms(REGION_MAP) == []
 
     def test_returns_none_for_whole_home_no_room_events(self):
         ms = _ms_with_timeline({
@@ -4920,3 +4924,94 @@ class TestTheStoredRoomsFollowTheCloud:
         store = self._store(rec)
         assert store.store_rooms_from_timelines({"6": "Primary Bathroom"}, {"downstairs": {"6": "Primary Bathroom"}}) == 0
         assert rec["last_cleaned_rooms"] == ["Study"]
+
+
+class TestAGuessWaitsForTheCloud:
+    """4.2.15: a record whose rooms are a guess (the robot gave no room
+    change) claims no rooms until the cloud's room events arrive -- and
+    falls back to the guess only if the cloud never reports the mission."""
+
+    _NAMES = {"1": "Master Bedroom", "5": "Bedroom", "16": "Bedroom 2"}
+
+    def _rec(self, ended_at, **extra):
+        return {
+            "id": "m_g", "ended_at": ended_at,
+            "last_cleaned_rooms": [], "tracked_rooms": ["Master Bedroom", "Bedroom"],
+            "rooms_source": "awaiting_cloud", **extra,
+        }
+
+    def _store(self, rec):
+        store = MissionStore()
+        store._records = [rec]
+        return store
+
+    def test_no_rooms_while_waiting(self):
+        from datetime import datetime, timezone
+
+        rec = self._rec(datetime.now(timezone.utc).isoformat())
+        store = self._store(rec)
+        assert store.latest_cleaned_rooms(self._NAMES) is None
+        assert store.room_cleaning_history(self._NAMES) == {}
+
+    def test_the_guess_after_a_day_without_the_cloud(self):
+        rec = self._rec("2026-01-01T10:00:00+00:00")
+        assert self._store(rec).latest_cleaned_rooms(self._NAMES) == ["Master Bedroom", "Bedroom"]
+
+    def test_the_cloud_answers(self):
+        from datetime import datetime, timezone
+
+        rec = self._rec(datetime.now(timezone.utc).isoformat(), timeline={"finEvents": [
+            {"type": "room", "room": {"rid": "1", "status": 0, "area": 100, "passArea": 70}},
+            {"type": "room", "room": {"rid": "16", "status": 0, "area": 100, "passArea": 60}},
+        ]})
+        store = self._store(rec)
+        assert store.store_rooms_from_timelines(self._NAMES) == 1
+        assert rec["last_cleaned_rooms"] == ["Master Bedroom", "Bedroom 2"]
+        assert rec["rooms_source"] == "cloud"
+        assert store.latest_cleaned_rooms(self._NAMES) == ["Master Bedroom", "Bedroom 2"]
+
+    def test_the_cloud_can_answer_none(self):
+        from datetime import datetime, timezone
+
+        rec = self._rec(datetime.now(timezone.utc).isoformat(), timeline={"finEvents": [
+            {"type": "room", "room": {"rid": "1", "status": 0, "area": 100, "passArea": 3}},
+        ]})
+        rec["last_cleaned_rooms"] = []
+        store = self._store(rec)
+        assert store.store_rooms_from_timelines(self._NAMES) == 1
+        assert rec["rooms_source"] == "cloud"
+        assert store.latest_cleaned_rooms(self._NAMES) == []
+
+
+class TestAGuessIsNotMadeOfRecordedRooms:
+    """Review, 4.2.15."""
+
+    def test_a_replay_does_not_hide_recorded_rooms(self):
+        store = MissionStore()
+        store._records = [{
+            "id": "m_1", "result": "completed", "ended_at": "2026-09-26T10:00:00+00:00",
+            "last_cleaned_rooms": ["A", "B"],
+        }]
+        assert store.update_terminal_fields("m_1", {
+            "id": "m_1", "ended_at": "2026-09-26T10:00:30+00:00",
+            "rooms_source": "awaiting_cloud", "tracked_rooms": ["A"], "dirt": 3,
+        })
+        rec = store._records[0]
+        assert "rooms_source" not in rec and "tracked_rooms" not in rec
+        assert rec["dirt"] == 3
+
+    def test_a_timeline_without_room_events_releases_the_guess(self):
+        """A robot whose cloud timelines carry no room events: the cloud
+        knows the mission and has no rooms for it."""
+        from datetime import datetime, timezone
+
+        rec = {"id": "m_2", "ended_at": datetime.now(timezone.utc).isoformat(),
+               "last_cleaned_rooms": [], "tracked_rooms": ["A", "B"],
+               "rooms_source": "awaiting_cloud",
+               "timeline": {"finEvents": [{"type": "travel", "ts": 5}]}}
+        store = MissionStore()
+        store._records = [rec]
+        assert store.store_rooms_from_timelines({"1": "A"}) == 1
+        assert rec["last_cleaned_rooms"] == ["A", "B"]
+        assert rec["rooms_source"] == "tracked"
+        assert store.latest_cleaned_rooms({"1": "A"}) == ["A", "B"]

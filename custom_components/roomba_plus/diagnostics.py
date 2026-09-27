@@ -883,6 +883,10 @@ def _last_mission_room_events(data: Any) -> dict[str, Any]:
         "result": rec.get("result"),
         "last_cleaned_rooms": rec.get("last_cleaned_rooms"),
         "zones": rec.get("zones"),
+        # 4.2.15: "awaiting_cloud" while the tracked rooms are a guess
+        # held back for the cloud's room events, "cloud" once answered.
+        "rooms_source": rec.get("rooms_source"),
+        "tracked_rooms": rec.get("tracked_rooms"),
     }
     timeline = rec.get("timeline")
     if not isinstance(timeline, dict):

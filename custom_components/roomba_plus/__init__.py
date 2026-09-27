@@ -58,6 +58,7 @@ from .callbacks import (
     make_cloud_refresh_callback,
 )
 from .room_cleaning import region_names_across_maps
+from .room_times import learn_via, robot_default_mode
 from .const import (
     ISSUE_TRACKER_URL,
     CONF_BLID,
@@ -800,12 +801,15 @@ async def _phase_cloud(ctx: _SetupContext) -> None:
                     since_ts=entry_created_ts(config_entry),
                 )
                 # The cloud's rooms into the stored field (4.2.14).
+                _names = region_names_across_maps(cloud_coordinator)
                 _rooms = ctx.mission_store.store_rooms_from_timelines(
-                    region_names_across_maps(cloud_coordinator),
-                    cloud_coordinator.regions_by_pmap,
+                    _names, cloud_coordinator.regions_by_pmap,
                 )
                 if _bf.corrected or _bf.enriched or _adopted or _rooms:
                     await ctx.mission_store.async_save(hass, config_entry.entry_id)
+                # Room times from the timelines are learned on the first
+                # cloud refresh after setup, once the robot profile store
+                # exists (callbacks.learn_room_times_from_store).
 
                 if ctx.grid_store is not None:
                     centroids = cloud_coordinator.observed_zone_centroids
@@ -931,6 +935,21 @@ async def _phase_cloud(ctx: _SetupContext) -> None:
     robot_profile_store = RobotProfileStore()
     await robot_profile_store.async_load(hass, config_entry.entry_id)
     _LOGGER.debug("RobotProfileStore: loaded for %s", config_entry.data[CONF_BLID])
+
+    # ROOM TIMES FROM THE CLOUD'S ROOM EVENTS (4.2.15), for the history
+    # already stored -- the next cloud refresh may be a mission away.
+    if cloud_coordinator is not None and ctx.mission_store is not None:
+        _learned, _added = learn_via(
+            ctx.mission_store,
+            robot_profile_store.room_estimate_cache,
+            robot_profile_store.room_times_learned,
+            region_names_across_maps(cloud_coordinator),
+            cloud_coordinator.regions_by_pmap,
+            robot_default_mode(ctx.state if isinstance(ctx.state, dict) else {}),
+        )
+        if _learned or _added:
+            # ONE SAVE for the figures and the missions they came from.
+            await robot_profile_store.async_save(hass, config_entry.entry_id)
 
     # L5-ARC/L3-ARC archive seeding
     if ctx.mission_archive is not None and ctx.mission_archive.initial_load_done:

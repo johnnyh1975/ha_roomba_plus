@@ -14,7 +14,7 @@ import sys
 import types
 import pytest
 
-from tests.conftest import robot_mock
+from tests.conftest import TEST_CONFIG_DIR, robot_mock
 from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.roomba_plus.const import DOMAIN
@@ -43,7 +43,7 @@ class _FakeHass:
     """Minimal hass stub for migration tests."""
 
     class _FakeConfig:
-        config_dir = "/tmp/roomba_plus_test"
+        config_dir = TEST_CONFIG_DIR
         components: set = set()
         def path(self, *parts: str) -> str:
             import os as _os

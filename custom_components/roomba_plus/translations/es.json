@@ -1749,7 +1749,7 @@
         "step": {
           "init": {
             "title": "Nombrar zonas Smart Map",
-            "description": "{robot}: {zone_count} zona(s) sin nombre. Introduzca una por línea como `id=Nombre`. ID: {zone_ids}\n\nLos nombres son suyos y permanecen en Home Assistant: no se renombra nada en la app de iRobot ni se envía nada al robot.\n\n¿No sabe cuál es cuál? Abra la imagen del mapa de este robot (`image.{robot_slug}_rooms_map`): las zonas sin nombre llevan su número.",
+            "description": "{robot}: {zone_count} zona(s) sin nombre: {zone_ids}. Escriba un nombre en el campo de cada zona que quiera nombrar; el número delante del campo es el ID de la zona. Los campos vacíos se omiten.\n\nLos nombres son suyos y permanecen en Home Assistant: no se renombra nada en la app de iRobot ni se envía nada al robot.\n\n¿No sabe cuál es cuál? Inicie una sola habitación o zona desde la app de iRobot: el robot informa entonces su ID, y la descarga de diagnóstico lo muestra en `smart_map` → `last_command_summary` → `region_ids`. O añada su cuenta de iRobot a este robot (Configurar → credenciales de la nube de iRobot): Roomba+ toma entonces todos los nombres de la cuenta y este aviso desaparece.",
             "data": {
               "zones": "Asignación de zonas"
             },

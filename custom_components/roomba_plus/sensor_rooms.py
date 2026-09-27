@@ -29,6 +29,7 @@ from .const import CONF_ROOM_SCHEDULE
 from .entity import IRobotEntity
 from .models import RoombaConfigEntry
 from .prime_coordinator import prime_current_state, prime_last_command
+from .room_times import current_cleaning_mode, measured_room_seconds, typical_room_seconds
 from .room_cleaning import region_names_across_maps
 
 _LOGGER = logging.getLogger("custom_components.roomba_plus.sensor")
@@ -595,6 +596,11 @@ def _compute_room_time_estimates(
         else:
             pass_key = "one_pass_sec"
 
+    # Our own measurements, and the mode they are read in (4.2.15).
+    _profile = getattr(config_entry.runtime_data, "robot_profile_store", None)
+    _cache = getattr(_profile, "room_estimate_cache", None) or {}
+    _mode = current_cleaning_mode(reported)
+
     # Build name→estimates map from coordinator
     region_map: dict[str, dict[str, Any]] = {}
     for region in cc.regions:
@@ -636,8 +642,22 @@ def _compute_room_time_estimates(
         else:
             # Whole seconds, as the cloud figures are: a measurement is
             # not precise enough for the fraction to carry meaning.
-            _measured = cached_room_seconds(config_entry, str(room_name))
+            #
+            # IN THIS MISSION'S MODE FIRST (4.2.15): a mop run is
+            # estimated from mop runs where there are any. The gate's
+            # floor (cached_room_seconds) keeps taking the smallest.
+            _measured = measured_room_seconds(_cache, str(room_name), _mode)
             result.append(int(_measured) if _measured else None)
+
+    # A ROOM NOT MEASURED YET GETS A TYPICAL ROOM (4.2.15), from every
+    # room this robot has been measured in -- in this mode where it can.
+    # Without it the only figure left was the average of whole missions,
+    # one-room runs and whole-house runs alike: @ScenicSystemsLLC's
+    # Braava showed 99 % after an hour of a five-room mop run.
+    if any(r is None for r in result):
+        _typical = typical_room_seconds(_cache, _mode)
+        if _typical:
+            result = [r if r is not None else int(_typical) for r in result]
     return result
 
 
@@ -821,6 +841,18 @@ def _resolve_smart_tier_room_state(config_entry: Any) -> dict[str, Any]:
                     known[j] for j in range(_idx + 1, len(known))
                 )
                 estimated_remaining_min = max(0, round(remaining_sec / 60))
+
+    # NEVER BEHIND AN OBSERVED ROOM CHANGE (4.2.15). Room times now come
+    # from every mission, so the clock-based room above applies to far
+    # more robots than before -- including ones whose room tracking has
+    # SEEN the robot move on (a travel signal). The clock may still run
+    # ahead of the tracker, as it always could; it may not show a room
+    # the robot has been seen to leave.
+    if current_room is not None and getattr(mts, "room_progress_observed", False) is True:
+        _seen = int(getattr(mts, "current_room_idx", 0) or 0)
+        if current_room in planned_order and planned_order.index(current_room) < _seen < len(planned_order):
+            current_room = planned_order[_seen]
+            next_room = planned_order[_seen + 1] if _seen + 1 < len(planned_order) else None
 
     if estimated_remaining_min is None:
         # v2.9.0 — fallback for whenever the per-room estimate calculation
