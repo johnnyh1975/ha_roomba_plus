@@ -59,9 +59,11 @@ stable line, not something you did wrong.
 
 ---
 
-### `Error occurred loading flow for integration roomba` in your log
+### `Error occurred loading flow for integration roomba` in your log, or a Roomba card you cannot dismiss
 
-Repeating every few minutes, alongside a blocking-call warning about
+Two symptoms of the same cause. In the log:
+
+repeating every few minutes, alongside a blocking-call warning about
 `homeassistant.components.roomba.config_flow`:
 
 ```
@@ -78,15 +80,24 @@ You see this even without that integration set up: Home Assistant finds
 your robot on the network and tries to prepare the built-in setup
 dialog, which is what fails. Your robot, and Roomba+, are unaffected.
 
-**Two things you can do, neither required:**
+In Settings → Devices & Services, a **Discovered** card for the
+built-in Roomba integration keeps coming back. Opening it fails with:
 
-*Ignore the discovered robot.* Settings → Devices & Services, find the
-discovered **Roomba** card, and ignore it. That stops Home Assistant
-offering the built-in setup for a robot you already have here. From
-v4.2.9 an ignored entry no longer triggers the "Two Roomba
-integrations" notice.
+```
+Config flow could not be loaded: {"message":"Invalid handler specified"}
+```
 
-*Silence the messages.* In `configuration.yaml`:
+**Ignoring the card fails the same way (@FJSoninC).** Home Assistant
+ignores a discovered device by starting the built-in integration's own
+setup flow in "ignore" mode, and that flow is exactly what cannot be
+loaded. So the card cannot be dismissed from the UI. The workaround
+below is the only way to make it go away.
+
+**What you can do, none of it required:**
+
+*Leave it.* The card and the log line are cosmetic.
+
+*Silence the log messages.* In `configuration.yaml`:
 
 ```yaml
 logger:
@@ -95,7 +106,12 @@ logger:
 ```
 
 This affects only the built-in integration's own logging. Nothing from
-Roomba+ is hidden by it.
+Roomba+ is hidden by it. The card stays.
+
+*Remove the card:* only with the workaround below. With it in place the
+built-in setup flow loads again (as an empty one), so the card can be
+ignored, or no longer appears at all. From v4.2.9 an ignored entry no
+longer triggers the "Two Roomba integrations" notice.
 
 **Why it is not simply fixed:** resolving it means the built-in
 integration moving from the synchronous library to the asynchronous

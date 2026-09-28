@@ -438,6 +438,8 @@ Every setting after setup is described in [Every option, and what it costs you t
 > up automatically alongside any Prime ones found.
 
 > **Note:** Roomba+ and the built-in Core Roomba integration cannot run simultaneously — they share the same local MQTT connection. Remove the Core integration first.
+>
+> Even removed, the built-in integration keeps finding your robot: Settings → Devices & Services shows a **Discovered** Roomba card that fails to open (`Invalid handler specified`) and cannot be ignored, and the log repeats `Error occurred loading flow for integration roomba`. Both are harmless — the built-in integration needs `roombapy` 1.x, Roomba+ needs 2.x, and only one can be installed. What you can do about it, including a workaround that removes the card: [Troubleshooting →](docs/TROUBLESHOOTING.md#error-occurred-loading-flow-for-integration-roomba-in-your-log-or-a-roomba-card-you-cannot-dismiss)
 
 ### Adding or updating cloud credentials
 
