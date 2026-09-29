@@ -3217,8 +3217,13 @@ async def _async_bootstrap_umf_aligner(
             )
             try:
                 cloud_api = coordinator.api
-                older = await cloud_api.get_mission_history(
-                    blid, count=500, before=oldest_ts
+                # 4.3.0b4: the paging request. The Classic one this used
+                # (count=500, before=...) is ignored by the cloud -- a 980
+                # and an i7 answered it with the same recent window this
+                # record set already came from, so it never found older
+                # traversal missions.
+                older = await cloud_api.get_mission_history_page(
+                    blid, before=oldest_ts, page_size=100
                 )
                 if older:
                     positions = _extract_traversal_umf_positions(older, aligner)

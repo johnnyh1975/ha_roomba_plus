@@ -26,6 +26,7 @@ from .const import (
     DOMAIN,
     ERROR_CODE_LABELS,
     ROOM_EVENT_DONE_STATUSES,
+    fin_events_in_order,
     room_event_was_cleaned,
 )
 from .models import ConnectionType, RoombaConfigEntry
@@ -902,8 +903,8 @@ def _last_mission_room_events(data: Any) -> dict[str, Any]:
 
     events: list[dict[str, Any]] = []
     rooms: list[dict[str, Any]] = []
-    for ev in timeline.get("finEvents") or []:
-        if isinstance(ev, dict) and ev.get("type") == "room":
+    for ev in fin_events_in_order(timeline):   # the cloud sends newest first
+        if ev.get("type") == "room":
             room = ev.get("room") or {}
             rooms.append(room)
             events.append({

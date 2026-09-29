@@ -1085,7 +1085,7 @@ async def _phase_finalize(ctx: _SetupContext) -> None:
     if (ctx.mission_archive is not None
             and cloud_coordinator is not None
             and cloud_coordinator.logged_in
-            and not ctx.mission_archive.initial_load_done):
+            and ctx.mission_archive.needs_cloud_load):
         config_entry.async_create_task(
             hass, ctx.mission_archive.async_initial_load(cloud_coordinator.api, config_entry.data[CONF_BLID], hass, config_entry.entry_id), name=f'roomba_plus_arc1_initial_load_{config_entry.entry_id}'
         )

@@ -1,0 +1,301 @@
+{
+  "id": "m_1790615250",
+  "started_at": "2026-09-28T17:07:30+00:00",
+  "ended_at": "2026-09-28T17:26:23.673832+00:00",
+  "duration_min": 19,
+  "area_sqft": 125,
+  "result": "completed",
+  "initiator": "localApp",
+  "zones": [
+    "Guest Bathroom",
+    "Bedroom 2"
+  ],
+  "last_cleaned_rooms": [
+    "Bedroom 2",
+    "Guest Bathroom"
+  ],
+  "error_code": null,
+  "bbrun_hr": 141,
+  "battery_cycles": 323,
+  "recharge_min": null,
+  "error_position_mm": null,
+  "phase_at_error": null,
+  "self_recovered": null,
+  "team_id": null,
+  "npicks_delta": 2,
+  "tracked_rooms": [
+    "Guest Bathroom"
+  ],
+  "rooms_source": "cloud",
+  "chrgM": 0,
+  "sqft": 125,
+  "runM": 18,
+  "durationM": 18,
+  "chrgs": 0,
+  "evacs": 0,
+  "nMssn": 129,
+  "timeline": {
+    "cmd": {
+      "initiator": "localApp",
+      "command": "start",
+      "ordered": 1,
+      "pmap_id": "jUdHT1VfTZCaZklWE-_6tw",
+      "user_pmapv_id": "260912T193054",
+      "regions": [
+        {
+          "type": "rid",
+          "params": {
+            "twoPass": false,
+            "noAutoPasses": false
+          },
+          "region_id": "10"
+        },
+        {
+          "type": "rid",
+          "params": {
+            "twoPass": false,
+            "noAutoPasses": false
+          },
+          "region_id": "16"
+        }
+      ],
+      "time": 1790615250
+    },
+    "nMssn": 129,
+    "mission_id": "01M3MFRS2GV3AG8SCGHXB10TDF",
+    "event": [
+      {
+        "type": "fin",
+        "ts": 1790616368
+      }
+    ],
+    "finEvents": [
+      {
+        "ts": 1790616309,
+        "ets": 1790616356,
+        "type": "traversal",
+        "traversal": {
+          "pmapId": "jUdHT1VfTZCaZklWE-_6tw",
+          "type": "region",
+          "rid": "5",
+          "pmapvId": "260926T190447"
+        }
+      },
+      {
+        "ts": 1790616276,
+        "ets": 1790616356,
+        "type": "travel",
+        "travel": {
+          "reason": 1,
+          "status": 0,
+          "dest": "dock"
+        }
+      },
+      {
+        "traversal": {
+          "pmapId": "jUdHT1VfTZCaZklWE-_6tw",
+          "pmapvId": "260926T190447",
+          "rid": "18",
+          "type": "region"
+        },
+        "type": "traversal",
+        "ts": 1790616294,
+        "ets": 1790616309
+      },
+      {
+        "type": "room",
+        "ets": 1790616276,
+        "ts": 1790615534,
+        "room": {
+          "passCount": 1,
+          "status": 0,
+          "area": 151,
+          "pmapId": "jUdHT1VfTZCaZklWE-_6tw",
+          "passArea": 102,
+          "rid": "16",
+          "pmapvId": "260926T190447"
+        }
+      },
+      {
+        "ts": 1790615776,
+        "reloc": {
+          "pmapvId": "260926T190447",
+          "confPmapvId": "260926T190447",
+          "pmapId": "jUdHT1VfTZCaZklWE-_6tw",
+          "confPmapId": "jUdHT1VfTZCaZklWE-_6tw"
+        },
+        "type": "reloc",
+        "ets": 1790615793
+      },
+      {
+        "ts": 1790615529,
+        "type": "traversal",
+        "ets": 1790615534,
+        "traversal": {
+          "rid": "18",
+          "type": "region",
+          "pmapvId": "260926T190447",
+          "pmapId": "jUdHT1VfTZCaZklWE-_6tw"
+        }
+      },
+      {
+        "ets": 1790615534,
+        "ts": 1790615516,
+        "travel": {
+          "pmapId": "jUdHT1VfTZCaZklWE-_6tw",
+          "rid": "16",
+          "status": 0,
+          "pmapvId": "260926T190447",
+          "dest": "room"
+        },
+        "type": "travel"
+      },
+      {
+        "ets": 1790615516,
+        "room": {
+          "pmapId": "jUdHT1VfTZCaZklWE-_6tw",
+          "area": 46,
+          "passCount": 1,
+          "rid": "10",
+          "passArea": 19,
+          "pmapvId": "260926T190447",
+          "status": 0
+        },
+        "ts": 1790615283,
+        "type": "room"
+      },
+      {
+        "type": "tentativeLoc",
+        "ts": 1790615297,
+        "ets": 1790615297,
+        "tentativeLoc": {
+          "pmapId": "jUdHT1VfTZCaZklWE-_6tw",
+          "confPmapvId": "260926T190447",
+          "pmapvId": "260926T190447",
+          "confPmapId": "jUdHT1VfTZCaZklWE-_6tw"
+        }
+      },
+      {
+        "ets": 1790615296,
+        "tentativeLoc": {
+          "pmapvId": "260926T190447",
+          "confPmapId": "jUdHT1VfTZCaZklWE-_6tw",
+          "confPmapvId": "260926T190447",
+          "pmapId": "jUdHT1VfTZCaZklWE-_6tw"
+        },
+        "type": "tentativeLoc",
+        "ts": 1790615296
+      },
+      {
+        "traversal": {
+          "type": "region",
+          "rid": "18",
+          "pmapvId": "260926T190447",
+          "pmapId": "jUdHT1VfTZCaZklWE-_6tw"
+        },
+        "ts": 1790615270,
+        "ets": 1790615283,
+        "type": "traversal"
+      },
+      {
+        "travel": {
+          "rid": "10",
+          "pmapId": "jUdHT1VfTZCaZklWE-_6tw",
+          "dest": "room",
+          "pmapvId": "260926T190447",
+          "status": 0
+        },
+        "type": "travel",
+        "ts": 1790615261,
+        "ets": 1790615283
+      },
+      {
+        "plan": {
+          "upcoming": [
+            {
+              "rid": "10",
+              "type": "rid"
+            },
+            {
+              "type": "rid",
+              "rid": "16"
+            }
+          ],
+          "type": "drc",
+          "pmapvId": "260926T190447",
+          "ordered": 1,
+          "pmapId": "jUdHT1VfTZCaZklWE-_6tw"
+        },
+        "type": "plan",
+        "ts": 1790615261
+      },
+      {
+        "type": "start",
+        "ts": 1790615251
+      }
+    ],
+    "ver": "2.10.0"
+  },
+  "dockedAtStart": true,
+  "missionId": "01M3MFRS2GV3AG8SCGHXB10TDF",
+  "pauseM": 0,
+  "cmd": {
+    "initiator": "localApp",
+    "pmap_id": "jUdHT1VfTZCaZklWE-_6tw",
+    "time": 1790615250,
+    "user_pmapv_id": "260912T193054",
+    "command": "start",
+    "ordered": 1,
+    "regions": [
+      {
+        "type": "rid",
+        "params": {
+          "noAutoPasses": false,
+          "twoPass": false
+        },
+        "region_id": "10"
+      },
+      {
+        "type": "rid",
+        "params": {
+          "noAutoPasses": false,
+          "twoPass": false
+        },
+        "region_id": "16"
+      }
+    ]
+  },
+  "wlBars": [
+    0,
+    0,
+    100,
+    0,
+    0
+  ],
+  "pmaps_info": [
+    {
+      "pmapv_id": "260928T172635",
+      "pmap_id": "jUdHT1VfTZCaZklWE-_6tw",
+      "umf_layer_deltas": {
+        "layer_type": "deltas",
+        "changelog": {
+          "changes": {},
+          "adds": {},
+          "deletes": {}
+        }
+      }
+    },
+    {
+      "pmap_id": "ZxqjMhLuQEKReYH-wQclbQ",
+      "umf_layer_deltas": {
+        "layer_type": "deltas",
+        "changelog": {
+          "changes": {},
+          "deletes": {},
+          "adds": {}
+        }
+      },
+      "pmapv_id": "260928T172643"
+    }
+  ]
+}
