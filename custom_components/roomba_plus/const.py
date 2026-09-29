@@ -1230,6 +1230,34 @@ ROOMS_AWAITING_CLOUD_MAX_SEC: Final[int] = 24 * 3600
 MIN_CLEANED_ROOM_SHARE: Final[float] = 0.10
 
 
+def fin_events_in_order(timeline: object) -> list[dict[str, Any]]:
+    """A mission timeline's `finEvents`, OLDEST FIRST.
+
+    THE CLOUD SENDS THEM NEWEST FIRST. Both captures there are -- an i3+
+    (tests/fixtures/irobot_missionhistory_i3plus.json) and a Braava m6
+    (@ScenicSystemsLLC, 28 Sep 2026) -- list the last event first; the
+    Braava's are ordered by `ets`, so not even strictly by `ts`. Every
+    reader that walked the list as a sequence got the mission backwards:
+    rooms listed last-cleaned first, and time per room computed from
+    negative gaps, which it then threw away.
+
+    Sorted by `ts`, stably. Events without a numeric `ts` keep their
+    relative order after the rest; anything that is not an object is
+    dropped.
+    """
+    if not isinstance(timeline, dict):
+        return []
+    events = [ev for ev in timeline.get("finEvents") or [] if isinstance(ev, dict)]
+
+    def _key(ev: dict[str, Any]) -> tuple[int, float]:
+        ts = ev.get("ts")
+        if isinstance(ts, bool) or not isinstance(ts, (int, float)):
+            return (1, 0.0)
+        return (0, float(ts))
+
+    return sorted(events, key=_key)
+
+
 def room_event_covered_share(room: object) -> float | None:
     """The share of the room's floor this event covered, 0.0-1.0, or
     None when the event carries no area figures.

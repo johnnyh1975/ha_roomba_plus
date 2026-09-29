@@ -46,7 +46,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
-from .const import ROOM_EVENT_DONE_STATUSES
+from .const import ROOM_EVENT_DONE_STATUSES, fin_events_in_order
 
 if TYPE_CHECKING:
     from .cloud_api import IrobotCloudApi
@@ -128,6 +128,13 @@ def _ts_to_iso(unix_ts: Any) -> str | None:
         return datetime.fromtimestamp(int(unix_ts), tz=UTC).isoformat()
     except (TypeError, ValueError, OSError, OverflowError):
         return None
+
+
+def _visits_in_order(room_visits: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """room_visits oldest first. Records archived before 4.2.16 hold them
+    in the cloud's order, which is newest first (see
+    const.fin_events_in_order)."""
+    return sorted(room_visits, key=lambda visit: _safe_int(visit.get("ts")))
 
 
 def _safe_int(val: Any, default: int = 0) -> int:
@@ -621,7 +628,7 @@ class MissionArchive:
     def _parse_derived(self, raw: dict[str, Any]) -> dict[str, Any]:
         """Extract 26 computed signals from a raw /missionhistory record."""
         timeline: dict[str, Any] = raw.get("timeline") or {}
-        fin_events: list[Any] = timeline.get("finEvents") or []
+        fin_events = fin_events_in_order(timeline)   # the cloud sends newest first
         plan: dict[str, Any] = timeline.get("plan") or {}
 
         # ── Planned room order from timeline.plan.upcoming ─────────────────
@@ -653,9 +660,7 @@ class MissionArchive:
             "kidnap", "reloc", "disc", "error", "missionstart",
         }
 
-        for ev in fin_events:
-            if not isinstance(ev, dict):
-                continue
+        for ev in fin_events:   # objects only: fin_events_in_order() dropped the rest
             ev_type = ev.get("type", "")
 
             if ev_type == "room":
@@ -774,7 +779,7 @@ class MissionArchive:
         events: list[list[Any]] = []
         timeline: dict[str, Any] = raw.get("timeline") or {}
         plan: dict[str, Any] = timeline.get("plan") or {}
-        fin_events: list[Any] = timeline.get("finEvents") or []
+        fin_events = fin_events_in_order(timeline)   # the cloud sends newest first
 
         # Prepend plan entry
         upcoming = plan.get("upcoming") or []
@@ -789,9 +794,7 @@ class MissionArchive:
                     },
                 ])
 
-        for ev in fin_events:
-            if not isinstance(ev, dict):
-                continue
+        for ev in fin_events:   # objects only: fin_events_in_order() dropped the rest
             ev_type = ev.get("type", "")
 
             if ev_type == "room":
@@ -939,7 +942,7 @@ class MissionArchive:
         Returns [{"rid": str, "ts": int}, ...] in chronological order.
         """
         path: list[dict[str, Any]] = []
-        for visit in room_visits:
+        for visit in _visits_in_order(room_visits):
             if path and path[-1]["rid"] == visit["rid"]:
                 continue
             path.append({"rid": visit["rid"], "ts": visit["ts"]})
@@ -964,6 +967,9 @@ class MissionArchive:
         """
         if len(room_visits) < 2:
             return {}
+        # Records archived before 4.2.16 kept the cloud's newest-first
+        # order, which made every gap negative -- and every figure empty.
+        room_visits = _visits_in_order(room_visits)
 
         totals: dict[str, int] = {}
         for i in range(len(room_visits) - 1):

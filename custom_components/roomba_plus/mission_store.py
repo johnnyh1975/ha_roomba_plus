@@ -36,7 +36,7 @@ from .const import (
     room_event_was_cleaned,
 )
 from .room_times import learn_from_records
-from .const import extract_region_id, SQFT_TO_M2
+from .const import extract_region_id, fin_events_in_order, SQFT_TO_M2
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -869,8 +869,8 @@ class MissionStore:
         if not isinstance(timeline, dict):
             return []
         ordered: list[str] = []
-        for ev in timeline.get("finEvents") or []:
-            if not isinstance(ev, dict) or ev.get("type") != "room":
+        for ev in fin_events_in_order(timeline):   # the cloud sends newest first
+            if ev.get("type") != "room":
                 continue
             room = ev.get("room") or {}
             if not room_event_was_cleaned(room):   # history: finished OR cleaned floor
@@ -1246,8 +1246,8 @@ class MissionStore:
         if isinstance(timeline, dict):
             ordered: list[str] = []
             seen: set[str] = set()
-            for ev in timeline.get("finEvents") or []:
-                if not isinstance(ev, dict) or ev.get("type") != "room":
+            for ev in fin_events_in_order(timeline):   # the cloud sends newest first
+                if ev.get("type") != "room":
                     continue
                 room = ev.get("room") or {}
                 if not room_event_was_cleaned(room):   # history: finished OR cleaned floor
