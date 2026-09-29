@@ -121,7 +121,7 @@ jobs:
       # Kept anyway, so both test jobs install it identically and the
       # roombapy-prime pin guard sees the same string in both.
       - name: Install roombapy-prime (--no-deps, for parity with the pinned job)
-        run: uv pip install --system --no-deps "roombapy-prime==0.4.0b2"
+        run: uv pip install --system --no-deps "roombapy-prime==0.4.0"
 
       # COVERAGE LIVES HERE since 4.3.0b2, not in the minimum-version
       # job: see the note at the top of `jobs`. Every module is at 95 %
@@ -220,7 +220,7 @@ jobs:
 
       - name: Install roombapy and roombapy-prime
         run: |
-          uv pip install --system "roombapy==2.0.2" "roombapy-prime[map]==0.4.0b2"
+          uv pip install --system "roombapy==2.0.2" "roombapy-prime[map]==0.4.0"
 
       # THESE THREE NEED THE LIBRARIES. They ran in the markdown job, which
       # installs nothing: one failed on `import yaml`, and the other two
