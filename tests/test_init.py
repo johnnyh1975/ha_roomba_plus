@@ -1483,7 +1483,7 @@ class TestRemoveCalendarEntityIfDisabled:
     own)."""
 
     def test_removes_calendar_entity_when_disabled(self):
-        from custom_components.roomba_plus import _remove_calendar_entity_if_disabled
+        from custom_components.roomba_plus import _remove_switched_off_optional_entities
         from custom_components.roomba_plus.const import CONF_ENABLE_SCHEDULE_CALENDAR
 
         config_entry = MagicMock()
@@ -1499,7 +1499,7 @@ class TestRemoveCalendarEntityIfDisabled:
                  "homeassistant.helpers.entity_registry.async_entries_for_config_entry",
                  return_value=[calendar_entry, sensor_entry],
              ):
-            _remove_calendar_entity_if_disabled(MagicMock(), config_entry)
+            _remove_switched_off_optional_entities(MagicMock(), config_entry)
 
         fake_er.async_remove.assert_called_once_with("calendar.roomba_schedule")
 
@@ -1507,16 +1507,18 @@ class TestRemoveCalendarEntityIfDisabled:
         """Default (no option set at all) must NOT remove anything --
         the whole point of defaulting to True is that existing
         installations are left untouched."""
-        from custom_components.roomba_plus import _remove_calendar_entity_if_disabled
+        from custom_components.roomba_plus import _remove_switched_off_optional_entities
 
         config_entry = MagicMock()
-        config_entry.options = {}
+        # Both optional platforms on: the to-do list is opt-in (4.0.0a30)
+        # and cleared like the calendar when it is off.
+        config_entry.options = {"enable_maintenance_list": True}
         config_entry.entry_id = "entry1"
 
         fake_er = MagicMock()
         with patch("homeassistant.helpers.entity_registry.async_get", return_value=fake_er),\
              patch("homeassistant.helpers.entity_registry.async_entries_for_config_entry") as mock_entries:
-            _remove_calendar_entity_if_disabled(MagicMock(), config_entry)
+            _remove_switched_off_optional_entities(MagicMock(), config_entry)
 
         mock_entries.assert_not_called()
         fake_er.async_remove.assert_not_called()

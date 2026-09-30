@@ -1427,6 +1427,17 @@ class RoombaPlusOptionsFlow(OptionsFlow):
                             CONF_ENABLE_SCHEDULE_CALENDAR, DEFAULT_ENABLE_SCHEDULE_CALENDAR
                         ),
                     ): bool,
+                    # THE MAINTENANCE LIST FOR CLASSIC TOO. It became opt-in
+                    # on both generations in 4.0.0a30, with the toggle added
+                    # to the Prime form only -- so a Classic robot's list
+                    # could not be switched back on at all (@ScenicSystemsLLC,
+                    # 4.3.0b4: gone after removing and re-adding a robot).
+                    vol.Optional(
+                        CONF_ENABLE_MAINTENANCE_LIST,
+                        default=options.get(
+                            CONF_ENABLE_MAINTENANCE_LIST, DEFAULT_ENABLE_MAINTENANCE_LIST
+                        ),
+                    ): bool,
                 }
             ),
         )

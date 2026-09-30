@@ -77,7 +77,7 @@ DELIBERATE: dict[str, dict[str, str]] = {
         ),
         "cancel": "cancels Classic-only background tasks",
         "append": "builds the Classic platform list",
-        "_remove_calendar_entity_if_disabled": (
+        "_remove_switched_off_optional_entities": (
             "the Prime branch unloads PRIME_PLATFORMS, which already "
             "excludes CALENDAR when the option is off"
         ),

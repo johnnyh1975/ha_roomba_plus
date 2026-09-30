@@ -1119,6 +1119,7 @@ async def _phase_finalize(ctx: _SetupContext) -> None:
         from .const import CLOUD_PLATFORMS
         platforms.extend(p for p in CLOUD_PLATFORMS if p not in platforms)
     platforms.extend(p for p in _optional_platforms(config_entry) if p not in platforms)
+    _remove_switched_off_optional_entities(hass, config_entry)
 
     # v3.2.1 — MQTT-watchdog stamp callback MUST be registered before the
     # platforms: entities register their on_message callbacks during setup,
@@ -1233,23 +1234,36 @@ def _optional_platforms(config_entry: RoombaConfigEntry) -> list[Platform]:
     return platforms
 
 
-def _remove_calendar_entity_if_disabled(hass: HomeAssistant, config_entry: RoombaConfigEntry) -> None:
-    """Explicit entity-registry cleanup when CONF_ENABLE_SCHEDULE_CALENDAR
-    is off (this session). Unloading Platform.CALENDAR (because it's no
-    longer in the platforms list) only stops the entity from being live
-    -- it does NOT remove the entity registry's own record, which would
-    otherwise linger forever as "unavailable" (never re-created, since
-    setup no longer forwards this platform for this entry). Idempotent
-    and safe to call on every unload regardless of whether the option
-    just changed or was already off -- a no-op if there's nothing to
-    remove."""
-    if config_entry.options.get(CONF_ENABLE_SCHEDULE_CALENDAR, DEFAULT_ENABLE_SCHEDULE_CALENDAR):
-        return
+def _remove_switched_off_optional_entities(hass: HomeAssistant, config_entry: RoombaConfigEntry) -> None:
+    """Explicit entity-registry cleanup for the optional platforms that
+    are switched off: the calendar (CONF_ENABLE_SCHEDULE_CALENDAR) and
+    the maintenance to-do list (CONF_ENABLE_MAINTENANCE_LIST).
+
+    Unloading a platform (because it's no longer in the platforms list)
+    only stops the entity from being live -- it does NOT remove the
+    entity registry's own record, which would otherwise linger forever
+    as "unavailable" (never re-created, since setup no longer forwards
+    this platform for this entry). Idempotent and safe to call on every
+    setup and unload -- a no-op if there's nothing to remove.
+
+    THE TO-DO LIST WAS MISSING HERE. It became opt-in in 4.0.0a30, and
+    every Classic list from before stayed behind as an "unavailable",
+    "restored" entity -- @ScenicSystemsLLC's two untouched robots still
+    had one, the re-added third had none, which read like the re-add had
+    lost it. Called at setup too, so those left-overs go on the next
+    start rather than on some future unload."""
     from homeassistant.helpers import entity_registry as er
 
+    switched_off: set[str] = set()
+    if not config_entry.options.get(CONF_ENABLE_SCHEDULE_CALENDAR, DEFAULT_ENABLE_SCHEDULE_CALENDAR):
+        switched_off.add("calendar")
+    if not config_entry.options.get(CONF_ENABLE_MAINTENANCE_LIST, DEFAULT_ENABLE_MAINTENANCE_LIST):
+        switched_off.add("todo")
+    if not switched_off:
+        return
     entity_reg = er.async_get(hass)
     for entry in er.async_entries_for_config_entry(entity_reg, config_entry.entry_id):
-        if entry.domain == "calendar":
+        if entry.domain in switched_off:
             entity_reg.async_remove(entry.entity_id)
 
 
@@ -1892,6 +1906,7 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
     from .const import PRIME_PLATFORMS
     platforms = list(PRIME_PLATFORMS)
     platforms.extend(p for p in _optional_platforms(config_entry) if p not in platforms)
+    _remove_switched_off_optional_entities(hass, config_entry)
     await hass.config_entries.async_forward_entry_setups(config_entry, platforms)
 
     # THE FIRST MISSION-HISTORY SYNC BELONGS HERE, not on the parts
@@ -2022,7 +2037,7 @@ async def async_unload_entry(
             config_entry, platforms
         )
         if unload_ok:
-            _remove_calendar_entity_if_disabled(hass, config_entry)
+            _remove_switched_off_optional_entities(hass, config_entry)
             bm = config_entry.runtime_data.blocking_manager
             if bm is not None:
                 bm.cancel_queue()
@@ -2080,7 +2095,7 @@ async def async_unload_entry(
         config_entry, platforms
     )
     if unload_ok:
-        _remove_calendar_entity_if_disabled(hass, config_entry)
+        _remove_switched_off_optional_entities(hass, config_entry)
         bm = config_entry.runtime_data.blocking_manager
         if bm is not None:
             bm.cancel_queue()

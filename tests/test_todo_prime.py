@@ -385,6 +385,84 @@ class TestTheOptionAppliesToBothGenerations:
 
         assert source.count("CONF_ENABLE_MAINTENANCE_LIST") == 1
 
+    @pytest.mark.asyncio
+    async def test_both_settings_forms_offer_the_switch(self):
+        """It went opt-in on both generations in 4.0.0a30, with the
+        switch added to the Prime form only: a Classic robot's list
+        could not be switched back on at all (@ScenicSystemsLLC,
+        4.3.0b4). Checked by asking both schemas."""
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.const import CONF_ENABLE_MAINTENANCE_LIST
+        from custom_components.roomba_plus.models import ConnectionType
+        from tests.test_config_flow import _make_options_flow
+
+        for connection_type in (ConnectionType.CLOUD_ONLY, ConnectionType.LOCAL_PUSH):
+            flow = _make_options_flow()
+            flow._config_entry.runtime_data.connection_type = connection_type
+            flow.async_show_form = MagicMock(side_effect=lambda **kw: kw)
+
+            result = await flow.async_step_settings(None)
+            keys = {str(k) for k in result["data_schema"].schema}
+
+            assert any(CONF_ENABLE_MAINTENANCE_LIST in k for k in keys), connection_type
+
+
+class TestASwitchedOffListLeavesNoEntityBehind:
+    """@ScenicSystemsLLC (4.3.0b4): two untouched robots still had a
+    `todo.*_maintenance` entity, "unavailable" and "restored"; the one he
+    removed and re-added had none. The list had been off for all three
+    since 4.0.0a30 -- the two were left-overs in the entity registry,
+    which a platform that is no longer set up does not clear."""
+
+    def _run(self, options):
+        from unittest.mock import MagicMock, patch
+
+        from custom_components.roomba_plus import _remove_switched_off_optional_entities
+
+        config_entry = MagicMock()
+        config_entry.options = options
+        config_entry.entry_id = "entry1"
+        entries = [
+            MagicMock(domain="todo", entity_id="todo.robby_maintenance"),
+            MagicMock(domain="calendar", entity_id="calendar.robby_schedule"),
+            MagicMock(domain="sensor", entity_id="sensor.robby_battery"),
+        ]
+        fake_er = MagicMock()
+        with patch("homeassistant.helpers.entity_registry.async_get", return_value=fake_er), patch(
+            "homeassistant.helpers.entity_registry.async_entries_for_config_entry",
+            return_value=entries,
+        ):
+            _remove_switched_off_optional_entities(MagicMock(), config_entry)
+        return [c.args[0] for c in fake_er.async_remove.call_args_list]
+
+    def test_the_list_off_removes_its_entity_and_nothing_else(self):
+        assert self._run({}) == ["todo.robby_maintenance"]
+
+    def test_the_list_on_keeps_it(self):
+        assert self._run({"enable_maintenance_list": True}) == []
+
+    def test_both_off_removes_both(self):
+        removed = self._run({"enable_schedule_calendar": False})
+        assert sorted(removed) == ["calendar.robby_schedule", "todo.robby_maintenance"]
+
+    def test_it_runs_at_setup_for_both_generations(self):
+        """Left-overs from before the option existed are only ever
+        cleared by a setup: nothing unloads an entry on a restart."""
+        import ast
+        import pathlib
+
+        tree = ast.parse(pathlib.Path("custom_components/roomba_plus/__init__.py").read_text())
+        callers = {
+            node.name
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            for call in ast.walk(node)
+            if isinstance(call, ast.Call)
+            and getattr(call.func, "id", None) == "_remove_switched_off_optional_entities"
+        }
+        assert {"async_unload_entry", "_phase_finalize", "_async_setup_entry_prime"} <= callers
+
 
 class TestPartNamesUseIRobotsOwnWords:
     """The part names in app 3.0.0 live in its locale files, in 25
