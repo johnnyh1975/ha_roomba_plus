@@ -17,7 +17,7 @@
           "host": "Sélectionner un robot"
         },
         "data_description": {
-          "host": "Le robot à configurer. La configuration avec votre compte iRobot est recommandée : elle fonctionne pour tous les robots, trouve tous les robots du compte et ne demande d'appuyer sur aucun bouton. Les robots trouvés sur votre réseau sont aussi listés ; choisissez la saisie manuelle si le vôtre manque."
+          "host": "Le robot à configurer. La configuration avec votre compte iRobot est recommandée : elle fonctionne pour tous les robots, trouve tous les robots du compte et ne demande d'appuyer sur aucun bouton. Un robot connecté en local a quand même besoin de son adresse sur votre réseau : elle est recherchée, et demandée si elle est introuvable. Les robots trouvés sur votre réseau sont aussi listés ; choisissez la saisie manuelle si le vôtre manque."
         }
       },
       "manual": {

@@ -17,7 +17,7 @@
           "host": "Select robot"
         },
         "data_description": {
-          "host": "The robot to set up. Setting up with your iRobot account is recommended: it works for every robot, finds all robots on the account and needs no button press. Robots found on your network are listed too; choose manual entry if yours is missing."
+          "host": "The robot to set up. Setting up with your iRobot account is recommended: it works for every robot, finds all robots on the account and needs no button press. A robot that connects locally still needs its address on your network: it is searched for, and asked for if it cannot be found. Robots found on your network are listed too; choose manual entry if yours is missing."
         }
       },
       "manual": {

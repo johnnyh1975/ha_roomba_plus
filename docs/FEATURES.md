@@ -547,7 +547,7 @@ Every reset above (button or service) writes a searchable Logbook entry and fire
 
 #### Maintenance to-do list (v3.4.0)
 
-`todo.{name}_maintenance` — filter replacement and brush/pad cleaning as real Home Assistant to-do items, always present. Due date comes from the same self-calibrated wear-rate estimate as the `*_days_until_due` sensors (absent until a wear rate is established — early in a robot's life, or right after a reset). Marking an item done fires the same reset as the corresponding button (`reset_filter` / `reset_brush` or `reset_pad` on Braava) — same Logbook entry and `roomba_plus_maintenance_reset` event either way.
+`todo.{name}_maintenance` — filter replacement and brush/pad cleaning as real Home Assistant to-do items. **Opt-in** on both generations (since 4.0): Configure → Connection settings → *Show maintenance as a to-do list*. Classic robots got that switch only in 4.2.17 / 4.3.0b5. Due date comes from the same self-calibrated wear-rate estimate as the `*_days_until_due` sensors (absent until a wear rate is established — early in a robot's life, or right after a reset). Marking an item done fires the same reset as the corresponding button (`reset_filter` / `reset_brush` or `reset_pad` on Braava) — same Logbook entry and `roomba_plus_maintenance_reset` event either way.
 
 SMART-tier robots (i/s/j-series, Braava) also get a **Reconfigure rooms** item whenever a Smart Map zone has no assigned name yet — same condition as the zone-naming Repair Issue. This item isn't manually completable: it disappears on its own once every zone is named via the existing naming wizard; marking it done by hand has no effect and it simply reappears on the next update if unnamed zones remain.
 

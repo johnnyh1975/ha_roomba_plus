@@ -1044,7 +1044,7 @@ class RoombaPlusConfigFlow(ConfigFlow, domain=DOMAIN):
             # The login an entry holds anyway lists this robot: it was
             # announced from it. Only a robot missing there needs a login.
             account: CloudAccount | None = async_peek(self.hass, username, password)
-            if self.blid not in _robots_of(account):
+            if account is None or self.blid not in _robots_of(account):
                 account, error = await self._async_login(username, password)
                 if account is None:
                     # NOT the same button again: every click would try
@@ -1820,6 +1820,17 @@ class RoombaPlusOptionsFlow(OptionsFlow):
                         CONF_ENABLE_SCHEDULE_CALENDAR,
                         default=options.get(
                             CONF_ENABLE_SCHEDULE_CALENDAR, DEFAULT_ENABLE_SCHEDULE_CALENDAR
+                        ),
+                    ): bool,
+                    # THE MAINTENANCE LIST FOR CLASSIC TOO. It became opt-in
+                    # on both generations in 4.0.0a30, with the toggle added
+                    # to the Prime form only -- so a Classic robot's list
+                    # could not be switched back on at all (@ScenicSystemsLLC,
+                    # 4.3.0b4: gone after removing and re-adding a robot).
+                    vol.Optional(
+                        CONF_ENABLE_MAINTENANCE_LIST,
+                        default=options.get(
+                            CONF_ENABLE_MAINTENANCE_LIST, DEFAULT_ENABLE_MAINTENANCE_LIST
                         ),
                     ): bool,
                 }

@@ -17,7 +17,7 @@
           "host": "Seleccionar robot"
         },
         "data_description": {
-          "host": "El robot que se va a configurar. Se recomienda configurarlo con tu cuenta de iRobot: funciona con cualquier robot, encuentra todos los robots de la cuenta y no requiere pulsar ningún botón. También aparecen los robots encontrados en tu red; elige la entrada manual si falta el tuyo."
+          "host": "El robot que se va a configurar. Se recomienda configurarlo con tu cuenta de iRobot: funciona con cualquier robot, encuentra todos los robots de la cuenta y no requiere pulsar ningún botón. Un robot con conexión local sigue necesitando su dirección en tu red: se busca y, si no se encuentra, se pide. También aparecen los robots encontrados en tu red; elige la entrada manual si falta el tuyo."
         }
       },
       "manual": {

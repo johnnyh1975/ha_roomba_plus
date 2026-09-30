@@ -17,7 +17,7 @@
           "host": "Wybierz robota"
         },
         "data_description": {
-          "host": "Robot do skonfigurowania. Zalecana jest konfiguracja z kontem iRobot: działa dla każdego robota, znajduje wszystkie roboty na koncie i nie wymaga naciskania przycisku. Roboty znalezione w sieci też są na liście; wybierz ręczne wprowadzanie, jeśli brakuje Twojego."
+          "host": "Robot do skonfigurowania. Zalecana jest konfiguracja z kontem iRobot: działa dla każdego robota, znajduje wszystkie roboty na koncie i nie wymaga naciskania przycisku. Robot łączący się lokalnie nadal potrzebuje swojego adresu w sieci: jest on wyszukiwany, a jeśli nie zostanie znaleziony – pytamy o niego. Roboty znalezione w sieci też są na liście; wybierz ręczne wprowadzanie, jeśli brakuje Twojego."
         }
       },
       "manual": {

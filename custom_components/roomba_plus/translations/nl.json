@@ -17,7 +17,7 @@
           "host": "Robot selecteren"
         },
         "data_description": {
-          "host": "De robot die je wilt instellen. Instellen met je iRobot-account wordt aanbevolen: het werkt voor elke robot, vindt alle robots op het account en je hoeft geen knop in te drukken. Robots die in je netwerk zijn gevonden staan er ook bij; kies handmatige invoer als de jouwe ontbreekt."
+          "host": "De robot die je wilt instellen. Instellen met je iRobot-account wordt aanbevolen: het werkt voor elke robot, vindt alle robots op het account en je hoeft geen knop in te drukken. Een robot die lokaal verbindt heeft wel zijn adres in je netwerk nodig: dat wordt gezocht, en gevraagd als het niet wordt gevonden. Robots die in je netwerk zijn gevonden staan er ook bij; kies handmatige invoer als de jouwe ontbreekt."
         }
       },
       "manual": {

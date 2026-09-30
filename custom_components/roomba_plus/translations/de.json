@@ -17,7 +17,7 @@
           "host": "Roboter auswählen"
         },
         "data_description": {
-          "host": "Der einzurichtende Roboter. Empfohlen ist die Einrichtung mit Ihrem iRobot-Konto: Sie funktioniert für jeden Roboter, findet alle Roboter des Kontos und braucht keinen Tastendruck. Im Netzwerk gefundene Roboter stehen ebenfalls in der Liste; wählen Sie die manuelle Eingabe, falls Ihrer fehlt."
+          "host": "Der einzurichtende Roboter. Empfohlen ist die Einrichtung mit Ihrem iRobot-Konto: Sie funktioniert für jeden Roboter, findet alle Roboter des Kontos und braucht keinen Tastendruck. Ein Roboter mit lokaler Verbindung braucht trotzdem seine Adresse im Netzwerk: Sie wird gesucht und abgefragt, wenn sie nicht gefunden wird. Im Netzwerk gefundene Roboter stehen ebenfalls in der Liste; wählen Sie die manuelle Eingabe, falls Ihrer fehlt."
         }
       },
       "manual": {
