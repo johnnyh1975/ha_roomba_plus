@@ -89,3 +89,56 @@ def unlabelled_zone_ids(
         rid for rid in collect_region_ids(vacuum_state, options)
         if rid not in named and rid not in hidden_ids
     ]
+
+
+def resolve_zone_name(
+    region_id: str,
+    aliases: dict[str, str],
+    cloud_name: str | None,
+    local_name: str | None,
+    labels: dict[str, str],
+) -> str:
+    """5-level priority chain for SMART robot zone display names.
+
+    Priority:
+      1. aliases[region_id]   — user's local alias (overrides everything)
+      2. cloud_name           — authoritative name from cloud coordinator
+      3. local_name           — from smart_zone_data (manually entered)
+      4. labels[region_id]    — legacy smart_zone_labels fallback
+      5. f"Zone {region_id}"  — auto-generated placeholder
+    """
+    return (
+        aliases.get(region_id)
+        or cloud_name
+        or local_name
+        or labels.get(region_id)
+        or f"Zone {region_id}"
+    )
+
+
+def map_room_label(
+    region_id: str, cloud_name: str | None, options: Mapping[str, Any]
+) -> str:
+    """The text the rooms map writes into a room.
+
+    THE SAME NAME AS EVERYWHERE ELSE: the user's alias, then the
+    account's name, then the one typed into the naming notice. Only the
+    last step differs from resolve_zone_name(): an unnamed room shows its
+    bare number, not "Zone 21" -- the naming notice lists zones by number,
+    and the map is where you find out which room that number is (the
+    Prime rooms map has done this since 4.2.10, @liblit).
+    """
+    from .const import CONF_SMART_ZONE_ALIASES
+
+    aliases = options.get(CONF_SMART_ZONE_ALIASES) or {}
+    zone_data = options.get("smart_zone_data") or {}
+    labels = options.get("smart_zone_labels") or {}
+    entry = zone_data.get(region_id)
+    local_name = entry.get("name") if isinstance(entry, dict) else None
+    return (
+        (aliases.get(region_id) if isinstance(aliases, dict) else None)
+        or cloud_name
+        or local_name
+        or (labels.get(region_id) if isinstance(labels, dict) else None)
+        or region_id
+    )

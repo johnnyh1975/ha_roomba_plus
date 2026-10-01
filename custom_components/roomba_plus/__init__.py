@@ -81,6 +81,7 @@ from .const import (
     DEFAULT_DELAY,
     DEFAULT_ENABLE_MAINTENANCE_LIST,
     DEFAULT_ENABLE_SCHEDULE_CALENDAR,
+    DEFAULT_REGION_SENSORS,
     DEFAULT_MAP_ENABLED,
     DEFAULT_MAP_SCALE,
     DEFAULT_MAP_SIZE_PX,
@@ -1138,6 +1139,7 @@ async def _phase_finalize(ctx: _SetupContext) -> None:
     _watcher.start()
     config_entry.async_on_unload(_watcher.stop)
 
+    config_entry.runtime_data.loaded_platforms = list(platforms)
     await hass.config_entries.async_forward_entry_setups(config_entry, platforms)
 
     # REST API views (registered once per HA instance)
@@ -1232,6 +1234,25 @@ def _optional_platforms(config_entry: RoombaConfigEntry) -> list[Platform]:
     ):
         platforms.append(Platform.TODO)
     return platforms
+
+
+def _platforms_to_unload(
+    config_entry: RoombaConfigEntry, from_options: list[Platform]
+) -> list[Platform]:
+    """The platforms setup actually forwarded, if it recorded them.
+
+    NOT THE LIST THE OPTIONS GIVE NOW. An option saved since the last
+    setup changes that list: switching the maintenance list on added
+    Platform.TODO, the reload then unloaded a platform that had never
+    been loaded, and Home Assistant refused the whole unload with
+    "Config entry was never loaded!" -- the entry stuck, the list never
+    appeared, and only a restart helped (@ScenicSystemsLLC, 4.2.17).
+    `from_options` is the fallback for an entry set up before this was
+    recorded."""
+    loaded = getattr(getattr(config_entry, "runtime_data", None), "loaded_platforms", None)
+    if isinstance(loaded, list) and loaded:
+        return list(loaded)
+    return from_options
 
 
 def _remove_switched_off_optional_entities(hass: HomeAssistant, config_entry: RoombaConfigEntry) -> None:
@@ -1907,6 +1928,7 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
     platforms = list(PRIME_PLATFORMS)
     platforms.extend(p for p in _optional_platforms(config_entry) if p not in platforms)
     _remove_switched_off_optional_entities(hass, config_entry)
+    config_entry.runtime_data.loaded_platforms = list(platforms)
     await hass.config_entries.async_forward_entry_setups(config_entry, platforms)
 
     # THE FIRST MISSION-HISTORY SYNC BELONGS HERE, not on the parts
@@ -2034,7 +2056,7 @@ async def async_unload_entry(
         platforms = list(PRIME_PLATFORMS)
         platforms.extend(p for p in _optional_platforms(config_entry) if p not in platforms)
         unload_ok = await hass.config_entries.async_unload_platforms(
-            config_entry, platforms
+            config_entry, _platforms_to_unload(config_entry, platforms)
         )
         if unload_ok:
             _remove_switched_off_optional_entities(hass, config_entry)
@@ -2092,7 +2114,7 @@ async def async_unload_entry(
     platforms.extend(p for p in _optional_platforms(config_entry) if p not in platforms)
 
     unload_ok = await hass.config_entries.async_unload_platforms(
-        config_entry, platforms
+        config_entry, _platforms_to_unload(config_entry, platforms)
     )
     if unload_ok:
         _remove_switched_off_optional_entities(hass, config_entry)
@@ -2169,8 +2191,18 @@ async def _async_reload_on_options_change(
     # the user sees".
     _RELOAD_TRIGGER_KEYS = {
         CONF_ENABLE_SCHEDULE_CALENDAR,
+        CONF_ENABLE_MAINTENANCE_LIST,
         CONF_REGION_SENSORS,
         CONF_BLOCKING_SENSORS,
+    }
+    # EVERY KEY WITH ITS DEFAULT, on both sides. The maintenance list was
+    # missing above, so switching it on reloaded only by accident: the
+    # form also saves "Separate sensor per room and zone", absent from
+    # .data and False in .options, and that difference triggered it.
+    _DEFAULTS: dict[str, Any] = {
+        CONF_ENABLE_SCHEDULE_CALENDAR: DEFAULT_ENABLE_SCHEDULE_CALENDAR,
+        CONF_ENABLE_MAINTENANCE_LIST: DEFAULT_ENABLE_MAINTENANCE_LIST,
+        CONF_REGION_SENSORS: DEFAULT_REGION_SENSORS,
     }
 
     def _get(source: Mapping[str, Any], key: str) -> Any:
@@ -2183,9 +2215,9 @@ async def _async_reload_on_options_change(
         # EVERY existing installation's first-ever options save (even an
         # unrelated one) look like a change and trigger a spurious extra
         # reload -- harmless, but avoidable.
-        if key == CONF_ENABLE_SCHEDULE_CALENDAR:
-            return source.get(key, DEFAULT_ENABLE_SCHEDULE_CALENDAR)
-        return source.get(key)
+        if key == CONF_BLOCKING_SENSORS:
+            return list(source.get(key) or [])
+        return source.get(key, _DEFAULTS.get(key))
 
     old_vals = {k: _get(config_entry.data, k) for k in _RELOAD_TRIGGER_KEYS}
     new_vals = {k: _get(config_entry.options, k) for k in _RELOAD_TRIGGER_KEYS}

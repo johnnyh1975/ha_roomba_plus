@@ -1534,6 +1534,45 @@ class TestReloadOnOptionsChangeIncludesCalendar:
     list at setup time."""
 
     @pytest.mark.asyncio
+    async def test_reload_triggered_when_the_maintenance_list_is_switched_on(self):
+        """It was not a trigger at all: switching it on reloaded only by
+        accident, when another field of the same form differed."""
+        from custom_components.roomba_plus import _async_reload_on_options_change
+
+        config_entry = MagicMock()
+        config_entry.data = {}
+        config_entry.options = {"enable_maintenance_list": True}
+        config_entry.entry_id = "entry1"
+        hass = MagicMock()
+        hass.config_entries.async_reload = AsyncMock()
+
+        await _async_reload_on_options_change(hass, config_entry)
+
+        hass.config_entries.async_reload.assert_awaited_once_with("entry1")
+
+    @pytest.mark.asyncio
+    async def test_saving_the_form_unchanged_does_not_reload(self):
+        """The form saves every field. A value absent from .data and at
+        its default in .options is no change."""
+        from custom_components.roomba_plus import _async_reload_on_options_change
+
+        config_entry = MagicMock()
+        config_entry.data = {}
+        config_entry.options = {
+            "enable_schedule_calendar": True,
+            "enable_maintenance_list": False,
+            "region_sensors": False,
+            "blocking_sensors": [],
+        }
+        config_entry.entry_id = "entry1"
+        hass = MagicMock()
+        hass.config_entries.async_reload = AsyncMock()
+
+        await _async_reload_on_options_change(hass, config_entry)
+
+        hass.config_entries.async_reload.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_reload_triggered_when_calendar_option_changes(self):
         from custom_components.roomba_plus import _async_reload_on_options_change
         from custom_components.roomba_plus.const import CONF_ENABLE_SCHEDULE_CALENDAR
@@ -1984,6 +2023,46 @@ class TestUnloadFlushesAndDisconnects:
         assert result is False
         entry.runtime_data.mission_timer_store.async_save.assert_not_awaited()
 
+    @pytest.mark.asyncio
+    async def test_it_unloads_what_setup_loaded_not_what_the_options_say_now(
+        self, hass: Any
+    ) -> None:
+        """@ScenicSystemsLLC (4.2.17): switching the maintenance list on
+        and saving reloaded the entry, and the unload asked Home
+        Assistant to unload the to-do platform too -- never loaded, so
+        HA refused the whole unload ("Config entry was never loaded!").
+        The entry was stuck until a restart."""
+        from homeassistant.const import Platform
+
+        from custom_components.roomba_plus import async_unload_entry
+
+        entry = self._entry_with_runtime(hass)
+        entry.options = {"enable_maintenance_list": True}
+        entry.runtime_data.loaded_platforms = [Platform.VACUUM, Platform.SENSOR]
+
+        await async_unload_entry(hass, entry)
+
+        unloaded = hass.config_entries.async_unload_platforms.await_args.args[1]
+        assert unloaded == [Platform.VACUUM, Platform.SENSOR]
+
+    @pytest.mark.asyncio
+    async def test_without_a_record_it_falls_back_to_the_options(
+        self, hass: Any
+    ) -> None:
+        from homeassistant.const import Platform
+
+        from custom_components.roomba_plus import async_unload_entry
+
+        entry = self._entry_with_runtime(hass)
+        entry.options = {}
+        entry.runtime_data.loaded_platforms = []
+
+        await async_unload_entry(hass, entry)
+
+        unloaded = hass.config_entries.async_unload_platforms.await_args.args[1]
+        assert Platform.VACUUM in unloaded
+        assert Platform.TODO not in unloaded
+
 
 class TestPhaseFinalizeWiresTheRobotUp:
     """Phase 5 registers the MQTT callbacks, forwards the platforms and
@@ -2029,6 +2108,19 @@ class TestPhaseFinalizeWiresTheRobotUp:
         self._teardown(ctx)
 
         hass.config_entries.async_forward_entry_setups.assert_awaited()
+
+    @pytest.mark.asyncio
+    async def test_the_forwarded_platforms_are_recorded_for_the_unload(
+        self, hass: Any
+    ) -> None:
+        from custom_components.roomba_plus import _phase_finalize
+
+        ctx = self._ctx(hass)
+        await _phase_finalize(ctx)
+        self._teardown(ctx)
+
+        forwarded = hass.config_entries.async_forward_entry_setups.await_args.args[1]
+        assert ctx.config_entry.runtime_data.loaded_platforms == list(forwarded)
 
     @pytest.mark.asyncio
     async def test_the_mqtt_stamp_callback_is_registered_before_them(

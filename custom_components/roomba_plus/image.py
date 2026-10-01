@@ -52,6 +52,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
+from .zone_naming import map_room_label
 from . import roomba_reported_state
 from .const import (
     CONF_MAP_CLEAN_ZONES,
@@ -3132,6 +3133,15 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
             self._cache = None
             self.async_write_ha_state()
 
+        # A NAME TYPED INTO THE NAMING NOTICE IS AN OPTIONS CHANGE, with
+        # no reload behind it. Without a new timestamp the frontend keeps
+        # the picture it has, and the name would only appear after the
+        # next mission.
+        async def _on_options_updated(_hass: HomeAssistant, _entry: Any) -> None:
+            _on_mission_images_updated()
+
+        self.async_on_remove(self._config_entry.add_update_listener(_on_options_updated))
+
         self.async_on_remove(
             async_dispatcher_connect(
                 self.hass,
@@ -3173,13 +3183,28 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
 
         aligned = aligner.aligned
 
+        # THE LABELS ARE PART OF THE PICTURE, so they are part of the cache
+        # key. Keyed on the map version alone, switching "Draw room names"
+        # on -- or naming a zone -- changed nothing on screen until the map
+        # itself changed.
+        labels: dict[str, str] = {}
+        if self._config_entry.options.get(CONF_MAP_ROOM_LABELS, DEFAULT_MAP_ROOM_LABELS):
+            cloud_names = aligner.rid_to_name()
+            for rid in polygons_umf:
+                cloud = cloud_names.get(rid)
+                # rid_to_name() falls back to the id itself for a region
+                # without a name; that is no name.
+                if cloud == rid:
+                    cloud = None
+                labels[str(rid)] = map_room_label(str(rid), cloud, self._config_entry.options)
+
         # ZONE-LAYER-CACHE (v2.9.0): room polygons are identical between
         # calls unless the map was retrained (pmap_version_id changes) or
         # alignment state flipped (fallback → aligned after enough missions).
         # Restore both the cached PNG and the transform parameters it was
         # computed with — calibration_points/_to_px_last depend on them
         # matching the returned image exactly.
-        cache_key = (aligner.pmap_version_id, aligned)
+        cache_key = (aligner.pmap_version_id, aligned, tuple(sorted(labels.items())))
         # Known limitation: this assumes umf_to_pose()'s rotation/translation
         # is stable for a given pmap_version_id once aligned=True is reached.
         # If a later alignment run meaningfully refines the transform for the
@@ -3272,8 +3297,6 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
         from PIL import Image, ImageDraw
         img  = Image.new("RGB", (size, size), (30, 30, 30))
         draw = ImageDraw.Draw(img)
-        # v2.7.3: rid_to_name() lookup removed — labels are no longer drawn
-        # into the PNG (XVMC card renders its own from predefined_selections).
 
         # ROOM-PALETTE (v2.9.0) — rotating per-room fill instead of a single
         # uniform colour, so adjacent rooms are visually distinguishable even
@@ -3298,22 +3321,20 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
             # they do not exist. Same option as the Prime map uses --
             # this is a preference about maps, not about robot
             # generations.
-            if self._config_entry is not None and self._config_entry.options.get(
-                CONF_MAP_ROOM_LABELS, DEFAULT_MAP_ROOM_LABELS
-            ):
+            #
+            # AN UNNAMED ROOM SHOWS ITS NUMBER, as on the Prime rooms map:
+            # the naming notice lists zones by number, and this is where
+            # you see which room a number is.
+            name = labels.get(str(rid))
+            if name:
                 from .map_renderer import LABEL_FONT  # noqa: PLC0415
 
-                name = aligner.rid_to_name().get(rid)
-                if name:
-                    cx = sum(x for x, _ in poly_px) / len(poly_px)
-                    cy = sum(y for _, y in poly_px) / len(poly_px)
-                    draw.text(
-                        (cx, cy), name, fill=(230, 230, 230),
-                        anchor="mm", font=LABEL_FONT,
-                    )
-            # v2.7.3: labels removed from PNG — XVMC card renders its own
-            # labels from predefined_selections.label.text; drawing them here
-            # produced duplicate overlapping labels in the card (veronoicc #2).
+                cx = sum(x for x, _ in poly_px) / len(poly_px)
+                cy = sum(y for _, y in poly_px) / len(poly_px)
+                draw.text(
+                    (cx, cy), name, fill=(230, 230, 230),
+                    anchor="mm", font=LABEL_FONT,
+                )
 
         buf = io.BytesIO()
         img.save(buf, format="PNG")
@@ -3675,6 +3696,21 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
             if isinstance(stored, dict):
                 self._stored_live_bundle = stored
         await self._async_refresh_rooms()
+
+        # A MAP OPTION SAVED IS A MAP REDRAWN. "Draw room names" is read
+        # when the image is rendered, and this image is rendered when the
+        # map version moves -- so switching the names on changed nothing
+        # until the robot re-versioned its map (found answering @liblit,
+        # #189). The polygons are already here: re-rendering costs no
+        # cloud call, and a reload of the whole entry would be a heavy
+        # answer to a display option.
+        async def _on_options_updated(_hass: HomeAssistant, _entry: Any) -> None:
+            if self._polygons:
+                self._png = await self.hass.async_add_executor_job(self._render_png)
+            self._attr_image_last_updated = dt_util.utcnow()
+            self.async_write_ha_state()
+
+        self.async_on_remove(self._config_entry.add_update_listener(_on_options_updated))
 
         # LIVE BUNDLES from the other Prime image entity, which watches
         # the map stream. The two are split by capability: that one has

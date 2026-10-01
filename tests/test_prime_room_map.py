@@ -2730,3 +2730,42 @@ class TestFloorPlanBuild:
         plan = await async_build_prime_floor_plan(entry, "m", "v")
         assert plan.room_polygons == {}
         robot.download_map_bundle.assert_not_called()
+
+
+class TestAMapOptionSavedIsAMapRedrawn:
+    """Switching "Draw room names" on changed nothing on the Prime rooms
+    map until the robot re-versioned its map: the image is rendered when
+    the map version moves (found answering @liblit, #189). The polygons
+    are already loaded, so the redraw needs no cloud call."""
+
+    @pytest.mark.asyncio
+    async def test_an_options_change_redraws_and_announces_a_new_picture(self, hass):
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from custom_components.roomba_plus.entity import IRobotEntity
+        from custom_components.roomba_plus.image import PrimeRoomsImage
+
+        entity = object.__new__(PrimeRoomsImage)
+        entity.hass = hass
+        entity._show_live_overlay = False
+        entity._polygons = {"r1": [(0, 0), (10, 0), (10, 10)]}
+        entity._png = b"OLD"
+        entity._render_png = MagicMock(return_value=b"NEW")
+        entity._async_refresh_rooms = AsyncMock()
+        entity.async_on_remove = MagicMock()
+        entity.async_write_ha_state = MagicMock()
+        entity._attr_image_last_updated = None
+        listeners: list = []
+        entry = MagicMock()
+        entry.add_update_listener = lambda cb: listeners.append(cb) or (lambda: None)
+        entity._config_entry = entry
+
+        with patch.object(IRobotEntity, "async_added_to_hass", AsyncMock()):
+            await entity.async_added_to_hass()
+        assert len(listeners) == 1
+
+        await listeners[0](hass, entry)
+
+        assert entity._png == b"NEW"
+        assert entity._attr_image_last_updated is not None
+        entity.async_write_ha_state.assert_called_once()
