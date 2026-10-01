@@ -121,6 +121,12 @@ class RoombaData:
     #: a vacuum attribute so automations and the map card can use them
     #: without an entity each.
     prime_favorites: list[dict[str, Any]] = field(default_factory=list)
+    #: The platforms setup forwarded, so unload unloads exactly those.
+    #: Rebuilt from the options instead, an option switched on since the
+    #: last setup named a platform that was never loaded, and Home
+    #: Assistant refused the whole unload ("Config entry was never
+    #: loaded!") -- @ScenicSystemsLLC, switching the maintenance list on.
+    loaded_platforms: list[Any] = field(default_factory=list)
     #: Live positions from the Prime map stream, as (x_mm, y_mm, deg).
     #:
     #: Held here rather than on an entity because the two halves live in

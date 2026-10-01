@@ -1582,6 +1582,9 @@ class TestRoomPalette:
         aligner._room_polygons = room_polygons
         entity._config_entry = entry_mock()
         entity._config_entry.runtime_data.umf_aligner = aligner
+        # Labels off, as by default: these tests sample fill colours, and
+        # since unnamed rooms show their number a label could sit on them.
+        entity._config_entry.options = {}
         entity._last_x_min = entity._last_y_min = 0.0
         entity._last_x_max = entity._last_y_max = 5000.0
         entity._last_size = 600
@@ -1640,6 +1643,117 @@ class TestRoomPalette:
 
 # ── ZONE-LAYER-CACHE (v2.9.0) ────────────────────────────────────────────────
 
+class TestTheRoomsMapLabels:
+    """Room names on the Classic rooms map (option "Draw room names").
+
+    Two gaps, both found answering @liblit (#189): the label went into a
+    PNG cached on the map version alone, so switching the option on --
+    or naming a zone -- changed nothing on screen until the map changed;
+    and an unnamed room got no label at all, though the naming notice
+    lists zones by number. The Prime rooms map has shown the number
+    since 4.2.10.
+    """
+
+    ROOMS = {
+        "11": [(0, 0), (1000, 0), (1000, 1000), (0, 1000)],
+        "12": [(2000, 0), (3000, 0), (3000, 1000), (2000, 1000)],
+    }
+
+    def _entity(self, options: dict, cloud_names: dict | None = None) -> Any:
+        from custom_components.roomba_plus.image import RoombaRoomsImage
+
+        entity = object.__new__(RoombaRoomsImage)
+        aligner = _make_aligner(aligned=True)
+        aligner._room_polygons = dict(self.ROOMS)
+        aligner.pmap_version_id = "v1"
+        aligner.rid_to_name = lambda: dict(cloud_names or {})
+        entity._config_entry = entry_mock()
+        entity._config_entry.runtime_data.umf_aligner = aligner
+        entity._config_entry.options = options
+        entity._last_x_min = entity._last_y_min = 0.0
+        entity._last_x_max = entity._last_y_max = 5000.0
+        entity._last_size = 600
+        entity._room_render_cache_key = None
+        entity._room_render_cache = None
+        return entity
+
+    def _labels(self, entity: Any) -> dict:
+        entity._render_rooms_png()
+        return dict(entity._room_render_cache_key[2])
+
+    def test_off_by_default_draws_nothing(self):
+        assert self._labels(self._entity({})) == {}
+
+    def test_an_unnamed_room_shows_its_number(self):
+        labels = self._labels(self._entity({"map_room_labels": True}))
+        assert labels == {"11": "11", "12": "12"}
+
+    def test_the_accounts_name_and_a_typed_name_are_used(self):
+        options = {
+            "map_room_labels": True,
+            "smart_zone_data": {"12": {"name": "Hallway"}},
+        }
+        labels = self._labels(self._entity(options, cloud_names={"11": "Kitchen", "12": "12"}))
+        assert labels == {"11": "Kitchen", "12": "Hallway"}
+
+    def test_an_alias_wins_as_on_the_zone_selector(self):
+        from custom_components.roomba_plus.const import CONF_SMART_ZONE_ALIASES
+
+        options = {"map_room_labels": True, CONF_SMART_ZONE_ALIASES: {"11": "Cooking"}}
+        labels = self._labels(self._entity(options, cloud_names={"11": "Kitchen"}))
+        assert labels["11"] == "Cooking"
+
+    def test_switching_the_option_on_redraws_a_cached_map(self):
+        entity = self._entity({})
+        before = entity._render_rooms_png()
+        entity._config_entry.options = {"map_room_labels": True}
+
+        after = entity._render_rooms_png()
+
+        assert after != before
+
+    def test_naming_a_zone_redraws_a_cached_map(self):
+        entity = self._entity({"map_room_labels": True})
+        before = entity._render_rooms_png()
+        entity._config_entry.options = {
+            "map_room_labels": True,
+            "smart_zone_data": {"11": {"name": "Kitchen"}},
+        }
+
+        after = entity._render_rooms_png()
+
+        assert after != before
+        assert dict(entity._room_render_cache_key[2])["11"] == "Kitchen"
+
+
+    @pytest.mark.asyncio
+    async def test_an_options_change_gives_the_frontend_a_new_picture(self, hass):
+        """Naming a zone in the notice is an options change without a
+        reload; without a new timestamp the frontend keeps its picture."""
+        from unittest.mock import AsyncMock, patch
+
+        from custom_components.roomba_plus.entity import IRobotEntity
+
+        entity = self._entity({"map_room_labels": True})
+        entity.hass = hass
+        entity.async_update_token = MagicMock()
+        entity.async_write_ha_state = MagicMock()
+        entity.async_on_remove = MagicMock()
+        listeners: list = []
+        entity._config_entry.add_update_listener = lambda cb: listeners.append(cb) or (lambda: None)
+        entity._config_entry.entry_id = "e1"
+        entity._attr_image_last_updated = None
+
+        with patch.object(IRobotEntity, "async_added_to_hass", AsyncMock()):
+            await entity.async_added_to_hass()
+        assert len(listeners) == 1
+
+        await listeners[0](hass, entity._config_entry)
+
+        assert entity._attr_image_last_updated is not None
+        entity.async_write_ha_state.assert_called_once()
+
+
 class TestZoneLayerCache:
     """Room polygon render is cached per (pmap_version_id, aligned) instead
     of re-rendering on every async_image() call."""
@@ -1652,6 +1766,7 @@ class TestZoneLayerCache:
         aligner.pmap_version_id = pmap_version_id
         entity._config_entry = entry_mock()
         entity._config_entry.runtime_data.umf_aligner = aligner
+        entity._config_entry.options = {}  # labels off, as by default
         entity._last_x_min = entity._last_y_min = 0.0
         entity._last_x_max = entity._last_y_max = 5000.0
         entity._last_size = 600
@@ -1678,7 +1793,7 @@ class TestZoneLayerCache:
     def test_cache_key_set_after_first_render(self):
         entity, aligner = self._entity_with_rooms(self.ROOMS, pmap_version_id="v1")
         entity._render_rooms_png()
-        assert entity._room_render_cache_key == ("v1", True)
+        assert entity._room_render_cache_key == ("v1", True, ())
         assert entity._room_render_cache is not None
 
     def test_pmap_version_change_invalidates_cache(self):
@@ -1695,17 +1810,17 @@ class TestZoneLayerCache:
         }
         entity._render_rooms_png()
 
-        assert entity._room_render_cache_key == ("v2", True)
+        assert entity._room_render_cache_key == ("v2", True, ())
         assert entity._last_x_max != x_max_v1
 
     def test_alignment_state_change_invalidates_cache(self):
         entity, aligner = self._entity_with_rooms(self.ROOMS, pmap_version_id="v1")
         entity._render_rooms_png()
-        assert entity._room_render_cache_key == ("v1", True)
+        assert entity._room_render_cache_key == ("v1", True, ())
 
         aligner._aligned = False  # falls back to UMF-space rendering mode
         entity._render_rooms_png()
-        assert entity._room_render_cache_key == ("v1", False)
+        assert entity._room_render_cache_key == ("v1", False, ())
 
     def test_cached_transform_parameters_restored_on_cache_hit(self):
         entity, _ = self._entity_with_rooms(self.ROOMS)

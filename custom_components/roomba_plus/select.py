@@ -31,31 +31,8 @@ from .const import (
 from .entity import IRobotEntity
 from .entity_cleanup import async_remove_entities_by_suffix
 from .models import ConnectionType, RoombaConfigEntry
-from .zone_naming import collect_region_ids, unlabelled_zone_ids
+from .zone_naming import collect_region_ids, resolve_zone_name, unlabelled_zone_ids
 
-def resolve_zone_name(
-    region_id: str,
-    aliases: dict[str, str],
-    cloud_name: str | None,
-    local_name: str | None,
-    labels: dict[str, str],
-) -> str:
-    """5-level priority chain for SMART robot zone display names.
-
-    Priority:
-      1. aliases[region_id]   — user's local alias (overrides everything)
-      2. cloud_name           — authoritative name from cloud coordinator
-      3. local_name           — from smart_zone_data (manually entered)
-      4. labels[region_id]    — legacy smart_zone_labels fallback
-      5. f"Zone {region_id}"  — auto-generated placeholder
-    """
-    return (
-        aliases.get(region_id)
-        or cloud_name
-        or local_name
-        or labels.get(region_id)
-        or f"Zone {region_id}"
-    )
 
 
 

@@ -1156,7 +1156,7 @@ what a robot does out of the box.
 | Enable the live cleaning map | on | Robots with position sensing only (900, i, s, j, Braava m) |
 | Map canvas size in pixels | 600 | 400–1200 |
 | Millimetres per pixel | 10 | 5–30. At 600 px, 10 gives you a 6 m × 6 m room |
-| Draw room names | on | |
+| Draw room names | off | The [xiaomi-vacuum-map-card](xiaomi-vacuum-map-card.md) draws its own names, so drawing them into the image as well would show each one twice. Switch it on for a plain picture card. A room without a name shows its number, as in the naming notice |
 | Draw clean zones | off | |
 | Draw keep-out zones | off | |
 | Draw no-mop zones | off | |

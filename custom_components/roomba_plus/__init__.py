@@ -82,6 +82,7 @@ from .const import (
     DEFAULT_DELAY,
     DEFAULT_ENABLE_MAINTENANCE_LIST,
     DEFAULT_ENABLE_SCHEDULE_CALENDAR,
+    DEFAULT_REGION_SENSORS,
     DEFAULT_MAP_ENABLED,
     DEFAULT_MAP_SCALE,
     DEFAULT_MAP_SIZE_PX,
@@ -126,13 +127,11 @@ from .prime_coordinator import (
     PrimeStatusCoordinator,
 )
 from . import cloud_errors
-from .cloud_account import async_acquire, async_release, cloud_country
+from .cloud_account import async_acquire, async_release
 
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from roombapy_prime import (
     AuthCredentialsError,
     CloudError,
-    PrimeFactory,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -1139,6 +1138,7 @@ async def _phase_finalize(ctx: _SetupContext) -> None:
     _watcher.start()
     config_entry.async_on_unload(_watcher.stop)
 
+    config_entry.runtime_data.loaded_platforms = list(platforms)
     await hass.config_entries.async_forward_entry_setups(config_entry, platforms)
 
     # REST API views (registered once per HA instance)
@@ -1233,6 +1233,25 @@ def _optional_platforms(config_entry: RoombaConfigEntry) -> list[Platform]:
     ):
         platforms.append(Platform.TODO)
     return platforms
+
+
+def _platforms_to_unload(
+    config_entry: RoombaConfigEntry, from_options: list[Platform]
+) -> list[Platform]:
+    """The platforms setup actually forwarded, if it recorded them.
+
+    NOT THE LIST THE OPTIONS GIVE NOW. An option saved since the last
+    setup changes that list: switching the maintenance list on added
+    Platform.TODO, the reload then unloaded a platform that had never
+    been loaded, and Home Assistant refused the whole unload with
+    "Config entry was never loaded!" -- the entry stuck, the list never
+    appeared, and only a restart helped (@ScenicSystemsLLC, 4.2.17).
+    `from_options` is the fallback for an entry set up before this was
+    recorded."""
+    loaded = getattr(getattr(config_entry, "runtime_data", None), "loaded_platforms", None)
+    if isinstance(loaded, list) and loaded:
+        return list(loaded)
+    return from_options
 
 
 def _remove_switched_off_optional_entities(hass: HomeAssistant, config_entry: RoombaConfigEntry) -> None:
@@ -1490,8 +1509,6 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
     blid = config_entry.data[CONF_BLID]
     username = config_entry.data[CONF_IROBOT_USERNAME]
     password = config_entry.data[CONF_IROBOT_PASSWORD]
-    session = async_get_clientsession(hass)
-
     # ONE LOGIN PER ACCOUNT (4.3), NOT PER ENTRY.
     #
     # Until 4.2 each entry ran the full Gigya + iRobot chain on its own,
@@ -1509,10 +1526,14 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
     # trying again -- against a locked account, every attempt extends
     # the lock. See cloud_account.py.
     #
-    # ONLY THE FIRST LOGIN IS SHARED FOR PRIME. PrimeRobot keeps its own
-    # relogin for the MQTT token; that moves onto the account in
-    # roombapy-prime 0.5.0. The token handed over here has at least ten
-    # minutes left, or the account logs in again first.
+    # PRIME RENEWS THROUGH THE ACCOUNT TOO (4.3.0b6, roombapy-prime
+    # 0.5.0b2). Until b5 only the first login was shared: each Prime robot
+    # then renewed its MQTT token with a login of its own, so robots from
+    # one login logged in once each about an hour later. The robot now
+    # takes the account's login when another robot has just made a fresh
+    # one, and otherwise logs in once for all of them. The token handed
+    # over here has at least ten minutes left, or the account logs in
+    # again first.
     #
     # AND A LOCKOUT DELIBERATELY STAYS IN THE AuthCredentialsError
     # BRANCH BELOW, which looks backwards and is not.
@@ -1531,10 +1552,7 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
         account = await async_acquire(
             hass, config_entry.entry_id, username, password, mqtt_blid=blid
         )
-        prime_robot = await PrimeFactory.create_prime_robot(
-            session, username, password, cloud_country(hass),
-            blid=blid, auto_refresh=True, login_result=account.login_result,
-        )
+        prime_robot = await account.prime_robot(blid, auto_refresh=True)
     except AuthCredentialsError as exc:
         raise exceptions.ConfigEntryAuthFailed(
             f"V4/Prime cloud login rejected for {blid}: {exc}",
@@ -1875,6 +1893,7 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
     platforms = list(PRIME_PLATFORMS)
     platforms.extend(p for p in _optional_platforms(config_entry) if p not in platforms)
     _remove_switched_off_optional_entities(hass, config_entry)
+    config_entry.runtime_data.loaded_platforms = list(platforms)
     await hass.config_entries.async_forward_entry_setups(config_entry, platforms)
 
     # THE FIRST MISSION-HISTORY SYNC BELONGS HERE, not on the parts
@@ -2002,7 +2021,7 @@ async def async_unload_entry(
         platforms = list(PRIME_PLATFORMS)
         platforms.extend(p for p in _optional_platforms(config_entry) if p not in platforms)
         unload_ok = await hass.config_entries.async_unload_platforms(
-            config_entry, platforms
+            config_entry, _platforms_to_unload(config_entry, platforms)
         )
         if unload_ok:
             _remove_switched_off_optional_entities(hass, config_entry)
@@ -2060,7 +2079,7 @@ async def async_unload_entry(
     platforms.extend(p for p in _optional_platforms(config_entry) if p not in platforms)
 
     unload_ok = await hass.config_entries.async_unload_platforms(
-        config_entry, platforms
+        config_entry, _platforms_to_unload(config_entry, platforms)
     )
     if unload_ok:
         _remove_switched_off_optional_entities(hass, config_entry)
@@ -2137,8 +2156,18 @@ async def _async_reload_on_options_change(
     # the user sees".
     _RELOAD_TRIGGER_KEYS = {
         CONF_ENABLE_SCHEDULE_CALENDAR,
+        CONF_ENABLE_MAINTENANCE_LIST,
         CONF_REGION_SENSORS,
         CONF_BLOCKING_SENSORS,
+    }
+    # EVERY KEY WITH ITS DEFAULT, on both sides. The maintenance list was
+    # missing above, so switching it on reloaded only by accident: the
+    # form also saves "Separate sensor per room and zone", absent from
+    # .data and False in .options, and that difference triggered it.
+    _DEFAULTS: dict[str, Any] = {
+        CONF_ENABLE_SCHEDULE_CALENDAR: DEFAULT_ENABLE_SCHEDULE_CALENDAR,
+        CONF_ENABLE_MAINTENANCE_LIST: DEFAULT_ENABLE_MAINTENANCE_LIST,
+        CONF_REGION_SENSORS: DEFAULT_REGION_SENSORS,
     }
 
     def _get(source: Mapping[str, Any], key: str) -> Any:
@@ -2151,9 +2180,9 @@ async def _async_reload_on_options_change(
         # EVERY existing installation's first-ever options save (even an
         # unrelated one) look like a change and trigger a spurious extra
         # reload -- harmless, but avoidable.
-        if key == CONF_ENABLE_SCHEDULE_CALENDAR:
-            return source.get(key, DEFAULT_ENABLE_SCHEDULE_CALENDAR)
-        return source.get(key)
+        if key == CONF_BLOCKING_SENSORS:
+            return list(source.get(key) or [])
+        return source.get(key, _DEFAULTS.get(key))
 
     old_vals = {k: _get(config_entry.data, k) for k in _RELOAD_TRIGGER_KEYS}
     new_vals = {k: _get(config_entry.options, k) for k in _RELOAD_TRIGGER_KEYS}

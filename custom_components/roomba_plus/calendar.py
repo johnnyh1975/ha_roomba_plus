@@ -69,7 +69,7 @@ from .schedule_parser import (
     parse_schedule_occurrences_with_regions,
     parse_prime_schedule_occurrences,
 )
-from .select import resolve_zone_name
+from .zone_naming import resolve_zone_name
 
 _LOGGER = logging.getLogger(__name__)
 

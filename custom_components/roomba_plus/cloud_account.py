@@ -39,10 +39,10 @@ entries starting together must not make three attempts against it.
 A failure is handed to anyone asking for the same credentials within
 FAILURE_REUSE_SECONDS instead of a new attempt.
 
-WHAT IS NOT SHARED YET (4.3.0b1). A Prime robot takes its FIRST login
-from the account, and then goes its own way: PrimeRobot keeps its own
-relogin for the MQTT token. That moves onto the account in roombapy-prime
-0.5.0.
+PRIME RENEWS THROUGH THE ACCOUNT (4.3.0b6). A Prime robot is built by
+CloudAccount.prime_robot() and renews its MQTT token through the account
+(roombapy-prime 0.5.0b2): a fresh login another robot just made is taken,
+not repeated. b1 to b5 shared only the first login.
 
 IN MEMORY ONLY. Nothing here is written to disk.
 """
