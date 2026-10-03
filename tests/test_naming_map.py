@@ -173,3 +173,39 @@ class TestWhichRoomsAreAskedAbout:
         nothing can show the user where they are."""
         data = SimpleNamespace(cloud_coordinator=MagicMock(), umf_aligner=None)
         assert smart_rooms_to_name(data, {}) == []
+
+
+class TestTheGuards:
+    """The ways there is no map, each answered without one."""
+
+    def test_an_entry_without_a_blid(self):
+        entry = _entry()
+        entry.runtime_data.blid = None
+        hass, registry, _ = _hass(entity=MagicMock())
+        with patch.object(naming_map.er, "async_get", return_value=registry):
+            assert naming_map.naming_map_markdown(hass, entry) is None
+        registry.async_get_entity_id.assert_not_called()
+
+    def test_a_map_entity_not_in_the_registry(self):
+        hass, registry, component = _hass(entity=MagicMock(), entity_id=None)
+        with patch.object(naming_map.er, "async_get", return_value=registry):
+            assert naming_map.naming_map_markdown(hass, _entry()) is None
+        component.get_entity.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_the_view_answers_404_when_the_map_is_gone(self):
+        hass, registry, _ = _hass(entity=None)
+        entry = _entry()
+        entry.state = naming_map.ConfigEntryState.LOADED
+        hass.config_entries.async_get_entry.return_value = entry
+        request = MagicMock()
+        request.app = {"hass": hass}
+        with patch.object(naming_map.er, "async_get", return_value=registry):
+            resp = await naming_map.NamingMapView().get(request, "E1")
+        assert resp.status == 404
+
+    @pytest.mark.asyncio
+    async def test_no_entity_no_png(self):
+        hass, registry, _ = _hass(entity=None)
+        with patch.object(naming_map.er, "async_get", return_value=registry):
+            assert await naming_map.async_naming_map_png(hass, _entry()) is None
