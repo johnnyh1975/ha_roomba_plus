@@ -185,12 +185,12 @@
         }
       },
       "zones": {
-        "title": "Gevonden kamers een naam geven",
-        "description": "{robot}: {zone_count} zone(s) hebben nog geen naam (ID's: {zone_ids}). Voer er één per regel in als `id=Naam`. Weet u niet welke zone welke is, open dan de kaart van de robot in de iRobot-app — de zones staan daar met hun nummers getekend."
+        "title": "Gedetecteerde gebieden benoemen",
+        "description": "{map}\n\n{robot}: Roomba+ heeft in de schoonmaakritten van deze robot {zone_count} gebied(en) zonder naam gevonden: {zone_ids}. De kaart hierboven tekent elk gebied als stippellijn met zijn nummer; het veld met hetzelfde nummer geeft het een naam. Deze robot bewaart geen eigen kaart, dus deze gebieden zijn van Roomba+ zelf.\n\nTyp een naam in het veld van elk gebied dat u wilt benoemen en laat de rest leeg. Benoemde gebieden verschijnen in de lijst ‘Zone selecteren’ en in de missiegeschiedenis."
       },
       "smart_zones": {
-        "title": "Smart Map-zones een naam geven",
-        "description": "{robot}: {zone_count} zone(s) hebben nog geen naam (ID's: {zone_ids}). Voer er één per regel in als `id=Naam`. Weet u niet welke zone welke is, open dan de kaart van de robot in de iRobot-app — de zones staan daar met hun nummers getekend."
+        "title": "Kamers benoemen",
+        "description": "{map}\n\n{robot}: {zone_count} kamer(s) op de kaart van deze robot hebben nog geen naam: {zone_ids}. De kaart hierboven toont elke kamer met haar nummer; het veld met hetzelfde nummer geeft haar een naam. Alle andere kamers hebben hun naam al uit uw iRobot-account.\n\nTyp een naam in het veld van elke kamer die u wilt benoemen en laat de rest leeg. De namen blijven in Home Assistant — er wordt niets hernoemd in uw iRobot-account."
       },
       "settings": {
         "title": "Verbindingsinstellingen",
@@ -361,8 +361,10 @@
       "rest980_rooms_already_imported": "Alle kamers van roomba_rest980 hebben al een naam in Roomba+.",
       "room_schedule_not_supported": "Frequenties per kamer vereisen een Smart Map-robot met cloudgegevens.",
       "room_schedule_no_rooms": "Nog geen benoemde kamers op de Smart Map gevonden.",
-      "no_rooms_to_name": "Geen kamers gevonden om te benoemen. De kamers van deze robot verschijnen zodra hij minstens één keer specifieke kamers heeft schoongemaakt, of zodra zijn kaart beschikbaar is via je iRobot-account.",
-      "all_rooms_named": "Elke kamer heeft al een naam. Hernoem er een via de zoneselector op de apparaatpagina."
+      "all_rooms_named": "Alle kamers en gebieden van deze robot hebben al een naam. Om in Home Assistant een andere naam te tonen, gebruikt u Configureren → Zonebeheer.",
+      "naming_needs_account": "Roomba+ kent de kamers van deze robot alleen als nummer, en zonder kaart is niet te zien welk nummer welke kamer is. Voeg uw iRobot-account toe aan deze robot (Configureren → iRobot cloud-inloggegevens): Roomba+ neemt dan alle kamer- en zonenamen uit het account over en tekent de kamerkaart. Kent u het nummer van een kamer al, dan kunt u het invoeren onder Configureren → Smart Map-zones handmatig invoeren.",
+      "account_rooms_not_loaded": "Roomba+ heeft de kamers uit uw iRobot-account nog niet gelezen. Probeer het over een minuut opnieuw; blijft dit zo, dan staat in het Home Assistant-logboek waarom het account niet gelezen kon worden.",
+      "naming_needs_map": "Voor het benoemen is de kaart van de robot nodig, zodat u ziet welk nummer welke kamer of welk gebied is, en Roomba+ heeft nog geen kaart om te tonen. Bij een robot met Smart Map is dat de Kamerkaart uit uw iRobot-account. Bij een robot zonder Smart Map is het de kaart ‘Schoonmaakroute’: zet ‘Live kaart inschakelen’ aan onder Configureren → Verbindingsinstellingen en laat de robot één keer schoonmaken. In beide gevallen moet de afbeeldingsentiteit van de kaart ingeschakeld zijn."
     }
   },
   "entity": {
@@ -1757,6 +1759,38 @@
       "maintenance": {
         "name": "Onderhoud"
       }
+    },
+    "event": {
+      "mission_completed": {
+        "name": "Schoonmaak voltooid",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "mission_completed": "Schoonmaak voltooid"
+            }
+          }
+        }
+      },
+      "room_completed": {
+        "name": "Kamer voltooid",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "room_completed": "Kamer voltooid"
+            }
+          }
+        }
+      },
+      "stuck": {
+        "name": "Vastgelopen",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "stuck": "Vastgelopen"
+            }
+          }
+        }
+      }
     }
   },
   "issues": {
@@ -1951,7 +1985,7 @@
     },
     "clean_zone": {
       "name": "Zone reinigen",
-      "description": "Stuurt een Prime-robot op verzoek naar een of meer schoonmaakzones, op naam of numeriek id.",
+      "description": "Stuurt de robot op verzoek naar een of meer schoonmaakzones, op naam (zoals de zonekeuze die toont) of numeriek id. Classic- en Prime-robots.",
       "fields": {
         "zone_name": {
           "name": "Zonenaam",

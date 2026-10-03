@@ -2549,3 +2549,86 @@ def test_the_object_id_is_a_stable_string(cls):
     except AttributeError:
         pytest.skip("uses the platform default")
     assert oid is None or (isinstance(oid, str) and oid)
+
+
+class TestTheRoomSensorsExistOnARealPrimeEntry:
+    """The overdue and history sensors on runtime data shaped like the
+    one Prime setup builds.
+
+    The setup test above passes a MagicMock as runtime data, which
+    answers `has_cloud` and `cloud_coordinator` with something truthy.
+    A real Prime entry has no Classic cloud coordinator at all, and
+    behind a `has_cloud` gate neither sensor was ever created -- while
+    the release notes of 4.0.0 announced both.
+    """
+
+    @staticmethod
+    async def _created(mission_store):
+        from custom_components.roomba_plus import sensor as sensor_mod
+        from custom_components.roomba_plus.models import RoombaData
+
+        entry = MagicMock()
+        entry.options = {}
+        entry.runtime_data = RoombaData(
+            blid="BLID123",
+            roomba=None,
+            connection_type=ConnectionType.CLOUD_ONLY,
+            prime_robot=MagicMock(),
+            mission_store=mission_store,
+        )
+        assert entry.runtime_data.has_cloud is False
+        assert entry.runtime_data.cloud_coordinator is None
+        created = []
+        await sensor_mod.async_setup_entry(
+            MagicMock(), entry, lambda ents, **kw: created.extend(ents)
+        )
+        return created
+
+    @pytest.mark.asyncio
+    async def test_both_sensors_are_created(self):
+        from custom_components.roomba_plus.mission_store import MissionStore
+        from custom_components.roomba_plus.sensor_rooms import (
+            PrimeRoomCleaningHistorySensor,
+            PrimeRoomsOverdueSensor,
+        )
+
+        created = await self._created(MissionStore())
+
+        assert sum(isinstance(e, PrimeRoomsOverdueSensor) for e in created) == 1
+        assert sum(
+            isinstance(e, PrimeRoomCleaningHistorySensor) for e in created
+        ) == 1
+
+    @pytest.mark.asyncio
+    async def test_neither_without_a_mission_store(self):
+        from custom_components.roomba_plus.sensor_rooms import (
+            PrimeRoomCleaningHistorySensor,
+            PrimeRoomsOverdueSensor,
+        )
+
+        created = await self._created(None)
+
+        assert not any(
+            isinstance(e, (PrimeRoomsOverdueSensor, PrimeRoomCleaningHistorySensor))
+            for e in created
+        )
+
+    @pytest.mark.asyncio
+    async def test_they_read_the_prime_room_names(self):
+        """Created is not enough: the names must come from
+        `prime_room_names`, since there is no cloud coordinator."""
+        from custom_components.roomba_plus.mission_store import MissionStore
+        from custom_components.roomba_plus.sensor_rooms import (
+            PrimeRoomsOverdueSensor,
+        )
+
+        created = await self._created(MissionStore())
+        sensor = next(e for e in created if isinstance(e, PrimeRoomsOverdueSensor))
+        data = sensor._config_entry.runtime_data
+        data.prime_room_names = {"7": "Kitchen"}
+
+        from custom_components.roomba_plus.sensor_rooms import _region_maps_for
+
+        assert _region_maps_for(data)[0] == {"7": "Kitchen"}
+        assert sensor.native_value == 0
+        assert isinstance(sensor.extra_state_attributes["rooms"], dict)

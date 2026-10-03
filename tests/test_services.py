@@ -2142,6 +2142,11 @@ class TestCleanZoneService:
 
         runtime = MagicMock()
         runtime.prime_room_names = zone_names or {}
+        # Prime: these tests are about the Prime name sources. Classic
+        # resolves names from the cloud zones -- see the class below.
+        from custom_components.roomba_plus.models import ConnectionType
+
+        runtime.connection_type = ConnectionType.CLOUD_ONLY
 
         config_entry = entry_mock()
         config_entry.runtime_data = runtime
@@ -3354,3 +3359,74 @@ class TestUnwrapStringifiedList:
     ])
     def test_cases(self, names, known, out):
         assert svc._unwrap_stringified_list(names, known) == out
+
+
+
+class TestCleanZoneOnClassic:
+    """@Hardy-196 (i7+, 4.2.18): the zone select listed "Esstisch", and
+    `clean_zone` with that name answered "not found" -- it read only
+    Prime's name sources, and kept only ids from `discovered_zone_ids`,
+    which on his robot held two of the four zones."""
+
+    def _setup(self, *, zones, options=None):
+        from custom_components.roomba_plus.models import ConnectionType
+
+        backend = MagicMock()
+        backend.clean_rooms = AsyncMock()
+        runtime = MagicMock()
+        runtime.connection_type = ConnectionType.LOCAL_PUSH
+        runtime.cloud_coordinator.data = {"pmaps": []}
+        runtime.cloud_coordinator.zones = zones
+        config_entry = entry_mock()
+        config_entry.runtime_data = runtime
+        config_entry.options = {"discovered_zone_ids": ["16", "21"], **(options or {})}
+        hass = hass_mock()
+        hass.config_entries.async_get_entry.return_value = config_entry
+        return hass, backend
+
+    async def _run(self, hass, backend, names):
+        from custom_components.roomba_plus.services import async_handle_clean_zone
+
+        call = MagicMock()
+        call.hass = hass
+        call.data = {"entity_id": ["vacuum.roomba"], "zone_name": names}
+        with patch(
+            "custom_components.roomba_plus.services.async_get_room_cleaning_backend",
+            return_value=backend,
+        ), patch("custom_components.roomba_plus.services.er.async_get"):
+            await async_handle_clean_zone(call)
+        return backend.clean_rooms.await_args.args[0]
+
+    ZONES = [
+        {"id": "16", "name": "Insel"}, {"id": "21", "name": "Couch"},
+        {"id": "30", "name": "Toilette"}, {"id": "31", "name": "Esstisch"},
+    ]
+
+    @pytest.mark.asyncio
+    async def test_a_cloud_zone_name_resolves(self):
+        hass, backend = self._setup(zones=self.ZONES)
+        assert await self._run(hass, backend, ["Esstisch"]) == ["zid_31"]
+
+    @pytest.mark.asyncio
+    async def test_case_and_accents_do_not_matter(self):
+        hass, backend = self._setup(zones=[{"id": "5", "name": "Küche Insel"}])
+        assert await self._run(hass, backend, ["kuche insel"]) == ["zid_5"]
+
+    @pytest.mark.asyncio
+    async def test_a_renamed_zone_answers_to_both_names(self):
+        from custom_components.roomba_plus.const import CONF_SMART_ZONE_ALIASES
+
+        for name in ("Tisch", "Esstisch"):
+            hass, backend = self._setup(
+                zones=self.ZONES, options={CONF_SMART_ZONE_ALIASES: {"31": "Tisch"}}
+            )
+            assert await self._run(hass, backend, [name]) == ["zid_31"]
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_name_lists_the_known_ones(self):
+        from homeassistant.exceptions import ServiceValidationError
+
+        hass, backend = self._setup(zones=self.ZONES)
+        with pytest.raises(ServiceValidationError, match="Esstisch"):
+            await self._run(hass, backend, ["Balkon"])
+        backend.clean_rooms.assert_not_awaited()

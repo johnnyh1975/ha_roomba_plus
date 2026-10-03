@@ -185,12 +185,12 @@
         }
       },
       "zones": {
-        "title": "Nommer les pièces détectées",
-        "description": "{robot} : {zone_count} zone(s) sans nom (ID : {zone_ids}). Saisissez une par ligne sous la forme `id=Nom`. Si vous ne savez pas laquelle est laquelle, ouvrez la carte du robot dans l'application iRobot — les zones y sont dessinées avec leurs numéros."
+        "title": "Nommer les zones détectées",
+        "description": "{map}\n\n{robot} : Roomba+ a trouvé {zone_count} zone(s) sans nom dans les passages de nettoyage de ce robot : {zone_ids}. La carte ci-dessus dessine chacune en pointillés avec son numéro ; le champ portant le même numéro la nomme. Ce robot ne conserve pas de carte, ces zones sont donc celles de Roomba+.\n\nSaisissez un nom dans le champ de chaque zone à nommer et laissez les autres vides. Les zones nommées apparaissent dans la liste « Sélectionner une zone » et dans l'historique des missions."
       },
       "smart_zones": {
-        "title": "Nommer les zones Smart Map",
-        "description": "{robot} : {zone_count} zone(s) sans nom (ID : {zone_ids}). Saisissez une par ligne sous la forme `id=Nom`. Si vous ne savez pas laquelle est laquelle, ouvrez la carte du robot dans l'application iRobot — les zones y sont dessinées avec leurs numéros."
+        "title": "Nommer les pièces",
+        "description": "{map}\n\n{robot} : {zone_count} pièce(s) de la carte de ce robot n'ont pas encore de nom : {zone_ids}. La carte ci-dessus montre chacune avec son numéro ; le champ portant le même numéro la nomme. Toutes les autres pièces ont déjà leur nom grâce à votre compte iRobot.\n\nSaisissez un nom dans le champ de chaque pièce à nommer et laissez les autres vides. Les noms restent dans Home Assistant — rien n'est renommé dans votre compte iRobot."
       },
       "settings": {
         "title": "Paramètres de connexion",
@@ -361,8 +361,10 @@
       "rest980_rooms_already_imported": "Toutes les pièces de roomba_rest980 sont déjà nommées dans Roomba+.",
       "room_schedule_not_supported": "Les fréquences par pièce nécessitent un robot Smart Map avec identifiants cloud.",
       "room_schedule_no_rooms": "Aucune pièce nommée trouvée sur la Smart Map.",
-      "no_rooms_to_name": "Aucune pièce à nommer. Les pièces de ce robot apparaissent une fois qu'il a nettoyé des pièces spécifiques au moins une fois, ou lorsque sa carte est disponible depuis votre compte iRobot.",
-      "all_rooms_named": "Chaque pièce a déjà un nom. Renommez-en une depuis le sélecteur de zones sur la page de l'appareil."
+      "all_rooms_named": "Toutes les pièces et zones de ce robot ont déjà un nom. Pour afficher un autre nom dans Home Assistant, utilisez Configurer → Gestion des zones.",
+      "naming_needs_account": "Roomba+ ne connaît les pièces de ce robot que par leur numéro et, sans carte, impossible de savoir quel numéro correspond à quelle pièce. Ajoutez votre compte iRobot à ce robot (Configurer → Identifiants cloud iRobot) : Roomba+ reprend alors tous les noms de pièces et de zones du compte et dessine la carte des pièces. Si vous connaissez déjà le numéro d'une pièce, vous pouvez le saisir sous Configurer → Saisir manuellement les zones Smart Map.",
+      "account_rooms_not_loaded": "Roomba+ n'a pas encore lu les pièces de votre compte iRobot. Réessayez dans une minute ; si cela persiste, le journal de Home Assistant indique pourquoi le compte n'a pas pu être lu.",
+      "naming_needs_map": "Pour nommer, il faut la carte du robot, afin de voir quel numéro correspond à quelle pièce ou zone, et Roomba+ n'a encore aucune carte à afficher. Sur un robot avec Smart Map, c'est la Carte des pièces, issue de votre compte iRobot. Sur un robot sans Smart Map, c'est la carte « Trajet de nettoyage » : activez « Activer la carte en direct » sous Configurer → Paramètres de connexion et laissez le robot nettoyer une fois. Dans les deux cas, l'entité image de la carte doit être activée."
     }
   },
   "entity": {
@@ -1757,6 +1759,38 @@
       "maintenance": {
         "name": "Entretien"
       }
+    },
+    "event": {
+      "mission_completed": {
+        "name": "Nettoyage terminé",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "mission_completed": "Nettoyage terminé"
+            }
+          }
+        }
+      },
+      "room_completed": {
+        "name": "Pièce terminée",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "room_completed": "Pièce terminée"
+            }
+          }
+        }
+      },
+      "stuck": {
+        "name": "Bloqué",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "stuck": "Bloqué"
+            }
+          }
+        }
+      }
     }
   },
   "issues": {
@@ -1951,7 +1985,7 @@
     },
     "clean_zone": {
       "name": "Nettoyer une zone",
-      "description": "Envoie un robot Prime vers une ou plusieurs zones de nettoyage à la demande, par nom ou par identifiant numérique.",
+      "description": "Envoie le robot vers une ou plusieurs zones de nettoyage à la demande, par nom (tel que l'affiche le sélecteur de zone) ou par identifiant numérique. Robots Classic et Prime.",
       "fields": {
         "zone_name": {
           "name": "Nom de zone",

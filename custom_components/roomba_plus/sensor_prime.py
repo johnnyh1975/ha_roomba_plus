@@ -55,6 +55,7 @@ from homeassistant.const import EntityCategory, PERCENTAGE, UnitOfTime
 
 from roombapy_prime.models.mission_history import FaultScene
 
+from .parts_catalog import guide_url_for
 from .prime_dirt import unfinished_missions
 from .const import (
     PHASE_LABELS,
@@ -1940,6 +1941,13 @@ class PrimeConsumablePartSensor(IRobotEntity, SensorEntity):
             # match them against their own app.
             "raw_count_remaining": part.count_remaining,
             "category": part.counter_category,
+            # The manufacturer's guide for this part, from iRobot's parts
+            # catalogue (4.2.19). Absent where the catalogue has none.
+            **(
+                {"guide_url": guide}
+                if (guide := guide_url_for(self._config_entry.runtime_data, part.part_id))
+                else {}
+            ),
         }
 
 

@@ -185,12 +185,12 @@
         }
       },
       "zones": {
-        "title": "Erkannte Räume benennen",
-        "description": "{robot}: {zone_count} Zone(n) haben noch keinen Namen (IDs: {zone_ids}). Geben Sie eine pro Zeile als `id=Name` ein. Wenn Sie nicht wissen, welche Zone welche ist, öffnen Sie die Karte des Roboters in der iRobot-App – dort sind die Zonen mit ihren Nummern eingezeichnet."
+        "title": "Erkannte Bereiche benennen",
+        "description": "{map}\n\n{robot}: Roomba+ hat in den Reinigungsfahrten dieses Roboters {zone_count} Bereich(e) ohne Namen gefunden: {zone_ids}. Die Karte oben zeigt jeden als gestrichelten Umriss mit seiner Nummer; das Feld mit derselben Nummer benennt ihn. Dieser Roboter speichert keine eigene Karte, die Bereiche stammen von Roomba+ selbst.\n\nTrag für jeden Bereich, den du benennen möchtest, einen Namen in sein Feld ein und lass die übrigen leer. Benannte Bereiche erscheinen in der Liste „Zone auswählen“ und im Reinigungsverlauf."
       },
       "smart_zones": {
-        "title": "Smart-Map-Zonen benennen",
-        "description": "{robot}: {zone_count} Zone(n) haben noch keinen Namen (IDs: {zone_ids}). Geben Sie eine pro Zeile als `id=Name` ein. Wenn Sie nicht wissen, welche Zone welche ist, öffnen Sie die Karte des Roboters in der iRobot-App – dort sind die Zonen mit ihren Nummern eingezeichnet."
+        "title": "Räume benennen",
+        "description": "{map}\n\n{robot}: {zone_count} Raum/Räume auf der Karte dieses Roboters haben noch keinen Namen: {zone_ids}. Die Karte oben zeigt jeden mit seiner Nummer; das Feld mit derselben Nummer benennt ihn. Alle anderen Räume haben ihren Namen bereits aus deinem iRobot-Konto.\n\nTrag für jeden Raum, den du benennen möchtest, einen Namen in sein Feld ein und lass die übrigen leer. Die Namen bleiben in Home Assistant – in deinem iRobot-Konto wird nichts umbenannt."
       },
       "settings": {
         "title": "Verbindungseinstellungen",
@@ -361,8 +361,10 @@
       "rest980_rooms_already_imported": "Alle Räume von roomba_rest980 sind in Roomba+ bereits benannt.",
       "room_schedule_not_supported": "Raum-Frequenzen erfordern einen Smart-Map-Roboter mit Cloud-Zugangsdaten.",
       "room_schedule_no_rooms": "Noch keine benannten Räume auf der Smart Map gefunden.",
-      "no_rooms_to_name": "Es wurden keine Räume zum Benennen gefunden. Die Räume erscheinen, sobald der Roboter mindestens einmal gezielt Räume gereinigt hat oder die Karte aus deinem iRobot-Konto vorliegt.",
-      "all_rooms_named": "Alle Räume haben bereits einen Namen. Umbenennen geht über die Zonenauswahl auf der Geräteseite."
+      "all_rooms_named": "Alle Räume und Bereiche dieses Roboters haben bereits einen Namen. Einen anderen Namen in Home Assistant vergibst du unter Konfigurieren → Zonenverwaltung.",
+      "naming_needs_account": "Roomba+ kennt die Räume dieses Roboters nur als Nummern, und ohne Karte lässt sich nicht erkennen, welche Nummer welcher Raum ist. Füge diesem Roboter dein iRobot-Konto hinzu (Konfigurieren → iRobot Cloud-Zugangsdaten): Roomba+ übernimmt dann alle Raum- und Zonennamen aus dem Konto und zeichnet die Raumkarte. Wenn du die Nummer eines Raums schon kennst, kannst du sie unter Konfigurieren → Smart Map Zonen manuell eingeben eintragen.",
+      "account_rooms_not_loaded": "Roomba+ hat die Räume aus deinem iRobot-Konto noch nicht gelesen. Versuch es in einer Minute noch einmal; bleibt es dabei, steht im Home-Assistant-Protokoll, warum das Konto nicht gelesen werden konnte.",
+      "naming_needs_map": "Zum Benennen braucht es die Karte des Roboters, damit du siehst, welche Nummer welcher Raum oder Bereich ist – und Roomba+ hat noch keine Karte zum Anzeigen. Bei einem Smart-Map-Roboter ist das die Raumkarte aus deinem iRobot-Konto. Bei einem Roboter ohne Smart Map ist es die Karte „Reinigungspfad“: Schalte „Live-Karte aktivieren“ unter Konfigurieren → Verbindungseinstellungen ein und lass den Roboter einmal reinigen. In beiden Fällen muss die Bild-Entity der Karte aktiviert sein."
     }
   },
   "entity": {
@@ -1757,6 +1759,38 @@
       "maintenance": {
         "name": "Wartung"
       }
+    },
+    "event": {
+      "mission_completed": {
+        "name": "Reinigung beendet",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "mission_completed": "Reinigung beendet"
+            }
+          }
+        }
+      },
+      "room_completed": {
+        "name": "Raum fertig",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "room_completed": "Raum fertig"
+            }
+          }
+        }
+      },
+      "stuck": {
+        "name": "Festgefahren",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "stuck": "Festgefahren"
+            }
+          }
+        }
+      }
     }
   },
   "issues": {
@@ -1951,7 +1985,7 @@
     },
     "clean_zone": {
       "name": "Zone reinigen",
-      "description": "Schickt einen Prime-Roboter auf Anforderung zu einer oder mehreren Reinigungszonen, per Name oder numerischer ID.",
+      "description": "Schickt den Roboter auf Anforderung zu einer oder mehreren Reinigungszonen, per Name (wie in der Zonenauswahl) oder numerischer ID. Für Classic- und Prime-Roboter.",
       "fields": {
         "zone_name": {
           "name": "Zonenname",

@@ -1838,3 +1838,28 @@ class TestRemovingBySuffix:
         assert [c.args[0] for c in registry.async_remove.call_args_list] == [
             "select.roomba_plus_B_carpet_boost_select", "sensor.roomba_plus_B_carpet_boost_mode",
         ]
+
+
+class TestCloudSelectReadsBothIdKeys:
+    """The account's map data names a zone `zone_id` or `id` and a room
+    `region_id` or `id`. The select read `id` alone, so a zone under
+    `zone_id` had no id, and every selection went out as a room
+    (@Hardy-196)."""
+
+    def test_a_zone_under_zone_id_has_its_id_and_kind(self):
+        sel = _zone_select(
+            regions=[{"region_id": "3", "name": "Küche"}],
+            zones=[{"zone_id": "31", "name": "Esstisch"}],
+        )
+        sel._selected = "Esstisch"
+        assert sel.selected_region_id == "31"
+        assert sel.selected_region_type == "zid"
+
+    def test_a_room_under_region_id_is_a_room(self):
+        sel = _zone_select(regions=[{"region_id": "3", "name": "Küche"}])
+        sel._selected = "Küche"
+        assert (sel.selected_region_id, sel.selected_region_type) == ("3", "rid")
+
+    def test_an_entry_without_any_id_is_not_offered(self):
+        sel = _zone_select(zones=[{"name": "Ghost"}, {"id": "5", "name": "Real"}])
+        assert sel.options == ["Real"]

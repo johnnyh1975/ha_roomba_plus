@@ -25,6 +25,9 @@ LOCAL_PLATFORMS: Final[list[Platform]] = [
     Platform.SWITCH,
     Platform.SELECT,
     Platform.DEVICE_TRACKER,
+    # EVENT (4.2.19): the mission and room moments as event entities, for
+    # users who cannot subscribe to the bus events -- see event.py.
+    Platform.EVENT,
     # Platform.TODO moved out of this list: the maintenance list is now
     # gated on CONF_ENABLE_MAINTENANCE_LIST for BOTH generations, added
     # at runtime by __init__.py's _optional_platforms(). It arrived on
@@ -95,6 +98,8 @@ PRIME_PLATFORMS: Final[list[Platform]] = [
     # identified for any of them, and a button that does nothing when
     # pressed is worse than one that is not there.
     Platform.BUTTON,
+    # EVENT (4.2.19): mission and room moments, see event.py.
+    Platform.EVENT,
 ]
 # Platform.CALENDAR moved out of this list too (this session) -- same
 # gating as LOCAL_PLATFORMS, see the comment there.

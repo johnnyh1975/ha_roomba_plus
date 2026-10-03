@@ -185,12 +185,12 @@
         }
       },
       "zones": {
-        "title": "Nazwij wykryte pomieszczenia",
-        "description": "{robot}: {zone_count} stref(y) nie ma jeszcze nazwy (ID: {zone_ids}). Wpisz po jednej w wierszu jako `id=Nazwa`. Jeśli nie wiesz, która jest która, otwórz mapę robota w aplikacji iRobot — strefy są tam narysowane wraz z numerami."
+        "title": "Nazwij wykryte obszary",
+        "description": "{map}\n\n{robot}: Roomba+ znalazł w przejazdach sprzątających tego robota {zone_count} obszar(y) bez nazwy: {zone_ids}. Mapa powyżej rysuje każdy jako przerywany kontur z jego numerem; pole z tym samym numerem nadaje mu nazwę. Ten robot nie przechowuje własnej mapy, więc te obszary pochodzą od Roomba+.\n\nWpisz nazwę w polu każdego obszaru, który chcesz nazwać, a pozostałe zostaw puste. Nazwane obszary pojawiają się na liście „Wybierz strefę” i w historii misji."
       },
       "smart_zones": {
-        "title": "Nazwij strefy Smart Map",
-        "description": "{robot}: {zone_count} stref(y) nie ma jeszcze nazwy (ID: {zone_ids}). Wpisz po jednej w wierszu jako `id=Nazwa`. Jeśli nie wiesz, która jest która, otwórz mapę robota w aplikacji iRobot — strefy są tam narysowane wraz z numerami."
+        "title": "Nazwij pomieszczenia",
+        "description": "{map}\n\n{robot}: {zone_count} pomieszczenie/pomieszczenia na mapie tego robota nie mają jeszcze nazwy: {zone_ids}. Mapa powyżej pokazuje każde z jego numerem; pole z tym samym numerem nadaje mu nazwę. Wszystkie pozostałe pomieszczenia mają już nazwę z Twojego konta iRobot.\n\nWpisz nazwę w polu każdego pomieszczenia, które chcesz nazwać, a pozostałe zostaw puste. Nazwy pozostają w Home Assistant — na Twoim koncie iRobot nic nie jest zmieniane."
       },
       "settings": {
         "title": "Ustawienia połączenia",
@@ -361,8 +361,10 @@
       "rest980_rooms_already_imported": "Wszystkie pomieszczenia z roomba_rest980 są już nazwane w Roomba+.",
       "room_schedule_not_supported": "Częstotliwości dla poszczególnych pomieszczeń wymagają robota z Smart Map i danymi logowania do chmury.",
       "room_schedule_no_rooms": "Nie znaleziono jeszcze nazwanych pomieszczeń na Smart Map.",
-      "no_rooms_to_name": "Nie znaleziono pokoi do nazwania. Pokoje tego robota pojawią się, gdy przynajmniej raz posprząta konkretne pokoje lub gdy jego mapa będzie dostępna z konta iRobot.",
-      "all_rooms_named": "Każdy pokój ma już nazwę. Zmień nazwę jednego z nich w selektorze stref na stronie urządzenia."
+      "all_rooms_named": "Wszystkie pomieszczenia i obszary tego robota mają już nazwę. Aby w Home Assistant wyświetlać inną nazwę, użyj Konfiguruj → Zarządzanie strefami.",
+      "naming_needs_account": "Roomba+ zna pomieszczenia tego robota tylko jako numery, a bez mapy nie da się ustalić, który numer jest którym pomieszczeniem. Dodaj do tego robota swoje konto iRobot (Konfiguruj → Dane logowania do chmury iRobot): Roomba+ przejmie wtedy wszystkie nazwy pomieszczeń i stref z konta i narysuje mapę pomieszczeń. Jeśli znasz już numer pomieszczenia, możesz go wpisać w Konfiguruj → Ręczne wprowadzenie stref Smart Map.",
+      "account_rooms_not_loaded": "Roomba+ nie odczytał jeszcze pomieszczeń z Twojego konta iRobot. Spróbuj ponownie za minutę; jeśli to się nie zmieni, dziennik Home Assistant podaje, dlaczego nie udało się odczytać konta.",
+      "naming_needs_map": "Do nadawania nazw potrzebna jest mapa robota, aby było widać, który numer jest którym pomieszczeniem lub obszarem, a Roomba+ nie ma jeszcze mapy do pokazania. W robocie ze Smart Map jest to Mapa pomieszczeń z Twojego konta iRobot. W robocie bez Smart Map jest to mapa „Trasa sprzątania”: włącz „Włącz mapę na żywo” w Konfiguruj → Ustawienia połączenia i pozwól robotowi raz posprzątać. W obu przypadkach encja obrazu mapy musi być włączona."
     }
   },
   "entity": {
@@ -1757,6 +1759,38 @@
       "maintenance": {
         "name": "Konserwacja"
       }
+    },
+    "event": {
+      "mission_completed": {
+        "name": "Sprzątanie zakończone",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "mission_completed": "Sprzątanie zakończone"
+            }
+          }
+        }
+      },
+      "room_completed": {
+        "name": "Pomieszczenie gotowe",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "room_completed": "Pomieszczenie gotowe"
+            }
+          }
+        }
+      },
+      "stuck": {
+        "name": "Utknął",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "stuck": "Utknął"
+            }
+          }
+        }
+      }
     }
   },
   "issues": {
@@ -1951,7 +1985,7 @@
     },
     "clean_zone": {
       "name": "Sprzątanie strefy",
-      "description": "Wysyła robota Prime do jednej lub kilku stref sprzątania na żądanie, według nazwy lub numerycznego id.",
+      "description": "Wysyła robota do jednej lub kilku stref sprzątania na żądanie, według nazwy (jak w wyborze strefy) lub numerycznego id. Roboty Classic i Prime.",
       "fields": {
         "zone_name": {
           "name": "Nazwa strefy",

@@ -229,12 +229,45 @@ data:
 
 Binary sensor `{name}_start_blocked` — ON while queued, with `blocking_entities`, `queued_since`, `timeout_at` attributes.
 
-#### Zone management
+#### Naming rooms and areas *(rebuilt in 4.2.19)*
 
 Configure: Settings → Devices & Services → Roomba+ → Configure → **Rooms & zones**
 
+The form shows the robot's map, with each unnamed room or area drawn with
+its number, and one empty field per number. Type a name into the fields
+you want and leave the rest empty. Nothing outside Home Assistant is
+needed: the iRobot app shows no room numbers, so the map in the form is
+where they are.
+
+- **Smart Map robots with the iRobot account added:** every room and
+  zone takes its name from the account, so there is usually nothing to
+  name. The form lists only rooms **on the map** that have no name
+  anywhere, and shows the room map with their numbers. Region numbers
+  known only from old schedules or earlier cleans are on no map and are
+  not asked about.
+- **Smart Map robots without the account:** Roomba+ knows the rooms only
+  by number and has no map to show, so the step explains this instead
+  of asking. Add the account (Configure → iRobot cloud credentials) and
+  the names and the room map appear on their own. If you know a room's
+  number already, Configure → *Manually enter Smart Map zones* still
+  takes it.
+- **Robots without a Smart Map (900 series):** the robot keeps no map;
+  the areas are ones Roomba+ finds in its cleaning runs. The form shows
+  the *Cleaning path* map, where each area is a dashed outline with its
+  number — the live map must be on (Connection settings → *Enable live
+  map*). Named areas appear in the *Select zone* list and in the mission
+  history; a 900-series robot cannot clean an area on its own.
+
+When there is no map to show — the map image entity is disabled, or the
+robot has not cleaned yet — the step says so rather than asking for names
+nobody can match to a room.
+
+#### Zone management
+
+Configure: Settings → Devices & Services → Roomba+ → Configure → **Zone management**
+
 - Browse all zones in a structured index
-- Rename any zone; Smart Map robots use the alias alongside the cloud name
+- Rename any zone; Smart Map robots use the alias alongside the cloud name. `clean_room` takes the new name as well as the original (since 4.2.19)
 - Hide zones — removed from selectors, `clean_room`, and repair issues
 - Changes saved atomically
 
@@ -402,6 +435,13 @@ On older XVMC versions (no Roomba+ platform in the dropdown), define `map_modes`
 
 `image.{name}_coverage_map` — EMA-weighted occupancy heatmap, updated at each mission end.
 
+**Placing something on it** *(4.2.19)*: the image is square, the floor
+plan usually is not. `x_min_mm`…`y_max_mm` are the bounding box of the
+visited cells; the attribute `render_extent_mm` (`x_min`, `x_max`,
+`y_min`, `y_max`, `size_px`) is the frame the picture is actually drawn
+in. A point at (x, y) mm sits at pixel
+`((x − x_min) · s, (y_max − y) · s)` with `s = size_px / (x_max − x_min)`.
+
 ---
 
 ### Room cleaning setup — HA areas (`vacuum.clean_area`, HA 2026.3+)
@@ -478,6 +518,14 @@ Base gets no bag sensor):
 | Edge sweeping brush | The side brush. Wears on its own schedule, so it is not averaged into the main brush sensor |
 | Dust Bag | The Clean Base bag |
 
+**A guide link per part** *(4.2.19)*. Where iRobot's parts catalogue has a
+replacement guide for a part, its sensor carries it as a `guide_url`
+attribute — the manufacturer's own page, in your Home Assistant language,
+for your robot's model. Classic consumable sensors get it through the
+account's part counter, Prime part sensors directly. The catalogue is read
+once per setup without logging in; a part without a guide has no attribute
+rather than a made-up one.
+
 **Migrating from the official app:** a part's cloud counter includes replacements you confirmed
 in iRobot's app, so the runtime-hours reading at each replacement is recoverable, and Roomba+
 adopts it as its baseline on the first cloud refresh. That replaces the install-time "assume
@@ -549,7 +597,7 @@ Every reset above (button or service) writes a searchable Logbook entry and fire
 
 `todo.{name}_maintenance` — filter replacement and brush/pad cleaning as real Home Assistant to-do items. **Opt-in** on both generations (since 4.0): Configure → Connection settings → *Show maintenance as a to-do list*. Classic robots got that switch only in 4.2.17 / 4.3.0b5. Due date comes from the same self-calibrated wear-rate estimate as the `*_days_until_due` sensors (absent until a wear rate is established — early in a robot's life, or right after a reset). Marking an item done fires the same reset as the corresponding button (`reset_filter` / `reset_brush` or `reset_pad` on Braava) — same Logbook entry and `roomba_plus_maintenance_reset` event either way.
 
-SMART-tier robots (i/s/j-series, Braava) also get a **Reconfigure rooms** item whenever a Smart Map zone has no assigned name yet — same condition as the zone-naming Repair Issue. This item isn't manually completable: it disappears on its own once every zone is named via the existing naming wizard; marking it done by hand has no effect and it simply reappears on the next update if unnamed zones remain.
+SMART-tier robots (i/s/j-series, Braava) also get a **Reconfigure rooms** item whenever a room still needs a name — with the iRobot account added, only a room on the map without a name anywhere counts (since 4.2.19; before, rooms named in the account kept it open). This item isn't manually completable: it disappears on its own once every room has a name via Configure → *Rooms & zones*; marking it done by hand has no effect and it simply reappears on the next update if unnamed rooms remain.
 
 #### Dock contact health (v2.8.0)
 
@@ -1035,8 +1083,8 @@ them separate:
 | | |
 |---|---|
 | `roomba_plus.set_quiet_hours` | writes the daily window, or a one-off "quiet until" moment |
-| `switch.{name}_do_not_disturb` | turns DND on and off right now |
-| `binary_sensor.{name}_in_quiet_hours` | whether a scheduled window covers this moment |
+| `switch.{name}_prime_quiet_hours_active` (shown as *Do not disturb*) | turns DND on and off right now |
+| `binary_sensor.{name}_prime_quiet_hours` (shown as *In quiet hours*) | whether a scheduled window covers this moment |
 
 The action takes **either** a daily window (`start` and `end`) **or** a single
 `ends_at` — the robot's own format is a sealed type with exactly those two
@@ -1250,7 +1298,7 @@ for Prime users, with no error to explain it.
 
 | Event | Fires when | Payload |
 |---|---|---|
-| `roomba_plus_mission_completed` | A mission ends (any result) | `entry_id`, `name`, `rooms_cleaned`, `area_sqft`, `stuck_count`, `result` — plus (v3.2.0) `is_anomalous`, `anomaly_reason`, `recommended_action`, `robot_lifted`, always present (`null`/`false` for ordinary missions), so a notification automation gets the anomaly reason without calling any service |
+| `roomba_plus_mission_completed` | A mission ends (any result) | `entry_id`, `name`, `rooms_cleaned`, `area_sqft`, `stuck_count`, `result` — plus (v3.2.0) `is_anomalous`, `anomaly_reason`, `recommended_action`, `robot_lifted`, always present (`null`/`false` for ordinary missions), so a notification automation gets the anomaly reason without calling any service — plus (4.2.19) `mission_id` and `missions_added`. **The same fields on Prime robots since 4.2.19** (before, Prime sent `entry_id` only); there `stuck_count` is `null`, and a sync that imports several missions at once — the first one after setup imports the history — fires once, describing the newest, with `missions_added` saying how many |
 | `roomba_plus_room_completed` | AUTO-ADVANCE-ROOM confirms a room finished | `entry_id`, `name`, `room_name`, `room_idx` |
 | `roomba_plus_health_change` | `sensor.*_integration_health` crosses a band (healthy/degraded/critical) | `entry_id`, `name`, `score`, `previous_score`, `band`, `previous_band` |
 | `roomba_plus_map_retrain_started` / `_completed` | Cloud detects a Smart Map change and syncs | `entry_id`, `name`, `pmap_id` |
@@ -1260,6 +1308,20 @@ for Prime users, with no error to explain it.
 | `roomba_plus_start_blocked` · `roomba_plus_start_timeout` | Smart Start blocking-sensor gate (see above) | `blocking_entities` (for `start_blocked`) |
 
 `roomba_plus_mission_completed`, `roomba_plus_maintenance_reset`, and `roomba_plus_stuck` also produce rich, searchable **Logbook** entries automatically — no setup needed.
+
+### Event entities *(4.2.19)*
+
+The three moments a dashboard most wants to react to are also **event entities**:
+
+| Entity | Mirrors | Robots |
+|---|---|---|
+| `event.{name}_mission_completed` | `roomba_plus_mission_completed` | both generations |
+| `event.{name}_room_completed` | `roomba_plus_room_completed` | both generations |
+| `event.{name}_stuck` | `roomba_plus_stuck` | Classic only — Prime robots report no stuck event |
+
+Each changes state when its bus event fires for that robot, with the event's payload as its attributes (`event_type` plus the fields above). The bus events still fire as before; automations and device triggers are unaffected.
+
+**Why both.** Home Assistant lets only administrators subscribe to an integration's own bus events from the frontend. A dashboard card opened by any other user never heard a mission end; an entity state reaches every user who can see the robot.
 
 ### Device triggers
 

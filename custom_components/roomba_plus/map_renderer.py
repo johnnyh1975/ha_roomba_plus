@@ -1023,13 +1023,20 @@ class MapRenderer:
             x1, y1 = self._mm_to_px_fit(x_min - offset, y_max + offset)
             x2, y2 = self._mm_to_px_fit(x_max + offset, y_min - offset)
             self._draw_dashed_rect(draw, x1, y1, x2, y2, SUGGEST_OUTLINE, SUGGEST_DASH)
-            # Room name label at bbox centroid
-            if room.name:
-                lx, ly = self._mm_to_px_fit(
-                    (x_min + x_max) / 2,
-                    (y_min + y_max) / 2,
-                )
-                draw.text((lx, ly), room.name, fill=SUGGEST_LABEL, anchor="mm", font=LABEL_FONT)
+            # Room name label at bbox centroid -- AND THE NUMBER when
+            # there is no name yet. An unnamed area was drawn as a bare
+            # outline, and the naming form asked for "zone_room_1"
+            # with nothing on the map to say which outline that was
+            # (@liblit, 980). The form now labels its field "Area 1".
+            # Spelled out rather than imported: this module stays free
+            # of the store's Home Assistant imports. It is
+            # `room_seg_store.area_number`, and a test holds them equal.
+            label = room.name or room.id.removeprefix("room_")
+            lx, ly = self._mm_to_px_fit(
+                (x_min + x_max) / 2,
+                (y_min + y_max) / 2,
+            )
+            draw.text((lx, ly), label, fill=SUGGEST_LABEL, anchor="mm", font=LABEL_FONT)
 
         # Door crossing markers (filled circles)
         if self._geometry_store:

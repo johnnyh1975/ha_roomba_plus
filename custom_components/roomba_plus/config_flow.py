@@ -113,12 +113,13 @@ from .const import (
     DEFAULT_PRESENCE_MODE,
     DOMAIN,
     ROOMBA_SESSION,
-    extract_region_id,
     has_smart_map,
 )
 from .dirt_threshold_manager import TRIGGER_MULTIPLIER_DEFAULT
 from .models import ConnectionType, MapCapability, RoombaConfigEntry
-from .room_seg_store import RoomSegStore
+from .naming_map import naming_map_markdown
+from .room_cleaning import smart_rooms_to_name
+from .room_seg_store import RoomSegStore, area_number
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -214,6 +215,11 @@ def _robots_of(account: CloudAccount | None) -> dict[str, Any]:
 #: The two fixed choices of the known_account step, next to the accounts.
 _OTHER_ACCOUNT = "__other__"
 _NO_ACCOUNT = "__none__"
+
+
+def _area_field(room_id: str) -> str:
+    """The naming form's field for one area, which is also its label."""
+    return f"Area {area_number(room_id)}"
 
 # ── Discovery constants ───────────────────────────────────────────────────────
 ROOMBA_DISCOVERY_LOCK = "roomba_plus_discovery_lock"
@@ -2251,7 +2257,7 @@ class RoombaPlusOptionsFlow(OptionsFlow):
 
         if user_input is not None:
             for room in unconfirmed:
-                name = user_input.get(f"zone_{room.id}", "").strip()
+                name = str(user_input.get(_area_field(room.id), "")).strip()
                 if name:
                     room_seg_store.rename_room(room.id, name)
             # Persist
@@ -2261,148 +2267,118 @@ class RoombaPlusOptionsFlow(OptionsFlow):
             return self.async_create_entry(title="", data=self.config_entry.options)
 
         if not unconfirmed:
-            return self.async_create_entry(title="", data=self.config_entry.options)
+            # SAY SO, rather than closing as if something was saved.
+            return self.async_abort(reason="all_rooms_named")
 
+        # THE MAP, OR NO FORM. The areas are Roomba+'s own -- a 980
+        # keeps no map, so nothing outside Home Assistant can say which
+        # is which -- and the Cleaning path map is where they are drawn.
+        picture = naming_map_markdown(self.hass, self.config_entry)
+        if picture is None:
+            return self.async_abort(reason="naming_needs_map")
+
+        # ONE FIELD PER AREA, LABELLED WITH THE NUMBER THE MAP SHOWS.
+        #
+        # The field was `zone_room_1`: the store's internal id, shown
+        # verbatim because no translation can exist for a name built at
+        # runtime (@liblit, 980). The map draws each unnamed area with
+        # this same number.
+        #
+        # A default only where the area already has a name; an empty
+        # field is an area the user chose to leave unnamed.
         schema = vol.Schema({
-            vol.Optional(f"zone_{r.id}", default=r.name): str
+            (
+                vol.Optional(_area_field(r.id), default=r.name)
+                if r.name else vol.Optional(_area_field(r.id))
+            ): str
             for r in unconfirmed
         })
         return self.async_show_form(
             step_id="zones",
             data_schema=schema,
-            description_placeholders={"zone_count": str(len(unconfirmed))},
+            description_placeholders={
+                "map": picture,
+                "robot": self.config_entry.title or "this robot",
+                "zone_count": str(len(unconfirmed)),
+                "zone_ids": ", ".join(area_number(r.id) for r in unconfirmed),
+            },
         )
 
 
     async def async_step_smart_zones(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Smart Map zone naming step — triggered by the Repair Issue.
+        """Name the rooms on a Smart Map robot's map that have no name.
 
-        Dynamically generates one text field per unlabelled region_id.
-        Saves user-assigned names to config_entry.options["smart_zone_labels"].
+        REBUILT IN 4.2.19 (@liblit, i7). The step listed every region id
+        Roomba+ had ever seen -- from schedules, the last clean, the
+        cloud -- as twelve fields labelled `zone_1` and pre-filled with
+        "Zone 1", under instructions to look the numbers up in the
+        iRobot app, which shows no numbers. Most of those rooms already
+        had their names from his iRobot account; the step never looked.
+
+        Now it asks only about what the user can answer, and nothing
+        outside Home Assistant is needed to answer it:
+
+        - rooms ON THE MAP without a name anywhere (`smart_rooms_to_name`),
+        - with the map shown above the fields, every room labelled and
+          the unnamed ones by the number their field carries.
+
+        Without an iRobot account there is no map, and Roomba+ knows the
+        rooms only by number; the step says so instead of asking. The
+        manual entry step remains for whoever knows the numbers.
         """
-
-        state = roomba_reported_state(self.config_entry.runtime_data.roomba)
+        data = self.config_entry.runtime_data
+        state = roomba_reported_state(data.roomba)
         if not has_smart_map(state):
             return self.async_create_entry(title="", data=self.config_entry.options)
 
-        # THREE SOURCES, NOT ONE.
-        #
-        # This read only `cleanSchedule2`, so a robot whose owner has
-        # never built a schedule WITH ROOMS offered nothing to name --
-        # the step opened and immediately reported itself finished
-        # (@connormxy). His robot knows its twelve rooms perfectly well;
-        # they simply are not in a schedule.
-        #
-        # `lastCommand` holds the regions of the most recent clean, and
-        # the cloud coordinator holds the full list. Either is a better
-        # answer than an empty screen.
-        region_ids: set[str] = set()
-
-        last = state.get("lastCommand")
-        if isinstance(last, dict):
-            for region in last.get("regions") or []:
-                if isinstance(region, dict):
-                    rid = region.get("region_id") or region.get("id")
-                    if rid:
-                        region_ids.add(str(rid))
-
-        data = getattr(self.config_entry, "runtime_data", None)
         coordinator = getattr(data, "cloud_coordinator", None)
-        for region in getattr(coordinator, "regions", None) or []:
-            rid = region.get("id") if isinstance(region, dict) else None
-            if rid:
-                region_ids.add(str(rid))
+        if coordinator is None:
+            return self.async_abort(reason="naming_needs_account")
+        if getattr(coordinator, "data", None) is None:
+            return self.async_abort(reason="account_rooms_not_loaded")
 
-        for entry in state.get("cleanSchedule2", []):
-            for region in entry.get("cmd", {}).get("regions", []):
-                rid = extract_region_id(region)
-                if rid:
-                    region_ids.add(rid)
-        last = state.get("lastCommand", {})
-        for region in (last.get("regions") or []):
-            rid = extract_region_id(region)
-            if rid:
-                region_ids.add(rid)
-
-        existing_labels: dict[str, Any] = self.config_entry.options.get(
-            "smart_zone_labels", {}
-        )
-        unlabelled = sorted(rid for rid in region_ids if rid not in existing_labels)
+        options = self.config_entry.options
+        unnamed = smart_rooms_to_name(data, options)
+        if not unnamed:
+            return self.async_abort(reason="all_rooms_named")
 
         if user_input is not None:
-            new_labels = dict(existing_labels)
-            new_zone_data: dict[str, Any] = dict(
-                self.config_entry.options.get("smart_zone_data", {})
-            )
-
-            # Capture pmap_id from live state at naming time.
-            # Priority: lastCommand > cleanSchedule2 > first entry in pmaps.
-            # The pmaps fallback covers the case where the user has only done
-            # full-home cleans so lastCommand contains no pmap_id, but the
-            # robot still reports its map ID in state.pmaps.
-            current_pmap_id: str = ""
-            last = state.get("lastCommand", {})
-            if last.get("pmap_id"):
-                current_pmap_id = last["pmap_id"]
-            else:
-                for entry in state.get("cleanSchedule2", []):
-                    cmd = entry.get("cmd", {})
-                    if cmd.get("pmap_id"):
-                        current_pmap_id = cmd["pmap_id"]
-                        break
-            if not current_pmap_id:
-                pmaps: list[dict[str, Any]] = state.get("pmaps", [])
-                if pmaps:
-                    current_pmap_id = next(iter(pmaps[0]), "")
-
-            for rid in unlabelled:
-                label = user_input.get(f"zone_{rid}", "").strip()
+            new_labels = dict(options.get("smart_zone_labels") or {})
+            new_zone_data: dict[str, Any] = dict(options.get("smart_zone_data") or {})
+            # THE MAP ON SCREEN. Every room asked about is on the active
+            # map -- that is the map the form showed.
+            pmap_id = str(getattr(coordinator, "active_pmap_id", "") or "")
+            for rid in unnamed:
+                label = str(user_input.get(f"Room {rid}", "")).strip()
                 if label:
                     new_labels[rid] = label
-                    # Build per-region pmap_id: prefer a region-specific match
-                    # from lastCommand if available, otherwise use current_pmap_id.
-                    pmap_for_rid = current_pmap_id
-                    if last.get("pmap_id") and any(
-                        r.get("region_id") == rid
-                        for r in (last.get("regions") or [])
-                    ):
-                        pmap_for_rid = last["pmap_id"]
-                    new_zone_data[rid] = {
-                        "name": label,
-                        "pmap_id": pmap_for_rid,
-                    }
-
-            new_options = dict(self.config_entry.options)
-            # Write both keys: smart_zone_labels for backward compat,
+                    new_zone_data[rid] = {"name": label, "pmap_id": pmap_id}
+            new_options = dict(options)
+            # Both keys: smart_zone_labels for backward compatibility,
             # smart_zone_data for the clean_room action.
             new_options["smart_zone_labels"] = new_labels
             new_options["smart_zone_data"] = new_zone_data
             return self.async_create_entry(title="", data=new_options)
 
-        if not unlabelled:
-            # SAY WHY, rather than reporting success for doing nothing.
-            #
-            # This step opened and immediately announced itself finished
-            # (@connormxy), which reads as "done" when it means "found
-            # nothing". The two cases below are different problems and
-            # deserve different sentences.
-            return self.async_abort(
-                reason="no_rooms_to_name" if not region_ids
-                else "all_rooms_named"
-            )
+        picture = naming_map_markdown(self.hass, self.config_entry)
+        if picture is None:
+            return self.async_abort(reason="naming_needs_map")
 
-        schema = vol.Schema({
-            vol.Optional(f"zone_{rid}", default=f"Zone {rid}"): str
-            for rid in unlabelled
-        })
+        # EMPTY FIELDS, labelled with the number the map draws. An empty
+        # field is a room the user chose to leave unnamed; the old
+        # pre-fill ("Zone 21") was saved as a name when the form was
+        # submitted unchanged.
+        schema = vol.Schema({vol.Optional(f"Room {rid}"): str for rid in unnamed})
         return self.async_show_form(
             step_id="smart_zones",
             data_schema=schema,
             description_placeholders={
-                "zone_count": str(len(unlabelled)),
-                "zone_ids": ", ".join(unlabelled),
+                "map": picture,
+                "robot": self.config_entry.title or "this robot",
+                "zone_count": str(len(unnamed)),
+                "zone_ids": ", ".join(unnamed),
             },
         )
 

@@ -357,18 +357,25 @@ async def async_setup_entry(
         # The Classic sensor sits behind `map_capability == "smart"` in
         # the branch below, which a CLOUD_ONLY entry never reaches --
         # not a decision, just the order things were built in. It reads
-        # the mission store and the cloud regions, both of which Prime
-        # has, and it matters MORE here: Prime robots have zones as
-        # well as rooms, so there is more to fall behind.
-        if data.has_cloud and data.cloud_coordinator is not None:
+        # the mission store and the region names, and it matters MORE
+        # here: Prime robots have zones as well as rooms, so there is
+        # more to fall behind.
+        #
+        # GATED ON THE MISSION STORE, NOT ON `has_cloud`. `has_cloud`
+        # means the Classic cloud coordinator, which a Prime entry never
+        # has -- the region names come from `prime_room_names` instead,
+        # and `_region_maps_for` already reads them. Behind the old gate
+        # neither sensor was ever created on a real Prime entry, while
+        # the setup test passed: its MagicMock runtime data answered
+        # every attribute with something truthy.
+        if data.mission_store is not None:
             entities.append(PrimeRoomsOverdueSensor(data.blid, config_entry))
             # The single-sensor history, which is what Classic ships and
             # Prime had no equivalent of. One entity carrying
             # {region_name: timestamp}, rather than one entity each.
-            if data.mission_store is not None:
-                entities.append(
-                    PrimeRoomCleaningHistorySensor(data.blid, config_entry)
-                )
+            entities.append(
+                PrimeRoomCleaningHistorySensor(data.blid, config_entry)
+            )
 
         # ONE "LAST CLEANED" SENSOR PER ROOM AND ZONE.
         #

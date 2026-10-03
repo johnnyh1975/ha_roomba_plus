@@ -299,6 +299,11 @@ class TestAsyncRecordMissionCompletedEvent:
         assert payload["area_sqft"] == 250
         assert payload["stuck_count"] == 1
         assert payload["result"] == "stuck"
+        # One schema on both generations -- the Prime sync's test pins
+        # the same set (4.2.19).
+        from tests.test_prime_mission_sync import MISSION_COMPLETED_KEYS
+        assert set(payload) == MISSION_COMPLETED_KEYS
+        assert payload["missions_added"] == 1
 
     def test_explanation_fields_always_present_with_constant_shape(self):
         """v3.2.0 UX fix — ANOMALY-EXPLAIN's result is folded into the

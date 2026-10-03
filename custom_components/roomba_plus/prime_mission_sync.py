@@ -420,6 +420,7 @@ async def _async_sync_locked(
     # the five records `async_append` compares against.
     known = {rec.get("id") for rec in store.records}
     added = 0
+    newest: dict[str, Any] | None = None
     # Oldest first, so the store's own ordering assumptions and any
     # rolling statistics see missions in the order they happened.
     for entry in sorted(
@@ -435,6 +436,7 @@ async def _async_sync_locked(
         # EVENT_MISSION_COMPLETED -- a "finished cleaning" for nothing.
         if await store.async_append(record):
             added += 1
+            newest = record
 
     # SAVED ONCE, AFTER THE LOOP.
     #
@@ -506,9 +508,53 @@ async def _async_sync_locked(
         # works, rather than adding a parallel one.
         _hass_of(config_entry).bus.async_fire(
             EVENT_MISSION_COMPLETED,
-            {"entry_id": config_entry.entry_id},
+            _mission_completed_payload(config_entry, store, newest, added),
         )
     return added
+
+
+def _mission_completed_payload(
+    config_entry: RoombaConfigEntry,
+    store: Any,
+    newest: dict[str, Any] | None,
+    added: int,
+) -> dict[str, Any]:
+    """The Classic payload of `roomba_plus_mission_completed`, from Prime.
+
+    THE SAME FIELDS ON BOTH GENERATIONS, so an automation, the logbook
+    and the mission-completed event entity read one shape. Prime sent
+    `entry_id` alone (I5 of the card plan). Every Classic field is
+    present; what a Prime history entry does not report is null, as the
+    Classic payload already does for an unknown value.
+
+    Describes the NEWEST mission this sync added. A sync can add several
+    -- the first one after setup adds the whole history -- and
+    `missions_added` says how many, so a consumer can tell one finished
+    clean from a backfill.
+    """
+    record = newest or {}
+    explanation: dict[str, Any] = {}
+    if record.get("id"):
+        try:
+            explanation = store.explain_mission(record["id"]) or {}
+        except Exception:  # noqa: BLE001 -- the event matters more
+            _LOGGER.debug("roomba_plus: explain_mission failed", exc_info=True)
+    rooms = record.get("room_durations_sec")
+    return {
+        "entry_id": config_entry.entry_id,
+        "name": config_entry.title,
+        "rooms_cleaned": len(rooms) if isinstance(rooms, dict) else 0,
+        "area_sqft": record.get("area_sqft"),
+        # Prime's history carries no stuck count.
+        "stuck_count": None,
+        "result": record.get("result"),
+        "is_anomalous": bool(explanation.get("is_anomalous", False)),
+        "anomaly_reason": explanation.get("anomaly_reason"),
+        "recommended_action": explanation.get("recommended_action"),
+        "robot_lifted": bool(explanation.get("robot_lifted", False)),
+        "mission_id": record.get("id"),
+        "missions_added": added,
+    }
 
 
 def _hass_of(config_entry: RoombaConfigEntry) -> Any:

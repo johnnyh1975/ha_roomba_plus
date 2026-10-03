@@ -1096,6 +1096,37 @@ class GridStore:
         candidate."""
         self._furniture_dismissed_at.pop(cell, None)
 
+    def render_extent_mm(self, size_px: int = 400) -> dict[str, float] | None:
+        """The millimetres the heatmap image actually covers (4.2.19).
+
+        THE IMAGE IS SQUARE AND THE HOUSE IS NOT. `render_heatmap` scales
+        the longer side of the cell bounding box, plus one cell, to the
+        full image, and leaves the rest of the shorter side empty. The
+        bounding box alone therefore does not say where a millimetre
+        lands -- a card that stretched it over the image would put its
+        pins in the wrong place on every non-square floor plan. This is
+        the frame the picture is drawn in, and `render_heatmap` takes its
+        scale from here (I10 of the card plan).
+
+        A point at (x, y) mm is drawn at pixel
+        ((x - x_min) * scale, (y_max - y) * scale), with
+        scale = size_px / (x_max - x_min). None before the first cell.
+        """
+        bbox = self.bounding_box_mm()
+        if bbox is None:
+            return None
+        x_min, x_max, y_min, y_max = bbox
+        span_x = max(x_max - x_min, CELL_SIZE_MM)
+        span_y = max(y_max - y_min, CELL_SIZE_MM)
+        side = max(span_x, span_y) + CELL_SIZE_MM
+        return {
+            "x_min": float(x_min),
+            "x_max": float(x_min + side),
+            "y_min": float(y_max - side),
+            "y_max": float(y_max),
+            "size_px": float(size_px),
+        }
+
     def render_heatmap(self, size_px: int = 400) -> bytes | None:
         """Render the occupancy grid as a PNG heatmap.
 
@@ -1116,12 +1147,15 @@ class GridStore:
             return None
 
         import io
-        bbox = self.bounding_box_mm()
-        if bbox is None:
+        # THE FRAME COMES FROM ONE PLACE, `render_extent_mm`, which the
+        # coverage image also publishes -- so what a card is told and
+        # what is drawn cannot drift apart (4.2.19).
+        extent = self.render_extent_mm(size_px)
+        if extent is None:
             return None
-        x_min, x_max, y_min, y_max = bbox
-        span_x = max(x_max - x_min, CELL_SIZE_MM)
-        span_y = max(y_max - y_min, CELL_SIZE_MM)
+        x_min = extent["x_min"]
+        y_max = extent["y_max"]
+        # (Why the frame is one cell wider than the span:)
         # THE SPAN IS CORNER-TO-CORNER, so the last cell's own width has
         # to fit beyond it. Without this, `scale` maps the outermost cell
         # centre exactly onto the canvas edge and its body falls off --
@@ -1129,7 +1163,7 @@ class GridStore:
         # row. One row of cells was always missing, in either
         # orientation, which is invisible without a landmark to check
         # against.
-        scale = size_px / (max(span_x, span_y) + CELL_SIZE_MM)
+        scale = size_px / (extent["x_max"] - extent["x_min"])
 
         img = Image.new("RGBA", (size_px, size_px), (255, 255, 255, 0))
         draw = ImageDraw.Draw(img)

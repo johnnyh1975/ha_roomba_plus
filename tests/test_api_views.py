@@ -2794,17 +2794,21 @@ class TestMoreHistoryBranches:
         grid = MagicMock()
         grid.hotspots.return_value = [
             {"gx": 1, "gy": 2, "x_mm": 10.0, "y_mm": 20.0, "source": "stuck_events"},
-            {"gx": None, "gy": None, "x_mm": 5.0, "y_mm": 6.0, "source": "keepout"},
         ]
         grid.stuck_pattern.return_value = {}
         aligner = MagicMock(aligned=True)
         aligner.pose_to_umf.return_value = (1.0, 2.0)
+        aligner.umf_to_pose.return_value = (500.0, 600.0)
         aligner.room_name_at.side_effect = lambda x, y: "Kitchen" if (x, y) == (1.0, 2.0) else "Hall"
         data = _make_runtime_data(map_capability=MapCapability.SMART, grid_store=grid)
-        data.cloud_coordinator.data = None
+        data.cloud_coordinator.data = {"pmaps": []}
+        data.cloud_coordinator.observed_zone_centroids = []
+        data.cloud_coordinator.keepout_zones = [{"cx": 5.0, "cy": 6.0}]
         data.umf_aligner = aligner
         status, body = await _get(_hass_with(data), format="hazards")
         assert [h["room_name"] for h in body] == ["Kitchen", "Hall"]
+        # The keep-out is looked up at its own map point, not its pose one.
+        aligner.room_name_at.assert_any_call(5.0, 6.0)
 
     @pytest.mark.asyncio
     async def test_a_bad_day_count_falls_back_to_ninety(self):
@@ -2871,3 +2875,54 @@ class TestHouseholdSummary:
         body = json.loads(resp.body)
         assert resp.status == 200
         assert body.get("robots") == []
+
+
+class TestHazardsShareOneFrame:
+    """I9 of the card plan: stuck pins came in pose-space millimetres and
+    the map's obstacles and keep-out zones in the map's own units, all
+    under `x_mm`/`y_mm` -- with a "bearing from the dock" computed from
+    the map's origin."""
+
+    def _data(self, *, aligned):
+        from custom_components.roomba_plus.models import MapCapability
+
+        grid = MagicMock()
+        grid.hotspots.return_value = [
+            {"gx": 1, "gy": 2, "x_mm": 300.0, "y_mm": 400.0,
+             "source": "stuck_events", "room_name": None},
+        ]
+        grid.stuck_pattern.return_value = {}
+        data = _make_runtime_data(map_capability=MapCapability.SMART, grid_store=grid)
+        data.cloud_coordinator.data = {"pmaps": []}
+        data.cloud_coordinator.observed_zone_centroids = [{"x": 7.0, "y": 8.0}]
+        data.cloud_coordinator.keepout_zones = [{"cx": 5.0, "cy": 6.0}]
+        aligner = MagicMock(aligned=aligned)
+        aligner.umf_to_pose.side_effect = lambda x, y: (x * 100, y * 100)
+        aligner.pose_to_umf.return_value = None
+        aligner.room_name_at.return_value = None
+        data.umf_aligner = aligner
+        return data
+
+    @pytest.mark.asyncio
+    async def test_aligned_every_pin_is_in_pose_space(self):
+        status, body = await _get(_hass_with(self._data(aligned=True)), format="hazards")
+        by_source = {h["source"]: h for h in body}
+
+        assert {h["space"] for h in body} == {"pose"}
+        assert (by_source["keepout"]["x_mm"], by_source["keepout"]["y_mm"]) == (500.0, 600.0)
+        assert (by_source["keepout"]["x_umf"], by_source["keepout"]["y_umf"]) == (5.0, 6.0)
+        assert (by_source["robot_learned"]["x_mm"], by_source["robot_learned"]["y_mm"]) == (700.0, 800.0)
+        assert by_source["keepout"]["distance_mm"] == int((500 ** 2 + 600 ** 2) ** 0.5)
+        assert by_source["stuck_events"]["x_mm"] == 300.0
+
+    @pytest.mark.asyncio
+    async def test_unaligned_map_pins_say_so_and_claim_no_bearing(self):
+        status, body = await _get(_hass_with(self._data(aligned=False)), format="hazards")
+        by_source = {h["source"]: h for h in body}
+
+        assert by_source["stuck_events"]["space"] == "pose"
+        for source in ("keepout", "robot_learned"):
+            assert by_source[source]["space"] == "umf"
+            assert by_source[source]["bearing_deg"] is None
+            assert by_source[source]["distance_mm"] is None
+        assert by_source["keepout"]["x_mm"] == 5.0

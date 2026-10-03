@@ -15,6 +15,7 @@ from unittest.mock import MagicMock
 from unittest.mock import patch
 import inspect
 import pytest
+import voluptuous as vol
 
 # MODULE SCOPE, not inside the test: the `hass` fixture rebuilds the
 # custom-integration module space, so an import in a test body that uses
@@ -295,20 +296,52 @@ class TestSaveZoneEditsAtomicEphemeral:
         assert flow._pending_zone_edits == {}
 
 
+_MAP_MD = "![map](/api/roomba_plus/test_entry/naming_map.png?authSig=x)"
+
+
+@pytest.fixture
+def naming_map():
+    """The naming forms' map, present unless a test says otherwise."""
+    with patch(
+        "custom_components.roomba_plus.config_flow.naming_map_markdown",
+        return_value=_MAP_MD,
+    ) as mocked:
+        yield mocked
+
+
+@pytest.mark.usefixtures("naming_map")
 class TestAsyncStepZonesEphemeral:
     @pytest.mark.asyncio
-    async def test_no_unconfirmed_rooms_skips_form(self):
+    async def test_no_unconfirmed_rooms_says_so(self):
+        """Closing as if something was saved read as "done" when it
+        meant "nothing to do"."""
         from custom_components.roomba_plus.room_seg_store import RoomSegStore, SegRoom
 
         rss = RoomSegStore()
         rss.rooms = {"room_1": SegRoom(id="room_1", name="Kitchen", confirmed=True)}
         flow = _make_options_flow(rss)
-        flow.async_create_entry = MagicMock(side_effect=lambda **kw: kw)
 
         result = await flow.async_step_zones(None)
 
-        flow.async_create_entry.assert_called_once()
-        assert "show_form" not in str(result)
+        assert result["type"] == "abort"
+        assert result["reason"] == "all_rooms_named"
+
+    @pytest.mark.asyncio
+    async def test_no_map_no_form(self, naming_map):
+        """Nine fields labelled with numbers nothing on screen explains
+        is the form @liblit could not use (980). Without the map the
+        step says what is missing instead."""
+        from custom_components.roomba_plus.room_seg_store import RoomSegStore, SegRoom
+
+        naming_map.return_value = None
+        rss = RoomSegStore()
+        rss.rooms = {"room_1": SegRoom(id="room_1", name="", confirmed=False)}
+        flow = _make_options_flow(rss)
+
+        result = await flow.async_step_zones(None)
+
+        assert result["type"] == "abort"
+        assert result["reason"] == "naming_needs_map"
 
     @pytest.mark.asyncio
     async def test_shows_form_with_one_field_per_unconfirmed_room(self):
@@ -326,8 +359,48 @@ class TestAsyncStepZonesEphemeral:
 
         flow.async_show_form.assert_called_once()
         schema_keys = {str(k) for k in result["data_schema"].schema.keys()}
-        assert any("room_1" in k for k in schema_keys)
-        assert any("room_2" in k for k in schema_keys)
+        # "Area 1", the number the Cleaning path map draws -- not the
+        # store's internal `zone_room_1` (@liblit, 980).
+        assert schema_keys == {"Area 1", "Area 2"}
+
+    @pytest.mark.asyncio
+    async def test_the_form_gets_every_placeholder_its_text_uses(self):
+        """`{robot}` was in the text and never passed: Home Assistant
+        showed `[formatjs Error: MISSING_VALUE]` instead of the
+        instructions (@liblit, 4.2.18)."""
+        from custom_components.roomba_plus.room_seg_store import RoomSegStore, SegRoom
+
+        rss = RoomSegStore()
+        rss.rooms = {
+            "room_1": SegRoom(id="room_1", name="", confirmed=False),
+            "room_4": SegRoom(id="room_4", name="", confirmed=False),
+        }
+        flow = _make_options_flow(rss)
+        flow._config_entry.title = "Roomba 980"
+        flow.async_show_form = MagicMock(side_effect=lambda **kw: kw)
+
+        result = await flow.async_step_zones(None)
+
+        assert result["description_placeholders"] == {
+            "map": _MAP_MD,
+            "robot": "Roomba 980", "zone_count": "2", "zone_ids": "1, 4",
+        }
+        # Empty fields: an unnamed area has nothing to pre-fill.
+        for key in result["data_schema"].schema:
+            assert key.default is vol.UNDEFINED
+
+    def test_the_map_draws_the_number_the_form_asks_for(self):
+        """The map renderer spells `area_number` out instead of
+        importing it; the two must not drift."""
+        import inspect
+
+        from custom_components.roomba_plus import map_renderer
+        from custom_components.roomba_plus.room_seg_store import area_number
+
+        assert area_number("room_12") == "12"
+        assert 'room.name or room.id.removeprefix("room_")' in inspect.getsource(
+            map_renderer
+        )
 
     @pytest.mark.asyncio
     async def test_submitting_names_renames_rooms(self):
@@ -338,7 +411,7 @@ class TestAsyncStepZonesEphemeral:
         flow = _make_options_flow(rss)
         flow.async_create_entry = MagicMock(side_effect=lambda **kw: kw)
 
-        await flow.async_step_zones({"zone_room_1": "Kitchen"})
+        await flow.async_step_zones({"Area 1": "Kitchen"})
 
         assert rss.rooms["room_1"].name == "Kitchen"
         assert rss.rooms["room_1"].confirmed is True
@@ -1354,123 +1427,145 @@ class TestMapManagementOptionsStep:
         assert result["type"] != "create_entry"
 
 
+@pytest.mark.usefixtures("naming_map")
 class TestSmartZonesNamingStep:
-    """`async_step_smart_zones` — the naming form @liblit reported on,
-    rebuilt in 4.2.10 and until now covered by no test at all.
+    """`async_step_smart_zones`, rebuilt in 4.2.19 (@liblit, i7).
 
-    THREE SOURCES, NOT ONE. It reads the zone list from `lastCommand`,
-    the cloud coordinator and `cleanSchedule2`. The step once read only
-    the schedule, so a robot whose owner had never built a schedule WITH
-    ROOMS opened the form and immediately declared itself finished —
-    @connormxy's robot knew its twelve rooms perfectly well, they were
-    simply not in a schedule. Each source below is a separate test
-    because each was a separate field report.
+    It listed every region id Roomba+ had ever seen as a field labelled
+    `zone_1`, pre-filled "Zone 1", and told him to find the numbers in
+    the iRobot app -- which shows none, and which named every one of his
+    rooms already. Now it asks only about rooms on the map without a
+    name anywhere, shows that map, and says what is missing otherwise.
     """
-
-    def _flow(self, state: dict, *, regions=None, options=None):
-        flow = _make_options_flow()
-        roomba = MagicMock()
-        roomba.master_state = {"state": {"reported": state}}
-        flow._config_entry.runtime_data.roomba = roomba
-        coordinator = MagicMock()
-        coordinator.regions = regions or []
-        flow._config_entry.runtime_data.cloud_coordinator = coordinator
-        flow._config_entry.options = dict(options or {})
-        return flow
 
     _SMART_MAP = {"pmaps": [{"abc": "v1"}], "cap": {"pmaps": 1}}
 
+    def _flow(self, *, polygons=("3", "7"), account=None, on_map=None,
+              options=None, cloud=True, loaded=True):
+        flow = _make_options_flow()
+        data = flow._config_entry.runtime_data
+        data.map_capability = MapCapability.SMART
+        roomba = MagicMock()
+        roomba.master_state = {"state": {"reported": dict(self._SMART_MAP)}}
+        data.roomba = roomba
+        if cloud:
+            coordinator = MagicMock()
+            coordinator.data = {"pmaps": []} if loaded else None
+            coordinator.active_pmap_id = "abc"
+            coordinator.regions = [
+                {"id": rid, "name": name} for rid, name in (account or {}).items()
+            ]
+            coordinator.zones = []
+            coordinator.regions_by_pmap = {}
+            data.cloud_coordinator = coordinator
+        else:
+            data.cloud_coordinator = None
+        aligner = MagicMock()
+        aligner.room_polygons_umf = {rid: [(0, 0), (1, 0), (1, 1)] for rid in polygons}
+        aligner.rid_to_name.return_value = dict(on_map or {})
+        data.umf_aligner = aligner
+        flow._config_entry.options = dict(options or {})
+        flow._config_entry.title = "Roomba i7"
+        return flow
+
     @pytest.mark.asyncio
     async def test_a_robot_without_a_smart_map_just_closes(self):
-        flow = self._flow({"cap": {}})
-        result = await flow.async_step_smart_zones()
-        assert result["type"] == "create_entry"
-
-    @pytest.mark.asyncio
-    async def test_zones_are_found_via_last_command(self):
-        """The most recent clean's regions — available even to an owner
-        who has never built a schedule."""
-        state = dict(self._SMART_MAP)
-        state["lastCommand"] = {
-            "pmap_id": "abc",
-            "regions": [{"region_id": "3"}, {"region_id": "7"}],
+        flow = self._flow()
+        flow._config_entry.runtime_data.roomba.master_state = {
+            "state": {"reported": {"cap": {}}}
         }
-        flow = self._flow(state)
-
         result = await flow.async_step_smart_zones()
-
-        assert result["type"] == "form"
-
-    @pytest.mark.asyncio
-    async def test_zones_are_found_via_the_cloud_coordinator(self):
-        """@connormxy's case: the robot knows its rooms, the schedule
-        does not."""
-        flow = self._flow(
-            dict(self._SMART_MAP),
-            regions=[{"id": "3", "name": ""}, {"id": "7", "name": ""}],
-        )
-
-        result = await flow.async_step_smart_zones()
-
-        assert result["type"] == "form"
-
-    @pytest.mark.asyncio
-    async def test_zones_are_found_via_the_schedule(self):
-        state = dict(self._SMART_MAP)
-        state["cleanSchedule2"] = [
-            {"cmd": {"pmap_id": "abc", "regions": [{"region_id": "3"}]}}
-        ]
-        flow = self._flow(state)
-
-        result = await flow.async_step_smart_zones()
-
-        assert result["type"] == "form"
-
-    @pytest.mark.asyncio
-    async def test_submitting_names_writes_both_option_keys(self):
-        """`smart_zone_labels` for backward compatibility and
-        `smart_zone_data` for the clean_room action — a step that writes
-        only one leaves half the integration unable to see the name."""
-        state = dict(self._SMART_MAP)
-        state["lastCommand"] = {"pmap_id": "abc", "regions": [{"region_id": "3"}]}
-        flow = self._flow(state)
-
-        result = await flow.async_step_smart_zones({"zone_3": "Kitchen"})
-
         assert result["type"] == "create_entry"
-        assert result["data"]["smart_zone_labels"]["3"] == "Kitchen"
-        assert result["data"]["smart_zone_data"]["3"]["name"] == "Kitchen"
 
     @pytest.mark.asyncio
-    async def test_the_prefilled_default_is_saved_as_a_real_name(self):
-        """Each field is pre-filled with `Zone <id>` and submitting it
-        unchanged stores exactly that. Pinned deliberately, because it
-        LOOKS like the @liblit bug and is not: he reported that the
-        pre-filled box read as a result rather than an input, which is a
-        presentation problem. Storing the default is the intended
-        outcome — a zone called "Zone 3" beats an unnamed one on the
-        map. Anyone tempted to "fix" this by dropping defaults should
-        change the form's presentation instead.
-        """
-        state = dict(self._SMART_MAP)
-        state["lastCommand"] = {"pmap_id": "abc", "regions": [{"region_id": "3"}]}
-        flow = self._flow(state)
-
-        result = await flow.async_step_smart_zones({"zone_3": "Zone 3"})
-
-        assert result["data"]["smart_zone_labels"]["3"] == "Zone 3"
-
-    @pytest.mark.asyncio
-    async def test_it_says_why_when_there_is_nothing_to_name(self):
-        """Two different nothings, two different messages: no rooms at
-        all, versus every room already named. Reporting success for
-        doing nothing is what @connormxy saw."""
-        flow = self._flow(dict(self._SMART_MAP))
+    async def test_rooms_named_by_the_account_are_not_asked_for(self):
+        """liblit's i7: every room on the map named in his account."""
+        flow = self._flow(account={"3": "Kitchen", "7": "Hall"})
 
         result = await flow.async_step_smart_zones()
 
         assert result["type"] == "abort"
-        assert result["reason"] == "no_rooms_to_name"
+        assert result["reason"] == "all_rooms_named"
+
+    @pytest.mark.asyncio
+    async def test_only_unnamed_rooms_on_the_map_get_a_field(self):
+        """Ids from old schedules or earlier cleans are on no map, and a
+        number the map does not draw is one nobody can place."""
+        flow = self._flow(polygons=("3", "7", "12"), account={"3": "Kitchen"})
+        flow._config_entry.runtime_data.roomba.master_state["state"]["reported"][
+            "cleanSchedule2"
+        ] = [{"cmd": {"regions": [{"region_id": "20"}, {"region_id": "21"}]}}]
+
+        form = await flow.async_step_smart_zones()
+
+        assert form["type"] == "form"
+        assert [str(k) for k in form["data_schema"].schema] == ["Room 7", "Room 12"]
+        for key in form["data_schema"].schema:
+            assert key.default is vol.UNDEFINED
+        assert form["description_placeholders"] == {
+            "map": _MAP_MD, "robot": "Roomba i7",
+            "zone_count": "2", "zone_ids": "7, 12",
+        }
+
+    @pytest.mark.asyncio
+    async def test_a_name_from_the_map_or_entered_here_counts(self):
+        flow = self._flow(
+            polygons=("3", "7", "9"),
+            on_map={"3": "Kitchen", "7": "7"},
+            options={"smart_zone_data": {"9": {"name": "Office"}}},
+        )
+
+        form = await flow.async_step_smart_zones()
+
+        assert [str(k) for k in form["data_schema"].schema] == ["Room 7"]
+
+    @pytest.mark.asyncio
+    async def test_hidden_rooms_are_not_asked_for(self):
+        flow = self._flow(options={CONF_SMART_ZONE_HIDDEN: ["7"]})
+
+        form = await flow.async_step_smart_zones()
+
+        assert [str(k) for k in form["data_schema"].schema] == ["Room 3"]
+
+    @pytest.mark.asyncio
+    async def test_without_an_account_it_says_so_instead_of_asking(self):
+        """Without the account there is no map: the step cannot show
+        which number is which room, so it does not ask."""
+        result = await self._flow(cloud=False).async_step_smart_zones()
+
+        assert result["type"] == "abort"
+        assert result["reason"] == "naming_needs_account"
+
+    @pytest.mark.asyncio
+    async def test_an_account_not_read_yet_is_not_an_empty_one(self):
+        result = await self._flow(loaded=False).async_step_smart_zones()
+
+        assert result["reason"] == "account_rooms_not_loaded"
+
+    @pytest.mark.asyncio
+    async def test_no_map_no_form(self, naming_map):
+        naming_map.return_value = None
+
+        result = await self._flow().async_step_smart_zones()
+
+        assert result["type"] == "abort"
+        assert result["reason"] == "naming_needs_map"
+
+    @pytest.mark.asyncio
+    async def test_submitting_saves_the_filled_fields_only(self):
+        """`smart_zone_labels` for backward compatibility and
+        `smart_zone_data` for clean_room, on the map that was shown.
+        An empty field is a room left unnamed -- the old pre-fill was
+        saved as a name when the form went back unchanged."""
+        flow = self._flow()
+
+        result = await flow.async_step_smart_zones({"Room 3": "Kitchen", "Room 7": " "})
+
+        assert result["type"] == "create_entry"
+        assert result["data"]["smart_zone_labels"] == {"3": "Kitchen"}
+        assert result["data"]["smart_zone_data"] == {
+            "3": {"name": "Kitchen", "pmap_id": "abc"}
+        }
 
 
 class TestSmartZonesManualStep:
@@ -2373,24 +2468,6 @@ class TestZoneEditing:
                                     "4": {"display_name": "", "hidden": False}}
         result = flow._save_zone_edits_atomic()
         assert result["data"][CONF_SMART_ZONE_HIDDEN] == ["3"]
-
-
-class TestSmartZoneMapId:
-
-    @pytest.mark.asyncio
-    async def test_naming_finds_the_map_via_the_schedule(self):
-        state = {"pmaps": [{"p1": "v"}], "cap": {"pmaps": 1},
-                 "cleanSchedule2": [{"cmd": {"pmap_id": "p1", "regions": [{"region_id": "3"}]}}]}
-        flow = _smart(_make_options_flow(), state=state)
-        result = await flow.async_step_smart_zones({"zone_3": "Kitchen"})
-        assert result["data"]["smart_zone_data"]["3"]["pmap_id"] == "p1"
-
-    @pytest.mark.asyncio
-    async def test_naming_falls_back_to_the_first_map(self):
-        state = {"pmaps": [{"p9": "v"}], "cap": {"pmaps": 1}}
-        flow = _smart(_make_options_flow(), regions=[{"id": "3", "name": ""}], state=state)
-        result = await flow.async_step_smart_zones({"zone_3": "Kitchen"})
-        assert result["data"]["smart_zone_data"]["3"]["pmap_id"] == "p9"
 
 
 class TestManualZoneNaming:

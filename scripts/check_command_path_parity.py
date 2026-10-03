@@ -24,6 +24,12 @@ Nothing kept the four answers in step, and they drifted:
   - the zone prefix was handled in three of four; `clean_zone` carried
     the mirror-image fault for a release
   - the capability filter reached the dropdown but not a service call
+  - Classic `clean_rooms` was recorded here as carrying zones "a
+    different way" -- through the type it notes while reading the room
+    list. True for `clean_room`, which reads the list; `clean_zone`
+    sends `zid_`-marked ids and does not, and on Classic it never worked
+    (@Hardy-196, 4.2.19). The entry that excused the absence went with
+    the fix.
 
 Each was found by hand, one at a time. This script asks the question
 once.
@@ -50,16 +56,6 @@ CONCERNS: dict[str, str] = {
 ACCEPTED: dict[tuple[str, str], str] = {
     ("wrong-floor warning", "Prime.clean_segments"):
         "delegates to Prime.clean_rooms, which carries it",
-    ("zone prefix", "Classic.clean_rooms"):
-        "CARRIES ZONES A DIFFERENT WAY, not 'cannot carry zones'. "
-        "Classic records the type in `_type_by_region` when building "
-        "the room list and reads it back when building the payload, so "
-        "its ids stay bare and the prefix never appears. Prime puts the "
-        "type IN the id instead. Both end up sending `zid`; only the "
-        "mechanism differs. "
-        "Reading this absence as a missing capability cost a night: it "
-        "led to a proposed rewrite of the Classic send path to add "
-        "something it already did.",
     ("map-updating guard", "Prime.clean_segments"):
         "delegates to Prime.clean_rooms, which carries it",
     ("map-updating guard", "Classic.clean_segments"):

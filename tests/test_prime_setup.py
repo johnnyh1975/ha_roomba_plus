@@ -122,6 +122,9 @@ class TestAsyncSetupEntryPrime:
             yield  # pragma: no cover -- makes this an async generator
 
         fake_prime_robot.watch_named_shadows_updates = _empty_named_shadows_updates
+        # A real dict, so "already registered?" has a real answer; a
+        # MagicMock's .get() returns something truthy.
+        hass.data = {}
 
         with patch.object(
             _CURRENT["account"], "prime_robot",
@@ -144,6 +147,14 @@ class TestAsyncSetupEntryPrime:
         assert runtime_data.prime_household_id == "hh1"
         assert runtime_data.prime_serial_info is fake_serial_info
         fake_prime_robot.connect.assert_awaited_once()
+        # THE REST API, which only the Classic setup registered: a
+        # Prime-only household had no /api/roomba_plus/* routes (I1).
+        registered = {
+            type(c.args[0]).__name__
+            for c in hass.http.register_view.call_args_list
+        }
+        assert "MissionHistoryView" in registered
+        assert "DailyDigestView" in registered
 
     @pytest.mark.asyncio
     async def test_serial_info_failure_does_not_block_setup(self) -> None:

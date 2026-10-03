@@ -1110,3 +1110,25 @@ class TestPressFailureHandling:
             side_effect=RuntimeError("cloud down")
         )
         await _button(CleanBaseBagResetButton, entry).async_press()
+
+
+class TestTheZoneButtonSendsAZoneAsAZone:
+    """@Hardy-196 (i7+): "Esstisch" selected in the cloud zone select, the
+    button pressed, nothing cleaned -- every selection went out as `rid`."""
+
+    @pytest.mark.asyncio
+    async def test_a_selected_zone_goes_out_as_zid(self, monkeypatch):
+        picker = SimpleNamespace(
+            unique_id="roomba_B_cloud_zone_p1", selected_region_id="31",
+            selected_region_type="zid", selected_pmap_info={"pmap_id": "p1"},
+        )
+        b = _zone_button(monkeypatch, pickers=[picker])
+        await b.async_press()
+        region = _sent(b)["regions"][0]
+        assert (region["region_id"], region["type"]) == ("31", "zid")
+
+    @pytest.mark.asyncio
+    async def test_a_room_and_an_older_picker_stay_rid(self, monkeypatch):
+        b = _zone_button(monkeypatch, pickers=[_picker("3", "p1")])
+        await b.async_press()
+        assert _sent(b)["regions"][0]["type"] == "rid"
