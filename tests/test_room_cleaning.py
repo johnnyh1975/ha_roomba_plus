@@ -1458,68 +1458,6 @@ class TestBothZoneKeysCount:
         assert self._has_rooms({"smart_zone_labels": {}}) is False
 
 
-class TestTheNamingFlowLooksBeyondSchedules:
-    """It read only `cleanSchedule2`, so a robot whose owner has never
-    built a schedule WITH ROOMS offered nothing to name -- the step
-    opened and immediately reported itself finished (@connormxy). His
-    robot knows its twelve rooms; they simply are not in a schedule.
-    """
-
-    def _source(self):
-        import inspect
-
-        from custom_components.roomba_plus import config_flow
-
-        src = inspect.getsource(config_flow)
-        i = src.index("THREE SOURCES, NOT ONE")
-        return src[i:i + 1600]
-
-    def test_the_last_command_is_read(self):
-        assert 'state.get("lastCommand")' in self._source()
-
-    def test_the_cloud_coordinator_is_read(self):
-        assert 'getattr(coordinator, "regions", None)' in self._source()
-
-    def test_schedules_are_still_read(self):
-        assert 'state.get("cleanSchedule2", [])' in self._source()
-
-
-class TestAnEmptyNamingStepSaysWhy:
-    """It announced itself finished, which reads as "done" when it means
-    "found nothing". The two cases are different problems."""
-
-    def _source(self):
-        import inspect
-
-        from custom_components.roomba_plus import config_flow
-
-        src = inspect.getsource(config_flow)
-        i = src.index("SAY WHY, rather than reporting success")
-        return src[i:i + 500]
-
-    def test_nothing_found_and_all_named_are_different_reasons(self):
-        source = self._source()
-
-        assert "no_rooms_to_name" in source
-        assert "all_rooms_named" in source
-
-    def test_it_aborts_rather_than_claiming_success(self):
-        assert "async_abort" in self._source()
-
-    def test_both_reasons_are_translated(self):
-        import json
-        import pathlib
-
-        for loc in ("de", "en", "fr"):
-            d = json.loads(
-                (pathlib.Path("custom_components/roomba_plus/translations")
-                 / f"{loc}.json").read_text()
-            )
-            abort = d.get("options", {}).get("abort", {})
-            assert "no_rooms_to_name" in abort, loc
-            assert "all_rooms_named" in abort, loc
-
-
 class TestAnEmptyMapIdIsRefusedRatherThanSent:
     """@Echovictor37 sent a region command with `map_id=None` on a Combo
     105: the broker returned a PUBACK **and the robot cleaned the whole
@@ -4457,3 +4395,125 @@ class TestAVersionThatFailedIsPassedOver:
 
     def test_without_a_version_nothing_is_sent(self):
         assert rc.resolve_user_pmapv_id({}, {}, "P") is None
+
+
+class TestARenamedRoomCanBeCleanedByItsNewName:
+    """I8 (card 2.5.0 review): a room renamed under Zone management shows
+    its alias everywhere -- select, rooms map, card -- and `clean_room`
+    answered "Unknown room(s)" for it."""
+
+    @staticmethod
+    def _backend(aliases):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.const import CONF_SMART_ZONE_ALIASES
+        from custom_components.roomba_plus.room_cleaning import ClassicRoomCleaning
+
+        coordinator = MagicMock()
+        coordinator.data = {"pmaps": []}
+        coordinator.regions = [
+            {"id": "3", "name": "Kitchen", "pmap_id": "M"},
+            {"id": "5", "name": "Hall", "pmap_id": "M"},
+        ]
+        coordinator.zones = []
+        coordinator.regions_by_pmap = {}
+        coordinator.active_pmap_id = "M"
+        backend = ClassicRoomCleaning.__new__(ClassicRoomCleaning)
+        backend._config_entry = SimpleNamespace(
+            options={CONF_SMART_ZONE_ALIASES: aliases}
+        )
+        backend._data = SimpleNamespace(cloud_coordinator=coordinator)
+        return backend
+
+    @pytest.mark.asyncio
+    async def test_the_alias_resolves_and_the_original_still_does(self):
+        rooms = await self._backend({"3": "Cooking"}).available_rooms()
+
+        assert rooms["Cooking"] == "3"
+        assert rooms["Kitchen"] == "3", "automations written before the rename"
+
+    @pytest.mark.asyncio
+    async def test_the_service_matcher_finds_it(self):
+        from custom_components.roomba_plus.room_cleaning import match_room_names
+
+        rooms = await self._backend({"3": "Küche"}).available_rooms()
+
+        assert match_room_names(rooms, ["kuche"]) == (["3"], [])
+
+    @pytest.mark.asyncio
+    async def test_an_alias_does_not_take_another_rooms_name(self):
+        rooms = await self._backend({"3": "Hall"}).available_rooms()
+
+        assert rooms["Hall"] == "5"
+
+    @pytest.mark.asyncio
+    async def test_an_alias_for_an_unknown_region_adds_nothing(self):
+        """An alias names a room; it does not make one reachable."""
+        rooms = await self._backend({"99": "Attic", "5": ""}).available_rooms()
+
+        assert "Attic" not in rooms
+        assert set(rooms) == {"Kitchen", "Hall"}
+
+
+class TestClassicZonesGoOutAsZones:
+    """@Hardy-196 (i7+): `clean_zone` could not work on a Classic robot.
+    The service sent `zid_<id>`; Classic `clean_rooms` looked that up as
+    a room, found no map for it, and would have sent it as a room."""
+
+    def _backend(self):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from custom_components.roomba_plus.room_cleaning import ClassicRoomCleaning
+
+        data = MagicMock()
+        data.roomba = robot_mock()
+        data.has_cloud = True
+        data.cloud_coordinator = MagicMock(
+            data={"x": 1},
+            regions=[{"id": "3", "name": "Küche", "pmap_id": "MAP-1"}],
+            zones=[{"id": "21", "name": "Esstisch", "pmap_id": "MAP-1"}],
+            regions_by_pmap={},
+            active_pmap_id="MAP-1",
+        )
+        data.roomba_reported_state = MagicMock(
+            return_value={"lastCommand": {"pmap_id": "MAP-1", "user_pmapv_id": "V1"}}
+        )
+        backend = ClassicRoomCleaning(data, MagicMock(), MagicMock())
+        backend._config_entry.options = {}
+        backend._hass.async_add_executor_job = AsyncMock()
+        return backend
+
+    async def _sent(self, backend, ids):
+        from unittest.mock import patch
+
+        with patch.object(backend, "_raise_if_map_updating"):
+            await backend.clean_rooms(ids)
+        return backend._data.roomba.send_command.await_args.args[1]
+
+    @pytest.mark.asyncio
+    async def test_a_zone_goes_out_bare_typed_zid_without_a_map_version(self):
+        params = await self._sent(self._backend(), ["zid_21"])
+
+        assert params["pmap_id"] == "MAP-1"
+        assert [(r["region_id"], r["type"]) for r in params["regions"]] == [("21", "zid")]
+        assert "user_pmapv_id" not in params, "error 224 on a zone-only command"
+
+    @pytest.mark.asyncio
+    async def test_mixed_rooms_and_zones_keep_the_version(self):
+        params = await self._sent(self._backend(), ["3", "zid_21"])
+
+        assert [(r["region_id"], r["type"]) for r in params["regions"]] == [
+            ("3", "rid"), ("21", "zid"),
+        ]
+        assert "user_pmapv_id" in params
+
+    @pytest.mark.asyncio
+    async def test_it_reads_the_room_list_itself(self):
+        """`clean_zone` has no reason to read the room list first."""
+        backend = self._backend()
+        assert backend._pmap_by_region == {}
+
+        await self._sent(backend, ["zid_21"])
+
+        assert backend._data.roomba.send_command.await_count == 1

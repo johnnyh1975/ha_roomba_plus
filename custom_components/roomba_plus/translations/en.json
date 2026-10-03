@@ -167,12 +167,12 @@
         }
       },
       "zones": {
-        "title": "Name detected rooms",
-        "description": "{robot}: {zone_count} zone(s) have no name yet (IDs: {zone_ids}). Enter one per line as `id=Name`. If you cannot tell which zone is which, open the robot's map in the iRobot app — the zones are drawn there with their numbers."
+        "title": "Name detected areas",
+        "description": "{map}\n\n{robot}: Roomba+ has found {zone_count} area(s) without a name in this robot's cleaning runs: {zone_ids}. The map above draws each one as a dashed outline with its number; the field with the same number names it. This robot keeps no map of its own, so these areas are Roomba+'s own.\n\nType a name into the field for each area you want to name, and leave the rest empty. Named areas appear in the “Select zone” list and in the mission history."
       },
       "smart_zones": {
-        "title": "Name Smart Map zones",
-        "description": "{robot}: {zone_count} zone(s) have no name yet (IDs: {zone_ids}). Enter one per line as `id=Name`. If you cannot tell which zone is which, open the robot's map in the iRobot app — the zones are drawn there with their numbers."
+        "title": "Name rooms",
+        "description": "{map}\n\n{robot}: {zone_count} room(s) on this robot's map have no name yet: {zone_ids}. The map above shows each one with its number; the field with the same number names it. All other rooms already have their name from your iRobot account.\n\nType a name into the field for each room you want to name, and leave the rest empty. The names stay in Home Assistant — nothing is renamed in your iRobot account."
       },
       "settings": {
         "title": "Connection settings",
@@ -333,8 +333,10 @@
       "rest980_rooms_already_imported": "All rooms from roomba_rest980 are already named in Roomba+.",
       "room_schedule_not_supported": "Per-room frequencies require a Smart Map robot with cloud credentials.",
       "room_schedule_no_rooms": "No named rooms found on the Smart Map yet.",
-      "no_rooms_to_name": "No rooms were found to name. This robot's rooms appear once it has cleaned specific rooms at least once, or once its map is available from your iRobot account.",
-      "all_rooms_named": "Every room already has a name. Rename one from the zone selector on the device page."
+      "all_rooms_named": "Every room and area of this robot already has a name. To show a different name in Home Assistant, use Configure → Zone management.",
+      "naming_needs_account": "Roomba+ knows this robot's rooms only by number, and without a map there is no way to tell which number is which room. Add your iRobot account to this robot (Configure → iRobot cloud credentials): Roomba+ then takes every room and zone name from the account and draws the room map. If you already know a room's number, you can enter it under Configure → Manually enter Smart Map zones.",
+      "account_rooms_not_loaded": "Roomba+ has not read the rooms from your iRobot account yet. Try again in a minute; if this stays, the Home Assistant log says why the account could not be read.",
+      "naming_needs_map": "Naming needs the robot's map, so you can see which number is which room or area, and Roomba+ has no map to show yet. On a Smart Map robot it is the Room map, drawn from your iRobot account. On a robot without a Smart Map it is the Cleaning path map: turn on “Enable live map” under Configure → Connection settings and let the robot clean once. Either way the map's image entity must be enabled."
     }
   },
   "entity": {
@@ -1729,6 +1731,38 @@
       "maintenance": {
         "name": "Maintenance"
       }
+    },
+    "event": {
+      "mission_completed": {
+        "name": "Mission completed",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "mission_completed": "Mission completed"
+            }
+          }
+        }
+      },
+      "room_completed": {
+        "name": "Room completed",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "room_completed": "Room completed"
+            }
+          }
+        }
+      },
+      "stuck": {
+        "name": "Stuck",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "stuck": "Stuck"
+            }
+          }
+        }
+      }
     }
   },
   "issues": {
@@ -1923,7 +1957,7 @@
     },
     "clean_zone": {
       "name": "Clean zone",
-      "description": "Send a Prime robot to one or more clean zones on demand, by name or by numeric id.",
+      "description": "Send the robot to one or more clean zones on demand, by name (as the zone select shows it) or by numeric id. Classic and Prime robots alike.",
       "fields": {
         "zone_name": {
           "name": "Zone name",

@@ -769,6 +769,40 @@ class TestInferenceSuggestionsLayer:
 
         assert png_empty != png_with_room
 
+    def test_an_unnamed_area_is_drawn_with_its_number(self):
+        """@liblit (980): the naming form asked for "zone_room_1" while
+        the map drew the unnamed area as a bare outline, so nothing said
+        which outline that was. The form now labels the field "Area 1"
+        and the map draws "1" -- a named area still shows its name."""
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.room_seg_store import area_number
+
+        drawn = []
+        draw = MagicMock()
+        draw.text.side_effect = lambda xy, text, **kw: drawn.append(text)
+
+        unnamed = _room_seg_store_with_room(
+            -1000, 1000, -1000, 1000, room_id="room_7", name=""
+        )
+        r = _make_renderer_with_stores(
+            geometry_store=GeometryStore(), room_seg_store=unnamed
+        )
+        r.add_pose(100, 100, 0)
+        r._draw_inference_suggestions(draw)
+        assert drawn == [area_number("room_7")] == ["7"]
+
+        drawn.clear()
+        named = _room_seg_store_with_room(
+            -1000, 1000, -1000, 1000, room_id="room_7", name="Hall"
+        )
+        r = _make_renderer_with_stores(
+            geometry_store=GeometryStore(), room_seg_store=named
+        )
+        r.add_pose(100, 100, 0)
+        r._draw_inference_suggestions(draw)
+        assert drawn == ["Hall"]
+
     def test_hidden_room_outline_not_drawn(self):
         """ROOM-SEG Stage 5 — hidden rooms are excluded from the map
         overlay (a deliberate fix: the old ZoneStore-backed code drew

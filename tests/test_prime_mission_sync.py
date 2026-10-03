@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from tests.conftest import hass_mock
@@ -1393,3 +1393,60 @@ class TestOnlyStoredRecordsCount:
         assert await pms.async_sync_prime_missions(entry) == 0
         store.async_save.assert_not_awaited()
         bus.async_fire.assert_not_called()
+
+
+#: The keys of the Classic `roomba_plus_mission_completed` payload, which
+#: test_callbacks.py pins for Classic. One schema on both generations.
+MISSION_COMPLETED_KEYS = {
+    "entry_id", "name", "rooms_cleaned", "area_sqft", "stuck_count",
+    "result", "is_anomalous", "anomaly_reason", "recommended_action",
+    "robot_lifted", "mission_id", "missions_added",
+}
+
+
+class TestPrimeMissionCompletedHasTheClassicShape:
+    """I5 of the card plan: Prime sent `entry_id` alone, Classic a full
+    payload. The logbook, automations and the mission-completed event
+    entity now read one shape."""
+
+    @pytest.mark.asyncio
+    async def test_the_payload_describes_the_newest_mission(self):
+        from custom_components.roomba_plus import prime_mission_sync as pms
+        from custom_components.roomba_plus.mission_store import MissionStore
+
+        store = MissionStore()
+        store.async_save = AsyncMock()
+        store.async_backfill_statistics = AsyncMock()
+        entry = MagicMock()
+        entry.entry_id = "e1"
+        entry.title = "Combo"
+        entry.runtime_data.mission_store = store
+        entry.runtime_data.prime_robot.get_mission_history = AsyncMock(
+            return_value=[
+                _entry(mission_id="old", done_code="ok",
+                       timestamp=datetime(2026, 9, 19, 9, tzinfo=timezone.utc)),
+                _entry(mission_id="new", done_code="ok", square_feet_covered=310,
+                       timestamp=datetime(2026, 9, 20, 9, tzinfo=timezone.utc)),
+            ]
+        )
+        # hass_mock closes the backfill coroutine the sync schedules; a
+        # bare MagicMock leaves it unawaited, and pytest then reports it
+        # against whichever test happens to be running.
+        from tests.conftest import hass_mock
+
+        entry.runtime_data.hass_ref = hass_mock()
+        bus = entry.runtime_data.hass_ref.bus
+
+        with patch.object(pms, "_async_update_profile", AsyncMock()):
+            assert await pms.async_sync_prime_missions(entry) == 2
+
+        bus.async_fire.assert_called_once()
+        name, payload = bus.async_fire.call_args.args
+        assert name == "roomba_plus_mission_completed"
+        assert set(payload) == MISSION_COMPLETED_KEYS
+        assert payload["entry_id"] == "e1"
+        assert payload["name"] == "Combo"
+        assert payload["mission_id"] == "p_new"
+        assert payload["area_sqft"] == 310
+        assert payload["missions_added"] == 2
+        assert payload["stuck_count"] is None

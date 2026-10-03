@@ -1688,6 +1688,22 @@ class TestTheRoomsMapLabels:
         labels = self._labels(self._entity({"map_room_labels": True}))
         assert labels == {"11": "11", "12": "12"}
 
+    def test_the_naming_form_gets_the_labels_with_the_option_off(self):
+        """The naming form asks by number, so its picture carries the
+        numbers whatever the map option says (4.2.19)."""
+        entity = self._entity({}, cloud_names={"11": "Kitchen"})
+        entity._render_rooms_png(force_labels=True)
+        assert dict(entity._room_render_cache_key[2]) == {"11": "Kitchen", "12": "12"}
+
+    @pytest.mark.asyncio
+    async def test_the_naming_image_is_rendered_with_labels(self):
+        entity = self._entity({})
+        entity.hass = MagicMock()
+        entity.hass.async_add_executor_job = AsyncMock(side_effect=lambda f: f())
+        png = await entity.async_naming_image()
+        assert png[:4] == b"\x89PNG"
+        assert dict(entity._room_render_cache_key[2]) == {"11": "11", "12": "12"}
+
     def test_the_accounts_name_and_a_typed_name_are_used(self):
         options = {
             "map_room_labels": True,

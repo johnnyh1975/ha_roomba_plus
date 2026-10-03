@@ -167,12 +167,12 @@
         }
       },
       "zones": {
-        "title": "Nomear divisões detetadas",
-        "description": "{robot}: {zone_count} zona(s) sem nome (IDs: {zone_ids}). Introduza uma por linha como `id=Nome`. Se não souber qual é qual, abra o mapa do robô na aplicação iRobot — as zonas estão desenhadas com os seus números."
+        "title": "Nomear áreas detetadas",
+        "description": "{map}\n\n{robot}: o Roomba+ encontrou {zone_count} área(s) sem nome nos percursos de limpeza deste robô: {zone_ids}. O mapa acima desenha cada uma com um contorno tracejado e o seu número; o campo com o mesmo número dá-lhe o nome. Este robô não guarda um mapa próprio, por isso estas áreas são do Roomba+.\n\nEscreva um nome no campo de cada área que pretende nomear e deixe as restantes vazias. As áreas com nome aparecem na lista «Selecionar zona» e no histórico de missões."
       },
       "smart_zones": {
-        "title": "Nomear zonas Smart Map",
-        "description": "{robot}: {zone_count} zona(s) sem nome (IDs: {zone_ids}). Introduza uma por linha como `id=Nome`. Se não souber qual é qual, abra o mapa do robô na aplicação iRobot — as zonas estão desenhadas com os seus números."
+        "title": "Nomear divisões",
+        "description": "{map}\n\n{robot}: {zone_count} divisão(ões) no mapa deste robô ainda não têm nome: {zone_ids}. O mapa acima mostra cada uma com o seu número; o campo com o mesmo número dá-lhe o nome. Todas as outras divisões já têm o nome da sua conta iRobot.\n\nEscreva um nome no campo de cada divisão que pretende nomear e deixe as restantes vazias. Os nomes ficam no Home Assistant — nada é renomeado na sua conta iRobot."
       },
       "settings": {
         "title": "Definições de ligação",
@@ -333,8 +333,10 @@
       "rest980_rooms_already_imported": "Todos os cómodos do roomba_rest980 já estão nomeados no Roomba+.",
       "room_schedule_not_supported": "As frequências por divisão exigem um robô Smart Map com credenciais de nuvem.",
       "room_schedule_no_rooms": "Ainda não foram encontradas divisões com nome no Smart Map.",
-      "no_rooms_to_name": "Não foram encontradas divisões para nomear. As divisões deste robô aparecem depois de ter limpo divisões específicas pelo menos uma vez, ou quando o mapa estiver disponível na sua conta iRobot.",
-      "all_rooms_named": "Cada divisão já tem nome. Mude um a partir do seletor de zonas na página do dispositivo."
+      "all_rooms_named": "Todas as divisões e áreas deste robô já têm nome. Para mostrar outro nome no Home Assistant, use Configurar → Gestão de zonas.",
+      "naming_needs_account": "O Roomba+ só conhece as divisões deste robô pelo número e, sem um mapa, não há forma de saber que número é cada divisão. Adicione a sua conta iRobot a este robô (Configurar → Credenciais cloud iRobot): o Roomba+ passa a usar todos os nomes de divisões e zonas da conta e desenha o mapa de divisões. Se já souber o número de uma divisão, pode introduzi-lo em Configurar → Introduzir zonas Smart Map manualmente.",
+      "account_rooms_not_loaded": "O Roomba+ ainda não leu as divisões da sua conta iRobot. Tente novamente dentro de um minuto; se continuar assim, o registo do Home Assistant indica porque não foi possível ler a conta.",
+      "naming_needs_map": "Para nomear é preciso o mapa do robô, para ver que número é cada divisão ou área, e o Roomba+ ainda não tem um mapa para mostrar. Num robô com Smart Map é o Mapa de divisões, obtido da sua conta iRobot. Num robô sem Smart Map é o mapa «Percurso de limpeza»: ative «Ativar mapa em tempo real» em Configurar → Definições de ligação e deixe o robô limpar uma vez. Em ambos os casos, a entidade de imagem do mapa tem de estar ativada."
     }
   },
   "entity": {
@@ -1729,6 +1731,38 @@
       "maintenance": {
         "name": "Manutenção"
       }
+    },
+    "event": {
+      "mission_completed": {
+        "name": "Limpeza concluída",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "mission_completed": "Limpeza concluída"
+            }
+          }
+        }
+      },
+      "room_completed": {
+        "name": "Divisão concluída",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "room_completed": "Divisão concluída"
+            }
+          }
+        }
+      },
+      "stuck": {
+        "name": "Preso",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "stuck": "Preso"
+            }
+          }
+        }
+      }
     }
   },
   "issues": {
@@ -1923,7 +1957,7 @@
     },
     "clean_zone": {
       "name": "Limpar zona",
-      "description": "Envia um robô Prime para uma ou mais zonas de limpeza a pedido, por nome ou id numérico.",
+      "description": "Envia o robô para uma ou mais zonas de limpeza a pedido, por nome (como o seletor de zonas o mostra) ou id numérico. Robôs Classic e Prime.",
       "fields": {
         "zone_name": {
           "name": "Nome da zona",

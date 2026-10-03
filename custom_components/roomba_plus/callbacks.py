@@ -888,6 +888,10 @@ async def async_record_mission(
             "anomaly_reason": explanation.get("anomaly_reason"),
             "recommended_action": explanation.get("recommended_action"),
             "robot_lifted": bool(explanation.get("robot_lifted", False)),
+            # One schema on both generations (4.2.19): the Prime sync
+            # sends these two as well, and a card reads one shape.
+            "mission_id": record["id"],
+            "missions_added": 1,
         },
     )
 

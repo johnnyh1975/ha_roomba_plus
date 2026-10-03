@@ -34,6 +34,7 @@ import sys
 import collections
 import datetime
 import io
+import functools
 import logging
 import math
 import time as _time_mod
@@ -3024,6 +3025,9 @@ class RoombaCoverageImage(IRobotEntity, ImageEntity):
             "x_max_mm":          bbox[1] if bbox else None,
             "y_min_mm":          bbox[2] if bbox else None,
             "y_max_mm":          bbox[3] if bbox else None,
+            # The frame the image is drawn in, which the bounding box
+            # above is not: the picture is square (4.2.19, I10).
+            "render_extent_mm":  self._grid_store.render_extent_mm(),
             "last_mission_end":  self._attr_image_last_updated.isoformat()
                                  if self._attr_image_last_updated else None,
         }
@@ -3157,7 +3161,18 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
         """Render room polygons from UmfAligner onto a dark canvas."""
         return await self.hass.async_add_executor_job(self._render_rooms_png)
 
-    def _render_rooms_png(self) -> bytes:
+    async def async_naming_image(self) -> bytes | None:
+        """The rooms map with every room labelled, for the naming form.
+
+        The form asks for names by number, so the picture above it must
+        carry the numbers whatever "Draw room names on the map image" is
+        set to: an unnamed room shows its number, a named one its name.
+        """
+        return await self.hass.async_add_executor_job(
+            functools.partial(self._render_rooms_png, force_labels=True)
+        )
+
+    def _render_rooms_png(self, *, force_labels: bool = False) -> bytes:
         """CPU-bound render — called via async_add_executor_job.
 
         Two rendering modes:
@@ -3188,7 +3203,9 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
         # on -- or naming a zone -- changed nothing on screen until the map
         # itself changed.
         labels: dict[str, str] = {}
-        if self._config_entry.options.get(CONF_MAP_ROOM_LABELS, DEFAULT_MAP_ROOM_LABELS):
+        if force_labels or self._config_entry.options.get(
+            CONF_MAP_ROOM_LABELS, DEFAULT_MAP_ROOM_LABELS
+        ):
             cloud_names = aligner.rid_to_name()
             for rid in polygons_umf:
                 cloud = cloud_names.get(rid)

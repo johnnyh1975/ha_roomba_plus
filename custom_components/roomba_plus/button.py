@@ -978,6 +978,7 @@ class SmartZoneButton(IRobotEntity, ButtonEntity):
 
         region_id: str | None = None
         pmap_id: str | None = None
+        region_type = "rid"
 
         # Walk all entity platforms registered under this domain to find
         # the zone select entity for this specific robot. We check for both:
@@ -1027,6 +1028,7 @@ class SmartZoneButton(IRobotEntity, ButtonEntity):
         chosen = pick_zone_selection(candidates)
         if chosen is not None:
             region_id = chosen.selected_region_id
+            region_type = getattr(chosen, "selected_region_type", "rid")
             # Also read pmap_id directly from cloud entity if available
             pmap_info = getattr(chosen, "selected_pmap_info", {})
             if pmap_info.get("pmap_id"):
@@ -1105,7 +1107,8 @@ class SmartZoneButton(IRobotEntity, ButtonEntity):
             "regions": [
                 {
                     "region_id": str(region_id),
-                    "type": "rid",
+                    # A clean zone goes out as a zone (@Hardy-196).
+                    "type": region_type,
                     "params": {"noAutoPasses": _no_auto, "twoPass": _two_pass},
                 }
             ],

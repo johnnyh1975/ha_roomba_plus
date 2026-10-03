@@ -31,6 +31,9 @@ def _make_todo(vacuum_state: dict | None = None):
     todo._config_entry = MagicMock()
     todo._config_entry.entry_id = "test_entry"
     todo._config_entry.options = {}
+    # No iRobot account unless a test adds one: a MagicMock coordinator
+    # with MagicMock data would take the account path everywhere.
+    todo._config_entry.runtime_data.cloud_coordinator = None
     todo.async_write_ha_state = MagicMock()
     return todo
 
@@ -131,7 +134,37 @@ class TestTodoItemsReconfigureRooms:
             items = todo.todo_items
         item = next(i for i in items if i.uid == "reconfigure_rooms")
         assert item.due is None
-        assert "wizard" in item.description
+        assert "Rooms & zones" in item.description
+
+    def _with_account(self, todo, unnamed):
+        coordinator = MagicMock()
+        coordinator.data = {"pmaps": []}
+        todo._config_entry.runtime_data.cloud_coordinator = coordinator
+        return patch(
+            "custom_components.roomba_plus.todo.smart_rooms_to_name",
+            return_value=unnamed,
+        )
+
+    def test_with_an_account_the_rooms_on_the_map_decide(self):
+        """@liblit's i7: every room named in his account, and the item
+        stood open because the robot's region ids -- old schedules and
+        earlier cleans -- had no name typed into Roomba+."""
+        todo = _make_todo()
+        with patch("custom_components.roomba_plus.todo._filter_days_until_due", return_value=None), \
+             patch("custom_components.roomba_plus.todo._brush_days_until_due", return_value=None), \
+             patch("custom_components.roomba_plus.todo.unlabelled_zone_ids", return_value=["20", "21"]), \
+             self._with_account(todo, []):
+            items = todo.todo_items
+        assert not any(i.uid == "reconfigure_rooms" for i in items)
+
+    def test_with_an_account_an_unnamed_room_on_the_map_opens_it(self):
+        todo = _make_todo()
+        with patch("custom_components.roomba_plus.todo._filter_days_until_due", return_value=None), \
+             patch("custom_components.roomba_plus.todo._brush_days_until_due", return_value=None), \
+             patch("custom_components.roomba_plus.todo.unlabelled_zone_ids", return_value=[]), \
+             self._with_account(todo, ["7"]):
+            items = todo.todo_items
+        assert any(i.uid == "reconfigure_rooms" for i in items)
 
 
 class TestAsyncUpdateTodoItem:

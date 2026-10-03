@@ -46,9 +46,10 @@ data:
 ```
 
 *(Looking for your robot's existing iRobot-app schedule instead of building
-a new HA-side one? That's `calendar.{name}_schedule`, which appears
-automatically. On Prime robots you can create, edit and delete entries
-there and they are written back to the robot; on Classic it is read-only.
+a new HA-side one? That's `calendar.{name}_schedule` on Classic robots and
+`calendar.{name}_prime_schedule` on Prime ones, which appears
+automatically. On both you can create, edit and delete entries there, and
+they are written back to the robot.
 This recipe is for building something the app itself can't express, like
 room-specific timing.)*
 
@@ -315,11 +316,12 @@ diagnostics download now says which of the two reasons applies.
 # Do not start a clean during a scheduled quiet-hours window.
 condition:
   - condition: state
-    entity_id: binary_sensor.robot_in_quiet_hours
+    entity_id: binary_sensor.robot_prime_quiet_hours
     state: "off"
 ```
 
-`switch.{name}_do_not_disturb` turns DND on and off directly, and
+`switch.{name}_prime_quiet_hours_active` (shown as *Do not disturb*) turns
+DND on and off directly, and
 `roomba_plus.set_quiet_hours` writes the window itself.
 
 **Do the enforcing here rather than trusting the robot.** A Prime robot has
@@ -330,7 +332,18 @@ field report has answered yes. The condition above is the reliable half.
 ## Dashboard example
 
 A minimal dashboard combining the map, vacuum card, key sensors, and the
-maintenance to-do list:
+maintenance to-do list. Built from Home Assistant's own cards, it works
+without anything else installed. For room selection, the rooms map, the
+mission history and maintenance with one-tap resets in one card, the
+[Roomba+ card](https://github.com/johnnyh1975/ha_roomba_plus_card) is the
+fuller option.
+
+Two entities below depend on your setup:
+- **`todo.roomba_maintenance` is opt-in.** Switch it on under Configure →
+  Connection settings → *Show maintenance as a to-do list*, or drop the
+  last card.
+- **The map is `image.roomba_cleaning_map` on Classic robots** and
+  `image.roomba_prime_cleaning_map` on Prime ones.
 
 ```yaml
 type: vertical-stack
@@ -358,6 +371,7 @@ cards:
         name: Progress
     columns: 4
 
+  # Opt-in: Configure → Connection settings → Show maintenance as a to-do list
   - type: todo-list
     entity: todo.roomba_maintenance
 ```

@@ -923,23 +923,30 @@ class CloudSmartZoneSelect(IRobotEntity, SelectEntity):
         labels: dict[str, Any] = options.get("smart_zone_labels", {})
         zone_data: dict[str, Any] = options.get("smart_zone_data", {})
 
+        # THE ID UNDER EITHER KEY, AND THE KIND. The account's map data
+        # names a room `region_id` or `id` and a zone `zone_id` or `id`,
+        # depending on the account -- the cloud coordinator reads both,
+        # this read `id` alone. A zone listed under `zone_id` then had
+        # no id here, and the zone button sent something else. And a
+        # zone has to go out as a zone: every selection went out as a
+        # room (@Hardy-196, i7+: "Esstisch" selected, nothing cleaned).
         items = []
         for r in self._regions:
-            rid = str(r.get("id", ""))
-            if rid in hidden_ids:
+            rid = str(r.get("id") or r.get("region_id") or "")
+            if not rid or rid in hidden_ids:
                 continue
             cloud_name = r.get("name")
             local_name = zone_data.get(rid, {}).get("name") if rid in zone_data else None
             name = resolve_zone_name(rid, aliases, cloud_name, local_name, labels)
-            items.append({"id": rid, "name": name, "pmap_id": self._pmap_id})
+            items.append({"id": rid, "name": name, "pmap_id": self._pmap_id, "type": "rid"})
         for z in self._zones:
-            zid = str(z.get("id", ""))
-            if zid in hidden_ids:
+            zid = str(z.get("zone_id") or z.get("id") or "")
+            if not zid or zid in hidden_ids:
                 continue
             cloud_name = z.get("name")
             local_name = zone_data.get(zid, {}).get("name") if zid in zone_data else None
             name = resolve_zone_name(zid, aliases, cloud_name, local_name, labels)
-            items.append({"id": zid, "name": name, "pmap_id": self._pmap_id})
+            items.append({"id": zid, "name": name, "pmap_id": self._pmap_id, "type": "zid"})
         return items
 
     @property
@@ -968,11 +975,21 @@ class CloudSmartZoneSelect(IRobotEntity, SelectEntity):
     @property
     def selected_region_id(self) -> str | None:
         """Return the region/zone id for the currently selected option."""
-        for item in self._all_items():
-            if item["name"] == self._selected:
-                return str(item["id"])
+        item = self._selected_item()
+        return str(item["id"]) if item else None
+
+    @property
+    def selected_region_type(self) -> str:
+        """`rid` for a room, `zid` for a clean zone -- what the robot needs."""
+        item = self._selected_item()
+        return str(item.get("type", "rid")) if item else "rid"
+
+    def _selected_item(self) -> dict[str, Any] | None:
         items = self._all_items()
-        return items[0]["id"] if items else None
+        for item in items:
+            if item["name"] == self._selected:
+                return item
+        return items[0] if items else None
 
     @property
     def selected_pmap_info(self) -> dict[str, str]:

@@ -1219,6 +1219,7 @@ _PLATFORM_TO_MODULE: dict[Platform, str] = {
     Platform.BUTTON: "button",
     Platform.SELECT: "select",
     Platform.DEVICE_TRACKER: "device_tracker",
+    Platform.EVENT: "event",
 }
 
 

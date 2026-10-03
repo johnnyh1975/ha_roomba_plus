@@ -299,6 +299,9 @@ class RoombaData:
     # Prime entity's device page previously showed no model/serial at all).
     # Best-effort, same reasoning as prime_household_id above.
     prime_serial_info: "RobotSerialInfo | None" = None
+    #: {part_id: {"guide_url", "part_name"}} from iRobot's parts
+    #: catalogue, read once per setup (parts_catalog.py, 4.2.19).
+    parts_catalogue: dict[str, dict[str, str]] = field(default_factory=dict)
     map_capability: MapCapability = MapCapability.NONE
     renderer: MapRenderer | None = None
     geometry_store: GeometryStore | None = None

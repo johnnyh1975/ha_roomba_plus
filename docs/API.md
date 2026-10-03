@@ -9,6 +9,12 @@ which is filled from the local connection on Classic robots and from iRobot's
 cloud on Prime ones. The response shape is the same either way; a field a
 particular robot never reports is absent rather than zero.
 
+Until 4.2.19 the endpoints were registered only when a Classic robot set
+up, so a household with only Prime robots had none of them. On a Prime
+robot, `format=hazards` is always empty (stuck pins come from the local
+grid, which Prime has no source for), and the mission path and mission
+map endpoints answer 404.
+
 ---
 
 ## Authentication
@@ -30,6 +36,40 @@ Unauthorized requests receive a `401` from the HA framework (`{"message": "Unaut
 
 ---
 
+## API version
+
+Every response carries an `X-Roomba-Plus-Api-Version` header with a
+single integer. The Lovelace card and the integration update on their
+own schedules, so a reader checks the number before relying on a
+behaviour. A missing header means a release before 4.2.11; treat it
+as `0`.
+
+**The number rises only for a change an existing reader can trip over:**
+- an endpoint, field or documented value removed or renamed;
+- a field's type, unit or meaning changed;
+- a field documented as never null becoming nullable;
+- a different status code for a case that already had one.
+
+**It does not rise for additions** that a reader ignoring unknown fields
+survives: new endpoints, new fields, new query parameters with a
+default, new `format` values, new values of a field documented as open
+(`source`, `result`). Readers must ignore unknown fields and tolerate
+unknown values of those fields.
+
+Compare with `>=`: version `n` includes everything below it. Stable and
+beta releases with the same API carry the same number.
+
+| Version | Since | Change |
+|---|---|---|
+| 1 | 4.2.11 | The header itself |
+| 2 | 4.2.19 | `format=hazards`: pins from the map (`robot_learned`, `keepout`) are in pose space once the map is aligned, and say so in the new `space` field; before alignment their `bearing_deg` and `distance_mm` are `null` |
+
+Also in 4.2.19, as additions: the endpoints exist on Prime-only households,
+Prime records list their rooms in `zones`, and `/household` reports
+Prime maintenance in `maintenance_due`.
+
+---
+
 ## Endpoints
 
 | Method | Path | Description |
@@ -42,6 +82,7 @@ Unauthorized requests receive a `401` from the HA framework (`{"message": "Unaut
 | `GET` | `/api/roomba_plus/{entry_id}/mission/{n_mssn}/path` | Room-granular path reconstruction for a mission (v3.2.0) |
 | `GET` | `/api/roomba_plus/{entry_id}/missions/{record_id}/map.json` | Coordinate-level coverage for one finished mission (v3.3.0) |
 | `GET` | `/api/roomba_plus/{entry_id}/missions/{record_id}/map.png` | Rendered coverage image for one finished mission (v3.3.0) |
+| `GET` | `/api/roomba_plus/{entry_id}/naming_map.png` | The map the room-naming form shows (4.2.19). Internal: reached through a signed link from the form, not part of the stable API |
 
 ### HTTP status codes
 
@@ -62,8 +103,8 @@ GET /api/roomba_plus/{entry_id}/mission_history
 
 | Parameter | Type | Default | Values | Notes |
 |---|---|---|---|---|
-| `format` | string | `summary` | `summary` / `records` / `hazards` / `export` | Response shape |
-| `days` | int | 28 (summary) / 90 (records) | 1–90 | Ignored for `hazards` and `export` |
+| `format` | string | `summary` | `summary` / `records` / `hazards` / `export` / `zone_coverage_health` | Response shape |
+| `days` | int | 28 (summary) / 90 (records) | 1–90 | Ignored for `hazards`, `export` and `zone_coverage_health` |
 
 ---
 
@@ -173,6 +214,11 @@ curl -H "Authorization: Bearer <token>" \
 
 Obstacle pin array from GridStore stuck hotspots and UMF-detected obstacle centroids.
 
+**One frame (4.2.19).** Until 4.2.18 the obstacles and keep-out zones
+from the map arrived in the map's own units under `x_mm`/`y_mm`, next to
+stuck pins in dock-relative millimetres, with a bearing and distance
+computed from the map's origin. Place pins only where `space` is `pose`.
+
 **Gate:** requires map capability ≠ NONE. Returns `[]` for 600-series robots.
 
 ```json
@@ -187,6 +233,7 @@ Obstacle pin array from GridStore stuck hotspots and UMF-detected obstacle centr
     "bearing_deg": 47,
     "distance_mm": 2160,
     "source": "stuck_events",
+    "space": "pose",
     "dominant_weekday": 0,
     "dominant_hour": 9
   }
@@ -196,11 +243,13 @@ Obstacle pin array from GridStore stuck hotspots and UMF-detected obstacle centr
 | Field | Type | Null? | Notes |
 |---|---|---|---|
 | `gx`, `gy` | int | Yes — null for `robot_learned` | GridStore grid cell coordinates |
-| `x_mm`, `y_mm` | float | Never | Dock-relative mm (pose space) |
+| `x_mm`, `y_mm` | float | Never | Dock-relative mm (pose space) when `space` is `pose`. When `space` is `umf`, the map's own units — see below |
+| `space` | string | Never | (4.2.19) `pose` or `umf`. Stuck pins are always `pose`. Pins from the map (`robot_learned`, `keepout`) are converted to `pose` once the map is aligned with the robot's own coordinates; before that they stay in the map's units and say `umf` |
+| `x_umf`, `y_umf` | float | Absent on stuck pins | (4.2.19) The map's own coordinates of a `robot_learned` or `keepout` pin, whatever `space` says |
 | `stuck_count` | int | Yes — null for `robot_learned` | Accumulated stuck events in this cell |
 | `room_name` | string | Yes — null without UMF alignment | Room from UmfAligner (confidence ≥ 0.70) |
-| `bearing_deg` | int | Never | Compass bearing from dock |
-| `distance_mm` | int | Never | Euclidean distance from dock |
+| `bearing_deg` | int | Yes — null when `space` is `umf` | Compass bearing from dock |
+| `distance_mm` | int | Yes — null when `space` is `umf` | Euclidean distance from dock |
 | `source` | string | Never | `stuck_events` / `robot_learned` / `keepout` |
 | `dominant_weekday` | int | Yes | (v3.3.1) 0=Monday..6=Sunday. Only set for `stuck_events` pins with ≥8 stuck events and a ≥60% dominant time slot — pins with fewer (down to the 3-event display threshold) always show `null` here, that's expected |
 | `dominant_hour` | int | Yes | (v3.3.1) 0-23, paired with `dominant_weekday` — always both-null or both-set |
@@ -386,7 +435,7 @@ GET /api/roomba_plus/household?days=28
 
 `floors` is omitted when no robot has a floor label configured. `area_sqft` is null when no robot has cloud records with area data.
 
-**Fleet health (v3.4.3):** `fleet_health.robots_needing_attention` lists the `name` of every robot where `needs_attention` is `true` — useful for a multi-robot dashboard that only needs to surface robots that actually need a look. Per robot: `health_trend` (`"improving"`/`"stable"`/`"declining"`/`null` until enough history exists), `battery_capacity_retention_pct` (same value as `sensor.*_battery_capacity_retention`), `maintenance_due` (same check as `binary_sensor.*_maintenance_due`), and `needs_attention` (`maintenance_due` OR a declining health trend). These reuse already-computed values rather than recalculating anything — the endpoint is only ever as fresh as those values already are elsewhere in the integration.
+**Fleet health (v3.4.3):** `fleet_health.robots_needing_attention` lists the `name` of every robot where `needs_attention` is `true` — useful for a multi-robot dashboard that only needs to surface robots that actually need a look. Per robot: `health_trend` (`"improving"`/`"stable"`/`"declining"`/`null` until enough history exists), `battery_capacity_retention_pct` (same value as `sensor.*_battery_capacity_retention`), `maintenance_due` (Classic: same check as `binary_sensor.*_maintenance_due`; Prime, since 4.2.19: a part the robot reports as used up, by the same rule as the Prime maintenance to-do list — before, a Prime robot was never due here), and `needs_attention` (`maintenance_due` OR a declining health trend). These reuse already-computed values rather than recalculating anything — the endpoint is only ever as fresh as those values already are elsewhere in the integration.
 
 ```bash
 curl -H "Authorization: Bearer <token>" \

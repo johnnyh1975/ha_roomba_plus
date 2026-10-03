@@ -31,7 +31,7 @@ There are two ways to set up the room overlay, depending on your XVMC version:
 
 - **XVMC v2.4.1 or newer (recommended):** the native Roomba+ platform is built
   in. Pick it as the `vacuum_platform` and let XVMC generate the room config for
-  you — no manual coordinates. See **[Path A](#path-a--xvmc-v241-recommended-once-merged)**.
+  you — no manual coordinates. See **[Path A](#path-a--xvmc-v241-recommended)**.
 - **XVMC older than v2.4.1:** the Roomba+ platform isn't available, so you define
   `predefined_selections` manually. The coordinates come straight from the
   `rooms` attribute — no measurement needed. See
@@ -76,15 +76,18 @@ Two more requirements for the room mode to actually clean:
 
 ---
 
-## Path A — XVMC v2.4.1+ (recommended once merged)
+## Path A — XVMC v2.4.1+ (recommended)
 
-A native Roomba+ platform for xiaomi-vacuum-map-card is in progress — release
-notes for XVMC v2.4.1 (June 2026) credited its addition, but as of this
-writing it isn't present in the upstream repository's `master` branch
-(checked directly against the source); a PR is pending. Once merged, it will
-register Roomba+ so XVMC can read this integration's `rooms` attribute
-directly, and supply the `clean_room` / `smart_start` service wiring. Until
-then, use [Path B](#path-b--xvmc-before-v241-manual) below.
+xiaomi-vacuum-map-card has a native Roomba+ platform: it is listed among the
+card's supported platforms, with its own page in the card's documentation
+([`johnnyh1975RoombaPlus.md`](https://github.com/PiotrMachowski/lovelace-xiaomi-vacuum-map-card/blob/master/docs/templates/johnnyh1975RoombaPlus.md)).
+It reads this integration's `rooms` attribute directly and supplies the
+`clean_room` / `smart_start` service wiring.
+
+*Corrected in 4.2.19:* this page said the platform was "not yet in the
+upstream card, a PR is pending", while the card's own release notes credited
+it to v2.4.1. The card's repository now carries it, so the page was the
+outdated side.
 
 1. Add the card and set the basics:
 
@@ -321,31 +324,27 @@ The `rooms` attribute and calibration are only accurate once UmfAligner confiden
 - Both names refer to the same entity. If you have `rooms_cleaning_map` (older install), use that name in your config. It has identical attributes. You can rename it manually via Settings → Entities if preferred.
 
 **"Generate Room Configs" produces IDs XVMC rejects (e.g. non-ASCII names like "Küche"):**
-- Root cause confirmed and fixed upstream (PR pending against `PiotrMachowski/lovelace-xiaomi-vacuum-map-card`): the card's generic room-config generator used the `rooms` attribute's object key (a display name) as the id, ignoring the `room_id` field this integration already provides specifically for this — an ASCII-safe slug (`"Küche"` → `"kuche"`, `"Test ü"` → `"test_u"`). Until the fix is merged, manually replace the `id:` values with the matching `room_id` from the attribute (Developer Tools → States → your `rooms_map` entity).
+- Older card versions' generic room-config generator used the `rooms` attribute's object key (a display name) as the id, ignoring the `room_id` field this integration provides for exactly this — an ASCII-safe slug (`"Küche"` → `"kuche"`, `"Test ü"` → `"test_u"`). The card's Roomba+ documentation now names `room_id` as the id to use. If your version still generates display names, replace the `id:` values with the matching `room_id` from the attribute (Developer Tools → States → your `rooms_map` entity). `clean_room` accepts the display name and the slug alike.
 
 **"Generate Room Configs" includes rooms from a different robot:**
-- Not a data issue on this integration's side — each robot's `rooms_map` entity attribute is scoped strictly to that robot's own config entry (verified against the source; no shared/global state involved). The card's generic room-config generator is also confirmed correctly scoped to the configured `map_source` entity only — it does not aggregate across entities. The remaining suspect is the `roomba_plus`-specific platform template itself (not yet in the upstream card as of this writing); if you hit this, double-check your card config's `map_source`/`entity` first.
+- Not a data issue on this integration's side — each robot's `rooms_map` entity attribute is scoped strictly to that robot's own config entry (verified against the source; no shared/global state involved). The card's generic room-config generator is also confirmed correctly scoped to the configured `map_source` entity only — it does not aggregate across entities. The remaining suspect is the `roomba_plus`-specific platform template itself; if you hit this, double-check your card config's `map_source`/`entity` first, then report it to the card.
 
 **Room selection stops working after 5 rooms are selected:**
-- Root cause confirmed: the `roomba_plus` platform template hard-coded `max_selections: 5` on all three `ROOM` modes. This integration's own `clean_room`/`smart_start` actions have no such limit — the value has been removed from the template ahead of its upstream submission. Until that PR is merged, you can work around this by defining `map_modes`/`predefined_selections` manually ([Path B](#path-b--xvmc-before-v241-manual)) with no `max_selections` set.
+- Root cause confirmed: the `roomba_plus` platform template hard-coded `max_selections: 5` on all three `ROOM` modes. This integration's own `clean_room`/`smart_start` actions have no such limit. If your card version still stops at five, define `map_modes`/`predefined_selections` manually ([Path B](#path-b--xvmc-before-v241-manual)) with no `max_selections` set.
 
 ---
 
 ## XVMC platform template (reference)
 
 The native `roomba_plus` platform template is what
-[Path A](#path-a--xvmc-v241-recommended-once-merged) uses once available. **Merge status
-note:** release notes for XVMC v2.4.1 credited this platform's addition, but
-as of this writing it isn't present in the upstream repository's `master`
-branch (checked directly against the source) — a PR is pending. If Path A
-doesn't show Roomba+ as a platform option, this is why; use
-[Path B](#path-b--xvmc-before-v241-manual) until it lands. For reference, the
-template defines three `selection_type: ROOM` modes — `vacuum_clean_segment`
+[Path A](#path-a--xvmc-v241-recommended) uses; it ships with the card. It
+defines three `selection_type: ROOM` modes — `vacuum_clean_segment`
 (→ `clean_room`), `vacuum_clean_segment_two_pass` (→ `clean_room` with
 `two_pass`), and `vacuum_clean_segment_with_blocking` (→ `smart_start`). It
 contains no coordinates itself: the geometry is read from this integration's
-`rooms` attribute at runtime, which is why the "Generate Room Configs" button
-will work only once Roomba+ is selectable as the platform.
+`rooms` attribute at runtime. If Roomba+ does not appear as a platform in the
+card editor, your card is older than v2.4.1; update it or use
+[Path B](#path-b--xvmc-before-v241-manual).
 
 ---
 

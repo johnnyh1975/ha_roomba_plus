@@ -40,7 +40,9 @@ from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN, SQFT_TO_M2
 from .mission_store import MissionStore
+from .models import ConnectionType
 from .room_cleaning import region_names_across_maps
+from .prime_parts import prime_parts_due
 
 if TYPE_CHECKING:
     from .models import RoombaData
@@ -65,7 +67,20 @@ _VALID_FORMATS = {"summary", "records", "hazards", "export", "zone_coverage_heal
 #: Carried as a header rather than a body field: two endpoints return a
 #: bare JSON array, which has nowhere to put one, and a header changes no
 #: response shape at all.
-ROOMBA_PLUS_API_VERSION = 1
+#:
+#: THE RULE (4.2.19, written down so the card can rely on it -- I6 of the
+#: card plan; the full text is in docs/API.md, "API version"):
+#: raise it for a change an existing reader can trip over -- a removed or
+#: renamed endpoint, field or value; a changed type, unit or meaning; a
+#: field that was never null becoming nullable; a changed status code for
+#: an existing case. Do not raise it for anything a reader that ignores
+#: unknown fields survives: new endpoints, fields, query parameters with a
+#: default, format values. Every raise gets a row in API.md's version
+#: history, and a test holds the two equal.
+#:
+#: 2 (4.2.19): `format=hazards` pins from the map moved to pose space
+#: once aligned, and their `bearing_deg`/`distance_mm` became nullable.
+ROOMBA_PLUS_API_VERSION = 2
 API_VERSION_HEADER = "X-Roomba-Plus-Api-Version"
 
 
@@ -376,6 +391,19 @@ def _resolve_cloud_mission_map_record(
     return None
 
 
+def _prime_rooms(record: dict[str, Any], names: dict[str, str] | None) -> list[str]:
+    """The rooms of a Prime mission, by name where one is known.
+
+    A Prime record has no `zones`; the sync writes the time spent per
+    region instead (`room_durations_sec`), in the order visited. Without
+    this every Prime mission came back with no rooms at all (I1).
+    """
+    per_room = record.get("room_durations_sec")
+    if not isinstance(per_room, dict):
+        return []
+    return [(names or {}).get(str(rid), str(rid)) for rid in per_room]
+
+
 def _local_record_to_unified(
     record: dict[str, Any],
     names: dict[str, str] | None = None,
@@ -398,10 +426,12 @@ def _local_record_to_unified(
         "area_sqft":    record.get("area_sqft"),
         "result":       record.get("result", "unknown"),
         "initiator":    record.get("initiator", "none"),
-        "zones":        record.get("zones", []),
+        "zones":        record.get("zones") or _prime_rooms(record, names),
         "error_code":   record.get("error_code"),
         "recharges":    None,                        # no local accumulator
-        "evacuations":  record.get("evacs"),         # from CR1 merge
+        # `evacs` from the Classic cloud merge, `evacuations` as the
+        # Prime sync writes it (I1).
+        "evacuations":  record.get("evacs", record.get("evacuations")),
         "dirt_events":  record.get("dirt"),          # from CR1 merge
         "wifi_signal":  record.get("wlBars"),        # from CR1 merge
         "source":       "local",
@@ -552,6 +582,53 @@ class MissionHistoryView(RoombaPlusView):
             if data.map_capability == MapCapability.NONE or data.grid_store is None:
                 return self.json([])
             hazards = data.grid_store.hotspots()
+            # ONE COORDINATE FRAME (4.2.19, I9 of the card plan).
+            #
+            # Stuck pins come from GridStore, in pose space: dock-relative
+            # millimetres, the frame of the cleaning path and the coverage
+            # map. The robot-learned obstacles and keep-out zones below come
+            # from the cloud map, in UMF units -- and were written into
+            # `x_mm`/`y_mm` unconverted, next to the pose-space pins, with
+            # a bearing and distance "from the dock" computed from the
+            # map's own origin. The card placed them from those fields and
+            # put them in the wrong place; its 2.5.0 dropped the pins.
+            #
+            # Converted through the aligner when it has aligned, which is
+            # what API.md always promised. Before that no conversion
+            # exists: such a pin keeps the map's units, says so in
+            # `space`, and has no bearing or distance rather than wrong
+            # ones. `x_umf`/`y_umf` carry the original either way.
+            for hazard in hazards:
+                hazard.setdefault("space", "pose")
+            aligner = getattr(data, "umf_aligner", None)
+            aligned = bool(aligner is not None and aligner.aligned)
+            import math
+
+            def _from_map(x_umf: float, y_umf: float, source: str) -> dict[str, Any]:
+                pose = aligner.umf_to_pose(x_umf, y_umf) if aligned else None  # type: ignore[union-attr]
+                pin: dict[str, Any] = {
+                    "gx":          None,
+                    "gy":          None,
+                    "stuck_count": None,
+                    "room_name":   None,
+                    "source":      source,
+                    "x_umf":       x_umf,
+                    "y_umf":       y_umf,
+                }
+                if pose is not None:
+                    x, y = pose
+                    pin.update(
+                        x_mm=x, y_mm=y, space="pose",
+                        bearing_deg=int(math.degrees(math.atan2(x, y)) % 360),
+                        distance_mm=int(math.sqrt(x ** 2 + y ** 2)),
+                    )
+                else:
+                    pin.update(
+                        x_mm=x_umf, y_mm=y_umf, space="umf",
+                        bearing_deg=None, distance_mm=None,
+                    )
+                return pin
+
             # Append UMF-seeded observed zones (source="robot_learned")
             cloud = data.cloud_coordinator
             if cloud is not None and cloud.data is not None:
@@ -559,38 +636,18 @@ class MissionHistoryView(RoombaPlusView):
                 # property -- so it answers the question and narrows
                 # nothing. Reading through a local carries the type
                 # to the accesses below.
-                import math
                 for centroid in cloud.observed_zone_centroids:
-                    x = centroid.get("x") or 0.0
-                    y = centroid.get("y") or 0.0
-                    hazards.append({
-                        "gx":          None,
-                        "gy":          None,
-                        "x_mm":        x,
-                        "y_mm":        y,
-                        "stuck_count": None,
-                        "room_name":   None,
-                        "bearing_deg": int(math.degrees(math.atan2(x, y)) % 360),
-                        "distance_mm": int(math.sqrt(x ** 2 + y ** 2)),
-                        "source":      "robot_learned",
-                    })
+                    hazards.append(_from_map(
+                        float(centroid.get("x") or 0.0),
+                        float(centroid.get("y") or 0.0),
+                        "robot_learned",
+                    ))
                 # v2.3.0 Step 8 / Gap B — keepout zone centroids
                 for zone in cloud.keepout_zones:
                     cx = zone.get("cx") or zone.get("centroid_x") or zone.get("x")
                     cy = zone.get("cy") or zone.get("centroid_y") or zone.get("y")
                     if cx is not None and cy is not None:
-                        cx, cy = float(cx), float(cy)
-                        hazards.append({
-                            "gx":          None,
-                            "gy":          None,
-                            "x_mm":        cx,
-                            "y_mm":        cy,
-                            "stuck_count": None,
-                            "room_name":   None,
-                            "bearing_deg": int(math.degrees(math.atan2(cx, cy)) % 360),
-                            "distance_mm": int(math.sqrt(cx ** 2 + cy ** 2)),
-                            "source":      "keepout",
-                        })
+                        hazards.append(_from_map(float(cx), float(cy), "keepout"))
 
             # F22 (v3.3.1) — merge GridStore.stuck_pattern()'s dominant
             # weekday/hour onto matching stuck_events pins. Runs after the
@@ -608,19 +665,19 @@ class MissionHistoryView(RoombaPlusView):
                 hazard["dominant_weekday"] = dominant_weekday
                 hazard["dominant_hour"] = dominant_hour
 
-            # v2.3.0 Step 8 — populate room_name via UmfAligner
-            aligner = getattr(data, "umf_aligner", None)
-            if aligner and aligner.aligned:
+            # v2.3.0 Step 8 — populate room_name via UmfAligner. Rooms
+            # are looked up in UMF space: a stuck pin is converted there,
+            # a pin from the map already has its UMF point.
+            if aligned:
                 for hazard in hazards:
-                    source   = hazard.get("source")
-                    x_mm     = hazard["x_mm"]
-                    y_mm     = hazard["y_mm"]
-                    if source == "stuck_events":
-                        pt_umf = aligner.pose_to_umf(x_mm, y_mm)
+                    if "x_umf" in hazard:
+                        hazard["room_name"] = aligner.room_name_at(  # type: ignore[union-attr]
+                            hazard["x_umf"], hazard["y_umf"]
+                        )
+                    elif hazard.get("source") == "stuck_events":
+                        pt_umf = aligner.pose_to_umf(hazard["x_mm"], hazard["y_mm"])  # type: ignore[union-attr]
                         if pt_umf:
-                            hazard["room_name"] = aligner.room_name_at(*pt_umf)
-                    elif source in ("robot_learned", "keepout"):
-                        hazard["room_name"] = aligner.room_name_at(x_mm, y_mm)
+                            hazard["room_name"] = aligner.room_name_at(*pt_umf)  # type: ignore[union-attr]
 
             return self.json(hazards)
 
@@ -656,6 +713,14 @@ class MissionHistoryView(RoombaPlusView):
 
         # Room names for `room_coverage` (4.2.15).
         _names = region_names_across_maps(_cc) if _cc is not None else {}
+        # PRIME KEEPS ITS NAMES ELSEWHERE: no cloud coordinator, a flat
+        # `{region_id: name}` of rooms and zones instead (I1).
+        if not _names:
+            _names = {
+                str(k): str(v)
+                for k, v in (getattr(data, "prime_room_names", None) or {}).items()
+                if v
+            }
         _by_pmap = (getattr(_cc, "regions_by_pmap", None) or {}) if _cc is not None else {}
 
         if _cc is not None and _cc.data is not None and _cc.raw_records:
@@ -1037,7 +1102,13 @@ class HouseholdSummaryView(RoombaPlusView):
                 health_trend = data.robot_profile_store.health_score_trend()
 
             maintenance_due = False
-            if data.maintenance_store is not None:
+            if data.connection_type is ConnectionType.CLOUD_ONLY:
+                # PRIME COUNTS ITS PARTS ITSELF. The Classic rule below
+                # reads local hour counters a Prime robot never reports,
+                # so a Prime robot was never due here. The maintenance
+                # list's own rule instead.
+                maintenance_due = bool(prime_parts_due(entry))
+            elif data.maintenance_store is not None:
                 # Local import — api_views.py is imported eagerly by
                 # __init__.py at module level (unlike platform modules
                 # such as switch.py/binary_sensor.py, which HA loads

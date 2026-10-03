@@ -36,6 +36,7 @@ from homeassistant.helpers.storage import Store
 from .command_record import record_command
 from .service_guard import register as register_guarded
 from .const import (
+    CONF_SMART_ZONE_ALIASES,
     maintenance_changed_signal,
     PRIME_ERROR_SEVERITY,
     cleaning_modes_for,
@@ -73,6 +74,7 @@ from .const import (
 # in case".
 from .prime_coordinator import prime_region_names_from_command
 from .room_cleaning import ZID_PREFIX, async_get_room_cleaning_backend
+from .zone_naming import resolve_zone_name
 from .models import ConnectionType, RoombaConfigEntry, RoombaData
 from .prime_coordinator import prime_current_state
 
@@ -545,6 +547,45 @@ async def _async_clean_rooms_via_backend(
         )
 
 
+def _classic_zone_ids(config_entry: Any, names: list[str]) -> list[str]:
+    """Zone ids for zone names on a Classic robot, or a clear refusal.
+
+    THE SAME NAMES THE ZONE SELECT OFFERS: the clean zones of the active
+    Smart Map from the iRobot account, named the way the select names
+    them -- an alias from Zone management first, then the account's
+    name. Matching is `clean_room`'s: case-insensitive, accents optional.
+    """
+    from .room_cleaning import match_room_names  # noqa: PLC0415
+
+    coordinator = getattr(config_entry.runtime_data, "cloud_coordinator", None)
+    options = config_entry.options
+    aliases = options.get(CONF_SMART_ZONE_ALIASES) or {}
+    labels = options.get("smart_zone_labels") or {}
+    zone_data = options.get("smart_zone_data") or {}
+    available: dict[str, str] = {}
+    if coordinator is not None and getattr(coordinator, "data", None) is not None:
+        for zone in coordinator.zones or []:
+            zid = str(zone.get("id") or "")
+            if not zid:
+                continue
+            stored = zone_data.get(zid)
+            local = stored.get("name") if isinstance(stored, dict) else None
+            shown = resolve_zone_name(zid, aliases, zone.get("name"), local, labels)
+            available.setdefault(shown, zid)
+            # The account's own name keeps working after a rename.
+            if zone.get("name"):
+                available.setdefault(str(zone["name"]), zid)
+    zone_ids, missing = match_room_names(available, names)
+    if missing:
+        known = ", ".join(sorted(available)) or "(none on this map)"
+        raise ServiceValidationError(
+            f"Zone name(s) not found: {missing}. Known zones: {known}.",
+            translation_domain=DOMAIN,
+            translation_key="zone_name_not_found",
+        )
+    return zone_ids
+
+
 async def async_handle_clean_zone(call: ServiceCall) -> None:
     """Send a Prime robot to one or more clean zones on demand.
 
@@ -606,6 +647,12 @@ async def async_handle_clean_zone(call: ServiceCall) -> None:
 
         if raw_ids:
             zone_ids = [str(z) for z in raw_ids]
+        elif config_entry.runtime_data.connection_type != ConnectionType.CLOUD_ONLY:
+            # CLASSIC: THE ZONES THE SELECT SHOWS. Only Prime's name
+            # sources were read here, so a Classic robot knew no zone by
+            # name -- @Hardy-196's i7+ listed "Esstisch" in its zone
+            # select and `clean_zone` answered "not found".
+            zone_ids = _classic_zone_ids(config_entry, list(raw_names or []))
         else:
             # NAME -> ID against the same command the calendar reads, so
             # a name that shows on the map resolves here too. An unknown

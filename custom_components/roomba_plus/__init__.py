@@ -93,6 +93,8 @@ from .const import (
     has_smart_map,
 )
 from .api_views import DailyDigestView, MissionHistoryView, HouseholdSummaryView, MissionHistoryImportView, ExplainMissionView, MissionPathView, MissionMapJsonView, MissionMapPngView
+from .naming_map import NamingMapView
+from .parts_catalog import async_load_into as _load_parts_catalogue
 from .grid_store import GridStore
 from .room_seg_store import RoomSegStore
 from .mission_store import MissionStore
@@ -1143,17 +1145,18 @@ async def _phase_finalize(ctx: _SetupContext) -> None:
     await hass.config_entries.async_forward_entry_setups(config_entry, platforms)
 
     # REST API views (registered once per HA instance)
-    if not hass.data.get("_roomba_plus_view_registered"):
-        hass.http.register_view(MissionHistoryView())
-        hass.http.register_view(HouseholdSummaryView())
-        hass.http.register_view(MissionHistoryImportView())
-        hass.http.register_view(DailyDigestView())
-        hass.http.register_view(ExplainMissionView())
-        hass.http.register_view(MissionPathView())
-        # v3.3.0 MISSION-MAP
-        hass.http.register_view(MissionMapJsonView())
-        hass.http.register_view(MissionMapPngView())
-        hass.data["_roomba_plus_view_registered"] = True
+    _async_register_views(hass)
+
+    # THE PARTS CATALOGUE, for the guide link on each consumable (I4).
+    # In the background: a slow or failed read costs the links only.
+    config_entry.async_create_background_task(
+        hass,
+        _load_parts_catalogue(
+            hass, config_entry.runtime_data,
+            roomba_reported_state(roomba).get("sku"),
+        ),
+        name=f"roomba_plus_parts_catalogue_{config_entry.entry_id}",
+    )
 
     # F22a — check for cloud-detected obstacle zones
     if cloud_coordinator is not None and ctx.grid_store is not None:
@@ -1843,6 +1846,19 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
         hass_ref=hass,
     )
 
+    # THE REST API FOR PRIME TOO (I1). Registered here, not only in the
+    # Classic setup: a household with only Prime robots had none.
+    _async_register_views(hass)
+
+    # THE PARTS CATALOGUE, for the guide link on each part sensor (I4).
+    config_entry.async_create_background_task(
+        hass,
+        _load_parts_catalogue(
+            hass, config_entry.runtime_data, getattr(serial_info, "sku", None)
+        ),
+        name=f"roomba_plus_parts_catalogue_{config_entry.entry_id}",
+    )
+
     async def _async_disconnect_on_stop(event: Any) -> None:
         await prime_robot.disconnect()
 
@@ -2276,6 +2292,34 @@ async def async_disconnect_or_timeout(
 
 
 # ── State helpers (used across all platforms) ─────────────────────────────────
+
+def _async_register_views(hass: HomeAssistant) -> None:
+    """The REST API, registered once per Home Assistant instance.
+
+    BY WHICHEVER ENTRY SETS UP FIRST, OF EITHER GENERATION. This lived in
+    the Classic setup alone, so a household with only Prime robots had
+    no `/api/roomba_plus/*` routes at all -- while API.md says "Both
+    generations", and the card's history, household and digest views
+    depend on them (I1 of the card plan). Every view reads the mission
+    store, which Prime entries have; the Classic-only parts (cloud
+    coordinator, grid store, archive) are guarded per view and answer
+    empty or 404 on a Prime entry.
+    """
+    if hass.data.get("_roomba_plus_view_registered"):
+        return
+    hass.http.register_view(MissionHistoryView())
+    hass.http.register_view(HouseholdSummaryView())
+    hass.http.register_view(MissionHistoryImportView())
+    hass.http.register_view(DailyDigestView())
+    hass.http.register_view(ExplainMissionView())
+    hass.http.register_view(MissionPathView())
+    # v3.3.0 MISSION-MAP
+    hass.http.register_view(MissionMapJsonView())
+    hass.http.register_view(MissionMapPngView())
+    # 4.2.19 -- the map the naming forms show
+    hass.http.register_view(NamingMapView())
+    hass.data["_roomba_plus_view_registered"] = True
+
 
 def roomba_reported_state(roomba: RoombaClient | None) -> dict[str, Any]:
     """Return the 'reported' sub-dict from master_state.

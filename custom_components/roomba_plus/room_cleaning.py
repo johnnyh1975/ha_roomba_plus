@@ -47,6 +47,8 @@ from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 
 from .command_record import record_command
 from .const import (
+    CONF_SMART_ZONE_ALIASES,
+    CONF_SMART_ZONE_HIDDEN,
     CONF_SMART_ZONE_LABELS,
     room_slug,
     CONF_FLOOR,
@@ -55,6 +57,7 @@ from .const import (
     MAP_UPDATING_NOT_READY,
 )
 from .structural_failures import record_failure, record_success
+from .zone_naming import map_room_label
 from .models import ConnectionType, MapCapability
 from .cloud_coordinator import committed_pmapv_id
 
@@ -1937,6 +1940,38 @@ class ClassicRoomCleaning(RoomCleaningBackend):
             # four theories of mine had each been ruled out by one of
             # his messages.
             self._pmap_by_region.setdefault(rid, pmap_id)
+
+        # THE NAME THE USER SEES, TOO.
+        #
+        # A room renamed under Configure → Zone management carries an
+        # alias, and every display shows it: the room select, the rooms
+        # map, the card. This list did not, so `clean_room` answered
+        # "Unknown room(s)" for the very name the card had just offered
+        # (found in the card's 2.5.0 review, I8). The original name keeps
+        # working -- automations written before the rename must not
+        # break.
+        #
+        # ONLY FOR A REGION THIS LIST ALREADY HOLDS: the alias names a
+        # room, it does not make one reachable. And a name another room
+        # already has stays with that room, like every other collision
+        # here; the alias then resolves nothing, and the log says so.
+        aliases = self._config_entry.options.get(CONF_SMART_ZONE_ALIASES) or {}
+        if isinstance(aliases, dict):
+            for alias_rid, alias in aliases.items():
+                rid = str(alias_rid)
+                name = str(alias or "").strip()
+                if not name or rid not in self._pmap_by_region:
+                    continue
+                owner = rooms.get(name)
+                if owner is None:
+                    rooms[name] = rid
+                elif owner != rid:
+                    _LOGGER.warning(
+                        "clean_room: the name '%s' given to region %s under "
+                        "Zone management already belongs to region %s; "
+                        "it keeps resolving to region %s",
+                        name, rid, owner, owner,
+                    )
         return rooms
 
     async def clean_rooms(
@@ -1986,10 +2021,29 @@ class ClassicRoomCleaning(RoomCleaningBackend):
         with adding a new generation -- one working generation at a time
         is easier to verify than two changing at once.
         """
+        # ZONES ARRIVE MARKED. `clean_zone` sends `zid_<id>`, the marker
+        # every other path in this file uses; the robot wants the bare id
+        # and `"type": "zid"`. Before 4.2.19 the marked id went out as a
+        # room id and the map lookup below never found it, so
+        # `clean_zone` could not work on a Classic robot at all
+        # (@Hardy-196, i7+).
+        forced_zones: set[str] = set()
+        bare_ids: list[str] = []
+        for rid in room_ids:
+            if rid.startswith(ZID_PREFIX):
+                rid = rid[len(ZID_PREFIX):]
+                forced_zones.add(rid)
+            bare_ids.append(rid)
+        room_ids = bare_ids
+
         if not self._pmap_by_region:
-            # clean_rooms is always reached via available_rooms, which
-            # populates the index. Refusing beats sending a command with
-            # an empty pmap_id, which the robot accepts and ignores.
+            # READ IT NOW rather than refuse. `clean_room` reaches this
+            # through available_rooms(), which fills the index;
+            # `clean_zone` does not, and has no other reason to.
+            await self.available_rooms()
+        if not self._pmap_by_region:
+            # Refusing beats sending a command with an empty pmap_id,
+            # which the robot accepts and ignores.
             raise HomeAssistantError(
                 "Room list has not been read yet, so the map each room belongs to "
                 "is unknown.", translation_domain=DOMAIN, translation_key="room_list_not_read"
@@ -2134,7 +2188,10 @@ class ClassicRoomCleaning(RoomCleaningBackend):
                     # `clean_rooms` without the mapping existing. An
                     # AttributeError here would turn a missing lookup
                     # into a failed clean.
-                    "type": getattr(self, "_type_by_region", {}).get(rid, "rid"),
+                    "type": (
+                        "zid" if rid in forced_zones
+                        else getattr(self, "_type_by_region", {}).get(rid, "rid")
+                    ),
                     "params": {
                         "noAutoPasses": no_auto,
                         # THE CLEANING MODE, when the user has expressed
@@ -2196,6 +2253,17 @@ class ClassicRoomCleaning(RoomCleaningBackend):
                 for i, rid in enumerate(room_ids)
             ],
         }
+        # A PURE ZONE COMMAND CARRIES NO MAP VERSION. Field logs: with
+        # `user_pmapv_id` the robot answers a zone-only command with
+        # error 224; `async_clean_segments` has omitted it since 2.7.0.
+        # Mixed room and zone commands keep it.
+        if room_ids and all(
+            rid in forced_zones
+            or getattr(self, "_type_by_region", {}).get(rid, "rid") == "zid"
+            for rid in room_ids
+        ):
+            params.pop("user_pmapv_id", None)
+            user_pmapv_id = ""
         _LOGGER.info(
             "clean_room: %s → regions=%s pmap=%s pmapv=%s",
             self._data.blid, room_ids, pmap_id[:12],
@@ -3037,6 +3105,50 @@ def region_names_across_maps(
             if region_id and region_name:
                 names.setdefault(str(region_id), region_name)
     return names
+
+def smart_rooms_to_name(runtime_data: Any, options: Any) -> list[str]:
+    """Rooms on the robot's map that have no name anywhere (4.2.19).
+
+    THE ONLY ROOMS WORTH ASKING ABOUT. A name can come from the user's
+    alias, the iRobot account, or the naming form; a room with any of
+    them needs nothing. And only a room ON THE MAP can be asked about:
+    the naming form shows that map, and a number the map does not draw
+    is one the user cannot place.
+
+    That leaves out every region id that is only known from an old
+    schedule or an earlier clean. @liblit's i7 was asked to name twelve
+    of them, all with names in his account or on no map at all. Those
+    cannot be cleaned on the current map either, so nothing is lost by
+    not asking.
+
+    Hidden rooms are left out, as everywhere else.
+    """
+    aligner = getattr(runtime_data, "umf_aligner", None)
+    polygons = getattr(aligner, "room_polygons_umf", None)
+    if not isinstance(polygons, dict) or not polygons:
+        return []
+    account = region_names_across_maps(
+        getattr(runtime_data, "cloud_coordinator", None)
+    )
+    try:
+        on_map = aligner.rid_to_name()  # type: ignore[union-attr]
+    except Exception:  # noqa: BLE001 -- a broken aligner names nothing
+        on_map = {}
+    hidden = {str(h) for h in (options.get(CONF_SMART_ZONE_HIDDEN) or [])}
+    unnamed: list[str] = []
+    for rid in polygons:
+        rid = str(rid)
+        if rid in hidden:
+            continue
+        cloud = account.get(rid) or on_map.get(rid)
+        # rid_to_name() falls back to the id itself for a region without
+        # a name; that is no name.
+        if not cloud or cloud == rid:
+            cloud = None
+        if map_room_label(rid, cloud, options) == rid:
+            unnamed.append(rid)
+    return sorted(unnamed, key=lambda x: x.zfill(4))
+
 
 def _resolve_rooms(
     zone_data: dict[str, dict[str, Any]],

@@ -1,7 +1,7 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Default-blue.svg)](https://github.com/hacs/default)
-[![Version](https://img.shields.io/badge/Version-4.2.18-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-4.2.19-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2025.5%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Platinum-blueviolet.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
@@ -21,9 +21,9 @@ Roomba+ is a Platinum-quality Home Assistant custom integration for iRobot Roomb
 
 | Your robot | Install | Why |
 |---|---|---|
-| **Any supported robot** | **v4.2.18** (stable) — the default in HACS | One line for both generations. No beta channel needed. |
-| **Roomba Max · Combo/Plus 400-series** and other newer cloud robots | **v4.2.18** | Earlier stable lines **cannot connect to your robot at all** |
-| Still on the 4.1 line | **v4.2.18** | Everything fixed in 4.1.1 through 4.1.8 is in it. That line has ended |
+| **Any supported robot** | **v4.2.19** (stable) — the default in HACS | One line for both generations. No beta channel needed. |
+| **Roomba Max · Combo/Plus 400-series** and other newer cloud robots | **v4.2.19** | Earlier stable lines **cannot connect to your robot at all** |
+| Still on the 4.1 line | **v4.2.19** | Everything fixed in 4.1.1 through 4.1.8 is in it. That line has ended |
 | Not sure | Check your model number against the [supported hardware](#supported-hardware--capability-matrix) table below | |
 
 > ⚠️ If HACS shows you only `main` and downloading it hangs, see
@@ -274,7 +274,7 @@ Everything else listed below works.
   detected" setting. The write mechanism itself is confirmed to work (the same one already
   confirmed for other shadow writes), but whether toggling it actually changes the robot's real
   behavior isn't confirmed yet the way start/stop/dock/find are
-- Schedule calendar — read-only, same `calendar.roomba_*_schedule` pattern as Classic robots,
+- Schedule calendar — `calendar.{name}_prime_schedule`; create, edit and delete entries and they are written back to the robot, as on Classic robots,
   showing each schedule's own room/zone (resolved to a real name via the account's map data,
   falling back to "Zone {id}" if unnamed). Only weekly-recurring schedules are shown; bi-weekly/
   monthly/one-time schedules are deliberately skipped rather than shown with a guessed date —
@@ -489,7 +489,7 @@ After installation, five steps to get the most out of Roomba+:
 4. **Set a blocking sensor** (optional) — Settings → Configure → Blocking sensors. Pick any binary sensor (door contact, occupancy, person home). The robot will queue or abort rather than starting when it fires.
 5. **Reset consumables after replacing them** — Settings → device → press the Filter / Brush / Battery reset button, or mark the matching to-do item done. The remaining-life countdown restarts either way.
 
-Two things also appear automatically, no setup needed: your cleaning schedule as `calendar.{name}_schedule`, and filter/brush maintenance as `todo.{name}_maintenance`.
+Your cleaning schedule appears automatically as a calendar — `calendar.{name}_schedule`, or `calendar.{name}_prime_schedule` on Prime robots — and you can edit it there. Filter and brush maintenance as a to-do list (`todo.{name}_maintenance`) is opt-in: Configure → Connection settings → *Show maintenance as a to-do list*.
 
 ---
 

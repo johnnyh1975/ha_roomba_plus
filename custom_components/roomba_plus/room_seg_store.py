@@ -123,6 +123,18 @@ DOOR_MERGE_DISTANCE_MM = 800.0
 MAX_BOUNDARY_HISTORY = 15
 
 
+def area_number(room_id: str) -> str:
+    """The number an area is shown with: `room_3` -> `3`.
+
+    The Cleaning path map draws it on an area that has no name yet, and
+    the naming form labels that area's field with it, so the two can be
+    read side by side. The ids are this store's own; a robot without a
+    Smart Map keeps no map, so the iRobot app has nothing to match them
+    against.
+    """
+    return room_id.removeprefix("room_")
+
+
 @dataclass
 class SegRoom:
     id: str

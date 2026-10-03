@@ -49,15 +49,16 @@ from .const import is_mop
 from .entity import IRobotEntity
 from .models import ConnectionType, RoombaConfigEntry
 from .sensor_helpers import _brush_days_until_due, _filter_days_until_due
+from .room_cleaning import smart_rooms_to_name
 from .zone_naming import unlabelled_zone_ids
 
 _LOGGER = logging.getLogger(__name__)
 PARALLEL_UPDATES = 0
 
 _RECONFIGURE_ROOMS_DESCRIPTION = (
-    "Unnamed zones detected. Use the zone-naming wizard (Settings or the "
-    "linked Repair) to resolve — this item clears itself automatically "
-    "once every zone has a name."
+    "Some rooms have no name yet. Open Configure → Rooms & zones: it "
+    "shows the robot's map with their numbers, or says what is missing. "
+    "This item clears itself once every room has a name."
 )
 
 
@@ -116,7 +117,7 @@ class RoombaMaintenanceTodo(IRobotEntity, TodoListEntity):
                  if brush_days is not None else None),
         ))
 
-        if unlabelled_zone_ids(self.vacuum_state, self._config_entry.options):
+        if self._rooms_need_naming():
             items.append(TodoItem(
                 summary="Reconfigure rooms",
                 uid="reconfigure_rooms",
@@ -125,6 +126,21 @@ class RoombaMaintenanceTodo(IRobotEntity, TodoListEntity):
             ))
 
         return items
+
+    def _rooms_need_naming(self) -> bool:
+        """The same question the "Rooms & zones" step answers.
+
+        WITH AN IROBOT ACCOUNT, rooms take their names from it, and only
+        a room on the map without a name anywhere needs one. Checked
+        against the robot's own region ids, this item stood open for
+        @liblit's i7 while every room on his map had its name.
+        """
+        options = self._config_entry.options
+        data = getattr(self._config_entry, "runtime_data", None)
+        coordinator = getattr(data, "cloud_coordinator", None)
+        if coordinator is not None and getattr(coordinator, "data", None) is not None:
+            return bool(smart_rooms_to_name(data, options))
+        return bool(unlabelled_zone_ids(self.vacuum_state, options))
 
     async def async_update_todo_item(self, item: TodoItem) -> None:
         """Only reacts to marking an item COMPLETED — there is no

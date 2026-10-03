@@ -9,6 +9,96 @@ note are listed — most releases need zero action beyond updating.
 
 ---
 
+## v4.2.19 — from v4.2.18
+
+**Configure → Rooms & zones asks less, and shows the map.**
+- **With an iRobot account,** it asks only for rooms on the robot's map
+  that have no name anywhere. Usually that is none.
+- **Without an account,** it explains that it can only know the rooms by
+  number, instead of showing a form.
+- **The fields start empty.** They used to be pre-filled with
+  "Zone 21". Names you saved before are kept.
+
+**The REST API reports version 2** (`X-Roomba-Plus-Api-Version`). Only
+`format=hazards` changed:
+- Obstacles and keep-out zones from the map are in dock-relative
+  millimetres once the map is aligned, like the stuck pins. They used to
+  be in the map's own units.
+- Every pin has a `space` field, `pose` or `umf`. Place only pins where
+  it says `pose`.
+- `bearing_deg` and `distance_mm` are `null` on a `umf` pin.
+
+**New entities, nothing to do:**
+- `event.<robot>_mission_completed`, `event.<robot>_room_completed`, and
+  on Classic `event.<robot>_stuck`;
+- on Prime, *Rooms overdue* and *Room cleaning history*, which never
+  appeared before.
+
+**`roomba_plus_mission_completed` on Prime carries the full payload,**
+with `stuck_count` always `null`. Automations that read only
+`entry_id` are unaffected. Both generations add `mission_id` and
+`missions_added`.
+
+**The *Clean zone (Smart Map)* button sends a clean zone as a zone.**
+Before, a zone went out as a room with the zone's number, and the robot
+cleaned whatever room had that number, or nothing. If an automation
+pressed it for a zone and you worked around the result, check it.
+
+---
+
+## v4.2.18 — from v4.2.17
+
+**Switching the maintenance list on works without a restart.** In 4.2.17
+it failed the reload; a restart had already set that right.
+
+**Room names on the Classic rooms map are off by default,** as they
+always were; the feature guide had said otherwise. Switch them on under
+Configure → Connection settings → *Draw room names on the map image*.
+
+---
+
+## v4.2.17 — from v4.2.16
+
+**The maintenance to-do list is opt-in on Classic robots too.** Switch
+it on under Configure → Connection settings → *Show maintenance as a
+to-do list*. Left-over `unavailable` to-do entities from before it
+became opt-in are removed at start; a dashboard card that points at one
+shows *Entity not found* until the list is switched on.
+
+---
+
+## v4.2.16 — from v4.2.15
+
+**Cleaned rooms are listed in the order they were cleaned.** They were
+listed last room first: the vacuum's `last_cleaned_rooms`, the REST
+mission list and the export. A template that took the first entry as
+the first room cleaned got the last one; it now gets the first.
+
+---
+
+## v4.2.15 — from v4.2.14
+
+**No carpet boost control on robots that do not declare it.** The
+*Carpet boost* select, the *Setting – Carpet boost* sensor and the
+vacuum's fan speeds are removed on those robots; on them a change never
+had an effect. An automation that set them reports the entity as
+missing.
+
+**A room counts as cleaned only above 10 % of its floor.** Room history
+and overdue rooms can list a room fewer for missions that only reached
+into it.
+
+---
+
+## v4.2.14 — from v4.2.13
+
+**The rooms recorded for a mission follow the cloud's room events** once
+they arrive, in the REST export and the diagnostics too. A mission can
+therefore list fewer rooms than room tracking saw, for example a room
+behind a closed door.
+
+---
+
 ## v4.2.13 — from v4.2.12
 
 **Missions can appear in the history after the fact.** A Classic robot

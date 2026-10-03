@@ -34,6 +34,7 @@ import datetime as dt_stdlib
 
 from homeassistant.util import dt as dt_util
 
+from .parts_catalog import guide_url_for
 from .const import (
     BBRUN_SQFT_SCALE,
     ERROR_CATALOGUE,
@@ -148,6 +149,8 @@ class RoombaSensorDescription(SensorEntityDescription):
     #: which stay true while the robot is unreachable.
     live_state: bool = False
     remaining: bool = False
+    #: The consumable role, for the parts-catalogue guide link (4.2.19).
+    consumable_role: str | None = None
     max_hours_fn: Callable[[IRobotEntity], int | None] = field(
         default_factory=lambda: lambda _: None
     )
@@ -292,6 +295,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         remaining=True,
         threshold_fn=_consumable_threshold,
         max_hours_fn=partial(_consumable_max_hours, role=IROBOT_PART_ROLE_FILTER),
+        consumable_role=IROBOT_PART_ROLE_FILTER,
     ),
     RoombaSensorDescription(
         key="brush_remaining_hours",
@@ -305,6 +309,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         remaining=True,
         threshold_fn=_consumable_threshold,
         max_hours_fn=partial(_consumable_max_hours, role=IROBOT_PART_ROLE_MAIN_BRUSH),
+        consumable_role=IROBOT_PART_ROLE_MAIN_BRUSH,
     ),
     RoombaSensorDescription(
         key="part_edge_brush",
@@ -319,6 +324,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         filter_fn=lambda state: not is_braava(state),
         threshold_fn=_consumable_threshold,
         max_hours_fn=partial(_consumable_max_hours, role=IROBOT_PART_ROLE_SIDE_BRUSH),
+        consumable_role=IROBOT_PART_ROLE_SIDE_BRUSH,
     ),
     RoombaSensorDescription(
         key="part_dirt_bag",
@@ -333,6 +339,7 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         filter_fn=has_clean_base,
         threshold_fn=_consumable_threshold,
         max_hours_fn=partial(_consumable_max_hours, role=IROBOT_PART_ROLE_CLEAN_BASE_BAG),
+        consumable_role=IROBOT_PART_ROLE_CLEAN_BASE_BAG,
     ),
     RoombaSensorDescription(
         key="battery_cycles",
@@ -2031,6 +2038,19 @@ class RoombaSensor(IRobotEntity, SensorEntity):
                 attrs["threshold_hours"] = threshold
             if max_hours is not None:
                 attrs["max_hours"] = max_hours
+            # THE MANUFACTURER'S GUIDE for this part (4.2.19), joined by
+            # the part id of the account's counter for this role. Only
+            # with the iRobot account: without it there is no part id.
+            role = getattr(self.entity_description, "consumable_role", None)
+            store = getattr(self._config_entry.runtime_data, "maintenance_store", None)
+            if role and store is not None:
+                record = store.cloud_part_by_role(role)
+                guide = guide_url_for(
+                    self._config_entry.runtime_data,
+                    record.get("part_id") if isinstance(record, dict) else None,
+                )
+                if guide:
+                    attrs["guide_url"] = guide
             return attrs
         # v1.8.0 L3: description + action for last_error_code
         # v3.4.1: localised via hass.config.language, falls back to English
