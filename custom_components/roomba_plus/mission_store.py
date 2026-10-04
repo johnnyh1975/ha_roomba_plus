@@ -35,7 +35,7 @@ from .const import (
     room_event_covered_share,
     room_event_was_cleaned,
 )
-from .room_times import learn_from_records
+from .room_times import learn_from_records, record_region_visits
 from .const import extract_region_id, fin_events_in_order, SQFT_TO_M2
 
 _LOGGER = logging.getLogger(__name__)
@@ -286,6 +286,41 @@ class MissionStore:
         )
 
     # ── Write ─────────────────────────────────────────────────────────────────
+
+    #: The room fields a Prime record carries (4.2.21); see
+    #: prime_mission_sync.prime_entry_to_record.
+    ROOM_DATA_KEYS: tuple[str, ...] = (
+        "rooms_cleaned", "room_ended_at", "room_durations_sec",
+    )
+
+    def add_missing_room_data(self, record: dict[str, Any]) -> bool:
+        """Give a stored record the room fields it was written without.
+
+        PRIME RECORDS BEFORE 4.2.21 HAVE NONE: the timeline's Unix-second
+        times broke the conversion, so every mission was stored without
+        rooms. The sync only appends missions it has not seen, so without
+        this the per-room values would stay empty until each room had
+        been cleaned again -- and the overdue rooms would treat every
+        room as never cleaned in the meantime.
+
+        Fills only a record that has no `rooms_cleaned` yet, from a
+        re-read of the same mission (same id). Returns whether it did.
+        """
+        if "rooms_cleaned" not in record:
+            return False
+        record_id = record.get("id")
+        if not record_id:
+            return False
+        for existing in self._records:
+            if existing.get("id") != record_id:
+                continue
+            if "rooms_cleaned" in existing:
+                return False
+            for key in self.ROOM_DATA_KEYS:
+                if key in record:
+                    existing[key] = record[key]
+            return True
+        return False
 
     async def async_append(self, record: dict[str, Any]) -> bool:
         """Append a record and trim to MAX_RECORDS FIFO.
@@ -1057,6 +1092,16 @@ class MissionStore:
             )
         if self._timeline_has_room_events(rec):
             return []   # the cloud's answer is "none" (4.2.15)
+        # PRIME (4.2.21): the sync stores the cleaned regions, judged by
+        # the same rule as source 1. An empty list is the timeline's
+        # answer "none", like the line above.
+        prime_cleaned = rec.get("rooms_cleaned")
+        if isinstance(prime_cleaned, list):
+            return self._resolve_region_ids(
+                [str(r) for r in prime_cleaned if str(r)],
+                effective_map,
+                self._record_region_map(rec, by_pmap),
+            )
         if rec.get("rooms_source") == ROOMS_AWAITING_CLOUD:
             # A GUESS WAITING FOR THE CLOUD (4.2.15): no answer yet --
             # unless the cloud never reported this mission, in which case
@@ -1212,9 +1257,25 @@ class MissionStore:
             if not ended_at or not isinstance(ended_at, str):
                 continue
             rooms = self._record_room_names(rec, effective_map, regions_by_pmap) or []
+            if not rooms:
+                continue
+            # EACH ROOM'S OWN END where the timeline has it (4.2.21), the
+            # mission's end otherwise -- the same names, resolved from
+            # the same ids, so the two line up.
+            own_end: dict[str, str] = {}
+            times = self.record_region_times(rec)
+            if times:
+                rids = list(times)
+                names = self._resolve_region_ids(
+                    rids, effective_map, self._record_region_map(rec, regions_by_pmap)
+                )
+                for rid, name in zip(rids, names, strict=True):
+                    end = (times.get(rid) or {}).get("ended_at")
+                    if end and name not in own_end:
+                        own_end[name] = end
             for room in rooms:
                 if room not in result:
-                    result[room] = ended_at
+                    result[room] = own_end.get(room) or ended_at
         return result
 
     @staticmethod
@@ -1259,15 +1320,68 @@ class MissionStore:
             if ordered:
                 return ordered
 
-        # Prime: {region_id: seconds}. Insertion order is the order the
-        # sync wrote them, which follows the timeline.
+        # Prime (4.2.21): the regions the sync judged cleaned, by the
+        # same rule as the finEvents read above.
+        cleaned = rec.get("rooms_cleaned")
+        if isinstance(cleaned, list):
+            return [str(rid) for rid in cleaned if str(rid)]
+        # Older shape: every region with recorded time. Never actually
+        # written before 4.2.21 (see prime_mission_sync), kept for
+        # records that carry it.
         durations = rec.get("room_durations_sec")
         if isinstance(durations, dict):
             return [str(rid) for rid in durations if str(rid)]
         return []
 
+    @staticmethod
+    def record_region_times(rec: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        """When each cleaned region of ONE record was done, and how long
+        the robot spent there (4.2.21).
+
+        `{region id: {"ended_at": iso | None, "seconds": float | None}}`
+        for the regions record_region_ids() returns. Prime keeps both in
+        the record; Classic derives them from the cloud's timeline the
+        same way (room_times.region_visits). A region without a time of
+        its own gets None, and the caller falls back to the mission's
+        end -- what every reader used before.
+        """
+        rids = MissionStore.record_region_ids(rec)
+        if not rids:
+            return {}
+        ended = rec.get("room_ended_at")
+        durations = rec.get("room_durations_sec")
+        if isinstance(ended, dict) or isinstance(durations, dict):
+            ended = ended if isinstance(ended, dict) else {}
+            durations = durations if isinstance(durations, dict) else {}
+            return {
+                rid: {
+                    "ended_at": ended.get(rid) if isinstance(ended.get(rid), str) else None,
+                    "seconds": (
+                        float(durations[rid])
+                        if isinstance(durations.get(rid), (int, float))
+                        and not isinstance(durations.get(rid), bool)
+                        else None
+                    ),
+                }
+                for rid in rids
+            }
+        visits = record_region_visits(rec)
+        result: dict[str, dict[str, Any]] = {}
+        for rid in rids:
+            visit = visits.get(rid) or {}
+            end = visit.get("ended_at")
+            seconds = visit.get("seconds")
+            result[rid] = {
+                "ended_at": (
+                    datetime.fromtimestamp(end, tz=timezone.utc).isoformat()
+                    if isinstance(end, (int, float)) else None
+                ),
+                "seconds": float(seconds) if seconds else None,
+            }
+        return result
+
     def region_last_cleaned(self) -> dict[str, str]:
-        """{"<pmap_id>/<region_id>": ended_at} newest-first, first wins.
+        """{"<pmap_id>/<region_id>": iso} newest-first, first wins.
 
         KEYED BY MAP AND REGION TOGETHER, because a region id alone is
         not unique across maps -- @dduff617's four-map account has ids
@@ -1278,9 +1392,21 @@ class MissionStore:
         Records with no map recorded (older entries, EPHEMERAL tier)
         are keyed on the id alone; a caller that knows its map looks up
         the qualified form first and falls back.
+
+        THE REGION'S OWN END, since 4.2.21, where the timeline has it:
+        in a multi-room mission each room is dated when the robot was
+        done with it, not when the whole mission ended.
         """
-        result: dict[str, str] = {}
-        for rec in self._records:
+        return {
+            key: detail["ended_at"]
+            for key, detail in self.region_last_cleaned_details().items()
+        }
+
+    def region_last_cleaned_details(self) -> dict[str, dict[str, Any]]:
+        """region_last_cleaned() with the time spent in the region on that
+        clean: `{key: {"ended_at": iso, "seconds": float | None}}` (4.2.21)."""
+        result: dict[str, dict[str, Any]] = {}
+        for rec in reversed(self._records):
             ended_at = rec.get("ended_at")
             if not ended_at or not isinstance(ended_at, str):
                 continue
@@ -1289,10 +1415,16 @@ class MissionStore:
             if isinstance(pmaps_info, list) and pmaps_info:
                 first = pmaps_info[0] if isinstance(pmaps_info[0], dict) else {}
                 pmap_id = str(first.get("pmap_id") or "")
+            times = self.record_region_times(rec)
             for rid in self.record_region_ids(rec):
                 key = f"{pmap_id}/{rid}" if pmap_id else rid
-                if key not in result:
-                    result[key] = ended_at
+                if key in result:
+                    continue
+                own = times.get(rid) or {}
+                result[key] = {
+                    "ended_at": own.get("ended_at") or ended_at,
+                    "seconds": own.get("seconds"),
+                }
         return result
 
     def room_visit_counts(

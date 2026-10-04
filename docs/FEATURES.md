@@ -690,7 +690,8 @@ Every mission is recorded to a persistent log (up to 365 entries, FIFO). Survive
 | Last mission result | `completed` / `stuck` / `cancelled` / `error` / `demand` |
 | Last mission duration | Duration in minutes |
 | Last mission summary | Most recent mission as a single entity — 14 attributes (duration, area, battery delta, recharges, dirt events, initiator, timestamps) for automation triggers without digging through history (v3.1.0) |
-| Room cleaning history | Dictionary sensor: `{room_name: last_cleaned_timestamp}` across all recorded missions, SMART-tier with cloud access (v3.1.0) |
+| Room cleaning history | Dictionary sensor: `{room_name: last_cleaned_timestamp}` across all recorded missions, SMART-tier with cloud access (v3.1.0), Prime too. Since 4.2.21 each room carries the time the robot finished it, not the end of the whole mission |
+| Last cleaned – *room or zone* | One timestamp sensor per room and saved zone, off by default: Configure → *Connection settings* → *Separate sensor per room and zone*. The time the robot finished that room on its newest clean (since 4.2.21; the mission's end where the timeline has no time of its own). Attributes: `last_duration_min` (time spent there on that clean, every visit added up, 4.2.21), `region_id`, `pmap_id`. Both generations |
 | Consecutive anomalous missions | Count of consecutive most-recent missions classified as anomalous (v3.0.0, disabled by default — threshold ≥ 3 triggers the Card C5-ANOMALY banner) |
 | Last mission team ID | `team_id` of the most recent mission, if part of an Imprint Link team clean — `null` for the vast majority of ordinary single-robot runs (v3.2.0, disabled by default) |
 
@@ -1318,7 +1319,7 @@ for Prime users, with no error to explain it.
 | Event | Fires when | Payload |
 |---|---|---|
 | `roomba_plus_mission_completed` | A mission ends (any result) | `entry_id`, `name`, `rooms_cleaned`, `area_sqft`, `stuck_count`, `result` — plus (v3.2.0) `is_anomalous`, `anomaly_reason`, `recommended_action`, `robot_lifted`, always present (`null`/`false` for ordinary missions), so a notification automation gets the anomaly reason without calling any service — plus (4.2.19) `mission_id` and `missions_added`. **The same fields on Prime robots since 4.2.19** (before, Prime sent `entry_id` only); there `stuck_count` is `null`, and a sync that imports several missions at once — the first one after setup imports the history — fires once, describing the newest, with `missions_added` saying how many |
-| `roomba_plus_room_completed` | AUTO-ADVANCE-ROOM confirms a room finished | `entry_id`, `name`, `room_name`, `room_idx` |
+| `roomba_plus_room_completed` | A room finished — Classic: room tracking moved on; Prime: the timeline moved to the next region | `entry_id`, `name`, `room_name`, `duration_sec` (4.2.21; Classic: what room tracking measured, Prime: from the room event's start in the timeline to the next event's, `null` when the timeline gave no start for the room); Classic `room_idx`, Prime `room_id`, `mission_id` |
 | `roomba_plus_health_change` | `sensor.*_integration_health` crosses a band (healthy/degraded/critical) | `entry_id`, `name`, `score`, `previous_score`, `band`, `previous_band` |
 | `roomba_plus_map_retrain_started` / `_completed` | Cloud detects a Smart Map change and syncs | `entry_id`, `name`, `pmap_id` |
 | `roomba_plus_maintenance_reset` | Filter/brush/battery/pad/wheel/contact/bin reset — button or service | `entry_id`, `name`, `component`, `hours` (`null` for calendar-based resets) |

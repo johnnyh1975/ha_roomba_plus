@@ -4125,10 +4125,16 @@ class TestRegionLastCleaned:
         assert result["MAP-B/2"] == "2026-08-20T10:00:00+00:00"
 
     def test_newest_wins_per_region(self):
-        """Records are scanned newest-first; the first hit stands."""
+        """The store APPENDS, so its records are oldest first.
+
+        This test used to list the newer record first and passed while
+        the method scanned the list forwards -- in a real store that
+        returned the OLDEST clean of every region (4.2.21). The order
+        here is the order `async_append` produces.
+        """
         store = self._store([
-            self._rec("M1", "MAP-A", ["2"], "2026-08-21T10:00:00+00:00"),
-            self._rec("M2", "MAP-A", ["2"], "2026-08-01T10:00:00+00:00"),
+            self._rec("M1", "MAP-A", ["2"], "2026-08-01T10:00:00+00:00"),
+            self._rec("M2", "MAP-A", ["2"], "2026-08-21T10:00:00+00:00"),
         ])
 
         assert store.region_last_cleaned()["MAP-A/2"] == "2026-08-21T10:00:00+00:00"
@@ -5015,3 +5021,112 @@ class TestAGuessIsNotMadeOfRecordedRooms:
         assert rec["last_cleaned_rooms"] == ["A", "B"]
         assert rec["rooms_source"] == "tracked"
         assert store.latest_cleaned_rooms({"1": "A"}) == ["A", "B"]
+
+
+from datetime import datetime as _DT, timezone as _TZ  # noqa: E402 - the module name `datetime` is taken above
+
+
+class TestEachRegionIsDatedByItsOwnEnd:
+    """4.2.21: a multi-room mission dates each room when the robot was
+    done with it, for both generations, and the per-region history
+    returns the NEWEST clean."""
+
+    @staticmethod
+    def _classic(rec_id, start, rooms, end):
+        """A Classic record with the cloud's timeline: rooms back to back
+        from `start`, each `(rid, seconds)`."""
+        events, t = [], start
+        for rid, seconds in rooms:
+            events.append({"type": "room", "ts": t, "ets": t + seconds,
+                           "room": {"rid": rid, "status": 0}})
+            t += seconds
+        return {
+            "id": rec_id,
+            "ended_at": _DT.fromtimestamp(end, tz=_TZ.utc).isoformat(),
+            "pmaps_info": [{"pmap_id": "MAP-A"}],
+            "timeline": {"finEvents": events},
+        }
+
+    def test_classic_rooms_get_their_own_end_and_time(self):
+        from custom_components.roomba_plus.mission_store import MissionStore
+
+        start = 1790000000
+        store = MissionStore.__new__(MissionStore)
+        store._records = [self._classic("M1", start, [("2", 600), ("5", 300)], start + 1200)]
+
+        details = store.region_last_cleaned_details()
+
+        assert details["MAP-A/2"]["ended_at"] == _DT.fromtimestamp(
+            start + 600, tz=_TZ.utc).isoformat()
+        assert details["MAP-A/2"]["seconds"] == 600.0
+        # The last room runs to its own end, not the mission's.
+        assert details["MAP-A/5"]["ended_at"] == _DT.fromtimestamp(
+            start + 900, tz=_TZ.utc).isoformat()
+
+    def test_a_record_without_times_falls_back_to_the_mission_end(self):
+        from custom_components.roomba_plus.mission_store import MissionStore
+
+        store = MissionStore.__new__(MissionStore)
+        store._records = [{
+            "id": "M1", "ended_at": "2026-08-21T10:00:00+00:00",
+            "timeline": {"finEvents": [{"type": "room", "room": {"rid": "2", "status": 0}}]},
+        }]
+
+        assert store.region_last_cleaned_details()["2"] == {
+            "ended_at": "2026-08-21T10:00:00+00:00", "seconds": None,
+        }
+
+    @pytest.mark.asyncio
+    async def test_the_newest_clean_wins_in_a_real_store(self):
+        """Through async_append, the order a running store has."""
+        from custom_components.roomba_plus.mission_store import MissionStore
+
+        store = MissionStore()
+        await store.async_append(self._classic("M1", 1790000000, [("2", 600)], 1790000700))
+        await store.async_append(self._classic("M2", 1790090000, [("2", 300)], 1790090400))
+
+        detail = store.region_last_cleaned_details()["MAP-A/2"]
+        assert detail["seconds"] == 300.0
+        assert detail["ended_at"].startswith(
+            _DT.fromtimestamp(1790090300, tz=_TZ.utc).date().isoformat()
+        )
+
+    def test_room_history_uses_the_room_end_too(self):
+        from custom_components.roomba_plus.mission_store import MissionStore
+
+        start = 1790000000
+        store = MissionStore.__new__(MissionStore)
+        store._records = [self._classic("M1", start, [("2", 600), ("5", 300)], start + 1200)]
+
+        history = store.room_cleaning_history({"2": "Kitchen", "5": "Hall"})
+
+        assert history["Kitchen"] == _DT.fromtimestamp(
+            start + 600, tz=_TZ.utc).isoformat()
+        assert history["Hall"] == _DT.fromtimestamp(
+            start + 900, tz=_TZ.utc).isoformat()
+
+    def test_prime_cleaned_rooms_reach_the_room_history(self):
+        from custom_components.roomba_plus.mission_store import MissionStore
+
+        store = MissionStore.__new__(MissionStore)
+        store._records = [{
+            "id": "p_M1", "ended_at": "2026-08-21T10:00:00+00:00",
+            "rooms_cleaned": ["11"],
+            "room_ended_at": {"11": "2026-08-21T09:40:00+00:00"},
+            "room_durations_sec": {"11": 600.0, "12": 30.0},
+        }]
+
+        assert store.room_cleaning_history({"11": "Hall"}) == {
+            "Hall": "2026-08-21T09:40:00+00:00"
+        }
+        # Region 12 had time but was not cleaned.
+        assert MissionStore.record_region_ids(store._records[0]) == ["11"]
+
+    def test_prime_none_cleaned_is_an_answer(self):
+        from custom_components.roomba_plus.mission_store import MissionStore
+
+        store = MissionStore.__new__(MissionStore)
+        store._records = [{"id": "p_M1", "ended_at": "2026-08-21T10:00:00+00:00",
+                           "rooms_cleaned": []}]
+
+        assert store._record_room_names(store._records[0], {}) == []

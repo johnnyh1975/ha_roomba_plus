@@ -124,6 +124,19 @@ class TestEveryViewAnswersOnAPrimeEntry:
         assert record["evacuations"] == 1
 
     @pytest.mark.asyncio
+    async def test_only_the_cleaned_rooms_are_named(self):
+        """4.2.21: `rooms_cleaned` decides, as for the room history. A
+        region with time but no cleaning is not one of the mission's
+        rooms."""
+        rec = {**_prime_record("M3"), "rooms_cleaned": ["9", "7"]}
+        entry = _prime_entry([rec])
+        resp = await api_views.MissionHistoryView().get(
+            _req(_hass(entry), format="records", days="90"), ENTRY_ID
+        )
+        record = next(r for r in _body(resp) if r["id"] == "p_M3")
+        assert record["zones"] == ["Hall", "Kitchen"]
+
+    @pytest.mark.asyncio
     async def test_export_carries_them_too(self, entry):
         resp = await api_views.MissionHistoryView().get(
             _req(_hass(entry), format="export"), ENTRY_ID

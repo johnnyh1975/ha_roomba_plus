@@ -101,6 +101,10 @@ class PrimeCoordinator(DataUpdateCoordinator[MissionTimelineReport]):
         #: A room completes when the next one starts, so this is
         #: what the room-completed event announces.
         self._last_room_id: str | None = None
+        #: When the robot started on that region, as Unix time -- the
+        #: event's own `ts` where the report has it, else when this
+        #: coordinator first saw the region (4.2.21, `duration_sec`).
+        self._last_room_since: float | None = None
         super().__init__(
             hass,
             _LOGGER,
@@ -369,8 +373,16 @@ class PrimeCoordinator(DataUpdateCoordinator[MissionTimelineReport]):
         make the event useless as a trigger.
         """
         current_id: str | None = None
+        #: The timeline's own time for this report's event, and whether
+        #: that event is the room itself rather than the drive to it.
+        event_ts: float | None = None
+        is_room_event = False
         events = getattr(report, "event", None) or []
         if events:
+            ts = getattr(events[0], "start_time", None)
+            if isinstance(ts, (int, float)) and not isinstance(ts, bool):
+                event_ts = float(ts)
+            is_room_event = getattr(events[0], "room", None) is not None
             room = getattr(events[0], "room", None) or getattr(
                 events[0], "travel", None
             )
@@ -378,11 +390,32 @@ class PrimeCoordinator(DataUpdateCoordinator[MissionTimelineReport]):
             current_id = str(region_id) if region_id is not None else None
 
         previous = self._last_room_id
+        # getattr: tests build this coordinator without __init__.
+        previous_since = getattr(self, "_last_room_since", None)
         self._last_room_id = current_id
+        # THE ROOM'S OWN START, from the timeline only (4.2.21). A drive
+        # to the room names it first; the room event that follows carries
+        # the start. Never Home Assistant's clock: the robot's and ours
+        # need not agree, and a guess is worse than no figure.
+        if current_id != previous:
+            self._last_room_since = event_ts if is_room_event else None
+        elif previous_since is None and is_room_event and event_ts is not None:
+            self._last_room_since = event_ts
         # Nothing to announce on the first report of a mission, or when
         # the robot is between rooms with nothing finished behind it.
         if previous is None or previous == current_id:
             return
+
+        # HOW LONG THE ROBOT SPENT THERE (4.2.21): from the room event's
+        # start to the start of whatever came next, both from the
+        # timeline. None when either is missing.
+        duration_sec = (
+            round(event_ts - previous_since)
+            if previous_since is not None
+            and event_ts is not None
+            and 0 < event_ts - previous_since <= 4 * 3600
+            else None
+        )
 
         # AND MOVE THE ROOM DISPLAY, which nothing here used to do.
         #
@@ -418,6 +451,7 @@ class PrimeCoordinator(DataUpdateCoordinator[MissionTimelineReport]):
                 "room_id": previous,
                 "room_name": self._room_name(previous),
                 "mission_id": getattr(report, "mission_id", None),
+                "duration_sec": duration_sec,
             },
         )
 

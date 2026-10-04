@@ -1055,6 +1055,17 @@ def _prime_store_summary(data: Any) -> dict[str, Any]:
             )
             summary["mission_store"] = {
                 "record_count": len(records),
+                # WHETHER THE ROOMS ARRIVED (4.2.21). Before that, no Prime
+                # record had any: the timeline's times broke the
+                # conversion. Records written since, and older ones the
+                # next sync re-reads, carry `rooms_cleaned`; the rest are
+                # older than the cloud's history window.
+                "records_with_room_data": sum(
+                    1 for r in records if isinstance(r.get("rooms_cleaned"), list)
+                ),
+                "records_without_room_data": sum(
+                    1 for r in records if not isinstance(r.get("rooms_cleaned"), list)
+                ),
                 "latest_id": latest.get("id") if latest else None,
                 "latest_record": latest,
                 # THE LAST TEN, in summary. One full record shows what a

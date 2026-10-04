@@ -1904,6 +1904,15 @@ def _advance_room_on_drive_end(
                         "name": entry.title,
                         "room_name": _completed_room,
                         "room_idx": _completed_idx,
+                        # What room tracking measured for it (4.2.21),
+                        # the same figure the room time estimates learn.
+                        "duration_sec": (
+                            round(_measured)
+                            if isinstance(_measured, (int, float))
+                            and not isinstance(_measured, bool)
+                            and _measured > 0
+                            else None
+                        ),
                     },
                 )
 

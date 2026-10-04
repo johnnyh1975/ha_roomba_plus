@@ -2408,3 +2408,25 @@ class TestUmfZoneShapes:
         from custom_components.roomba_plus import diagnostics
 
         assert '"umf_zone_shapes"' in inspect.getsource(diagnostics._cloud_diag)
+
+
+class TestPrimeRecordsWithRoomData:
+    """4.2.21: whether the Prime records carry rooms -- before that none
+    did, and the download could not show it."""
+
+    def test_counts_with_and_without(self):
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.diagnostics import _prime_store_summary
+
+        records = [
+            {"id": "p_1", "ended_at": "2026-08-01T10:00:00+00:00", "rooms_cleaned": ["11"]},
+            {"id": "p_2", "ended_at": "2026-08-02T10:00:00+00:00", "rooms_cleaned": []},
+            {"id": "p_3", "ended_at": "2026-08-03T10:00:00+00:00"},
+        ]
+        store = MagicMock()
+        store.query.return_value = records
+        summary = _prime_store_summary(SimpleNamespace(mission_store=store))
+
+        assert summary["mission_store"]["records_with_room_data"] == 2
+        assert summary["mission_store"]["records_without_room_data"] == 1

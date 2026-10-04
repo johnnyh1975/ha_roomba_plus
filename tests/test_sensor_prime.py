@@ -2088,7 +2088,11 @@ class TestPrimeRegionLastCleanedSensor:
         )
 
         entry = MagicMock()
-        entry.runtime_data.mission_store.region_last_cleaned.return_value = history
+        # The sensor reads the detailed form since 4.2.21 (end and time
+        # spent); these tests are about the lookup, so no time spent.
+        entry.runtime_data.mission_store.region_last_cleaned_details.return_value = {
+            key: {"ended_at": value, "seconds": None} for key, value in history.items()
+        }
 
         with patch.object(
             PrimeRegionLastCleanedSensor, "robot_unique_id", "BLID1"
@@ -2364,7 +2368,11 @@ class TestAPrimeRegionSensorFindsItsTimestamp:
         s._region_id = "107"
         s._pmap_id = pmap_id
         entry = MagicMock()
-        entry.runtime_data.mission_store.region_last_cleaned.return_value = history
+        # The sensor reads the detailed form since 4.2.21 (end and time
+        # spent); these tests are about the lookup, so no time spent.
+        entry.runtime_data.mission_store.region_last_cleaned_details.return_value = {
+            key: {"ended_at": value, "seconds": None} for key, value in history.items()
+        }
         s._config_entry = entry
         return s
 
@@ -2632,3 +2640,51 @@ class TestTheRoomSensorsExistOnARealPrimeEntry:
         assert _region_maps_for(data)[0] == {"7": "Kitchen"}
         assert sensor.native_value == 0
         assert isinstance(sensor.extra_state_attributes["rooms"], dict)
+
+
+class TestTheRegionSensorSaysHowLongItTook:
+    """4.2.21 (@mrsnyds): the time spent in the region on its newest
+    clean, as `last_duration_min`."""
+
+    @staticmethod
+    def _sensor(details):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.sensor_prime import (
+            PrimeRegionLastCleanedSensor,
+        )
+
+        s = PrimeRegionLastCleanedSensor.__new__(PrimeRegionLastCleanedSensor)
+        s._region_id = "11"
+        s._pmap_id = None
+        entry = MagicMock()
+        entry.runtime_data.mission_store.region_last_cleaned_details.return_value = details
+        s._config_entry = entry
+        return s
+
+    def test_minutes_from_seconds(self):
+        s = self._sensor({"11": {"ended_at": "2026-08-21T09:40:00+00:00", "seconds": 742.0}})
+
+        assert s.extra_state_attributes["last_duration_min"] == 12.4
+        assert s.native_value.isoformat() == "2026-08-21T09:40:00+00:00"
+
+    def test_absent_without_a_time(self):
+        s = self._sensor({"11": {"ended_at": "2026-08-21T09:40:00+00:00", "seconds": None}})
+
+        assert "last_duration_min" not in s.extra_state_attributes
+
+    def test_end_to_end_from_a_real_store(self):
+        from custom_components.roomba_plus.mission_store import MissionStore
+
+        store = MissionStore.__new__(MissionStore)
+        store._records = [{
+            "id": "p_M1", "ended_at": "2026-08-21T10:00:00+00:00",
+            "rooms_cleaned": ["11"],
+            "room_ended_at": {"11": "2026-08-21T09:40:00+00:00"},
+            "room_durations_sec": {"11": 600.0},
+        }]
+        s = self._sensor({})
+        s._config_entry.runtime_data.mission_store = store
+
+        assert s.native_value.isoformat() == "2026-08-21T09:40:00+00:00"
+        assert s.extra_state_attributes["last_duration_min"] == 10.0
