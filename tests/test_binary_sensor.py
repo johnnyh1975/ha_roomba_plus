@@ -385,7 +385,13 @@ class TestStuckContextEvent:
             tmock.time.return_value = now
             s._async_watchdog_tick(None)
         payload = s.hass.bus.async_fire.call_args[0][1]
-        assert payload["last_known_position"] == {"x": 171, "y": -113}
+        assert payload["last_known_position"] == {
+            "x": 171, "y": -113,
+            # Centimetres in, millimetres out, as everywhere else; the map
+            # pair swapped like the tracker's (4.2.20).
+            "x_mm": 1710, "y_mm": -1130,
+            "map_x_mm": -1130, "map_y_mm": 1710,
+        }
 
     def test_position_none_when_pose_absent(self):
         """SMART-tier robots (or any robot without pose in this

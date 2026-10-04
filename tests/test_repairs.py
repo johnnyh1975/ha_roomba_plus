@@ -994,6 +994,31 @@ class TestErrorRecurrence:
         assert data["room"] == "Kitchen"
 
     @pytest.mark.asyncio
+    async def test_room_name_uses_the_maps_axis_order(self):
+        """The stored position is in the firmware's order; the aligner is
+        not (4.2.20, I11). The test above puts the error at x == y, where
+        the two orders agree -- which is how the swap went unnoticed."""
+        from custom_components.roomba_plus.repairs import async_check_error_recurrence
+        ms = self._ms_with_errors(15, 3)
+        # Firmware order: x=500, y=3000. On the map that is (3000, 500).
+        ms._records[-1]["error_position_mm"] = {"x": 500.0, "y": 3000.0}
+        ms._records[-1]["phase_at_error"] = "run"
+        aligner = _make_aligner()
+        aligner._room_polygons = {
+            "kitchen": [(0.0, 0.0), (5000.0, 0.0), (5000.0, 2000.0), (0.0, 2000.0)],
+            "hall": [(0.0, 2000.0), (2000.0, 2000.0), (2000.0, 5000.0), (0.0, 5000.0)],
+        }
+        aligner._regions = [
+            {"id": "kitchen", "name": "Kitchen"},
+            {"id": "hall", "name": "Hall"},
+        ]
+        entry = self._entry(ms, aligner=aligner)
+        hass = MagicMock()
+        await async_check_error_recurrence(hass, entry)
+        data = hass.bus.async_fire.call_args[0][1]
+        assert data["room"] == "Kitchen"
+
+    @pytest.mark.asyncio
     async def test_room_name_unknown_without_aligner(self):
         from custom_components.roomba_plus.repairs import async_check_error_recurrence
         ms = self._ms_with_errors(15, 3)

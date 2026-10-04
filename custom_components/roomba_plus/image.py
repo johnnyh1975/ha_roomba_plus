@@ -53,10 +53,12 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
-from .zone_naming import map_room_label
+from .zone_naming import map_room_label, room_display_name
 from . import roomba_reported_state
 from .const import (
+    CONF_LIVE_POSITION_REQUESTS,
     CONF_MAP_CLEAN_ZONES,
+    DEFAULT_LIVE_POSITION_REQUESTS,
     CONF_MAP_KEEPOUT_ZONES,
     CONF_MAP_NOMOP_ZONES,
     DEFAULT_MAP_ZONES,
@@ -71,16 +73,20 @@ from .const import (
     MAX_DOOR_WIDTH_MM,
     MIN_DOOR_WIDTH_MM,
     MISSION_END_PHASES,
-    POSE_POINT_CM_TO_MM,
     REGION_TYPE_ICONS,
     ROOM_TRANSITION_CANDIDATE_PHASES,
+    reports_local_pose,
 )
 from .entity import IRobotEntity
+from .geometry_utils import pose_point_to_map_mm, raw_pose_mm_to_map
+from .live_position import LivePositionStream
+from .room_cleaning import region_names_across_maps
 from .segment_anchoring import anchor_segment
 from .trajectory_segments import split_into_segments
 from .structural_failures import record_failure, record_success
 from .grid_store import GridStore, CELL_SIZE_MM, DECAY, VISIT_INCREMENT
-from .map_renderer import MapRenderer, _load_font
+from .map_renderer import MapRenderer, _load_font, render_area_map
+from .room_seg_store import CELL_MM as ROOM_SEG_CELL_MM, area_number
 from .mission_map import (
     MissionMapMismatch,
     MissionMapUnavailable,
@@ -172,6 +178,14 @@ def _prime_map_storage_key(entry_id: str) -> str:
     rather than renderer state), and a robot never switches generation,
     so the two can never collide."""
     return f"{DOMAIN}_prime_map_{entry_id}"
+
+
+#: Where the cleaning map's path came from: the robot's own `pose` in its
+#: shadow, or positions requested from a robot that publishes none (4.3).
+#: Saved with the path, because the two are not known to share a frame
+#: with the room data, and what is drawn over the path depends on it.
+POSITION_SOURCE_POSE = "pose"
+POSITION_SOURCE_REQUEST = "request"
 
 
 def _map_storage_key(entry_id: str) -> str:
@@ -1164,6 +1178,9 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
     _attr_translation_key = "map"
     _attr_entity_category = None
     _attr_content_type = "image/png"
+    #: Class-level default as well as set in __init__: tests build this
+    #: entity with __new__, and a shadow path predates the attribute.
+    _position_source: str | None = None
 
     def __init__(
         self,
@@ -1190,6 +1207,8 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         # _async_cloud_coverage_png().
         self._cloud_coverage_png: bytes | None = None
         self._cloud_coverage_png_for: str | None = None
+        #: POSITION_SOURCE_POSE or _REQUEST once a path exists, else None.
+        self._position_source: str | None = None
 
         # Mission tracking
         self._last_phase: str = ""
@@ -1309,6 +1328,14 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         """Register MQTT callback, restore persisted map state, generate token."""
         await IRobotEntity.async_added_to_hass(self)
         self.async_update_token()
+        # Positions requested from a robot that publishes none (4.3).
+        # Type-checked, not None-checked: runtime_data is a MagicMock in
+        # much of the test suite, and a mock would accept the listener.
+        live = getattr(
+            getattr(self._config_entry, "runtime_data", None), "live_position", None
+        )
+        if isinstance(live, LivePositionStream):
+            self.async_on_remove(live.add_listener(self._handle_live_position))
         # Restore last mission's map from hass.storage (if any)
         await self._async_restore_map_state()
         # v2.8.2 — load (but do not yet apply) a mission-in-progress
@@ -1317,6 +1344,32 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         await self._async_load_pending_checkpoint()
 
     # ── ImageEntity interface ─────────────────────────────────────────────────
+
+    async def async_naming_image(self) -> bytes | None:
+        """The detected areas for the naming form (4.2.20, @liblit).
+
+        Each area as the cells it consists of, coloured and labelled --
+        its number, or its name once it has one -- with the dock. The
+        live map below drew areas as overlapping bounding boxes among
+        the path, door markers and coverage outline, which is a lot to
+        decode for a form that only asks "which area is which".
+
+        Hidden areas are left out, as they are of the form. Without any
+        area, the live map is shown instead.
+        """
+        data = self._config_entry.runtime_data if self._config_entry else None
+        store = getattr(data, "room_seg_store", None)
+        areas = [
+            (room.name or area_number(room.id), frozenset(room.cells))
+            for room in (store.rooms.values() if store is not None else ())
+            if not room.hidden and room.cells
+        ]
+        if not areas:
+            return await self.async_image()
+        size = self._renderer._cfg.size_px if self._renderer is not None else 600
+        return await self.hass.async_add_executor_job(
+            render_area_map, areas, ROOM_SEG_CELL_MM, size
+        )
 
     async def async_image(self) -> bytes | None:
         """Return current map as PNG bytes. Always returns a valid image."""
@@ -1358,6 +1411,10 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         # overlaid on the other (@Thonno).
         _rt = getattr(self._config_entry, "runtime_data", None)
         _extent = getattr(_rt, "room_map_extent_mm", None)
+        # The room map's extent is in the aligner's frame; a requested
+        # path is not known to be (see _handle_live_position).
+        if self._position_source == POSITION_SOURCE_REQUEST:
+            _extent = None
         # Length-checked, not just None-checked: runtime_data is a
         # MagicMock in much of the test suite and returns one for any
         # attribute, so `is not None` is true for a value that cannot be
@@ -1374,7 +1431,12 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         png = await self.hass.async_add_executor_job(self._renderer.render)
 
         # v2.3.0 Step 6 — keepout zone overlay (Amendment 4)
-        if self._config_entry is not None:
+        # Not over a requested path: the zones come through the aligner,
+        # whose frame that path is not known to share.
+        if (
+            self._config_entry is not None
+            and self._position_source != POSITION_SOURCE_REQUEST
+        ):
             _data = self._config_entry.runtime_data
             aligner = _data.umf_aligner
             if (
@@ -1571,6 +1633,16 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         attrs: dict[str, Any] = {}
         if self._config_entry is None or self._renderer is None:
             return attrs
+        # A REQUESTED PATH GETS NO CALIBRATION (4.3). Every attribute
+        # below places room data on this image through the aligner, in
+        # the frame the robot's shadow pose or the cloud's coverage
+        # defines. roombapy documents the requested frame as the same;
+        # nobody has compared the two yet, and calibration points that
+        # are wrong put every room in the wrong place on a card without
+        # any sign of it. Saying where the path came from lets a card
+        # tell this apart from "not aligned yet".
+        if self._position_source == POSITION_SOURCE_REQUEST:
+            return {"position_source": POSITION_SOURCE_REQUEST}
         data    = self._config_entry.runtime_data
         aligner = data.umf_aligner
         if aligner is None or not aligner.aligned:
@@ -1590,7 +1662,16 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
             {r["id"]: r.get("region_type", "default") for r in cc.regions}
             if cc is not None else {}
         )
-        rid_to_name = aligner.rid_to_name()
+        # THE ACCOUNT'S NAME FROM WHERE THE SELECT READS IT (4.2.20). The
+        # aligner is built from the map's own UMF regions, whose name can
+        # be empty where the map details carry one ("Salon" in the i3+
+        # fixture); the room select reads the details. Details first --
+        # active map winning, through the one shared lookup -- and the
+        # aligner's name only where they have none.
+        rid_to_name = {
+            **aligner.rid_to_name(),
+            **region_names_across_maps(cc),
+        }
         rooms: dict[str, dict[str, Any]] = {}
         for rid, poly_umf in aligner.room_polygons_umf.items():
             # Filtered rather than checked, same as the keep-out path
@@ -1602,7 +1683,9 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
             poly_pose = [p for p in raw_pose if p is not None]
             if not poly_pose or len(poly_pose) != len(raw_pose):
                 continue
-            room_name = rid_to_name.get(rid, rid)
+            room_name = room_display_name(
+                str(rid), rid_to_name.get(rid), self._config_entry.options
+            )
             # XVMC-COORDS: outline and centroid in pose-space mm (not pixels).
             # XVMC applies calibration (pose mm → display px) itself.
             cx = sum(x for x, _ in poly_pose) / len(poly_pose)
@@ -1614,6 +1697,9 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                 "outline": [[x, y] for x, y in poly_pose],
                 "name":    room_name,
                 "room_id": room_slug(room_name),  # v2.7.3: ASCII slug for XVMC id
+                # The robot's own id, which `clean_room` takes as well
+                # and which survives a rename (4.2.20, I12).
+                "region_id": str(rid),
                 "icon":    icon,
                 "x":       cx,
                 "y":       cy,
@@ -1727,6 +1813,8 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                 self._had_cleaning_phase = True
                 if self._renderer:
                     self._renderer.reset()
+                    # Decided again by whichever position arrives first.
+                    self._position_source = None
                     self._mission_points = []
                     self._mission_thetas = []
                     self._stuck_mission_points = []
@@ -2031,9 +2119,9 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         # start" for GridStore/RoomSegStore (stuck-event contamination
         # predating the Dock-Anchor-Korrektur, see that plan) rather than
         # attempting a coordinate-transform migration of old data.
-        x = float(point.get("y", 0)) * POSE_POINT_CM_TO_MM
-        y = float(point.get("x", 0)) * POSE_POINT_CM_TO_MM
+        x, y = pose_point_to_map_mm(point)
         theta = float(pose.get("theta", 0))
+        self._position_source = POSITION_SOURCE_POSE
         # v3.2.1 DOCK-ANCHOR — the very FIRST pose reading of a mission
         # (x=y=0, robot still literally on the dock before departure) is
         # arguably the CLEANEST possible dock_theta_baseline sample: the
@@ -2070,6 +2158,34 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
             self._mission_points.append((x, y))
             self._mission_thetas.append(theta)
         self._attr_image_last_updated = dt_util.now(datetime.timezone.utc)
+
+    @callback
+    def _handle_live_position(self, position: Any) -> None:
+        """Draw a position requested from the robot (4.3, live_position.py).
+
+        THE LIVE PICTURE ONLY. Unlike _handle_pose(), this does not add
+        to _mission_points, so nothing reaches GridStore, the door
+        markers or the trajectory store at mission end. For these robots
+        those are filled from the cloud's coverage record in the
+        aligner's frame; roombapy says the requested frame is the
+        shadow's (metres from the dock, x along the docked heading), and
+        that has not been compared against a cloud map yet. A wrong
+        frame in a persistent store would not wash out.
+
+        Metres and radians in, the shadow's millimetres and degrees out,
+        then the same axis swap every map applies to a shadow pose.
+        """
+        if self._renderer is None:
+            return
+        if reports_local_pose(roomba_reported_state(self.vacuum)):
+            # The shadow's own pose is drawn by _handle_pose; two sources
+            # in one path would draw a zigzag between them.
+            return
+        x, y = raw_pose_mm_to_map(position.x * 1000.0, position.y * 1000.0)
+        self._renderer.add_pose(x, y, math.degrees(position.theta))
+        self._position_source = POSITION_SOURCE_REQUEST
+        self._attr_image_last_updated = dt_util.now(datetime.timezone.utc)
+        self.async_write_ha_state()
 
     def _handle_dock_contact_confirmed(self) -> None:
         """v3.2.1 DOCK-ANCHOR — fires once per confirmed dock contact
@@ -2299,6 +2415,33 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
 
         self._refresh_terminal_mission_images()
         if not self._mission_points:
+            # A requested path never fills _mission_points (see
+            # _handle_live_position), so without this it would be lost on
+            # the next restart, when a shadow path is kept. Read through
+            # getattr: several tests build this entity without a renderer.
+            _renderer_now = getattr(self, "_renderer", None)
+            if (
+                self._position_source == POSITION_SOURCE_REQUEST
+                and _renderer_now is not None
+                and _renderer_now.has_data
+                and self._config_entry is not None
+            ):
+                self._config_entry.async_create_task(
+                    self.hass, self._async_save_map_state()
+                )
+            elif (
+                _renderer_now is not None
+                and not _renderer_now.has_data
+                and self._config_entry is not None
+                and not reports_local_pose(roomba_reported_state(self.vacuum))
+            ):
+                # A ROBOT WITHOUT A POSE THAT DREW NOTHING THIS TIME --
+                # option off, or it never answered. Its map is the cloud's
+                # record of this mission now; a path saved from an earlier
+                # one would come back on the next restart and hide it.
+                self._config_entry.async_create_task(
+                    self.hass, self._async_clear_map_state()
+                )
             return
 
         # v3.2.1 DOCK-ANCHOR — CONSOLIDATED (previously a KNOWN
@@ -2647,10 +2790,28 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
             _MAP_STORAGE_VERSION,
             _map_storage_key(self._config_entry.entry_id),
         )
-        await store.async_save(self._renderer.dump_state())
+        # Additive key, no storage version bump: a dump without it is a
+        # shadow path, which is all there was before 4.3.
+        await store.async_save(
+            {
+                **self._renderer.dump_state(),
+                "position_source": self._position_source,
+            }
+        )
         _LOGGER.debug(
             "Map: saved %d points to storage", self._renderer.point_count
         )
+
+    async def _async_clear_map_state(self) -> None:
+        """Remove the saved path (4.3, see _handle_mission_end)."""
+        if self._config_entry is None:
+            return
+        store: Store[dict[str, Any]] = Store(
+            self.hass,
+            _MAP_STORAGE_VERSION,
+            _map_storage_key(self._config_entry.entry_id),
+        )
+        await store.async_remove()
 
     async def _async_restore_map_state(self) -> None:
         """Load renderer state from hass.storage on startup.
@@ -2676,7 +2837,23 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
             _LOGGER.debug("Map: no stored state found")
             return
 
+        # A REQUESTED PATH WITH THE OPTION SINCE SWITCHED OFF is not
+        # restored: the user chose the cloud's record of the last mission,
+        # and a restored path would stand in front of it.
+        if data.get("position_source") == POSITION_SOURCE_REQUEST and not (
+            self._config_entry.options.get(
+                CONF_LIVE_POSITION_REQUESTS, DEFAULT_LIVE_POSITION_REQUESTS
+            )
+        ):
+            _LOGGER.debug("Map: requested path not restored, option is off")
+            return
+
         if self._renderer.restore_state(data):
+            self._position_source = (
+                POSITION_SOURCE_REQUEST
+                if data.get("position_source") == POSITION_SOURCE_REQUEST
+                else POSITION_SOURCE_POSE
+            )
             # Bump image_last_updated so the frontend fetches the restored image
             self._attr_image_last_updated = dt_util.now(datetime.timezone.utc)
             _LOGGER.debug(
@@ -3459,7 +3636,16 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
             {r["id"]: r.get("region_type", "default") for r in cc.regions}
             if cc is not None else {}
         )
-        rid_to_name = aligner.rid_to_name()
+        # THE ACCOUNT'S NAME FROM WHERE THE SELECT READS IT (4.2.20). The
+        # aligner is built from the map's own UMF regions, whose name can
+        # be empty where the map details carry one ("Salon" in the i3+
+        # fixture); the room select reads the details. Details first --
+        # active map winning, through the one shared lookup -- and the
+        # aligner's name only where they have none.
+        rid_to_name = {
+            **aligner.rid_to_name(),
+            **region_names_across_maps(cc),
+        }
         rooms: dict[str, dict[str, Any]] = {}
         for rid, poly_umf in polygons_umf.items():
             poly_coords: list[tuple[float, float]]
@@ -3478,7 +3664,9 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
                 poly_coords = list(poly_umf)
             if not poly_coords:  # Bug 6 fix: guard against empty polygon
                 continue
-            room_name = rid_to_name.get(rid, rid)
+            room_name = room_display_name(
+                str(rid), rid_to_name.get(rid), self._config_entry.options
+            )
             # XVMC-COORDS: outline and centroid in vacuum mm (pose or UMF space).
             # XVMC applies calibration (vacuum mm → display px) itself.
             cx = sum(x for x, _ in poly_coords) / len(poly_coords)
@@ -3490,6 +3678,9 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
                 "outline": [[x, y] for x, y in poly_coords],
                 "name":    room_name,
                 "room_id": room_slug(room_name),  # v2.7.3: ASCII slug for XVMC id
+                # The robot's own id, which `clean_room` takes as well
+                # and which survives a rename (4.2.20, I12).
+                "region_id": str(rid),
                 "icon":    icon,
                 "x":       cx,
                 "y":       cy,

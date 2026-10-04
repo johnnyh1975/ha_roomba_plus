@@ -163,7 +163,7 @@ does not apply to those robots at all.
 | Feature | Roomba+ | HA Core | roomba_rest980 |
 |---|---|---|---|
 | Floor plan map | ✅ local MQTT `pose` stream ¹ | ❌ | ✅ UMF from iRobot cloud (static) ³ |
-| Live cleaning path during mission | ✅ local MQTT `pose` stream ★ | ❌ | ❌ |
+| Live cleaning path during mission | ✅ local MQTT `pose` stream ★; robots without it are asked for their position (4.3) | ❌ | ❌ |
 | Map survives HA restart | ✅ hass.storage persistence ★ | ❌ | ❌ |
 | Room outline — Smart Map robots | ✅ UMF polygon overlay, per-room colour palette, embedded font, cached per map version (v2.9.0) | ❌ | ✅ rendered on UMF floor plan ³ |
 | Which room is being cleaned, live | ✅ advances when a travel leg ends, from the robot's own `Traveling` signal — works on firmware that emits no phase between rooms (v4.1.7) | ❌ | ❌ |

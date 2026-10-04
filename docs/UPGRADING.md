@@ -36,10 +36,37 @@ ten minutes.
 background, one page every two seconds, up to 800 missions. Lifetime
 figures and statistics can change once when it finishes.
 
+**A live cleaning path for Classic robots that report no position.**
+An i7 or S9+ on lewis, an i3 (a j-series has not been tried yet):
+Roomba+ now asks the robot where it is while it cleans, about once a
+second, and draws the path live instead of showing the last finished
+mission from the cloud. The option also needs the map switched on. On by
+default for these robots; Configure → *Connection settings* → *Ask the
+robot for its position*. The option does not appear for a 900-series,
+which reports its position itself. While the map shows such a path it
+carries no `calibration_points` or `rooms` (`position_source: request`
+instead), and the path is not added to the coverage heatmap: whether it
+lines up with the cloud map has not been checked yet.
+
 **Prime: closing means closed.** Unloading the integration or stopping
 Home Assistant now ends a Prime robot's cloud connection for good.
 Before, a hidden connection could stay behind and compete with the next
 one.
+
+---
+
+## v4.2.20 — from v4.2.19
+
+**Nothing to do.** New attributes only:
+- the tracker's `map_x_mm`/`map_y_mm`, the robot's position in the
+  maps' frame (`x_mm`/`y_mm` are unchanged);
+- `region_id` on each entry of the map's `rooms`;
+- `segment_type` on the Prime *Select room or zone*.
+
+**A room you renamed in *Zone management* now has that name on the map
+attribute too.** If you regenerate a xiaomi-vacuum-map-card room
+configuration, its ids follow the new names. An existing configuration
+keeps working: `clean_room` still accepts the original name.
 
 ---
 

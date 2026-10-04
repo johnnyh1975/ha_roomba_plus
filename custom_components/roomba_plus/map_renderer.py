@@ -1342,3 +1342,172 @@ class MapRenderer:
             (cx + int(r * 0.866), cy - r // 2),
         ]
         draw.polygon(pts, fill=colour)
+
+
+# ── Naming map for robots without a map of their own (4.2.20) ────────────────
+#
+# Light fills on white, distinguishable from each other and dark enough
+# for a label in near-black to read on every one of them.
+NAMING_AREA_PALETTE: list[tuple[int, int, int]] = [
+    (166, 206, 227),  # light blue
+    (178, 223, 138),  # light green
+    (251, 154, 153),  # salmon
+    (253, 191, 111),  # light orange
+    (202, 178, 214),  # lavender
+    (255, 237, 160),  # pale yellow
+    (141, 211, 199),  # aqua
+    (217, 217, 217),  # light grey
+]
+NAMING_BORDER = (90, 90, 90, 255)
+NAMING_LABEL = (25, 25, 25, 255)
+NAMING_LABEL_FONT = _load_font(18)
+
+
+def _area_label_cell(cells: frozenset[tuple[int, int]]) -> tuple[int, int]:
+    """The cell deepest inside an area, where its label cannot fall out.
+
+    The middle of the bounding box lies outside an L- or U-shaped area,
+    which is how a number ended up drawn on the neighbouring room. A
+    breadth-first pass from the area's edge finds the cell furthest from
+    any edge; of equally deep cells, the one nearest the centre wins, so
+    the choice is stable.
+    """
+    edge = [
+        c for c in cells
+        if any((c[0] + dx, c[1] + dy) not in cells
+               for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)))
+    ]
+    depth = {c: 0 for c in edge}
+    frontier = list(edge)
+    while frontier:
+        nxt = []
+        for x, y in frontier:
+            for n in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+                if n in cells and n not in depth:
+                    depth[n] = depth[(x, y)] + 1
+                    nxt.append(n)
+        frontier = nxt
+    mx = sum(c[0] for c in cells) / len(cells)
+    my = sum(c[1] for c in cells) / len(cells)
+    return max(
+        cells,
+        key=lambda c: (depth.get(c, 0), -((c[0] - mx) ** 2 + (c[1] - my) ** 2), c),
+    )
+
+
+def _area_colours(areas: list[frozenset[tuple[int, int]]]) -> list[int]:
+    """A palette index per area, never the same as a touching neighbour."""
+    owner = {c: i for i, cells in enumerate(areas) for c in cells}
+    colours: list[int] = []
+    for i, cells in enumerate(areas):
+        touching = {
+            owner[n]
+            for x, y in cells
+            for n in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1))
+            if n in owner and owner[n] != i
+        }
+        taken = {colours[j] for j in touching if j < i}
+        colours.append(
+            next(
+                (k for k in range(len(NAMING_AREA_PALETTE)) if k not in taken),
+                i % len(NAMING_AREA_PALETTE),
+            )
+        )
+    return colours
+
+
+def render_area_map(
+    areas: list[tuple[str, frozenset[tuple[int, int]]]],
+    cell_mm: float,
+    size_px: int = 600,
+) -> bytes:
+    """The detected areas as coloured patches with their labels, and the dock.
+
+    FOR THE NAMING FORM, not the live map (@liblit, 980). The cleaning
+    path map drew each area as its bounding box, widened past the walls:
+    on an L- or U-shaped floor the boxes overlap their neighbours, and
+    one of nine covered half the picture. Here every area is the cells
+    it actually consists of, in its own colour, with a border where it
+    meets another area and its label inside it. Nothing else is drawn
+    -- no path, no door markers -- except the dock, so there is one
+    known point to turn the picture by.
+
+    Same frame and orientation as the cleaning path map: x to the right,
+    y up, the dock at (0, 0). `cell_mm` is the grid the cells index.
+    """
+    img = Image.new("RGBA", (size_px, size_px), BG_COLOUR)
+    draw = ImageDraw.Draw(img)
+    cell_sets = [cells for _label, cells in areas if cells]
+    labelled = [(label, cells) for label, cells in areas if cells]
+    if not labelled:
+        buf = io.BytesIO()
+        img.convert("RGB").save(buf, format="PNG")
+        return buf.getvalue()
+
+    xs = [c[0] for cells in cell_sets for c in cells]
+    ys = [c[1] for cells in cell_sets for c in cells]
+    # The dock is cell (0, 0)'s corner; keep it in the picture.
+    x_min, x_max = min(min(xs), 0) * cell_mm, (max(max(xs), 0) + 1) * cell_mm
+    y_min, y_max = min(min(ys), 0) * cell_mm, (max(max(ys), 0) + 1) * cell_mm
+    margin = 0.06 * size_px
+    scale = max(x_max - x_min, y_max - y_min) / (size_px - 2 * margin)
+    off_x = (size_px - (x_max - x_min) / scale) / 2
+    off_y = (size_px - (y_max - y_min) / scale) / 2
+
+    def to_px(x_mm: float, y_mm: float) -> tuple[float, float]:
+        return (off_x + (x_mm - x_min) / scale, off_y + (y_max - y_mm) / scale)
+
+    colours = _area_colours(cell_sets)
+    owner = {c: i for i, cells in enumerate(cell_sets) for c in cells}
+    for i, cells in enumerate(cell_sets):
+        fill = (*NAMING_AREA_PALETTE[colours[i]], 255)
+        for x, y in cells:
+            x0, y0 = to_px(x * cell_mm, (y + 1) * cell_mm)
+            x1, y1 = to_px((x + 1) * cell_mm, y * cell_mm)
+            draw.rectangle([x0, y0, x1, y1], fill=fill)
+
+    # Borders: wherever a cell's neighbour belongs to another area, or
+    # to none.
+    width = max(1, round(size_px / 300))
+    for i, cells in enumerate(cell_sets):
+        for x, y in cells:
+            for dx, dy, edge in (
+                (1, 0, ((x + 1, y), (x + 1, y + 1))),
+                (-1, 0, ((x, y), (x, y + 1))),
+                (0, 1, ((x, y + 1), (x + 1, y + 1))),
+                (0, -1, ((x, y), (x + 1, y))),
+            ):
+                if owner.get((x + dx, y + dy)) == i:
+                    continue
+                (ax, ay), (bx, by) = edge
+                draw.line(
+                    [to_px(ax * cell_mm, ay * cell_mm), to_px(bx * cell_mm, by * cell_mm)],
+                    fill=NAMING_BORDER,
+                    width=width,
+                )
+
+    dx_px, dy_px = to_px(0.0, 0.0)
+    r = max(5, round(size_px / 70))
+    draw.ellipse(
+        [dx_px - r, dy_px - r, dx_px + r, dy_px + r],
+        fill=DOCK_COLOUR,
+        outline=(30, 120, 30, 255),
+        width=2,
+    )
+
+    for label, cells in labelled:
+        lx, ly = _area_label_cell(cells)
+        px, py = to_px((lx + 0.5) * cell_mm, (ly + 0.5) * cell_mm)
+        draw.text(
+            (px, py),
+            label,
+            fill=NAMING_LABEL,
+            anchor="mm",
+            font=NAMING_LABEL_FONT,
+            stroke_width=2,
+            stroke_fill=(255, 255, 255, 255),
+        )
+
+    buf = io.BytesIO()
+    img.convert("RGB").save(buf, format="PNG")
+    return buf.getvalue()

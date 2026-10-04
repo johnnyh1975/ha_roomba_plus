@@ -29,7 +29,9 @@ from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.util import dt as dt_util
 
 from . import roomba_reported_state
+from .geometry_utils import pose_point_to_map_mm
 from .const import (
+    POSE_POINT_CM_TO_MM,
     CONSUMABLE_ROLES,
     CONF_BLOCKING_SENSORS,
     MAP_UPDATING_NOT_READY,
@@ -1181,7 +1183,23 @@ class RoombaMqttStale(IRobotEntity, BinarySensorEntity):
             if isinstance(pose, dict):
                 point = pose.get("point")
                 if isinstance(point, dict) and "x" in point and "y" in point:
-                    last_known_position = {"x": point["x"], "y": point["y"]}
+                    # `x`/`y` stay the firmware's raw values (centimetres,
+                    # firmware axis order) for whoever built on them; the
+                    # millimetre pairs are what every other position in
+                    # Roomba+ carries -- the tracker's `x_mm`/`y_mm` and,
+                    # in the maps' frame, `map_x_mm`/`map_y_mm` (4.2.20).
+                    try:
+                        map_x, map_y = pose_point_to_map_mm(point)
+                        last_known_position = {
+                            "x": point["x"],
+                            "y": point["y"],
+                            "x_mm": round(float(point["x"]) * POSE_POINT_CM_TO_MM),
+                            "y_mm": round(float(point["y"]) * POSE_POINT_CM_TO_MM),
+                            "map_x_mm": round(map_x),
+                            "map_y_mm": round(map_y),
+                        }
+                    except (TypeError, ValueError):
+                        last_known_position = {"x": point["x"], "y": point["y"]}
 
             self.hass.bus.async_fire(EVENT_STUCK, {
                 "entry_id": self._entry.entry_id,

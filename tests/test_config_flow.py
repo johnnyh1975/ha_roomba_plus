@@ -383,7 +383,7 @@ class TestAsyncStepZonesEphemeral:
 
         assert result["description_placeholders"] == {
             "map": _MAP_MD,
-            "robot": "Roomba 980", "zone_count": "2", "zone_ids": "1, 4",
+            "robot": "Roomba 980", "zone_ids": "1, 4",
         }
         # Empty fields: an unnamed area has nothing to pre-fill.
         for key in result["data_schema"].schema:
@@ -1503,8 +1503,7 @@ class TestSmartZonesNamingStep:
         for key in form["data_schema"].schema:
             assert key.default is vol.UNDEFINED
         assert form["description_placeholders"] == {
-            "map": _MAP_MD, "robot": "Roomba i7",
-            "zone_count": "2", "zone_ids": "7, 12",
+            "map": _MAP_MD, "robot": "Roomba i7", "zone_ids": "7, 12",
         }
 
     @pytest.mark.asyncio
@@ -3503,3 +3502,66 @@ class TestFlowsResolveTheirEntryAsHa2026Does:
         flow.handler = None
         with pytest.raises(ValueError):
             flow.config_entry
+
+
+class TestLivePositionOption:
+    """4.3: "Ask the robot for its position" is offered only to a robot
+    whose shadow carries no pose, defaults on, and sits under the map
+    switch."""
+
+    async def _keys(self, reported: dict) -> list[str]:
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.models import ConnectionType
+
+        flow = _make_options_flow()
+        flow._config_entry.runtime_data.connection_type = ConnectionType.LOCAL_PUSH
+        flow._config_entry.runtime_data.roomba.master_state = {
+            "state": {"reported": reported}
+        }
+        flow.async_show_form = MagicMock(side_effect=lambda **kw: kw)
+        result = await flow.async_step_settings(None)
+        return [str(k) for k in result["data_schema"].schema]
+
+    @pytest.mark.asyncio
+    async def test_offered_without_a_pose_right_after_the_map_switch(self):
+        keys = await self._keys({"cap": {"pose": 2}})
+        assert "live_position_requests" in keys
+        assert keys.index("live_position_requests") == keys.index("map_enabled") + 1
+
+    @pytest.mark.asyncio
+    async def test_not_offered_to_a_robot_that_publishes_its_pose(self):
+        keys = await self._keys({"pose": {"point": {"x": 1, "y": 2}, "theta": 0}})
+        assert "live_position_requests" not in keys
+
+    def test_defaults_on(self):
+        from custom_components.roomba_plus.const import DEFAULT_LIVE_POSITION_REQUESTS
+
+        assert DEFAULT_LIVE_POSITION_REQUESTS is True
+
+    def test_labelled_in_every_language(self):
+        import json
+        import pathlib
+
+        base = pathlib.Path("custom_components/roomba_plus")
+        for path in [base / "strings.json", *sorted((base / "translations").glob("*.json"))]:
+            step = json.loads(path.read_text(encoding="utf-8"))["options"]["step"]["settings"]
+            assert step["data"]["live_position_requests"], path
+            assert step["data_description"]["live_position_requests"], path
+
+
+class TestLivePositionOptionNeedsTheMap:
+    @pytest.mark.asyncio
+    async def test_hidden_with_the_map_off(self):
+        """No renderer, no stream: the option would do nothing."""
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.models import ConnectionType
+
+        flow = _make_options_flow()
+        flow._config_entry.options = {"map_enabled": False}
+        flow._config_entry.runtime_data.connection_type = ConnectionType.LOCAL_PUSH
+        flow._config_entry.runtime_data.roomba.master_state = {"state": {"reported": {}}}
+        flow.async_show_form = MagicMock(side_effect=lambda **kw: kw)
+        result = await flow.async_step_settings(None)
+        assert "live_position_requests" not in [str(k) for k in result["data_schema"].schema]

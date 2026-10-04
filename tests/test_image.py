@@ -321,16 +321,50 @@ class TestRoombaMapImageAttrs:
         assert isinstance(room["outline"][0], list)  # [x, y] arrays not {x, y} dicts
         assert "icon" in room
         assert "x" in room and "y" in room
-        # XVMC couples on the display name (room_id slug), NOT region_id —
-        # names survive map retraining, region_ids do not. region_id is
-        # deliberately absent from the rooms attribute (see docs/xiaomi-
-        # vacuum-map-card.md): clean_room takes room_name, and the field
-        # report asking "where is region_id" reflects that design, not a bug.
+        # XVMC couples on the display name (room_id slug) -- names survive
+        # map retraining, region ids need not. The region id is published
+        # beside it since 4.2.20 (I12): clean_room takes it too (#88), and
+        # it is what lets the card match a tap on the map to the select's
+        # entry when a room has an alias. It is not the XVMC id.
         assert room["room_id"] == "kitchen"
-        assert "region_id" not in room
+        assert room["region_id"] == "r1"
         # calibration_points key (renamed from "calibration" for XVMC compat)
         assert "calibration_points" in attrs
         assert "calibration" not in attrs
+
+    def test_cleaning_map_takes_the_account_name_from_the_map_details(self):
+        aligner = _make_aligner()
+        aligner._regions = [{"id": "r1", "name": ""}]
+        aligner._room_polygons = {
+            "r1": [(0.0, 0.0), (1000.0, 0.0), (1000.0, 1000.0), (0.0, 1000.0)]
+        }
+        renderer = MagicMock()
+        renderer._mm_to_px_fit.side_effect = lambda x, y: (int(x), int(y))
+        entity = self._entity(aligner=aligner, renderer=renderer)
+        entity._config_entry.options = {}
+        entity._config_entry.runtime_data.cloud_coordinator.regions = [
+            {"id": "r1", "name": "Salon", "region_type": "living_room"}
+        ]
+        assert list(entity.extra_state_attributes["rooms"]) == ["Salon"]
+
+    def test_cleaning_map_rooms_use_the_alias(self):
+        """4.2.20 (I12): the cleaning map's `rooms` follows the select too."""
+        from custom_components.roomba_plus.const import CONF_SMART_ZONE_ALIASES
+        aligner = _make_aligner()
+        aligner._regions = [{"id": "r1", "name": "Kitchen"}]
+        aligner._room_polygons = {
+            "r1": [(0.0, 0.0), (1000.0, 0.0), (1000.0, 1000.0), (0.0, 1000.0)]
+        }
+        renderer = MagicMock()
+        renderer._mm_to_px_fit.side_effect = lambda x, y: (int(x), int(y))
+        entity = self._entity(aligner=aligner, renderer=renderer)
+        entity._config_entry.options = {CONF_SMART_ZONE_ALIASES: {"r1": "Cooking"}}
+        entity._config_entry.runtime_data.cloud_coordinator.regions = [
+            {"id": "r1", "region_type": "kitchen"}
+        ]
+        rooms = entity.extra_state_attributes["rooms"]
+        assert list(rooms) == ["Cooking"]
+        assert rooms["Cooking"]["region_id"] == "r1"
 
 
 class TestRoombaRoomsImage:
@@ -3485,6 +3519,49 @@ def _map(capability, entry, renderer=None):
     return m
 
 
+class TestCleaningPathNamingImage:
+    """4.2.20 (@liblit): the naming form draws the detected areas, not the
+    live map with its boxes, path and door markers."""
+
+    def _store(self, *rooms):
+        from types import SimpleNamespace as NS
+        return NS(rooms={r.id: r for r in rooms})
+
+    def _room(self, rid, cells, name="", hidden=False):
+        from types import SimpleNamespace as NS
+        return NS(id=rid, cells=set(cells), name=name, hidden=hidden)
+
+    @pytest.mark.asyncio
+    async def test_areas_drawn_with_number_or_name_hidden_left_out(self, monkeypatch):
+        entry, _s = _entry()
+        entry.runtime_data.room_seg_store = self._store(
+            self._room("room_1", {(0, 0), (1, 0)}),
+            self._room("room_2", {(5, 5)}, name="Hall"),
+            self._room("room_6", {(9, 9)}, hidden=True),
+        )
+        m = _map(MapCapability.EPHEMERAL, entry, renderer=MagicMock())
+        m._renderer._cfg.size_px = 321
+        seen = {}
+
+        def fake_render(areas, cell_mm, size):
+            seen.update(areas=areas, cell_mm=cell_mm, size=size)
+            return b"PNG"
+
+        monkeypatch.setattr(img, "render_area_map", fake_render)
+        m.hass.async_add_executor_job = AsyncMock(side_effect=lambda f, *a: f(*a))
+        assert await m.async_naming_image() == b"PNG"
+        assert sorted(label for label, _c in seen["areas"]) == ["1", "Hall"]
+        assert seen["cell_mm"] == 150.0 and seen["size"] == 321
+
+    @pytest.mark.asyncio
+    async def test_without_areas_the_live_map_is_shown(self):
+        entry, _s = _entry()
+        entry.runtime_data.room_seg_store = None
+        m = _map(MapCapability.EPHEMERAL, entry, renderer=MagicMock())
+        m.async_image = AsyncMock(return_value=b"LIVE")
+        assert await m.async_naming_image() == b"LIVE"
+
+
 def _path(n=30, step=100.0):
     return [(i * step, 0.0) for i in range(n)]
 
@@ -3660,8 +3737,11 @@ def _prime_rooms(hass, monkeypatch, *, map_ids, current=None, chosen=None, versi
     return r, built
 
 
-def _rooms_attrs(hass, *, aligned=True, rendered=True, polygons=None, aligner=True):
+def _rooms_attrs(hass, *, aligned=True, rendered=True, polygons=None, aligner=True, options=None,
+                 regions=None, umf_names=None):
     entry = _real_entry(hass)
+    if options is not None:
+        entry.options = options
     data = entry.runtime_data
     if aligner:
         al = MagicMock(aligned=aligned)
@@ -3670,13 +3750,14 @@ def _rooms_attrs(hass, *, aligned=True, rendered=True, polygons=None, aligner=Tr
             "5": [(-1.0, 1.0), (2.0, 1.0), (2.0, 2.0)]}         # one corner does not map back
         al.umf_to_pose.side_effect = lambda x, y: None if x < 0 else (x * 10, y * 10)
         al.keepout_polygon_umf.side_effect = lambda z: z.get("poly")
-        al.rid_to_name.return_value = {"3": "Kitchen"}
+        al.rid_to_name.return_value = umf_names if umf_names is not None else {"3": "Kitchen"}
         al.calibration_points.return_value = [{"cal": 1}]
         data.umf_aligner = al
     else:
         data.umf_aligner = None
     data.cloud_coordinator = SimpleNamespace(
-        regions=[{"id": "3", "region_type": "kitchen"}],
+        regions=regions if regions is not None else [{"id": "3", "region_type": "kitchen"}],
+        zones=[],
         observed_zone_centroids=[{"x": 2.0, "y": 2.0}, {"x": -3.0, "y": 0.0}],
         keepout_zones=[{"poly": [(1.0, 1.0), (2.0, 1.0), (2.0, 2.0)]},
                        {"poly": [(-1.0, 1.0), (2.0, 1.0), (2.0, 2.0)]}, {"poly": None}])
@@ -4229,6 +4310,30 @@ class TestAfterARoomRecompute:
 
 
 class TestRoomsImageAttributes:
+
+    def test_a_room_is_named_as_the_select_names_it(self, hass):
+        """4.2.20 (I12): an alias wins on the map attribute as it does in
+        the room select, and the region id rides along."""
+        from custom_components.roomba_plus.const import CONF_SMART_ZONE_ALIASES
+        attrs = _rooms_attrs(hass, options={CONF_SMART_ZONE_ALIASES: {"3": "Cooking"}})
+        assert list(attrs["rooms"]) == ["Cooking"]
+        room = attrs["rooms"]["Cooking"]
+        assert room["name"] == "Cooking" and room["room_id"] == "cooking"
+        assert room["region_id"] == "3"
+
+    def test_the_account_name_comes_from_the_map_details(self, hass):
+        """The aligner's UMF region can be nameless where the map details
+        name the room -- the select reads the details, so the map does too."""
+        polygons = {"1": [(1.0, 1.0), (4.0, 1.0), (4.0, 4.0)]}
+        attrs = _rooms_attrs(hass, polygons=polygons, options={},
+                             regions=[{"id": "1", "name": "Salon", "region_type": "living_room"}],
+                             umf_names={"1": ""})
+        assert list(attrs["rooms"]) == ["Salon"]
+
+    def test_an_unnamed_room_reads_as_in_the_select(self, hass):
+        polygons = {"7": [(1.0, 1.0), (4.0, 1.0), (4.0, 4.0)]}
+        attrs = _rooms_attrs(hass, polygons=polygons, options={})
+        assert list(attrs["rooms"]) == ["Zone 7"]
 
     def test_rooms_zones_doors_and_furniture_for_the_card(self, hass):
         attrs = _rooms_attrs(hass)
@@ -4799,3 +4904,204 @@ class TestARobotThatPromisesPoseAndNeverSendsOne:
 
         data.cloud_coordinator.api.get_pmap_umf.assert_not_awaited()
         assert result == b"local-render-bytes"
+
+
+class TestRequestedPositionsOnTheCleaningMap:
+    """4.3: positions requested from a robot that publishes none are drawn
+    on the cleaning map -- and only there."""
+
+    def _pos(self, x: float, y: float, theta: float = 0.0) -> object:
+        from roombapy import RobotPosition
+        return RobotPosition(x=x, y=y, theta=theta, timestamp=1, source="request")
+
+    def _entity(self, *, pose: object = None):
+        entry, scheduled = _entry()
+        renderer = MagicMock()
+        renderer.has_data = True
+        m = _map(MapCapability.SMART, entry, renderer)
+        reported = {"bbmssn": {"nMssn": 7}}
+        if pose is not None:
+            reported["pose"] = pose
+        m.vacuum.master_state = {"state": {"reported": reported}}
+        m.async_write_ha_state = MagicMock()
+        return m, renderer, entry, scheduled
+
+    def test_metres_to_millimetres_in_the_maps_frame(self):
+        """Metres and radians in; the shadow's millimetres and degrees out,
+        with the same axis swap every map applies to a shadow pose."""
+        m, renderer, _e, _s = self._entity()
+        m._handle_live_position(self._pos(1.5, -0.25, math.pi / 2))
+        renderer.add_pose.assert_called_once()
+        x, y, theta = renderer.add_pose.call_args.args
+        assert (x, y) == (-250.0, 1500.0)
+        assert theta == pytest.approx(90.0)
+        assert m._position_source == img.POSITION_SOURCE_REQUEST
+        m.async_write_ha_state.assert_called_once()
+
+    def test_not_fed_to_the_learning_stores(self):
+        """The requested frame is not confirmed against the cloud map; a
+        wrong frame in GridStore would not wash out."""
+        m, _r, _e, _s = self._entity()
+        m._handle_live_position(self._pos(1.0, 1.0))
+        assert m._mission_points == []
+        assert m._mission_thetas == []
+
+    def test_ignored_while_the_shadow_carries_a_pose(self):
+        m, renderer, _e, _s = self._entity(pose={"point": {"x": 1, "y": 2}, "theta": 0})
+        m._handle_live_position(self._pos(1.0, 1.0))
+        renderer.add_pose.assert_not_called()
+
+    def test_a_requested_path_gets_no_calibration(self):
+        m, _r, entry, _s = self._entity()
+        entry.runtime_data.umf_aligner = _make_aligner()
+        m._handle_live_position(self._pos(1.0, 1.0))
+        assert m.extra_state_attributes == {"position_source": "request"}
+
+    def test_a_shadow_path_keeps_its_attributes(self):
+        """The guard is for requested paths only: a 900-series path with an
+        aligner still gets its calibration."""
+        m, renderer, entry, _s = self._entity()
+        aligner = _make_aligner()
+        aligner._regions = [{"id": "r1", "name": "Kitchen"}]
+        aligner._room_polygons = {"r1": [(0.0, 0.0), (1000.0, 0.0), (1000.0, 1000.0)]}
+        entry.runtime_data.umf_aligner = aligner
+        entry.runtime_data.cloud_coordinator.regions = []
+        renderer._mm_to_px_fit.side_effect = lambda x, y: (int(x), int(y))
+        m._handle_pose({"point": {"x": 10, "y": 20}, "theta": 0})
+        attrs = m.extra_state_attributes
+        assert "position_source" not in attrs
+        assert "rooms" in attrs
+
+    def test_the_path_is_saved_at_mission_end(self):
+        """_mission_points stays empty for a requested path, and the save
+        sat behind the early return for an empty one."""
+        m, _r, _e, scheduled = self._entity()
+        m._handle_live_position(self._pos(1.0, 1.0))
+        m._handle_mission_end("charge")
+        assert any("_async_save_map_state" in name for name in scheduled)
+
+    def test_an_empty_shadow_mission_still_saves_nothing(self):
+        m, _r, _e, scheduled = self._entity()
+        m._handle_mission_end("charge")
+        assert not any("_async_save_map_state" in name for name in scheduled)
+
+    def test_mission_start_forgets_the_last_source(self):
+        m, _r, _e, _s = self._entity()
+        m._handle_live_position(self._pos(1.0, 1.0))
+        m.vacuum.master_state = {"state": {"reported": {
+            "cleanMissionStatus": {"phase": "run", "cycle": "clean"}}}}
+        m.on_message({"state": {"reported": {
+            "cleanMissionStatus": {"phase": "run", "cycle": "clean"}}}})
+        assert m._position_source is None
+
+    @pytest.mark.asyncio
+    async def test_the_source_survives_a_restart(self, monkeypatch):
+        saved: dict = {}
+
+        class _Store:
+            def __init__(self, *_a, **_k): pass
+            async def async_save(self, data): saved.update(data)
+            async def async_load(self): return dict(saved)
+
+        monkeypatch.setattr(img, "Store", _Store)
+        m, renderer, entry, _s = self._entity()
+        entry.entry_id = "e"
+        renderer.dump_state.return_value = {"version": 1, "points": []}
+        m._handle_live_position(self._pos(1.0, 1.0))
+        await m._async_save_map_state()
+        assert saved["position_source"] == img.POSITION_SOURCE_REQUEST
+
+        fresh, renderer2, entry2, _s2 = self._entity()
+        entry2.entry_id = "e"
+        renderer2.restore_state.return_value = True
+        await fresh._async_restore_map_state()
+        assert fresh._position_source == img.POSITION_SOURCE_REQUEST
+
+    @pytest.mark.asyncio
+    async def test_no_zone_overlay_or_shared_frame_over_a_requested_path(self):
+        m, renderer, entry, _s = self._entity()
+        renderer.render.return_value = b"path"
+        m.hass.async_add_executor_job = AsyncMock(side_effect=lambda f, *a: f(*a))
+        aligner = MagicMock()
+        aligner.aligned = True
+        aligner.keepout_polygon_umf.return_value = [(0, 0), (1, 0), (1, 1)]
+        aligner.umf_to_pose.side_effect = lambda x, y: (x, y)
+        entry.runtime_data.umf_aligner = aligner
+        entry.runtime_data.cloud_coordinator.keepout_zones = [{"id": "k"}]
+        entry.runtime_data.cloud_coordinator.observed_zone_centroids = []
+        renderer._mm_to_px_fit.side_effect = lambda x, y: (int(x), int(y))
+        renderer.render_keepout_zones.return_value = b"overlay"
+        entry.runtime_data.room_map_extent_mm = (0, 1000, 0, 1000)
+        m._handle_live_position(self._pos(1.0, 1.0))
+        assert await m.async_image() == b"path"
+        renderer.render_keepout_zones.assert_not_called()
+        assert renderer._fit_bounds_px is None
+
+    @pytest.mark.asyncio
+    async def test_the_map_listens_to_the_stream(self, hass):
+        from custom_components.roomba_plus.live_position import LivePositionStream
+
+        m, _r, entry, _s = self._entity()
+        robot = MagicMock()
+        stream = LivePositionStream(hass, robot, enabled=lambda: True)
+        entry.runtime_data.live_position = stream
+        m.async_update_token = MagicMock()
+        m._async_restore_map_state = AsyncMock()
+        m._async_load_pending_checkpoint = AsyncMock()
+        removers = []
+        m.async_on_remove = removers.append
+        await m.async_added_to_hass()
+        assert m._handle_live_position in stream._listeners
+
+
+class TestRequestedPathReviewFindings:
+    """Found in the independent review of the first version."""
+
+    def _entity(self, *, pose: object = None):
+        return TestRequestedPositionsOnTheCleaningMap()._entity(pose=pose)
+
+    def test_a_pose_less_mission_with_no_path_clears_the_saved_one(self):
+        """Otherwise an older requested path came back after a restart and
+        hid the cloud's record of the newer mission."""
+        m, renderer, _e, scheduled = self._entity()
+        renderer.has_data = False
+        m._handle_mission_end("charge")
+        assert any("_async_clear_map_state" in n for n in scheduled)
+
+    def test_a_900_series_keeps_its_saved_path(self):
+        m, renderer, _e, scheduled = self._entity(
+            pose={"point": {"x": 1, "y": 2}, "theta": 0}
+        )
+        renderer.has_data = False
+        m._handle_mission_end("charge")
+        assert not any("_async_clear_map_state" in n for n in scheduled)
+
+    @pytest.mark.asyncio
+    async def test_a_saved_shadow_path_restores_as_pose(self, monkeypatch):
+        """A dump from before 4.3 has no source key; it is a shadow path
+        and keeps its calibration."""
+        class _Store:
+            def __init__(self, *_a, **_k): pass
+            async def async_load(self): return {"version": 1, "points": []}
+
+        monkeypatch.setattr(img, "Store", _Store)
+        m, renderer, entry, _s = self._entity()
+        entry.entry_id = "e"
+        renderer.restore_state.return_value = True
+        await m._async_restore_map_state()
+        assert m._position_source == img.POSITION_SOURCE_POSE
+
+    @pytest.mark.asyncio
+    async def test_a_requested_path_is_not_restored_with_the_option_off(self, monkeypatch):
+        class _Store:
+            def __init__(self, *_a, **_k): pass
+            async def async_load(self):
+                return {"version": 1, "points": [], "position_source": "request"}
+
+        monkeypatch.setattr(img, "Store", _Store)
+        m, renderer, entry, _s = self._entity()
+        entry.entry_id = "e"
+        entry.options = {"live_position_requests": False}
+        await m._async_restore_map_state()
+        renderer.restore_state.assert_not_called()
+        assert m._position_source is None

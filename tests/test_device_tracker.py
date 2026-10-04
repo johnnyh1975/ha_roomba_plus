@@ -208,6 +208,17 @@ class TestExtraStateAttributes:
         assert attrs["x_mm"] == 1200
         assert attrs["y_mm"] == 450
 
+    def test_pose_in_the_maps_frame(self):
+        """4.2.20 (I11): the maps swap the firmware's axes; the tracker
+        publishes the swapped pair beside the raw one, so a card placing
+        the robot on a map does not have to know."""
+        tracker, roomba, entry = _make_tracker()
+        entry.runtime_data.mission_timer_store = None
+        _set_state(roomba, phase="charge", pose={"point": {"x": 120, "y": 45}})
+
+        attrs = tracker.extra_state_attributes
+        assert (attrs["map_x_mm"], attrs["map_y_mm"]) == (450, 1200)
+
     def test_no_pose_data_omits_coordinates(self):
         tracker, roomba, entry = _make_tracker()
         entry.runtime_data.mission_timer_store = None
@@ -216,6 +227,7 @@ class TestExtraStateAttributes:
         attrs = tracker.extra_state_attributes
         assert "x_mm" not in attrs
         assert "y_mm" not in attrs
+        assert "map_x_mm" not in attrs
 
     def test_room_and_next_room_exposed_during_active_smart_mission(self):
         tracker, roomba, entry = _make_tracker(map_capability_value="smart")
@@ -873,3 +885,58 @@ class TestTrackerAreaResolution:
         monkeypatch.setattr(area_resolver, "async_area_for_segment",
                             MagicMock(side_effect=RuntimeError("registry gone")))
         assert t._async_area_for("Kitchen") is None
+
+
+class TestRequestedPosition:
+    """4.3: a robot that publishes no pose gets the same four coordinates
+    from the positions requested for the live map."""
+
+    def _stream(self, x: float, y: float):
+        from roombapy import RobotPosition
+        from custom_components.roomba_plus.live_position import LivePositionStream
+
+        stream = LivePositionStream(MagicMock(), MagicMock(), enabled=lambda: True)
+        stream.latest = RobotPosition(x=x, y=y, theta=0.0, timestamp=1, source="request")
+        return stream
+
+    def test_metres_to_millimetres_both_frames(self):
+        tracker, roomba, entry = _make_tracker()
+        entry.runtime_data.mission_timer_store = None
+        entry.runtime_data.live_position = self._stream(1.2, 0.45)
+        _set_state(roomba, phase="run", pose=None)
+
+        attrs = tracker.extra_state_attributes
+        assert (attrs["x_mm"], attrs["y_mm"]) == (1200, 450)
+        assert (attrs["map_x_mm"], attrs["map_y_mm"]) == (450, 1200)
+        assert attrs["position_source"] == "request"
+
+    def test_the_shadow_pose_wins(self):
+        tracker, roomba, entry = _make_tracker()
+        entry.runtime_data.mission_timer_store = None
+        entry.runtime_data.live_position = self._stream(9.0, 9.0)
+        _set_state(roomba, phase="run", pose={"point": {"x": 120, "y": 45}})
+
+        attrs = tracker.extra_state_attributes
+        assert attrs["x_mm"] == 1200
+        assert "position_source" not in attrs
+
+    def test_nothing_without_a_position(self):
+        tracker, roomba, entry = _make_tracker()
+        entry.runtime_data.mission_timer_store = None
+        entry.runtime_data.live_position = self._stream(1.0, 1.0)
+        entry.runtime_data.live_position.latest = None
+        _set_state(roomba, phase="run", pose=None)
+        assert "x_mm" not in tracker.extra_state_attributes
+
+    @pytest.mark.asyncio
+    async def test_written_on_each_requested_position(self):
+        tracker, roomba, entry = _make_tracker()
+        stream = self._stream(1.0, 1.0)
+        entry.runtime_data.live_position = stream
+        entry.runtime_data.connection_type = None
+        tracker.async_on_remove = MagicMock()
+        tracker.async_write_ha_state = MagicMock()
+        await tracker.async_added_to_hass()
+        for listener in stream._listeners:
+            listener(stream.latest)
+        tracker.async_write_ha_state.assert_called_once()

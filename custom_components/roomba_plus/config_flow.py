@@ -62,6 +62,7 @@ from . import CannotConnect, async_connect_or_timeout, async_disconnect_or_timeo
 from . import cloud_errors
 from .cloud_account import async_login, async_offer, async_peek
 from .const import (
+    reports_local_pose,
     CONF_CORRELATION_ENTITIES,
     CONF_ROOM_SCHEDULE,
     ROOM_SCHEDULE_INTERVALS,
@@ -81,6 +82,7 @@ from .const import (
     CONF_FLOOR,
     CONF_IROBOT_PASSWORD,
     CONF_IROBOT_USERNAME,
+    CONF_LIVE_POSITION_REQUESTS,
     CONF_MAP_ENABLED,
     CONF_MAP_SCALE,
     CONF_MAP_SIZE_PX,
@@ -104,6 +106,7 @@ from .const import (
     DEFAULT_DELAY,
     DEFAULT_ENABLE_MAINTENANCE_LIST,
     DEFAULT_ENABLE_SCHEDULE_CALENDAR,
+    DEFAULT_LIVE_POSITION_REQUESTS,
     DEFAULT_MAP_ENABLED,
     DEFAULT_MAP_SCALE,
     DEFAULT_MAP_SIZE_PX,
@@ -1756,92 +1759,122 @@ class RoombaPlusOptionsFlow(OptionsFlow):
             updated.update(user_input)
             return self.async_create_entry(title="", data=updated)
 
-        return self.async_show_form(
-            step_id="settings",
-            data_schema=vol.Schema(
-                {
-                    # CONTINUOUS AND DELAY ARE GONE FROM THIS FORM (4.2).
-                    #
-                    # roombapy 2.x keeps one supervised connection and
-                    # reconnects on its own -- the behaviour `continuous:
-                    # true` used to select, and what this form's own
-                    # description already recommended. There is no
-                    # polling mode left to ask for, so offering the
-                    # choice would be offering something nothing reads.
-                    #
-                    # The stored keys are left in the config entry
-                    # rather than migrated away: a value nothing reads is
-                    # harmless, and a migration whose only effect is to
-                    # delete two numbers is a risk with no upside.
-                    vol.Optional(
-                        CONF_MAP_ENABLED,
-                        default=options.get(CONF_MAP_ENABLED, DEFAULT_MAP_ENABLED),
-                    ): bool,
-                    vol.Optional(
-                        CONF_MAP_SIZE_PX,
-                        default=options.get(CONF_MAP_SIZE_PX, DEFAULT_MAP_SIZE_PX),
-                    ): vol.All(int, vol.Range(min=400, max=1200)),
-                    vol.Optional(
-                        CONF_MAP_SCALE,
-                        default=float(options.get(CONF_MAP_SCALE, DEFAULT_MAP_SCALE)),
-                    ): vol.All(vol.Coerce(float), vol.Range(min=5.0, max=30.0)),
-                    # Room names drawn INTO the map image. Same option
-                    # the Prime form offers: this is a preference about
-                    # maps, not about robot generations.
-                    #
-                    # Off by default, which reads backwards until you
-                    # know that v2.7.3 removed these labels on purpose --
-                    # the xiaomi-vacuum-map-card draws its own overlay
-                    # from the `rooms` attribute, and both at once
-                    # doubles them up.
-                    vol.Optional(
-                        CONF_REGION_SENSORS,
-                        default=options.get(
-                            CONF_REGION_SENSORS, DEFAULT_REGION_SENSORS
-                        ),
-                    ): bool,
-                    vol.Optional(
-                        CONF_MAP_ROOM_LABELS,
-                        default=options.get(
-                            CONF_MAP_ROOM_LABELS,
-                            DEFAULT_MAP_ROOM_LABELS,
-                        ),
-                    ): bool,
-                    vol.Optional(
-                        CONF_FLOOR,
-                        default=options.get(CONF_FLOOR, ""),
-                    ): str,
-                    # v3.3.0 CROSS-CORR — opt-in: external sensors whose
-                    # mission-start values get correlated with dirt counts
-                    vol.Optional(
-                        CONF_CORRELATION_ENTITIES,
-                        default=options.get(CONF_CORRELATION_ENTITIES, []),
-                    ): SelectorEntitySelector(
-                        SelectorEntitySelectorConfig(
-                            domain="sensor",
-                            multiple=True,
-                        )
+        schema: dict[Any, Any] = {
+            # CONTINUOUS AND DELAY ARE GONE FROM THIS FORM (4.2).
+            #
+            # roombapy 2.x keeps one supervised connection and
+            # reconnects on its own -- the behaviour `continuous:
+            # true` used to select, and what this form's own
+            # description already recommended. There is no
+            # polling mode left to ask for, so offering the
+            # choice would be offering something nothing reads.
+            #
+            # The stored keys are left in the config entry
+            # rather than migrated away: a value nothing reads is
+            # harmless, and a migration whose only effect is to
+            # delete two numbers is a risk with no upside.
+            vol.Optional(
+                CONF_MAP_ENABLED,
+                default=options.get(CONF_MAP_ENABLED, DEFAULT_MAP_ENABLED),
+            ): bool,
+        }
+        # ASKING A ROBOT WHERE IT IS (4.3) -- offered only to one whose
+        # shadow carries no position. A 900-series publishes its own and
+        # the option would do nothing there; showing it would invite a
+        # question nobody can answer from the form.
+        # Without the map there is nothing to draw the positions on, so
+        # no stream either (__init__.py creates it only with a renderer).
+        if options.get(
+            CONF_MAP_ENABLED, DEFAULT_MAP_ENABLED
+        ) and self._robot_reports_no_pose():
+            schema[
+                vol.Optional(
+                    CONF_LIVE_POSITION_REQUESTS,
+                    default=options.get(
+                        CONF_LIVE_POSITION_REQUESTS, DEFAULT_LIVE_POSITION_REQUESTS
                     ),
-                    vol.Optional(
-                        CONF_ENABLE_SCHEDULE_CALENDAR,
-                        default=options.get(
-                            CONF_ENABLE_SCHEDULE_CALENDAR, DEFAULT_ENABLE_SCHEDULE_CALENDAR
-                        ),
-                    ): bool,
-                    # THE MAINTENANCE LIST FOR CLASSIC TOO. It became opt-in
-                    # on both generations in 4.0.0a30, with the toggle added
-                    # to the Prime form only -- so a Classic robot's list
-                    # could not be switched back on at all (@ScenicSystemsLLC,
-                    # 4.3.0b4: gone after removing and re-adding a robot).
-                    vol.Optional(
-                        CONF_ENABLE_MAINTENANCE_LIST,
-                        default=options.get(
-                            CONF_ENABLE_MAINTENANCE_LIST, DEFAULT_ENABLE_MAINTENANCE_LIST
-                        ),
-                    ): bool,
-                }
-            ),
+                )
+            ] = bool
+        schema.update(
+            {
+                vol.Optional(
+                    CONF_MAP_SIZE_PX,
+                    default=options.get(CONF_MAP_SIZE_PX, DEFAULT_MAP_SIZE_PX),
+                ): vol.All(int, vol.Range(min=400, max=1200)),
+                vol.Optional(
+                    CONF_MAP_SCALE,
+                    default=float(options.get(CONF_MAP_SCALE, DEFAULT_MAP_SCALE)),
+                ): vol.All(vol.Coerce(float), vol.Range(min=5.0, max=30.0)),
+                # Room names drawn INTO the map image. Same option
+                # the Prime form offers: this is a preference about
+                # maps, not about robot generations.
+                #
+                # Off by default, which reads backwards until you
+                # know that v2.7.3 removed these labels on purpose --
+                # the xiaomi-vacuum-map-card draws its own overlay
+                # from the `rooms` attribute, and both at once
+                # doubles them up.
+                vol.Optional(
+                    CONF_REGION_SENSORS,
+                    default=options.get(
+                        CONF_REGION_SENSORS, DEFAULT_REGION_SENSORS
+                    ),
+                ): bool,
+                vol.Optional(
+                    CONF_MAP_ROOM_LABELS,
+                    default=options.get(
+                        CONF_MAP_ROOM_LABELS,
+                        DEFAULT_MAP_ROOM_LABELS,
+                    ),
+                ): bool,
+                vol.Optional(
+                    CONF_FLOOR,
+                    default=options.get(CONF_FLOOR, ""),
+                ): str,
+                # v3.3.0 CROSS-CORR — opt-in: external sensors whose
+                # mission-start values get correlated with dirt counts
+                vol.Optional(
+                    CONF_CORRELATION_ENTITIES,
+                    default=options.get(CONF_CORRELATION_ENTITIES, []),
+                ): SelectorEntitySelector(
+                    SelectorEntitySelectorConfig(
+                        domain="sensor",
+                        multiple=True,
+                    )
+                ),
+                vol.Optional(
+                    CONF_ENABLE_SCHEDULE_CALENDAR,
+                    default=options.get(
+                        CONF_ENABLE_SCHEDULE_CALENDAR, DEFAULT_ENABLE_SCHEDULE_CALENDAR
+                    ),
+                ): bool,
+                # THE MAINTENANCE LIST FOR CLASSIC TOO. It became opt-in
+                # on both generations in 4.0.0a30, with the toggle added
+                # to the Prime form only -- so a Classic robot's list
+                # could not be switched back on at all (@ScenicSystemsLLC,
+                # 4.3.0b4: gone after removing and re-adding a robot).
+                vol.Optional(
+                    CONF_ENABLE_MAINTENANCE_LIST,
+                    default=options.get(
+                        CONF_ENABLE_MAINTENANCE_LIST, DEFAULT_ENABLE_MAINTENANCE_LIST
+                    ),
+                ): bool,
+            }
         )
+        return self.async_show_form(
+            step_id="settings", data_schema=vol.Schema(schema)
+        )
+
+    def _robot_reports_no_pose(self) -> bool:
+        """True when the robot's shadow carries no `pose`.
+
+        Read when the form opens. A robot not yet connected reports
+        nothing at all and gets the option -- which then does nothing
+        until a mission shows whether a pose arrives.
+        """
+        roomba = getattr(self.config_entry.runtime_data, "roomba", None)
+        state = roomba_reported_state(roomba) if roomba is not None else {}
+        return not reports_local_pose(state if isinstance(state, dict) else {})
 
     # ── v1.7.0 L5 — Blocking sensors configuration ───────────────────────────
 
@@ -2299,7 +2332,6 @@ class RoombaPlusOptionsFlow(OptionsFlow):
             description_placeholders={
                 "map": picture,
                 "robot": self.config_entry.title or "this robot",
-                "zone_count": str(len(unconfirmed)),
                 "zone_ids": ", ".join(area_number(r.id) for r in unconfirmed),
             },
         )
@@ -2377,7 +2409,6 @@ class RoombaPlusOptionsFlow(OptionsFlow):
             description_placeholders={
                 "map": picture,
                 "robot": self.config_entry.title or "this robot",
-                "zone_count": str(len(unnamed)),
                 "zone_ids": ", ".join(unnamed),
             },
         )

@@ -186,16 +186,17 @@
       },
       "zones": {
         "title": "Assegna un nome alle aree rilevate",
-        "description": "{map}\n\n{robot}: Roomba+ ha trovato {zone_count} area/e senza nome nei percorsi di pulizia di questo robot: {zone_ids}. La mappa qui sopra disegna ognuna con un contorno tratteggiato e il suo numero; il campo con lo stesso numero le dà il nome. Questo robot non conserva una mappa propria, quindi queste aree sono di Roomba+.\n\nInserisci un nome nel campo di ogni area da nominare e lascia vuoti gli altri. Le aree con nome compaiono nell'elenco «Seleziona zona» e nella cronologia delle missioni."
+        "description": "{map}\n\n{robot}: queste aree dei percorsi di pulizia del robot non hanno ancora un nome: {zone_ids}. Questo robot non conserva una mappa propria, quindi le aree sono di Roomba+: suddivide il pavimento percorso dal robot nei suoi punti stretti.\n\nNella mappa qui sopra ogni area è una superficie colorata con il suo numero, o con il suo nome quando ne ha uno; il punto verde è la base. La mappa è disegnata a partire dalla base, quindi può apparire ruotata rispetto alla tua planimetria. Il campo con lo stesso numero le dà il nome.\n\nInserisci un nome nel campo di ogni area da nominare e lascia vuoti gli altri. Le aree con nome compaiono nell'elenco «Seleziona zona» e nella cronologia delle missioni."
       },
       "smart_zones": {
         "title": "Assegna un nome alle stanze",
-        "description": "{map}\n\n{robot}: {zone_count} stanza/e sulla mappa di questo robot non hanno ancora un nome: {zone_ids}. La mappa qui sopra mostra ognuna con il suo numero; il campo con lo stesso numero le dà il nome. Tutte le altre stanze hanno già il nome dal tuo account iRobot.\n\nInserisci un nome nel campo di ogni stanza da nominare e lascia vuoti gli altri. I nomi restano in Home Assistant: nulla viene rinominato nel tuo account iRobot."
+        "description": "{map}\n\n{robot}: queste stanze sulla mappa del robot non hanno ancora un nome: {zone_ids}. La mappa qui sopra mostra ognuna con il suo numero; il campo con lo stesso numero le dà il nome. Tutte le altre stanze hanno già il nome dal tuo account iRobot.\n\nInserisci un nome nel campo di ogni stanza da nominare e lascia vuoti gli altri. I nomi restano in Home Assistant: nulla viene rinominato nel tuo account iRobot."
       },
       "settings": {
         "title": "Impostazioni di connessione",
         "data": {
           "map_enabled": "Abilita mappa in tempo reale",
+          "live_position_requests": "Chiedere la posizione al robot",
           "map_size_px": "Dimensione mappa (pixel)",
           "map_scale_mm_per_px": "Scala (mm/pixel)",
           "floor_label": "Piano (es. Piano terra)",
@@ -211,6 +212,7 @@
         },
         "data_description": {
           "map_enabled": "Abilita la mappa di pulizia in tempo reale per i robot con rilevamento della posizione (Roomba 900, i, s, j, Braava m).",
+          "live_position_requests": "Offerto solo per i robot che non comunicano da soli la propria posizione. Interroga il robot circa una volta al secondo durante la pulizia per disegnare il percorso in tempo reale. Disattivato: la mappa mostra invece l'ultima missione completata dal cloud iRobot, se l'accesso al cloud è configurato.",
           "map_size_px": "Dimensione del canvas della mappa in pixel (400–1200). Predefinito: 600.",
           "map_scale_mm_per_px": "Millimetri per pixel (5–30). Predefinito 10 = 6 m × 6 m a 600 px.",
           "floor_label": "Testo libero, ad esempio Piano terra. Raggruppa i robot nella vista flotta.",

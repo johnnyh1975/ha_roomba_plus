@@ -49,6 +49,8 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import roomba_reported_state
 from .const import DOCK_TASK_PHASES, MISSION_END_PHASES, POSE_POINT_CM_TO_MM
+from .geometry_utils import pose_point_to_map_mm, raw_pose_mm_to_map
+from .live_position import LivePositionStream
 from .entity import IRobotEntity
 from .structural_failures import record_failure, record_success
 from .models import ConnectionType, RoombaConfigEntry
@@ -336,6 +338,14 @@ class RoombaDeviceTracker(IRobotEntity, TrackerEntity):
     async def async_added_to_hass(self) -> None:
         await IRobotEntity.async_added_to_hass(self)
 
+        # A CLASSIC ROBOT THAT PUBLISHES NO POSITION (4.3): written on
+        # each requested one, as a 900-series' tracker is on each pose.
+        live = getattr(self._config_entry.runtime_data, "live_position", None)
+        if isinstance(live, LivePositionStream):
+            self.async_on_remove(
+                live.add_listener(lambda _position: self.async_write_ha_state())
+            )
+
         # PRIME ONLY. Classic resolves room names through its own paths
         # and needs no cache; Prime's come from a cloud call that cannot
         # happen inside a synchronous attribute read.
@@ -603,8 +613,36 @@ class RoombaDeviceTracker(IRobotEntity, TrackerEntity):
             if x is not None and y is not None:
                 attrs["x_mm"] = round(float(x) * POSE_POINT_CM_TO_MM)
                 attrs["y_mm"] = round(float(y) * POSE_POINT_CM_TO_MM)
+                # THE SAME POINT IN THE MAPS' FRAME (4.2.20, I11). The
+                # pair above is the firmware's order and stays that way
+                # for anyone who built on it; a card placing the robot
+                # on a map wants this one, from the same function the
+                # maps use, so the two cannot drift apart.
+                map_x, map_y = pose_point_to_map_mm(point)
+                attrs["map_x_mm"] = round(map_x)
+                attrs["map_y_mm"] = round(map_y)
 
         data = self._config_entry.runtime_data
+
+        # THE SAME FOUR FOR A ROBOT THAT HAS TO BE ASKED (4.3). Requested
+        # positions are metres from the dock in the firmware's order;
+        # `position_source` says which path produced them, because the
+        # requested frame has not been compared against the room data
+        # yet (see live_position.py).
+        live = getattr(data, "live_position", None)
+        if (
+            "x_mm" not in attrs
+            and isinstance(live, LivePositionStream)
+            and live.latest is not None
+        ):
+            x_mm = live.latest.x * 1000.0
+            y_mm = live.latest.y * 1000.0
+            attrs["x_mm"] = round(x_mm)
+            attrs["y_mm"] = round(y_mm)
+            map_x, map_y = raw_pose_mm_to_map(x_mm, y_mm)
+            attrs["map_x_mm"] = round(map_x)
+            attrs["map_y_mm"] = round(map_y)
+            attrs["position_source"] = "request"
         mts = getattr(data, "mission_timer_store", None)
         phase = (state.get("cleanMissionStatus") or {}).get("phase", "")
         if (

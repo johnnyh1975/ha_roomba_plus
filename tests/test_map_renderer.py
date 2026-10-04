@@ -1419,3 +1419,52 @@ class TestBothImagesShareOneFrame:
         b = self._renderer([(400, 400), (500, 500)])._compute_fit()
 
         assert a != b
+
+
+class TestNamingAreaMap:
+    """4.2.20 (@liblit, 980) — the naming form's picture: each area as its
+    own cells, coloured and labelled, instead of overlapping boxes."""
+
+    @staticmethod
+    def _rect(x0, x1, y0, y1):
+        return frozenset((x, y) for x in range(x0, x1) for y in range(y0, y1))
+
+    def test_a_label_stays_inside_an_l_shaped_area(self):
+        from custom_components.roomba_plus.map_renderer import _area_label_cell
+        # An L: the middle of its bounding box is outside it.
+        ell = self._rect(0, 3, 0, 10) | self._rect(0, 10, 0, 3)
+        x0 = min(c[0] for c in ell); x1 = max(c[0] for c in ell)
+        y0 = min(c[1] for c in ell); y1 = max(c[1] for c in ell)
+        assert ((x0 + x1) // 2, (y0 + y1) // 2) not in ell
+        assert _area_label_cell(ell) in ell
+
+    def test_touching_areas_never_share_a_colour(self):
+        from custom_components.roomba_plus.map_renderer import _area_colours
+        a = self._rect(0, 5, 0, 5)
+        b = self._rect(5, 10, 0, 5)      # touches a
+        c = self._rect(0, 5, 5, 10)      # touches a
+        d = self._rect(5, 10, 5, 10)     # touches b and c
+        colours = _area_colours([a, b, c, d])
+        assert colours[0] != colours[1] and colours[0] != colours[2]
+        assert colours[3] != colours[1] and colours[3] != colours[2]
+
+    def test_the_picture_has_the_areas_and_the_dock(self):
+        import io
+
+        from PIL import Image
+
+        from custom_components.roomba_plus.map_renderer import (
+            DOCK_COLOUR, NAMING_AREA_PALETTE, render_area_map,
+        )
+        png = render_area_map(
+            # Two areas that touch, so they must get two colours.
+            [("1", self._rect(0, 10, 2, 12)), ("Hall", self._rect(-10, 0, 2, 12))],
+            150.0, 300,
+        )
+        colours = {c for _n, c in Image.open(io.BytesIO(png)).convert("RGB").getcolors(1 << 20)}
+        assert DOCK_COLOUR[:3] in colours
+        assert sum(1 for c in NAMING_AREA_PALETTE if c in colours) == 2
+
+    def test_no_areas_is_a_blank_picture_not_an_error(self):
+        from custom_components.roomba_plus.map_renderer import render_area_map
+        assert render_area_map([], 150.0, 100).startswith(b"\x89PNG")

@@ -186,16 +186,17 @@
       },
       "zones": {
         "title": "Erkannte Bereiche benennen",
-        "description": "{map}\n\n{robot}: Roomba+ hat in den Reinigungsfahrten dieses Roboters {zone_count} Bereich(e) ohne Namen gefunden: {zone_ids}. Die Karte oben zeigt jeden als gestrichelten Umriss mit seiner Nummer; das Feld mit derselben Nummer benennt ihn. Dieser Roboter speichert keine eigene Karte, die Bereiche stammen von Roomba+ selbst.\n\nTrag für jeden Bereich, den du benennen möchtest, einen Namen in sein Feld ein und lass die übrigen leer. Benannte Bereiche erscheinen in der Liste „Zone auswählen“ und im Reinigungsverlauf."
+        "description": "{map}\n\n{robot}: Diese Bereiche aus den Reinigungsfahrten des Roboters haben noch keinen Namen: {zone_ids}. Dieser Roboter speichert keine eigene Karte, die Bereiche stammen von Roomba+: Es teilt die befahrene Fläche an ihren Engstellen auf.\n\nAuf der Karte oben ist jeder Bereich eine farbige Fläche mit seiner Nummer, oder mit seinem Namen, sobald er einen hat; der grüne Punkt ist die Ladestation. Die Karte ist von der Ladestation aus gezeichnet und kann deshalb gegenüber deinem Grundriss gedreht sein. Das Feld mit derselben Nummer benennt den Bereich.\n\nTrag für jeden Bereich, den du benennen möchtest, einen Namen in sein Feld ein und lass die übrigen leer. Benannte Bereiche erscheinen in der Liste „Zone auswählen“ und im Reinigungsverlauf."
       },
       "smart_zones": {
         "title": "Räume benennen",
-        "description": "{map}\n\n{robot}: {zone_count} Raum/Räume auf der Karte dieses Roboters haben noch keinen Namen: {zone_ids}. Die Karte oben zeigt jeden mit seiner Nummer; das Feld mit derselben Nummer benennt ihn. Alle anderen Räume haben ihren Namen bereits aus deinem iRobot-Konto.\n\nTrag für jeden Raum, den du benennen möchtest, einen Namen in sein Feld ein und lass die übrigen leer. Die Namen bleiben in Home Assistant – in deinem iRobot-Konto wird nichts umbenannt."
+        "description": "{map}\n\n{robot}: Diese Räume auf der Karte des Roboters haben noch keinen Namen: {zone_ids}. Die Karte oben zeigt jeden mit seiner Nummer; das Feld mit derselben Nummer benennt ihn. Alle anderen Räume haben ihren Namen bereits aus deinem iRobot-Konto.\n\nTrag für jeden Raum, den du benennen möchtest, einen Namen in sein Feld ein und lass die übrigen leer. Die Namen bleiben in Home Assistant – in deinem iRobot-Konto wird nichts umbenannt."
       },
       "settings": {
         "title": "Verbindungseinstellungen",
         "data": {
           "map_enabled": "Live-Karte aktivieren",
+          "live_position_requests": "Roboter nach seiner Position fragen",
           "map_size_px": "Kartengröße (Pixel)",
           "map_scale_mm_per_px": "Maßstab (mm/Pixel)",
           "floor_label": "Etage (z. B. Erdgeschoss)",
@@ -211,6 +212,7 @@
         },
         "data_description": {
           "map_enabled": "Aktiviert die Live-Reinigungskarte für Roboter mit Positionserkennung (Roomba 900, i, s, j, Braava m).",
+          "live_position_requests": "Nur für Roboter, die ihre Position nicht selbst melden. Fragt den Roboter während der Reinigung etwa einmal pro Sekunde, um den Reinigungsweg live zu zeichnen. Aus: Die Karte zeigt stattdessen die letzte abgeschlossene Mission aus der iRobot-Cloud, sofern der Cloud-Zugang eingerichtet ist.",
           "map_size_px": "Bildgröße der Karte in Pixel (400–1200). Standard: 600 px.",
           "map_scale_mm_per_px": "Millimeter pro Pixel (5–30). Standard 10 entspricht 6 m × 6 m bei 600 Pixel.",
           "floor_label": "Freitext, zum Beispiel Erdgeschoss. Gruppiert Roboter in der Flottenansicht.",

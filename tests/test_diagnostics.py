@@ -9,6 +9,7 @@ from __future__ import annotations
 
 
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 from unittest.mock import patch
 import pytest
@@ -2343,3 +2344,96 @@ class TestTheCloudMapVersionsAreVisible:
         }
         no_cloud = SimpleNamespace(cloud_coordinator=None)
         assert _room_command_versions(no_cloud, {"pmaps": [{"m": "v"}, {}, "junk"]}) == {"m": "v"}
+
+
+class TestUmfZoneShapes:
+    """4.2.20 — the download says whether the map HAS obstacle zones, not
+    only whether the integration could read them (I14 of the card plan).
+
+    The zone below has the shape of the one real UMF map with obstacle
+    zones we have seen: a polygon over `points2d`, an `extent_type`, a
+    confidence -- and no `cx`/`cy`. The integration's reader finds
+    nothing in it, which until now looked the same as "no zones"."""
+
+    _REAL_SHAPE = {
+        "id": "144863393",
+        "extent_type": "around_dining_table",
+        "quality": {"confidence": 100},
+        "geometry": {"type": "polygon", "ids": [["100036", "100037", "100038", "100036"]]},
+        "related_objects": ["144863393"],
+    }
+
+    def _shapes(self, umf, centroids=None):
+        from custom_components.roomba_plus.diagnostics import _umf_zone_shapes
+
+        cc = SimpleNamespace(umf_data=umf, observed_zone_centroids=centroids or [])
+        return _umf_zone_shapes(cc)
+
+    def test_zones_the_reader_cannot_read_are_counted(self) -> None:
+        shapes = self._shapes({"observed_zones": [self._REAL_SHAPE] * 2, "keepoutzones": []})
+        assert shapes["observed_zones"]["count"] == 2
+        assert shapes["observed_zones"]["geometry_type"] == "polygon"
+        assert "extent_type" in shapes["observed_zones"]["fields"]
+        assert "cx" not in shapes["observed_zones"]["fields"]
+        assert shapes["observed_zone_centroids_read"] == 0
+        assert shapes["keepoutzones"] == {"count": 0, "fields": [], "geometry_type": None}
+
+    def test_no_coordinates_and_no_values_leave_the_house(self) -> None:
+        import json
+
+        dumped = json.dumps(self._shapes({"observed_zones": [self._REAL_SHAPE]}))
+        for value in ("100036", "around_dining_table", "144863393"):
+            assert value not in dumped
+
+    def test_a_map_without_zone_data(self) -> None:
+        shapes = self._shapes(None)
+        assert shapes["observed_zones"]["count"] == 0
+        assert shapes["keepoutzones"]["count"] == 0
+
+    def test_a_reader_that_fails_does_not_cost_the_download(self) -> None:
+        from custom_components.roomba_plus.diagnostics import _umf_zone_shapes
+
+        class _Broken:
+            umf_data = {"observed_zones": [{"cx": 1}]}
+
+            @property
+            def observed_zone_centroids(self):
+                raise RuntimeError("boom")
+
+        assert _umf_zone_shapes(_Broken())["observed_zone_centroids_read"] is None
+
+    def test_it_is_in_the_cloud_section(self) -> None:
+        import inspect
+
+        from custom_components.roomba_plus import diagnostics
+
+        assert '"umf_zone_shapes"' in inspect.getsource(diagnostics._cloud_diag)
+
+
+class TestLivePositionInThePositionChain:
+    """4.3: the requested-position stream reports how it ran -- status and
+    counts, no coordinates."""
+
+    def test_reported_when_there_is_a_stream(self):
+        from types import SimpleNamespace
+
+        from roombapy import RobotPosition
+        from custom_components.roomba_plus.diagnostics import _position_chain
+        from custom_components.roomba_plus.live_position import LivePositionStream
+
+        stream = LivePositionStream(MagicMock(), MagicMock(), enabled=lambda: True)
+        stream.positions_received = 3
+        stream.latest = RobotPosition(
+            x=4.321, y=8.765, theta=0.0, timestamp=1, source="request", pmap_id="p"
+        )
+        chain = _position_chain(SimpleNamespace(live_position=stream))
+        assert chain["live_position"]["positions_received"] == 3
+        assert chain["live_position"]["enabled"] is True
+        assert "4.321" not in repr(chain) and "8.765" not in repr(chain)
+
+    def test_none_without_one(self):
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.diagnostics import _position_chain
+
+        assert _position_chain(SimpleNamespace())["live_position"] is None

@@ -72,6 +72,7 @@ from .const import (
     CONF_FLOOR,
     CONF_IROBOT_PASSWORD,
     CONF_IROBOT_USERNAME,
+    CONF_LIVE_POSITION_REQUESTS,
     CONF_MAP_ENABLED,
     CONF_MAP_SCALE,
     CONF_MAP_SIZE_PX,
@@ -83,6 +84,7 @@ from .const import (
     DEFAULT_ENABLE_MAINTENANCE_LIST,
     DEFAULT_ENABLE_SCHEDULE_CALENDAR,
     DEFAULT_REGION_SENSORS,
+    DEFAULT_LIVE_POSITION_REQUESTS,
     DEFAULT_MAP_ENABLED,
     DEFAULT_MAP_SCALE,
     DEFAULT_MAP_SIZE_PX,
@@ -119,6 +121,7 @@ from .map_renderer import (
 )
 from .migrations import async_migrate_entry  # noqa: F401 -- re-exported for HA's own lookup
 from .structural_failures import record_failure, record_success
+from .live_position import LivePositionStream
 from .models import ConnectionType, MapCapability, RoombaConfigEntry, RoombaData
 from .services import async_register_services
 from .geometry_store import GeometryStore
@@ -1140,8 +1143,29 @@ async def _phase_finalize(ctx: _SetupContext) -> None:
     _watcher.start()
     config_entry.async_on_unload(_watcher.stop)
 
+    # LIVE POSITION FOR ROBOTS THAT DO NOT PUBLISH ONE (4.3). Created
+    # before the platforms so the map image and the tracker find it when
+    # they are added; started after them so the first position of a
+    # mission already running has somewhere to go.
+    _live_position = None
+    if config_entry.runtime_data.renderer is not None:
+        _live_position = LivePositionStream(
+            hass,
+            roomba,
+            enabled=lambda: bool(
+                config_entry.options.get(
+                    CONF_LIVE_POSITION_REQUESTS, DEFAULT_LIVE_POSITION_REQUESTS
+                )
+            ),
+        )
+        config_entry.runtime_data.live_position = _live_position
+        config_entry.async_on_unload(_live_position.stop)
+
     config_entry.runtime_data.loaded_platforms = list(platforms)
     await hass.config_entries.async_forward_entry_setups(config_entry, platforms)
+
+    if _live_position is not None:
+        _live_position.start()
 
     # REST API views (registered once per HA instance)
     _async_register_views(hass)

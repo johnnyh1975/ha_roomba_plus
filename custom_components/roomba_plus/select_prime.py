@@ -55,6 +55,7 @@ from .entity import IRobotEntity
 import contextlib
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from .prime_room_map import SIGNAL_PRIME_ROOM_NAMES
+from .room_cleaning import ZID_PREFIX
 from .structural_failures import record_failure, record_success
 from .const import DOMAIN
 
@@ -1300,6 +1301,18 @@ def _map_of(segment_id: str) -> str:
             return rest.split("/", 1)[0] if "/" in rest else ""
     return ""
 
+def _is_zone_segment(segment_id: str) -> bool:
+    """Whether a segment id names a zone.
+
+    `zid_<map>/<id>` and `zid_<id>` from the version document -- and
+    `rid_<map>/zid_<id>` for a zone that the map's own room list
+    carries, which is wrapped as a room id like everything in that list.
+    """
+    return segment_id.startswith(ZID_PREFIX) or segment_id.rsplit("/", 1)[
+        -1
+    ].startswith(ZID_PREFIX)
+
+
 class PrimeZoneSelect(IRobotEntity, SelectEntity):
     """Which room or zone the Prime clean-zone button will send the robot to.
 
@@ -1502,10 +1515,21 @@ class PrimeZoneSelect(IRobotEntity, SelectEntity):
 
         Names rather than p2map ids: "Upstairs" means something,
         `a1b2c3...` does not.
+
+        ROOM OR ZONE, per entry (4.2.20, I13). The list holds both and
+        the names alone do not say which; the id's prefix does, so it is
+        read from there and published whether or not the floors could be
+        named -- it needs no second cloud call.
         """
+        attrs: dict[str, Any] = {}
+        if self._segments:
+            attrs["segment_type"] = {
+                name: "zone" if _is_zone_segment(seg_id) else "room"
+                for name, seg_id in self._segments.items()
+            }
         if not self._segment_maps:
-            return {}
-        return {
+            return attrs
+        attrs.update({
             "segment_map": dict(self._segment_maps),
             "robot_on_map": self._robot_on_map,
             # Whether that is the robot speaking or the last thing it
@@ -1513,7 +1537,8 @@ class PrimeZoneSelect(IRobotEntity, SelectEntity):
             # the robot, and showing it without this reads as a
             # measurement.
             "robot_map_is_live": self._robot_map_is_live,
-        }
+        })
+        return attrs
 
     @property
     def available(self) -> bool:

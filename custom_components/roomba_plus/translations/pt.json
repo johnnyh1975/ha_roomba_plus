@@ -186,16 +186,17 @@
       },
       "zones": {
         "title": "Nomear áreas detetadas",
-        "description": "{map}\n\n{robot}: o Roomba+ encontrou {zone_count} área(s) sem nome nos percursos de limpeza deste robô: {zone_ids}. O mapa acima desenha cada uma com um contorno tracejado e o seu número; o campo com o mesmo número dá-lhe o nome. Este robô não guarda um mapa próprio, por isso estas áreas são do Roomba+.\n\nEscreva um nome no campo de cada área que pretende nomear e deixe as restantes vazias. As áreas com nome aparecem na lista «Selecionar zona» e no histórico de missões."
+        "description": "{map}\n\n{robot}: estas áreas dos percursos de limpeza do robô ainda não têm nome: {zone_ids}. Este robô não guarda um mapa próprio, por isso as áreas são do Roomba+: divide o chão percorrido pelo robô nas suas passagens estreitas.\n\nNo mapa acima, cada área é uma superfície colorida com o seu número, ou com o seu nome quando já o tem; o ponto verde é a base. O mapa é desenhado a partir da base, por isso pode aparecer rodado em relação à sua planta. O campo com o mesmo número dá-lhe o nome.\n\nEscreva um nome no campo de cada área que pretende nomear e deixe as restantes vazias. As áreas com nome aparecem na lista «Selecionar zona» e no histórico de missões."
       },
       "smart_zones": {
         "title": "Nomear divisões",
-        "description": "{map}\n\n{robot}: {zone_count} divisão(ões) no mapa deste robô ainda não têm nome: {zone_ids}. O mapa acima mostra cada uma com o seu número; o campo com o mesmo número dá-lhe o nome. Todas as outras divisões já têm o nome da sua conta iRobot.\n\nEscreva um nome no campo de cada divisão que pretende nomear e deixe as restantes vazias. Os nomes ficam no Home Assistant — nada é renomeado na sua conta iRobot."
+        "description": "{map}\n\n{robot}: estas divisões no mapa deste robô ainda não têm nome: {zone_ids}. O mapa acima mostra cada uma com o seu número; o campo com o mesmo número dá-lhe o nome. Todas as outras divisões já têm o nome da sua conta iRobot.\n\nEscreva um nome no campo de cada divisão que pretende nomear e deixe as restantes vazias. Os nomes ficam no Home Assistant — nada é renomeado na sua conta iRobot."
       },
       "settings": {
         "title": "Definições de ligação",
         "data": {
           "map_enabled": "Ativar mapa em tempo real",
+          "live_position_requests": "Perguntar a posição ao robô",
           "map_size_px": "Tamanho do mapa (píxeis)",
           "map_scale_mm_per_px": "Escala (mm/píxel)",
           "floor_label": "Andar (ex.: Rés do chão)",
@@ -211,6 +212,7 @@
         },
         "data_description": {
           "map_enabled": "Ativar o mapa de limpeza em tempo real para robôs com deteção de posição (Roomba 900, i, s, j, Braava m).",
+          "live_position_requests": "Apenas para robôs que não informam a sua posição por si próprios. Pergunta ao robô cerca de uma vez por segundo durante a limpeza para desenhar o percurso em direto. Desligado: o mapa mostra em vez disso a última missão concluída a partir da cloud da iRobot, se o acesso à cloud estiver configurado.",
           "map_size_px": "Tamanho do canvas do mapa em píxeis (400–1200). Predefinição: 600.",
           "map_scale_mm_per_px": "Milímetros por píxel (5–30). Predefinição 10 = 6 m × 6 m a 600 px.",
           "floor_label": "Texto livre, por exemplo Rés-do-chão. Agrupa os robôs na vista de frota.",

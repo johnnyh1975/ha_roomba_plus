@@ -70,7 +70,7 @@ marked in their own headings.
 | Schedule hold | Switch | Freeze schedule without deleting it (i/s/j/Braava) |
 | Locate robot | Button | Play find-me tone |
 | Evacuate bin | Button | Clean Base models only |
-| Select room or zone | Select | Rooms and zones from every map in one list, on both generations. Each id carries the map it belongs to, so a room upstairs can be mapped to a Home Assistant area and cleaned by name. Cleaning rooms from two maps in one command is refused rather than half-done |
+| Select room or zone | Select | Rooms and zones from every map in one list, on both generations. Each id carries the map it belongs to, so a room upstairs can be mapped to a Home Assistant area and cleaned by name. Cleaning rooms from two maps in one command is refused rather than half-done. Attributes: `segment_type` says for each entry whether it is a `room` or a `zone` *(4.2.20)*; `segment_map`, `robot_on_map` and `robot_map_is_live` name the floors when they can be read |
 | Clean selected room | Button | Sends the robot to whatever the selector holds. Works whichever map the robot last ran on — a robot accepts a region command for any of its maps (v4.1.0) |
 | *(one per favourite)* | Button | Runs a saved iRobot favourite. A favourite carries its own map, so this is the shortest route to a room on another floor |
 
@@ -253,9 +253,12 @@ where they are.
   takes it.
 - **Robots without a Smart Map (900 series):** the robot keeps no map;
   the areas are ones Roomba+ finds in its cleaning runs. The form shows
-  the *Cleaning path* map, where each area is a dashed outline with its
-  number — the live map must be on (Connection settings → *Enable live
-  map*). Named areas appear in the *Select zone* list and in the mission
+  each area as a coloured patch with its number — or its name, once it
+  has one — and the dock as a green dot *(4.2.20)*. The picture is drawn
+  from the dock, so it may be turned against your floor plan. It comes
+  from the *Cleaning path* map entity, which must be on (Connection
+  settings → *Enable live map*); the live map itself still shows the
+  path, the coverage outline and the areas' outer bounds. Named areas appear in the *Select zone* list and in the mission
   history; a 900-series robot cannot clean an area on its own.
 
 When there is no map to show — the map image entity is disabled, or the
@@ -360,8 +363,23 @@ entity would otherwise stay blank white indefinitely, with nothing logged to exp
 i-series models behave this way — an i3/i3+ on `daredevil` firmware, for instance — but the
 fallback keys off what the robot reports about itself, not off any model list.)
 
-With cloud credentials configured, such a robot falls back to the **last completed mission's
-coverage as recorded by iRobot's cloud** — the same data the official app draws its post-clean map
+**Since 4.3 Roomba+ asks such a robot where it is** while it cleans, about once a second over the
+local connection, and draws the path live — the same request the iRobot app uses. Configure →
+*Connection settings* → *Ask the robot for its position* (on by default; offered only to robots that
+report no position themselves). The robot's tracker carries the same position (`x_mm`/`y_mm`,
+`map_x_mm`/`map_y_mm`, `position_source: request`).
+
+What a requested path does **not** do yet: it is not fed into the coverage heatmap, door markers or
+room learning, and the map carries no `calibration_points`/`rooms` while it shows one — the image
+says `position_source: request` instead. The robot reports the position from its dock, as a
+900-series does; that this matches the cloud map's frame has not been checked on any robot yet, and
+a wrong frame in those stores would not wash out. A robot that never answers, or has not delivered a
+first position two minutes after the start (a Braava jet m6 answered without one for a whole run), is
+not asked again until its next mission; the
+diagnostics download says which (`position_chain.live_position`).
+
+Without that, or when the robot does not answer, and with cloud credentials configured, such a robot
+falls back to the **last completed mission's coverage as recorded by iRobot's cloud** — the same data the official app draws its post-clean map
 from. Nothing changes for a robot that does report position: there, an empty renderer means "this
 mission hasn't started yet", which still renders as it always did.
 
@@ -385,11 +403,27 @@ show_state: false
 Both map entities expose `calibration_points` and `rooms` attributes for xiaomi-vacuum-map-card integration. See **[xiaomi-vacuum-map-card.md](xiaomi-vacuum-map-card.md)** for the full setup guide.
 
 **ZONE-OVERLAY + furniture shadows (v3.3.1):** both map entities additionally expose, when aligned:
-- `zones` — keep-out zones and robot-observed obstacle zones as raw vector data (`{"type": "keepout", "polygon": [[x,y],...]}` or `{"type": "observed", "x": ..., "y": ...}`, pose-space mm), letting a dashboard draw its own overlay instead of relying on the baked-in PNG rendering described below.
+- `zones` — keep-out zones and robot-observed obstacle zones as raw vector data (`{"type": "keepout", "polygon": [[x,y],...]}` or `{"type": "observed", "x": ..., "y": ...}`, pose-space mm), letting a dashboard draw its own overlay instead of relying on the baked-in PNG rendering described below. **Observed zones are under investigation** *(4.2.20)*: they are read from a centre point on each zone, and the only real map with such zones seen so far describes them as outlines instead, so the list may stay empty although your map has them. The diagnostics download now shows how many the map holds and in what shape (`umf_zone_shapes`).
 - `door_markers` — inferred door-crossing positions accumulated across missions (`{"id", "cx", "cy", "label", "mission_count"}`, pose-space mm). Known caveat: not re-corrected by drift detection, so a marker can lag slightly behind a large inter-mission drift correction.
 - `furniture_candidates` — cells flagged by the FURNITURE detector (reliably covered for a long stretch, now absent) as `{"x_mm", "y_mm"}` pairs, pose-space mm — the same signal that drives `binary_sensor.*_layout_change_detected`, exposed here as a full list rather than first-candidate-only.
 
 All three are withheld in fallback (not-yet-aligned) mode, since the underlying data is pose-space and would be spatially wrong overlaid on a UMF-space fallback render.
+
+**Room names match the room select** *(4.2.20)*. Each entry of `rooms` is
+named as the room select names it: your alias from Zone management first,
+then the account's name, then a name typed into the naming notice, then
+`Zone N`. Before 4.2.20 the attribute used the name in the map's floor
+plan, so a renamed room had one name in the list and another on the map.
+Each entry also carries `region_id`, the robot's own id for the room.
+`room_id` stays the ASCII slug of the name and is still the id to use in
+xiaomi-vacuum-map-card.
+
+**Robot position in the maps' frame** *(4.2.20)*. The maps draw the
+robot's pose with its x and y axes swapped, a convention the firmware's
+own client always used. The tracker's `x_mm`/`y_mm` keep the firmware's
+order, for anyone who already built on them; `map_x_mm`/`map_y_mm` are
+the same point in the frame of the maps, the cleaning path and the stuck
+pins, and are the pair to use when placing the robot on a map.
 
 ### What the colours on the map mean
 
@@ -1144,6 +1178,7 @@ Settings → Devices → Roomba+ → Configure
 | Parameter | Default | Description |
 |---|---|---|
 | Map enabled | `true` | Enable live map rendering (900-series) |
+| Ask the robot for its position | `true` | Robots that report no position themselves only (4.3): asked about once a second while cleaning, for the live path |
 | Map size (px) | `600` | Rendered map image size (400–1200) |
 | Map scale (mm/px) | `10.0` | Millimetres per pixel |
 
@@ -1303,7 +1338,7 @@ for Prime users, with no error to explain it.
 | `roomba_plus_health_change` | `sensor.*_integration_health` crosses a band (healthy/degraded/critical) | `entry_id`, `name`, `score`, `previous_score`, `band`, `previous_band` |
 | `roomba_plus_map_retrain_started` / `_completed` | Cloud detects a Smart Map change and syncs | `entry_id`, `name`, `pmap_id` |
 | `roomba_plus_maintenance_reset` | Filter/brush/battery/pad/wheel/contact/bin reset — button or service | `entry_id`, `name`, `component`, `hours` (`null` for calendar-based resets) |
-| `roomba_plus_stuck` (v3.2.0) | MQTT watchdog detects the robot went silent during an active mission | `entry_id`, `name`, `last_room`, `phase`, `stuck_count`, `minutes_stuck`, `last_known_position` (if pose data available) |
+| `roomba_plus_stuck` (v3.2.0) | MQTT watchdog detects the robot went silent during an active mission | `entry_id`, `name`, `last_room`, `phase`, `stuck_count`, `minutes_stuck`, `last_known_position` (if pose data available: `x_mm`/`y_mm` in millimetres from the dock and `map_x_mm`/`map_y_mm` in the maps' frame, as on the tracker; `x`/`y` are the firmware's raw centimetres) |
 | `roomba_plus_all_away` · `roomba_plus_person_detected_during_clean` | Presence-aware scheduling (see above) | — |
 | `roomba_plus_start_blocked` · `roomba_plus_start_timeout` | Smart Start blocking-sensor gate (see above) | `blocking_entities` (for `start_blocked`) |
 

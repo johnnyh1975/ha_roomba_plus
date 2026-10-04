@@ -1651,6 +1651,20 @@ class TestZoneChoice:
         attrs = z.extra_state_attributes
         assert isinstance(attrs, dict) and "Ground" in str(attrs)
 
+    def test_attributes_say_room_or_zone(self):
+        """4.2.20 (I13): rooms and zones share the list; the id prefix
+        tells them apart, published even when the floors are unknown."""
+        z = _zone({
+            "Kitchen": "rid_m1/3", "Rug": "zid_m1/9", "Old zone": "zid_4",
+            # A zone the map's room list carries is wrapped as a room id.
+            "Litter": "rid_m1/zid_100",
+        })
+        attrs = z.extra_state_attributes
+        assert attrs["segment_type"] == {
+            "Kitchen": "room", "Rug": "zone", "Old zone": "zone", "Litter": "zone",
+        }
+        assert "segment_map" not in attrs
+
 
 class TestReportedWetness:
 

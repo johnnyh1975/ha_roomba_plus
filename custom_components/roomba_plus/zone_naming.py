@@ -142,3 +142,35 @@ def map_room_label(
         or (labels.get(region_id) if isinstance(labels, dict) else None)
         or region_id
     )
+
+
+def room_display_name(
+    region_id: str, cloud_name: str | None, options: Mapping[str, Any]
+) -> str:
+    """The name a room carries in the map attributes: the select's name.
+
+    THE ROOM SELECT AND THE MAP NAME A ROOM THE SAME WAY (4.2.20, I12).
+    The map's `rooms` attribute used the account's name or the bare id,
+    the select the user's alias first -- so a renamed room was one thing
+    in the list and another on the map, and the card could not match a
+    tap on the map to an entry in the list. Same chain as
+    resolve_zone_name(), "Zone N" included; the picture's own label is
+    map_room_label() and differs only in showing a bare number.
+
+    `cloud_name` equal to the id, or empty, is no name: the aligner
+    falls back to the id for a region without one.
+    """
+    from .const import CONF_SMART_ZONE_ALIASES
+
+    aliases = options.get(CONF_SMART_ZONE_ALIASES) or {}
+    zone_data = options.get("smart_zone_data") or {}
+    labels = options.get("smart_zone_labels") or {}
+    entry = zone_data.get(region_id) if isinstance(zone_data, dict) else None
+    local_name = entry.get("name") if isinstance(entry, dict) else None
+    return resolve_zone_name(
+        region_id,
+        aliases if isinstance(aliases, dict) else {},
+        cloud_name if cloud_name and cloud_name != region_id else None,
+        local_name,
+        labels if isinstance(labels, dict) else {},
+    )

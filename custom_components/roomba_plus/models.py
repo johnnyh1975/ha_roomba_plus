@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from .maintenance_store import MaintenanceStore
     from .mission_store import MissionStore          # v1.8.0 L1
     from .map_renderer import MapRenderer
+    from .live_position import LivePositionStream        # 4.3
     from .presence_manager import PresenceManager    # v1.8.0 L6
     from .dirt_threshold_manager import DirtThresholdManager  # v2.4 F11
     from .outline_store import OutlineStore                    # v2.4 F-EPHEMERAL
@@ -304,6 +305,9 @@ class RoombaData:
     parts_catalogue: dict[str, dict[str, str]] = field(default_factory=dict)
     map_capability: MapCapability = MapCapability.NONE
     renderer: MapRenderer | None = None
+    #: Positions requested from a robot that does not publish its own
+    #: (4.3, live_position.py). None without a renderer to draw them.
+    live_position: LivePositionStream | None = None
     geometry_store: GeometryStore | None = None
     maintenance_store: MaintenanceStore | None = None
     # Optional cloud coordinator — None when no credentials or non-SMART robot

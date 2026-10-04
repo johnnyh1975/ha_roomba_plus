@@ -15,6 +15,7 @@ from typing import Any, Final
 from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.core import HomeAssistant
 
+from .live_position import LivePositionStream
 from .structural_failures import diagnostic_info
 from .const import (
     CONF_PRIME_FAVORITE_BUTTONS,
@@ -55,6 +56,41 @@ def _room_command_versions(data: Any, state: dict[str, Any]) -> dict[str, Any]:
     return {pid: resolve_user_pmapv_id(state, cloud_data, pid) for pid in map_ids}
 
 
+def _umf_zone_shapes(cc: Any) -> dict[str, Any]:
+    """How many obstacle and keep-out zones the map holds, and their shape.
+
+    TO SETTLE A QUESTION, not to show the zones (4.2.20). The integration
+    reads an obstacle zone's position from `cx`/`cy` (or `centroid_x`/`x`),
+    and the only real map with such zones we have seen carries none of
+    those fields -- a polygon over `points2d` instead. Every count shown
+    so far went through that reader, so "0 observed zones" could mean
+    either "none" or "none it could read". This tells the two apart:
+    the raw count, the reader's count, and the field names of the first
+    entry. Names and counts only -- no coordinates, nothing about the
+    home beyond how many zones its map has.
+    """
+    umf = getattr(cc, "umf_data", None)
+    umf = umf if isinstance(umf, dict) else {}
+    shapes: dict[str, Any] = {}
+    for key in ("observed_zones", "keepoutzones"):
+        zones = umf.get(key)
+        zones = zones if isinstance(zones, list) else []
+        first = next((z for z in zones if isinstance(z, dict)), None)
+        geometry = first.get("geometry") if first else None
+        shapes[key] = {
+            "count": len(zones),
+            "fields": sorted(str(k) for k in first) if first else [],
+            "geometry_type": (
+                geometry.get("type") if isinstance(geometry, dict) else None
+            ),
+        }
+    try:
+        shapes["observed_zone_centroids_read"] = len(cc.observed_zone_centroids)
+    except Exception:  # noqa: BLE001
+        shapes["observed_zone_centroids_read"] = None
+    return shapes
+
+
 def _cloud_diag(data: Any) -> dict[str, Any]:
     """Return cloud coordinator diagnostics (no credentials)."""
     cc = data.cloud_coordinator
@@ -80,6 +116,7 @@ def _cloud_diag(data: Any) -> dict[str, Any]:
         result["active_pmap_id"] = cc.active_pmap_id
         result["region_count_active"] = len(cc.regions)   # active pmap only (post-filter)
         result["zone_count_active"] = len(cc.zones)       # active pmap only (post-filter)
+        result["umf_zone_shapes"] = _umf_zone_shapes(cc)
 
         # WHO OWNS EACH MAP. A cloud pmap entry carries `robot_ids` and
         # `shared`, and this download dropped both -- so when a
@@ -725,8 +762,15 @@ def _position_chain(data: Any) -> dict[str, Any]:
     """
     aligner = getattr(data, "umf_aligner", None)
     renderer = getattr(data, "renderer", None)
+    live = getattr(data, "live_position", None)
     return {
         "position_points_collected": getattr(renderer, "point_count", None),
+        # REQUESTED POSITIONS (4.3), for a robot that publishes none:
+        # whether the stream ran, how much arrived and why it stopped.
+        # Counts and a status only -- no coordinates.
+        "live_position": (
+            live.diagnostics() if isinstance(live, LivePositionStream) else None
+        ),
         "aligner_present": aligner is not None,
         "aligner_aligned": getattr(aligner, "aligned", None),
         # THE TWO NUMBERS THAT SAY WHY IT IS NOT ALIGNED.
