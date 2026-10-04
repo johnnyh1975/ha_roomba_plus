@@ -9,6 +9,21 @@ note are listed — most releases need zero action beyond updating.
 
 ---
 
+## v4.2.20 — from v4.2.19
+
+**Nothing to do.** New attributes only:
+- the tracker's `map_x_mm`/`map_y_mm`, the robot's position in the
+  maps' frame (`x_mm`/`y_mm` are unchanged);
+- `region_id` on each entry of the map's `rooms`;
+- `segment_type` on the Prime *Select room or zone*.
+
+**A room you renamed in *Zone management* now has that name on the map
+attribute too.** If you regenerate a xiaomi-vacuum-map-card room
+configuration, its ids follow the new names. An existing configuration
+keeps working: `clean_room` still accepts the original name.
+
+---
+
 ## v4.2.19 — from v4.2.18
 
 **Configure → Rooms & zones asks less, and shows the map.**

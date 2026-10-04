@@ -354,7 +354,7 @@ class TestAsyncStepZonesEphemeral:
 
         assert result["description_placeholders"] == {
             "map": _MAP_MD,
-            "robot": "Roomba 980", "zone_count": "2", "zone_ids": "1, 4",
+            "robot": "Roomba 980", "zone_ids": "1, 4",
         }
         # Empty fields: an unnamed area has nothing to pre-fill.
         for key in result["data_schema"].schema:
@@ -1496,8 +1496,7 @@ class TestSmartZonesNamingStep:
         for key in form["data_schema"].schema:
             assert key.default is vol.UNDEFINED
         assert form["description_placeholders"] == {
-            "map": _MAP_MD, "robot": "Roomba i7",
-            "zone_count": "2", "zone_ids": "7, 12",
+            "map": _MAP_MD, "robot": "Roomba i7", "zone_ids": "7, 12",
         }
 
     @pytest.mark.asyncio

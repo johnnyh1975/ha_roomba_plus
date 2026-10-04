@@ -1,7 +1,7 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Default-blue.svg)](https://github.com/hacs/default)
-[![Version](https://img.shields.io/badge/Version-4.2.19-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-4.2.20-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2025.5%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Platinum-blueviolet.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
@@ -21,9 +21,9 @@ Roomba+ is a Platinum-quality Home Assistant custom integration for iRobot Roomb
 
 | Your robot | Install | Why |
 |---|---|---|
-| **Any supported robot** | **v4.2.19** (stable) — the default in HACS | One line for both generations. No beta channel needed. |
-| **Roomba Max · Combo/Plus 400-series** and other newer cloud robots | **v4.2.19** | Earlier stable lines **cannot connect to your robot at all** |
-| Still on the 4.1 line | **v4.2.19** | Everything fixed in 4.1.1 through 4.1.8 is in it. That line has ended |
+| **Any supported robot** | **v4.2.20** (stable) — the default in HACS | One line for both generations. No beta channel needed. |
+| **Roomba Max · Combo/Plus 400-series** and other newer cloud robots | **v4.2.20** | Earlier stable lines **cannot connect to your robot at all** |
+| Still on the 4.1 line | **v4.2.20** | Everything fixed in 4.1.1 through 4.1.8 is in it. That line has ended |
 | Not sure | Check your model number against the [supported hardware](#supported-hardware--capability-matrix) table below | |
 
 > ⚠️ If HACS shows you only `main` and downloading it hangs, see
@@ -38,7 +38,7 @@ Roomba+ is a Platinum-quality Home Assistant custom integration for iRobot Roomb
 
 **Why Roomba+?**
 - **No prerequisites** — local MQTT push, no Docker container, no polling. Cloud credentials are optional and used only for map sync and analytics.
-- **Full automation support** — replace `vacuum.start` with `smart_start`: it waits if a blocking sensor fires (a door contact, a baby monitor), skips rooms that aren't actually dirty, and can pause and resume around your presence — all from automations you already have, no new workarounds needed.
+- **Full automation support** — replace `vacuum.start` with `smart_start`: it waits if a blocking sensor fires (a door contact, a baby monitor) and can pause and resume around your presence; `auto_clean_dirty_rooms` and `clean_overdue_rooms` pick only the rooms that need it — all from automations you already have, no new workarounds needed.
 - **Comprehensive monitoring** — 100+ entities covering maintenance life, wear rates, 365-entry mission history, performance trends, and error detail with recommended actions.
 - **Self-calibrating** — maintenance thresholds, navigation health, battery degradation, and per-room cleaning rhythms all adapt to your robot's own usage history rather than fixed thresholds or manual configuration.
 - **Platinum quality scale**, Home Assistant's highest — every rule checked against the code in 4.2.11 ([quality_scale.yaml](custom_components/roomba_plus/quality_scale.yaml) says where each is met). 8,200+ tests with every module above 95% coverage, 8 languages, full config entry migration chain, CI/CD.

@@ -166,3 +166,43 @@ class TestMalformedInputResilience:
         }
         assert collect_region_ids({}, options) == []
         assert unlabelled_zone_ids({}, options) == []
+
+
+class TestRoomDisplayName:
+    """4.2.20 (I12) — the map attribute's name chain is the select's."""
+
+    def _name(self, rid, cloud, options):
+        from custom_components.roomba_plus.zone_naming import room_display_name
+        return room_display_name(rid, cloud, options)
+
+    def test_alias_first(self):
+        from custom_components.roomba_plus.const import CONF_SMART_ZONE_ALIASES
+        assert self._name("3", "Kitchen", {CONF_SMART_ZONE_ALIASES: {"3": "Cooking"}}) == "Cooking"
+
+    def test_cloud_name_next(self):
+        assert self._name("3", "Kitchen", {}) == "Kitchen"
+
+    def test_the_id_as_cloud_name_is_no_name(self):
+        """rid_to_name() falls back to the id; that must not become the name."""
+        assert self._name("3", "3", {}) == "Zone 3"
+        assert self._name("3", "", {}) == "Zone 3"
+
+    def test_typed_name_then_legacy_label(self):
+        assert self._name("3", None, {"smart_zone_data": {"3": {"name": "Hall"}}}) == "Hall"
+        assert self._name("3", None, {"smart_zone_labels": {"3": "Den"}}) == "Den"
+
+    def test_matches_the_select_chain(self):
+        """Same answer as resolve_zone_name() for the same inputs."""
+        from custom_components.roomba_plus.const import CONF_SMART_ZONE_ALIASES
+        from custom_components.roomba_plus.zone_naming import resolve_zone_name
+        options = {
+            CONF_SMART_ZONE_ALIASES: {"1": "A"},
+            "smart_zone_data": {"2": {"name": "B"}},
+            "smart_zone_labels": {"4": "D"},
+        }
+        for rid, cloud in (("1", "x"), ("2", None), ("3", "C"), ("4", None), ("5", None)):
+            local = options["smart_zone_data"].get(rid, {}).get("name")
+            expected = resolve_zone_name(
+                rid, options[CONF_SMART_ZONE_ALIASES], cloud, local, options["smart_zone_labels"]
+            )
+            assert self._name(rid, cloud, options) == expected

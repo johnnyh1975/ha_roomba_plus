@@ -168,11 +168,11 @@
       },
       "zones": {
         "title": "Name detected areas",
-        "description": "{map}\n\n{robot}: Roomba+ has found {zone_count} area(s) without a name in this robot's cleaning runs: {zone_ids}. The map above draws each one as a dashed outline with its number; the field with the same number names it. This robot keeps no map of its own, so these areas are Roomba+'s own.\n\nType a name into the field for each area you want to name, and leave the rest empty. Named areas appear in the “Select zone” list and in the mission history."
+        "description": "{map}\n\n{robot}: these areas from the robot's cleaning runs have no name yet: {zone_ids}. This robot keeps no map of its own, so the areas are Roomba+'s: it divides the floor the robot has covered at its narrow points.\n\nOn the map above, each area is a coloured patch with its number, or its name once it has one; the green dot is the dock. The map is drawn from the dock, so it may be turned compared with your floor plan. The field with the same number names the area.\n\nType a name into the field for each area you want to name, and leave the rest empty. Named areas appear in the “Select zone” list and in the mission history."
       },
       "smart_zones": {
         "title": "Name rooms",
-        "description": "{map}\n\n{robot}: {zone_count} room(s) on this robot's map have no name yet: {zone_ids}. The map above shows each one with its number; the field with the same number names it. All other rooms already have their name from your iRobot account.\n\nType a name into the field for each room you want to name, and leave the rest empty. The names stay in Home Assistant — nothing is renamed in your iRobot account."
+        "description": "{map}\n\n{robot}: these rooms on the robot's map have no name yet: {zone_ids}. The map above shows each one with its number; the field with the same number names it. All other rooms already have their name from your iRobot account.\n\nType a name into the field for each room you want to name, and leave the rest empty. The names stay in Home Assistant — nothing is renamed in your iRobot account."
       },
       "settings": {
         "title": "Connection settings",

@@ -168,11 +168,11 @@
       },
       "zones": {
         "title": "Gedetecteerde gebieden benoemen",
-        "description": "{map}\n\n{robot}: Roomba+ heeft in de schoonmaakritten van deze robot {zone_count} gebied(en) zonder naam gevonden: {zone_ids}. De kaart hierboven tekent elk gebied als stippellijn met zijn nummer; het veld met hetzelfde nummer geeft het een naam. Deze robot bewaart geen eigen kaart, dus deze gebieden zijn van Roomba+ zelf.\n\nTyp een naam in het veld van elk gebied dat u wilt benoemen en laat de rest leeg. Benoemde gebieden verschijnen in de lijst ‘Zone selecteren’ en in de missiegeschiedenis."
+        "description": "{map}\n\n{robot}: deze gebieden uit de schoonmaakritten van de robot hebben nog geen naam: {zone_ids}. Deze robot bewaart geen eigen kaart, dus de gebieden zijn van Roomba+: het verdeelt de vloer die de robot heeft gereden op de smalle plekken.\n\nOp de kaart hierboven is elk gebied een gekleurd vlak met zijn nummer, of met zijn naam zodra het er een heeft; de groene stip is het basisstation. De kaart is getekend vanaf het basisstation en kan daardoor gedraaid zijn ten opzichte van uw plattegrond. Het veld met hetzelfde nummer geeft het gebied een naam.\n\nTyp een naam in het veld van elk gebied dat u wilt benoemen en laat de rest leeg. Benoemde gebieden verschijnen in de lijst ‘Zone selecteren’ en in de missiegeschiedenis."
       },
       "smart_zones": {
         "title": "Kamers benoemen",
-        "description": "{map}\n\n{robot}: {zone_count} kamer(s) op de kaart van deze robot hebben nog geen naam: {zone_ids}. De kaart hierboven toont elke kamer met haar nummer; het veld met hetzelfde nummer geeft haar een naam. Alle andere kamers hebben hun naam al uit uw iRobot-account.\n\nTyp een naam in het veld van elke kamer die u wilt benoemen en laat de rest leeg. De namen blijven in Home Assistant — er wordt niets hernoemd in uw iRobot-account."
+        "description": "{map}\n\n{robot}: deze kamers op de kaart van de robot hebben nog geen naam: {zone_ids}. De kaart hierboven toont elke kamer met haar nummer; het veld met hetzelfde nummer geeft haar een naam. Alle andere kamers hebben hun naam al uit uw iRobot-account.\n\nTyp een naam in het veld van elke kamer die u wilt benoemen en laat de rest leeg. De namen blijven in Home Assistant — er wordt niets hernoemd in uw iRobot-account."
       },
       "settings": {
         "title": "Verbindingsinstellingen",

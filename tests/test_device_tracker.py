@@ -208,6 +208,17 @@ class TestExtraStateAttributes:
         assert attrs["x_mm"] == 1200
         assert attrs["y_mm"] == 450
 
+    def test_pose_in_the_maps_frame(self):
+        """4.2.20 (I11): the maps swap the firmware's axes; the tracker
+        publishes the swapped pair beside the raw one, so a card placing
+        the robot on a map does not have to know."""
+        tracker, roomba, entry = _make_tracker()
+        entry.runtime_data.mission_timer_store = None
+        _set_state(roomba, phase="charge", pose={"point": {"x": 120, "y": 45}})
+
+        attrs = tracker.extra_state_attributes
+        assert (attrs["map_x_mm"], attrs["map_y_mm"]) == (450, 1200)
+
     def test_no_pose_data_omits_coordinates(self):
         tracker, roomba, entry = _make_tracker()
         entry.runtime_data.mission_timer_store = None
@@ -216,6 +227,7 @@ class TestExtraStateAttributes:
         attrs = tracker.extra_state_attributes
         assert "x_mm" not in attrs
         assert "y_mm" not in attrs
+        assert "map_x_mm" not in attrs
 
     def test_room_and_next_room_exposed_during_active_smart_mission(self):
         tracker, roomba, entry = _make_tracker(map_capability_value="smart")

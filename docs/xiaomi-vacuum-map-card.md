@@ -268,7 +268,7 @@ Room names come from Roomba+ Options → **Rooms & Zones**. To list all configur
 {{ state_attr('image.roomba_rooms_map', 'rooms').keys() | list }}
 ```
 
-Names are case-insensitive in `clean_room` and survive map retraining (unlike `{pmap_id}_{region_id}` segment IDs).
+Names are case-insensitive in `clean_room` and survive map retraining (unlike `{pmap_id}_{region_id}` segment IDs). Since 4.2.20 each room is named as the room select names it — your alias first — and also carries `region_id`; keep using `room_id` as the XVMC id. A configuration generated before 4.2.20 keeps working: `clean_room` still accepts the account's original name and its slug.
 
 ---
 

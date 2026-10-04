@@ -1904,7 +1904,6 @@ class RoombaPlusOptionsFlow(OptionsFlow):
             description_placeholders={
                 "map": picture,
                 "robot": self.config_entry.title or "this robot",
-                "zone_count": str(len(unconfirmed)),
                 "zone_ids": ", ".join(area_number(r.id) for r in unconfirmed),
             },
         )
@@ -1982,7 +1981,6 @@ class RoombaPlusOptionsFlow(OptionsFlow):
             description_placeholders={
                 "map": picture,
                 "robot": self.config_entry.title or "this robot",
-                "zone_count": str(len(unnamed)),
                 "zone_ids": ", ".join(unnamed),
             },
         )

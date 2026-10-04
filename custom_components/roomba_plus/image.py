@@ -53,7 +53,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
-from .zone_naming import map_room_label
+from .zone_naming import map_room_label, room_display_name
 from . import roomba_reported_state
 from .const import (
     CONF_MAP_CLEAN_ZONES,
@@ -71,16 +71,18 @@ from .const import (
     MAX_DOOR_WIDTH_MM,
     MIN_DOOR_WIDTH_MM,
     MISSION_END_PHASES,
-    POSE_POINT_CM_TO_MM,
     REGION_TYPE_ICONS,
     ROOM_TRANSITION_CANDIDATE_PHASES,
 )
 from .entity import IRobotEntity
+from .geometry_utils import pose_point_to_map_mm
+from .room_cleaning import region_names_across_maps
 from .segment_anchoring import anchor_segment
 from .trajectory_segments import split_into_segments
 from .structural_failures import record_failure, record_success
 from .grid_store import GridStore, CELL_SIZE_MM, DECAY, VISIT_INCREMENT
-from .map_renderer import MapRenderer, _load_font
+from .map_renderer import MapRenderer, _load_font, render_area_map
+from .room_seg_store import CELL_MM as ROOM_SEG_CELL_MM, area_number
 from .mission_map import (
     MissionMapMismatch,
     MissionMapUnavailable,
@@ -1318,6 +1320,32 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
 
     # ── ImageEntity interface ─────────────────────────────────────────────────
 
+    async def async_naming_image(self) -> bytes | None:
+        """The detected areas for the naming form (4.2.20, @liblit).
+
+        Each area as the cells it consists of, coloured and labelled --
+        its number, or its name once it has one -- with the dock. The
+        live map below drew areas as overlapping bounding boxes among
+        the path, door markers and coverage outline, which is a lot to
+        decode for a form that only asks "which area is which".
+
+        Hidden areas are left out, as they are of the form. Without any
+        area, the live map is shown instead.
+        """
+        data = self._config_entry.runtime_data if self._config_entry else None
+        store = getattr(data, "room_seg_store", None)
+        areas = [
+            (room.name or area_number(room.id), frozenset(room.cells))
+            for room in (store.rooms.values() if store is not None else ())
+            if not room.hidden and room.cells
+        ]
+        if not areas:
+            return await self.async_image()
+        size = self._renderer._cfg.size_px if self._renderer is not None else 600
+        return await self.hass.async_add_executor_job(
+            render_area_map, areas, ROOM_SEG_CELL_MM, size
+        )
+
     async def async_image(self) -> bytes | None:
         """Return current map as PNG bytes. Always returns a valid image."""
         if self._renderer is None:
@@ -1590,7 +1618,16 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
             {r["id"]: r.get("region_type", "default") for r in cc.regions}
             if cc is not None else {}
         )
-        rid_to_name = aligner.rid_to_name()
+        # THE ACCOUNT'S NAME FROM WHERE THE SELECT READS IT (4.2.20). The
+        # aligner is built from the map's own UMF regions, whose name can
+        # be empty where the map details carry one ("Salon" in the i3+
+        # fixture); the room select reads the details. Details first --
+        # active map winning, through the one shared lookup -- and the
+        # aligner's name only where they have none.
+        rid_to_name = {
+            **aligner.rid_to_name(),
+            **region_names_across_maps(cc),
+        }
         rooms: dict[str, dict[str, Any]] = {}
         for rid, poly_umf in aligner.room_polygons_umf.items():
             # Filtered rather than checked, same as the keep-out path
@@ -1602,7 +1639,9 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
             poly_pose = [p for p in raw_pose if p is not None]
             if not poly_pose or len(poly_pose) != len(raw_pose):
                 continue
-            room_name = rid_to_name.get(rid, rid)
+            room_name = room_display_name(
+                str(rid), rid_to_name.get(rid), self._config_entry.options
+            )
             # XVMC-COORDS: outline and centroid in pose-space mm (not pixels).
             # XVMC applies calibration (pose mm → display px) itself.
             cx = sum(x for x, _ in poly_pose) / len(poly_pose)
@@ -1614,6 +1653,9 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                 "outline": [[x, y] for x, y in poly_pose],
                 "name":    room_name,
                 "room_id": room_slug(room_name),  # v2.7.3: ASCII slug for XVMC id
+                # The robot's own id, which `clean_room` takes as well
+                # and which survives a rename (4.2.20, I12).
+                "region_id": str(rid),
                 "icon":    icon,
                 "x":       cx,
                 "y":       cy,
@@ -2031,8 +2073,7 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         # start" for GridStore/RoomSegStore (stuck-event contamination
         # predating the Dock-Anchor-Korrektur, see that plan) rather than
         # attempting a coordinate-transform migration of old data.
-        x = float(point.get("y", 0)) * POSE_POINT_CM_TO_MM
-        y = float(point.get("x", 0)) * POSE_POINT_CM_TO_MM
+        x, y = pose_point_to_map_mm(point)
         theta = float(pose.get("theta", 0))
         # v3.2.1 DOCK-ANCHOR — the very FIRST pose reading of a mission
         # (x=y=0, robot still literally on the dock before departure) is
@@ -3459,7 +3500,16 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
             {r["id"]: r.get("region_type", "default") for r in cc.regions}
             if cc is not None else {}
         )
-        rid_to_name = aligner.rid_to_name()
+        # THE ACCOUNT'S NAME FROM WHERE THE SELECT READS IT (4.2.20). The
+        # aligner is built from the map's own UMF regions, whose name can
+        # be empty where the map details carry one ("Salon" in the i3+
+        # fixture); the room select reads the details. Details first --
+        # active map winning, through the one shared lookup -- and the
+        # aligner's name only where they have none.
+        rid_to_name = {
+            **aligner.rid_to_name(),
+            **region_names_across_maps(cc),
+        }
         rooms: dict[str, dict[str, Any]] = {}
         for rid, poly_umf in polygons_umf.items():
             poly_coords: list[tuple[float, float]]
@@ -3478,7 +3528,9 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
                 poly_coords = list(poly_umf)
             if not poly_coords:  # Bug 6 fix: guard against empty polygon
                 continue
-            room_name = rid_to_name.get(rid, rid)
+            room_name = room_display_name(
+                str(rid), rid_to_name.get(rid), self._config_entry.options
+            )
             # XVMC-COORDS: outline and centroid in vacuum mm (pose or UMF space).
             # XVMC applies calibration (vacuum mm → display px) itself.
             cx = sum(x for x, _ in poly_coords) / len(poly_coords)
@@ -3490,6 +3542,9 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
                 "outline": [[x, y] for x, y in poly_coords],
                 "name":    room_name,
                 "room_id": room_slug(room_name),  # v2.7.3: ASCII slug for XVMC id
+                # The robot's own id, which `clean_room` takes as well
+                # and which survives a rename (4.2.20, I12).
+                "region_id": str(rid),
                 "icon":    icon,
                 "x":       cx,
                 "y":       cy,

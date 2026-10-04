@@ -53,6 +53,7 @@ from .const import (
     MAP_RETRAIN_WARN_MINUTES,
     get_localized_error_entry,
 )
+from .geometry_utils import raw_pose_mm_to_map
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -954,8 +955,11 @@ async def async_check_error_recurrence(
     aligner = data.umf_aligner
     pos     = recent.get("error_position_mm")
     if aligner and aligner.aligned and isinstance(pos, dict):
+        # The stored position is in the firmware's axis order; the
+        # aligner works in the maps' frame (4.2.20). Unswapped, the room
+        # named here was the one at the mirrored point.
         pt_umf = aligner.pose_to_umf(
-            float(pos.get("x", 0)), float(pos.get("y", 0))
+            *raw_pose_mm_to_map(float(pos.get("x", 0)), float(pos.get("y", 0)))
         )
         if pt_umf:
             rn = aligner.room_name_at(*pt_umf)

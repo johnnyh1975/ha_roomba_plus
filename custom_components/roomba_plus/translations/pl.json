@@ -168,11 +168,11 @@
       },
       "zones": {
         "title": "Nazwij wykryte obszary",
-        "description": "{map}\n\n{robot}: Roomba+ znalazł w przejazdach sprzątających tego robota {zone_count} obszar(y) bez nazwy: {zone_ids}. Mapa powyżej rysuje każdy jako przerywany kontur z jego numerem; pole z tym samym numerem nadaje mu nazwę. Ten robot nie przechowuje własnej mapy, więc te obszary pochodzą od Roomba+.\n\nWpisz nazwę w polu każdego obszaru, który chcesz nazwać, a pozostałe zostaw puste. Nazwane obszary pojawiają się na liście „Wybierz strefę” i w historii misji."
+        "description": "{map}\n\n{robot}: te obszary z przejazdów sprzątających robota nie mają jeszcze nazwy: {zone_ids}. Ten robot nie przechowuje własnej mapy, więc obszary pochodzą od Roomba+: dzieli on przejechaną przez robota powierzchnię w jej wąskich miejscach.\n\nNa mapie powyżej każdy obszar to kolorowa powierzchnia z jego numerem albo z nazwą, gdy już ją ma; zielona kropka to stacja dokująca. Mapa jest rysowana względem stacji dokującej, więc może być obrócona w stosunku do Twojego planu mieszkania. Pole z tym samym numerem nadaje obszarowi nazwę.\n\nWpisz nazwę w polu każdego obszaru, który chcesz nazwać, a pozostałe zostaw puste. Nazwane obszary pojawiają się na liście „Wybierz strefę” i w historii misji."
       },
       "smart_zones": {
         "title": "Nazwij pomieszczenia",
-        "description": "{map}\n\n{robot}: {zone_count} pomieszczenie/pomieszczenia na mapie tego robota nie mają jeszcze nazwy: {zone_ids}. Mapa powyżej pokazuje każde z jego numerem; pole z tym samym numerem nadaje mu nazwę. Wszystkie pozostałe pomieszczenia mają już nazwę z Twojego konta iRobot.\n\nWpisz nazwę w polu każdego pomieszczenia, które chcesz nazwać, a pozostałe zostaw puste. Nazwy pozostają w Home Assistant — na Twoim koncie iRobot nic nie jest zmieniane."
+        "description": "{map}\n\n{robot}: te pomieszczenia na mapie robota nie mają jeszcze nazwy: {zone_ids}. Mapa powyżej pokazuje każde z jego numerem; pole z tym samym numerem nadaje mu nazwę. Wszystkie pozostałe pomieszczenia mają już nazwę z Twojego konta iRobot.\n\nWpisz nazwę w polu każdego pomieszczenia, które chcesz nazwać, a pozostałe zostaw puste. Nazwy pozostają w Home Assistant — na Twoim koncie iRobot nic nie jest zmieniane."
       },
       "settings": {
         "title": "Ustawienia połączenia",

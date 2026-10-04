@@ -168,11 +168,11 @@
       },
       "zones": {
         "title": "Nommer les zones détectées",
-        "description": "{map}\n\n{robot} : Roomba+ a trouvé {zone_count} zone(s) sans nom dans les passages de nettoyage de ce robot : {zone_ids}. La carte ci-dessus dessine chacune en pointillés avec son numéro ; le champ portant le même numéro la nomme. Ce robot ne conserve pas de carte, ces zones sont donc celles de Roomba+.\n\nSaisissez un nom dans le champ de chaque zone à nommer et laissez les autres vides. Les zones nommées apparaissent dans la liste « Sélectionner une zone » et dans l'historique des missions."
+        "description": "{map}\n\n{robot} : ces zones issues des passages de nettoyage du robot n'ont pas encore de nom : {zone_ids}. Ce robot ne conserve pas de carte, ces zones sont donc celles de Roomba+ : il découpe la surface parcourue par le robot à ses passages étroits.\n\nSur la carte ci-dessus, chaque zone est une surface colorée avec son numéro, ou son nom dès qu'elle en a un ; le point vert est la base. La carte est dessinée à partir de la base et peut donc apparaître tournée par rapport à votre plan. Le champ portant le même numéro nomme la zone.\n\nSaisissez un nom dans le champ de chaque zone à nommer et laissez les autres vides. Les zones nommées apparaissent dans la liste « Sélectionner une zone » et dans l'historique des missions."
       },
       "smart_zones": {
         "title": "Nommer les pièces",
-        "description": "{map}\n\n{robot} : {zone_count} pièce(s) de la carte de ce robot n'ont pas encore de nom : {zone_ids}. La carte ci-dessus montre chacune avec son numéro ; le champ portant le même numéro la nomme. Toutes les autres pièces ont déjà leur nom grâce à votre compte iRobot.\n\nSaisissez un nom dans le champ de chaque pièce à nommer et laissez les autres vides. Les noms restent dans Home Assistant — rien n'est renommé dans votre compte iRobot."
+        "description": "{map}\n\n{robot} : ces pièces de la carte du robot n'ont pas encore de nom : {zone_ids}. La carte ci-dessus montre chacune avec son numéro ; le champ portant le même numéro la nomme. Toutes les autres pièces ont déjà leur nom grâce à votre compte iRobot.\n\nSaisissez un nom dans le champ de chaque pièce à nommer et laissez les autres vides. Les noms restent dans Home Assistant — rien n'est renommé dans votre compte iRobot."
       },
       "settings": {
         "title": "Paramètres de connexion",

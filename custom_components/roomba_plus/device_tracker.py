@@ -49,6 +49,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import roomba_reported_state
 from .const import DOCK_TASK_PHASES, MISSION_END_PHASES, POSE_POINT_CM_TO_MM
+from .geometry_utils import pose_point_to_map_mm
 from .entity import IRobotEntity
 from .structural_failures import record_failure, record_success
 from .models import ConnectionType, RoombaConfigEntry
@@ -603,6 +604,14 @@ class RoombaDeviceTracker(IRobotEntity, TrackerEntity):
             if x is not None and y is not None:
                 attrs["x_mm"] = round(float(x) * POSE_POINT_CM_TO_MM)
                 attrs["y_mm"] = round(float(y) * POSE_POINT_CM_TO_MM)
+                # THE SAME POINT IN THE MAPS' FRAME (4.2.20, I11). The
+                # pair above is the firmware's order and stays that way
+                # for anyone who built on it; a card placing the robot
+                # on a map wants this one, from the same function the
+                # maps use, so the two cannot drift apart.
+                map_x, map_y = pose_point_to_map_mm(point)
+                attrs["map_x_mm"] = round(map_x)
+                attrs["map_y_mm"] = round(map_y)
 
         data = self._config_entry.runtime_data
         mts = getattr(data, "mission_timer_store", None)
