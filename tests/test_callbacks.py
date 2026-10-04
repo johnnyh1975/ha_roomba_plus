@@ -1727,15 +1727,21 @@ class TestRoomCompletedEvent:
         hass.loop.run_until_complete(asyncio.sleep(0))
 
         assert mts.current_room_idx == 1, "advance_room() must have run for real"
-        hass.bus.async_fire.assert_any_call(
-            EVENT_ROOM_COMPLETED,
-            {
-                "entry_id": entry.entry_id,
-                "name": entry.title,
-                "room_name": "Kitchen",
-                "room_idx": 0,
-            },
-        )
+        payloads = [
+            c.args[1] for c in hass.bus.async_fire.call_args_list
+            if c.args and c.args[0] == EVENT_ROOM_COMPLETED
+        ]
+        assert len(payloads) == 1
+        payload = dict(payloads[0])
+        # What room tracking measured for the room (4.2.21): run time
+        # since it was entered, 20 s in this setup.
+        assert payload.pop("duration_sec") == 20
+        assert payload == {
+            "entry_id": entry.entry_id,
+            "name": entry.title,
+            "room_name": "Kitchen",
+            "room_idx": 0,
+        }
 
     def test_no_event_when_already_on_last_room(self):
         """advance_room() returns False at the last planned room — no event."""

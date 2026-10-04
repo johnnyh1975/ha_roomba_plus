@@ -2429,18 +2429,20 @@ class PrimeRegionLastCleanedSensor(IRobotEntity, SensorEntity):
             f"{self.robot_unique_id}_last_cleaned_{pmap_id}_{region_id}"
         )
 
-    @property
-    def native_value(self) -> datetime | None:
+    def _detail(self) -> dict[str, Any] | None:
+        """This region's newest clean: `{"ended_at", "seconds"}`, or None."""
         store = getattr(self._config_entry.runtime_data, "mission_store", None)
         if store is None:
             return None
-        history = store.region_last_cleaned()
+        history = store.region_last_cleaned_details()
+        if not isinstance(history, dict):
+            return None
         # Qualified form first; the bare id is the fallback for records
         # that carry no map (older entries, EPHEMERAL tier).
-        raw = history.get(f"{self._pmap_id}/{self._region_id}") or history.get(
+        detail = history.get(f"{self._pmap_id}/{self._region_id}") or history.get(
             self._region_id
         )
-        if not raw and self._pmap_id is None:
+        if not detail and self._pmap_id is None:
             # ONLY WHEN THIS SENSOR HAS NO MAP OF ITS OWN.
             #
             # With a pmap, matching on the region alone would show a
@@ -2456,17 +2458,30 @@ class PrimeRegionLastCleanedSensor(IRobotEntity, SensorEntity):
             _suffix = f"/{self._region_id}"
             for _key, _value in history.items():
                 if _key.endswith(_suffix):
-                    raw = _value
+                    detail = _value
                     break
-        if not raw:
+        return detail if isinstance(detail, dict) else None
+
+    @property
+    def native_value(self) -> datetime | None:
+        detail = self._detail()
+        raw = detail.get("ended_at") if detail else None
+        if not raw or not isinstance(raw, str):
             return None
         return dt_util.parse_datetime(raw)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """The map this region is on, so two rooms sharing a name on
-        different floors can be told apart in the UI."""
-        return {"region_id": self._region_id, "pmap_id": self._pmap_id}
+        different floors can be told apart in the UI -- and, since
+        4.2.21, how long that clean spent in the region (@mrsnyds built
+        this himself from start and end events)."""
+        attrs: dict[str, Any] = {"region_id": self._region_id, "pmap_id": self._pmap_id}
+        detail = self._detail()
+        seconds = detail.get("seconds") if detail else None
+        if isinstance(seconds, (int, float)) and not isinstance(seconds, bool) and seconds > 0:
+            attrs["last_duration_min"] = round(seconds / 60, 1)
+        return attrs
 
     async def async_added_to_hass(self) -> None:
         """Follow the coordinator that drives the history sync.

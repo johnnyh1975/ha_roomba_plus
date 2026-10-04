@@ -32,6 +32,7 @@ says nothing about the job).
 
 from __future__ import annotations
 
+from bisect import bisect_right
 from datetime import datetime, timezone
 from typing import Any
 
@@ -41,6 +42,7 @@ from .const import (
     is_braava,
     is_mop,
     room_event_covered_share,
+    room_event_was_cleaned,
 )
 
 #: A room taking less than this is not a room clean (a doorway strip, a
@@ -293,6 +295,110 @@ def timeline_room_seconds(rec: dict[str, Any]) -> dict[str, float]:
         rid: seconds for rid, seconds in spent.items()
         if rid in cleaned and MIN_ROOM_SECONDS <= seconds <= MAX_ROOM_SECONDS
     }
+
+
+#: What ends a room or zone visit for the history below: the next room
+#: or zone, or a drive. Zones count here, unlike in timeline_room_seconds
+#: -- on Prime a saved clean zone has a "last cleaned" of its own.
+_REGION_BOUNDARY_TYPES: frozenset[str] = frozenset(
+    {"room", "zone", "travel", "charge", "evac"}
+)
+
+#: A single visit longer than this is a lost event, not a clean.
+MAX_REGION_VISIT_SECONDS: float = 4 * 3600.0
+
+
+def region_visits(
+    events: list[dict[str, Any]],
+    mission_end: float | None,
+    kinds: tuple[str, ...] = ("room", "zone"),
+) -> dict[str, dict[str, Any]]:
+    """Per room or zone of ONE mission: time spent, whether it was
+    cleaned, and when the robot was done with it (4.2.21).
+
+    `{region id: {"seconds": float, "cleaned": bool, "ended_at": float | None}}`,
+    in the order the regions were first entered.
+
+    - **seconds** -- every visit added up, cleaned or not. A robot that
+      leaves a room to empty its bin and comes back spent both visits
+      there.
+    - **cleaned** -- by the same rule as Classic's room history,
+      `room_event_was_cleaned`: a finished pass, or cleaned floor in a
+      room closed at the mission's end, and not a doorway strip.
+    - **ended_at** -- the end of the last cleaned visit, as Unix time;
+      None when no visit counts as cleaned.
+
+    A VISIT ENDS AT THE NEXT ROOM, ZONE OR DRIVE, for the same reason
+    timeline_room_seconds() does: one older capture carries a constant
+    mission-end `ets` on every event. Without a later event the visit
+    ends at its own `ets` when that is after its start, else at the
+    mission's end -- in newer captures the two agree with the next
+    event's start to the second.
+
+    `events` in the cloud's shape: `{"type", "ts", "ets", "room": {"rid",
+    "status", "passArea", ...}}` or `"zone": {"zid", ...}`. Order does
+    not matter; they are sorted by `ts`.
+
+    `kinds` picks which visits are reported. Classic keeps room and zone
+    ids in separate ranges, so its rooms are read alone -- room 3 and
+    zone 3 are different places. Prime keys both by one flat id set.
+    Zones end a visit either way.
+    """
+    timed: list[tuple[float, dict[str, Any]]] = []
+    for ev in events:
+        if not isinstance(ev, dict):
+            continue
+        ts = ev.get("ts")
+        if isinstance(ts, bool) or not isinstance(ts, (int, float)):
+            continue
+        timed.append((float(ts), ev))
+    timed.sort(key=lambda pair: pair[0])
+    # The next boundary strictly after a start, by bisection: linear in
+    # the events rather than a scan of the rest for every room.
+    boundaries = [t for t, ev in timed if ev.get("type") in _REGION_BOUNDARY_TYPES]
+
+    result: dict[str, dict[str, Any]] = {}
+    for ts, ev in timed:
+        kind = ev.get("type")
+        if kind not in kinds:
+            continue
+        payload = ev.get(kind)
+        if not isinstance(payload, dict):
+            continue
+        rid = str(payload.get("rid") or payload.get("zid") or "")
+        if not rid:
+            continue
+        position = bisect_right(boundaries, ts)
+        until = boundaries[position] if position < len(boundaries) else None
+        if until is None:
+            ets = ev.get("ets")
+            if (
+                isinstance(ets, (int, float)) and not isinstance(ets, bool)
+                and float(ets) > ts
+            ):
+                until = float(ets)
+            else:
+                until = mission_end
+        entry = result.setdefault(
+            rid, {"seconds": 0.0, "cleaned": False, "ended_at": None}
+        )
+        if until is not None and 0 < until - ts <= MAX_REGION_VISIT_SECONDS:
+            entry["seconds"] += until - ts
+        if room_event_was_cleaned(payload):
+            entry["cleaned"] = True
+            if until is not None and until > ts:
+                entry["ended_at"] = max(entry["ended_at"] or 0.0, until)
+    return result
+
+
+def record_region_visits(rec: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """region_visits() for a stored Classic record with the cloud's
+    timeline; empty without one."""
+    timeline = rec.get("timeline")
+    if not isinstance(timeline, dict):
+        return {}
+    events = [ev for ev in timeline.get("finEvents") or [] if isinstance(ev, dict)]
+    return region_visits(events, _record_end(rec), kinds=("room",))
 
 
 def _mission_key(rec: dict[str, Any]) -> str | None:

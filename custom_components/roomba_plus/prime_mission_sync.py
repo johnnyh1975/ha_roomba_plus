@@ -39,6 +39,8 @@ from __future__ import annotations
 import asyncio
 import logging
 
+from homeassistant.helpers.dispatcher import async_dispatcher_send
+
 from roombapy_prime.models.mission_history import parse_mission_history
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
@@ -46,7 +48,8 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from .models import RoombaConfigEntry
 
-from .const import EVENT_MISSION_COMPLETED
+from .const import EVENT_MISSION_COMPLETED, mission_store_changed_signal
+from .room_times import MIN_ROOM_SECONDS, region_visits
 from .structural_failures import record_failure, record_success
 
 _LOGGER = logging.getLogger(__name__)
@@ -269,51 +272,123 @@ def prime_entry_to_record(entry: Any) -> dict[str, Any] | None:
     if command:
         record["initiator"] = str(command)
 
-    # MEASURED per-room durations, from the mission's own timeline.
+    # PER ROOM AND ZONE, from the mission's own timeline (4.2.21).
     #
-    # This is what Prime has instead of the cloud time estimates Classic
-    # reads from regions[*].time_estimates. Prime's cloud supplies none:
-    # not in RoomFeatureProperties, not in room metadata, and the one
-    # endpoint that would (`/v1/time-estimates`) builds its request body
-    # in native code, so its key names are not determinable.
+    # Measured durations are what Prime has instead of the cloud time
+    # estimates Classic reads from regions[*].time_estimates: Prime's
+    # cloud supplies none (not in RoomFeatureProperties, not in room
+    # metadata, and `/v1/time-estimates` builds its request body in
+    # native code).
     #
-    # Measuring is arguably better than predicting -- it is this robot in
-    # this home rather than a model value -- at the cost of needing a
-    # room cleaned once before there is anything to say.
-    per_room = _room_durations(getattr(entry, "timeline", None))
-    if per_room:
-        record["room_durations_sec"] = per_room
+    # THIS NEVER PRODUCED ANYTHING BEFORE 4.2.21. The timeline's times
+    # are Unix seconds -- `ts`/`ets`, typed `int` by roombapy-prime in
+    # every release -- and the old code called `.total_seconds()` on
+    # their difference. The AttributeError was caught per event, so
+    # every Prime record went without room data, and with it every
+    # per-room "last cleaned", the room history and the overdue rooms.
+    # The tests built their events with datetimes, a shape the library
+    # never delivers.
+    #
+    # Three fields, because they answer three questions:
+    # - `room_durations_sec`: time per cleaned region, every visit added
+    #   up -- what the room time estimates learn from.
+    # - `rooms_cleaned`: the regions that count as cleaned, by Classic's
+    #   rule (room_event_was_cleaned), in the order entered. Present,
+    #   possibly empty, whenever the timeline had a room or zone event,
+    #   so "none" can be told from "unknown".
+    # - `room_ended_at`: when the robot was done with each cleaned
+    #   region, so a multi-room mission dates each room on its own.
+    events = _timeline_as_events(getattr(entry, "timeline", None))
+    visits = region_visits(events, _epoch(getattr(entry, "timestamp", None)))
+    if visits:
+        # CLEANED REGIONS ONLY, and not under half a minute -- the rule
+        # Classic's learned room times use (room_times.MIN_ROOM_SECONDS).
+        # A skipped room or a doorway strip leaves a few seconds, and the
+        # estimate is a median: a room often closed off would read as
+        # done the moment the robot reached it.
+        durations = {
+            rid: round(v["seconds"], 1)
+            for rid, v in visits.items()
+            if v["cleaned"] and v["seconds"] >= MIN_ROOM_SECONDS
+        }
+        if durations:
+            record["room_durations_sec"] = durations
+        record["rooms_cleaned"] = [rid for rid, v in visits.items() if v["cleaned"]]
+        ended = {
+            rid: _as_iso(v["ended_at"])
+            for rid, v in visits.items()
+            if v["cleaned"] and v["ended_at"] is not None
+        }
+        if ended:
+            record["room_ended_at"] = ended
 
     return record
 
 
-def _room_durations(timeline: Any) -> dict[str, float]:
-    """{region_id: seconds} from a mission timeline.
+def _epoch(value: Any) -> float | None:
+    """A timestamp as Unix seconds, whatever shape it arrived in."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, datetime):
+        return value.timestamp()
+    return None
 
-    A room event carries region_id; the event around it carries
-    start_time and end_time. Rooms visited more than once in a mission
-    accumulate rather than overwrite -- a robot that leaves a room to
-    empty its bin and comes back spent the sum of both visits there.
+
+def _region_payload(event_part: Any, id_attr: str, id_key: str) -> dict[str, Any] | None:
+    """A RoomEvent or ZoneEvent as the cloud's dict, for the shared rules."""
+    if event_part is None:
+        return None
+    region_id = getattr(event_part, id_attr, None)
+    if not region_id:
+        return None
+    payload: dict[str, Any] = {id_key: str(region_id)}
+    for key, attr in (
+        ("status", "status"),
+        ("passArea", "pass_area"),
+        ("area", "area"),
+        ("totalArea", "total_area"),
+    ):
+        value = getattr(event_part, attr, None)
+        if value is not None:
+            payload[key] = value
+    return payload
+
+
+def _timeline_as_events(timeline: Any) -> list[dict[str, Any]]:
+    """roombapy-prime's timeline objects in the cloud's own shape.
+
+    The room rules (`room_event_was_cleaned`, `region_visits`) are
+    written against the cloud's dicts, which is what Classic stores.
+    Translating here keeps one rule for both generations instead of a
+    second copy written against the library's attribute names.
+
+    Times pass through as they are: Unix seconds in every capture, and
+    a datetime is turned into the same.
     """
-    durations: dict[str, float] = {}
+    events: list[dict[str, Any]] = []
     for event in timeline or []:
-        room = getattr(event, "room", None)
-        region_id = getattr(room, "region_id", None) if room else None
-        if not region_id:
+        if isinstance(event, dict):
+            events.append(event)
             continue
-        start, end = getattr(event, "start_time", None), getattr(event, "end_time", None)
-        if start is None or end is None:
-            continue
-        try:
-            seconds = (end - start).total_seconds()
-        except (TypeError, AttributeError):
-            continue
-        # Guard against clock skew and unfinished events: a negative or
-        # implausibly long room visit would poison the average it feeds.
-        if seconds <= 0 or seconds > 4 * 3600:
-            continue
-        durations[str(region_id)] = durations.get(str(region_id), 0.0) + seconds
-    return durations
+        ev: dict[str, Any] = {"type": getattr(event, "event_type", None)}
+        ts = _epoch(getattr(event, "start_time", None))
+        ets = _epoch(getattr(event, "end_time", None))
+        if ts is not None:
+            ev["ts"] = ts
+        if ets is not None:
+            ev["ets"] = ets
+        room = _region_payload(getattr(event, "room", None), "region_id", "rid")
+        zone = _region_payload(getattr(event, "zone", None), "zone_id", "zid")
+        if room is not None:
+            ev["room"] = room
+            ev["type"] = ev["type"] or "room"
+        elif zone is not None:
+            ev["zone"] = zone
+            ev["type"] = ev["type"] or "zone"
+        events.append(ev)
+    return events
 
 
 def _parsed(history: Any) -> list[Any]:
@@ -420,6 +495,7 @@ async def _async_sync_locked(
     # the five records `async_append` compares against.
     known = {rec.get("id") for rec in store.records}
     added = 0
+    backfilled = 0
     newest: dict[str, Any] | None = None
     # Oldest first, so the store's own ordering assumptions and any
     # rolling statistics see missions in the order they happened.
@@ -428,7 +504,13 @@ async def _async_sync_locked(
         key=lambda e: _as_iso(getattr(e, "timestamp", None)) or "",
     ):
         record = prime_entry_to_record(entry)
-        if record is None or record["id"] in known:
+        if record is None:
+            continue
+        if record["id"] in known:
+            # A MISSION STORED WITHOUT ITS ROOMS (before 4.2.21) gets them
+            # now, from the same history entry read again.
+            if store.add_missing_room_data(record):
+                backfilled += 1
             continue
         known.add(record["id"])
         # Count only what was actually stored. A dropped duplicate counted
@@ -452,6 +534,31 @@ async def _async_sync_locked(
     #
     # Once rather than per record: a backfill of a hundred missions on
     # first run would otherwise be a hundred disk writes.
+    if backfilled and not added:
+        # Rooms only: nothing for the statistics, just the store to keep.
+        try:
+            await store.async_save(_hass_of(config_entry), config_entry.entry_id)
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug(
+                "roomba_plus: could not persist room data for %d record(s)",
+                backfilled, exc_info=True,
+            )
+    if backfilled:
+        _LOGGER.info(
+            "roomba_plus: added room data to %d stored mission record(s)",
+            backfilled,
+        )
+    if added or backfilled:
+        # EVERY ENTITY RE-READS ITS STORES on this signal (entity.py), as
+        # it does after a Classic cloud merge. The per-room sensors
+        # listen to the status coordinator too, but a backfill happens
+        # without any status change to carry it.
+        _blid = getattr(getattr(config_entry, "runtime_data", None), "blid", None)
+        if _blid:
+            async_dispatcher_send(
+                _hass_of(config_entry), mission_store_changed_signal(_blid)
+            )
+
     if added:
         # BACKFILL STATISTICS HERE TOO, not only at setup.
         #
@@ -539,11 +646,13 @@ def _mission_completed_payload(
             explanation = store.explain_mission(record["id"]) or {}
         except Exception:  # noqa: BLE001 -- the event matters more
             _LOGGER.debug("roomba_plus: explain_mission failed", exc_info=True)
-    rooms = record.get("room_durations_sec")
+    rooms = record.get("rooms_cleaned")
+    if not isinstance(rooms, list):
+        rooms = list(record.get("room_durations_sec") or {})
     return {
         "entry_id": config_entry.entry_id,
         "name": config_entry.title,
-        "rooms_cleaned": len(rooms) if isinstance(rooms, dict) else 0,
+        "rooms_cleaned": len(rooms),
         "area_sqft": record.get("area_sqft"),
         # Prime's history carries no stuck count.
         "stuck_count": None,

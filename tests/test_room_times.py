@@ -297,3 +297,89 @@ class TestOddInput:
         cache = {"A|measured|mop": True, "B|other": 5.0, "C|measured|nonsense": 50.0}
         assert rt.measured_room_seconds(cache, "A", "mop") is None
         assert rt.measured_room_seconds(cache, "C", "mop") == 50.0
+
+
+class TestRegionVisits:
+    """4.2.21: per room or zone of one mission -- time spent, whether it
+    was cleaned, when the robot was done with it."""
+
+    @staticmethod
+    def _room(rid, ts, ets=None, status=0, kind="room"):
+        key = "rid" if kind == "room" else "zid"
+        ev = {"type": kind, "ts": ts, kind: {key: rid, "status": status}}
+        if ets is not None:
+            ev["ets"] = ets
+        return ev
+
+    def test_a_visit_ends_at_the_next_event_not_a_constant_ets(self):
+        """The older capture stamps every event with the mission's end as
+        `ets`; the next drive is where the room really ended."""
+        from custom_components.roomba_plus.room_times import region_visits
+
+        events = [
+            {"type": "start", "ts": 1696660066},
+            self._room("5", 1696660084, ets=1696662000),
+            {"type": "travel", "ts": 1696660945, "ets": 1696662000},
+        ]
+
+        visit = region_visits(events, 1696662000)["5"]
+        assert visit["seconds"] == 861.0
+        assert visit["ended_at"] == 1696660945.0
+
+    def test_the_last_room_ends_at_its_own_ets_else_the_mission_end(self):
+        from custom_components.roomba_plus.room_times import region_visits
+
+        with_ets = region_visits([self._room("5", 100, ets=400)], 900)["5"]
+        without = region_visits([self._room("5", 100)], 900)["5"]
+
+        assert with_ets["ended_at"] == 400.0
+        assert without["ended_at"] == 900.0
+
+    def test_a_revisit_dates_the_room_by_its_last_visit(self):
+        from custom_components.roomba_plus.room_times import region_visits
+
+        events = [
+            self._room("5", 100),
+            {"type": "evac", "ts": 400},
+            self._room("5", 500),
+            {"type": "travel", "ts": 700},
+        ]
+
+        visit = region_visits(events, 900)["5"]
+        assert visit["seconds"] == 500.0
+        assert visit["ended_at"] == 700.0
+
+    def test_a_zone_ends_the_room_before_it(self):
+        from custom_components.roomba_plus.room_times import region_visits
+
+        events = [self._room("5", 100), self._room("9", 300, kind="zone")]
+
+        assert region_visits(events, 900)["5"]["ended_at"] == 300.0
+
+    def test_an_event_at_the_same_second_does_not_end_the_room(self):
+        """The drive is stamped with the room's start second; it is the
+        drive into it."""
+        from custom_components.roomba_plus.room_times import region_visits
+
+        events = [
+            {"type": "travel", "ts": 100},
+            self._room("5", 100),
+            {"type": "travel", "ts": 400},
+        ]
+
+        assert region_visits(events, 900)["5"]["seconds"] == 300.0
+
+    def test_classic_reads_rooms_apart_from_zones_with_the_same_id(self):
+        """Room 3 and zone 3 are different places on Classic."""
+        from custom_components.roomba_plus.room_times import record_region_visits
+
+        rec = {"ended_at": "2026-09-28T17:00:00+00:00", "timeline": {"finEvents": [
+            self._room("3", 0),
+            {"type": "travel", "ts": 600},
+            self._room("3", 700, kind="zone"),
+            {"type": "travel", "ts": 900},
+        ]}}
+
+        visit = record_region_visits(rec)["3"]
+        assert visit["seconds"] == 600.0
+        assert visit["ended_at"] == 600.0

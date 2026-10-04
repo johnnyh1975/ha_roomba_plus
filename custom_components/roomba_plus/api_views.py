@@ -399,6 +399,11 @@ def _prime_rooms(record: dict[str, Any], names: dict[str, str] | None) -> list[s
     region instead (`room_durations_sec`), in the order visited. Without
     this every Prime mission came back with no rooms at all (I1).
     """
+    # The cleaned regions since 4.2.21, by the room history's rule; the
+    # regions with recorded time for a record that has only those.
+    cleaned = record.get("rooms_cleaned")
+    if isinstance(cleaned, list):
+        return [(names or {}).get(str(rid), str(rid)) for rid in cleaned if str(rid)]
     per_room = record.get("room_durations_sec")
     if not isinstance(per_room, dict):
         return []

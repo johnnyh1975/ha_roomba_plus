@@ -55,6 +55,21 @@ one.
 
 ---
 
+## v4.2.21 — from v4.2.20
+
+**Nothing to do.** On a Prime robot the per-room values fill in at the
+first mission-history sync after the update, for every mission the
+iRobot history still lists.
+
+**Room times move a little.** *Last cleaned – room* and *Room cleaning
+history* now show when the robot finished each room rather than when the
+whole mission ended, so a room cleaned first in a long mission reads
+earlier than before. An automation comparing these times against a
+fixed hour may need a look. On Classic, *Last cleaned – room* may jump
+forward: it showed the oldest clean still in the history until now.
+
+---
+
 ## v4.2.20 — from v4.2.19
 
 **Nothing to do.** New attributes only:

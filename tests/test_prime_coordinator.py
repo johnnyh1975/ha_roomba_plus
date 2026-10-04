@@ -1485,3 +1485,67 @@ class TestTheListenerIsCleanedUp:
         )
 
         assert len(added) == 1
+
+
+class TestRoomCompletedSaysHowLong:
+    """4.2.21: `duration_sec` from the room event's own start to the start
+    of whatever came next, both from the timeline. Never Home Assistant's
+    clock."""
+
+    @staticmethod
+    def _report(region_id, ts, kind="room"):
+        from unittest.mock import MagicMock
+
+        report = MagicMock(mission_id="M1")
+        event = MagicMock(start_time=ts)
+        if kind == "room":
+            event.room = MagicMock(region_id=region_id)
+        else:
+            event.room = None
+            event.travel = MagicMock(region_id=region_id)
+        report.event = [event]
+        return report
+
+    def test_the_duration_comes_from_the_room_events(self):
+        c = TestPrimeFiresRoomCompleted._coordinator()
+
+        c._fire_room_completed_if_changed(self._report("10", 1784483000))
+        c._fire_room_completed_if_changed(self._report("10", 1784483000))
+        c._fire_room_completed_if_changed(self._report("11", 1784483742))
+
+        _name, payload = c.hass.bus.async_fire.call_args[0]
+        assert payload["room_id"] == "10"
+        assert payload["duration_sec"] == 742
+
+    def test_the_drive_in_is_not_counted(self):
+        """The timeline names the room while the robot drives there; the
+        room's own event carries the start."""
+        c = TestPrimeFiresRoomCompleted._coordinator()
+
+        c._fire_room_completed_if_changed(self._report("10", 1784483000, kind="travel"))
+        c._fire_room_completed_if_changed(self._report("10", 1784483060))
+        c._fire_room_completed_if_changed(self._report("11", 1784483660, kind="travel"))
+
+        _name, payload = c.hass.bus.async_fire.call_args[0]
+        assert payload["duration_sec"] == 600
+
+    def test_none_without_the_timelines_times(self):
+        """No `ts` on the events: no figure, not one from our clock."""
+        c = TestPrimeFiresRoomCompleted._coordinator()
+
+        c._fire_room_completed_if_changed(self._report("10", None))
+        c._fire_room_completed_if_changed(self._report("11", None))
+
+        _name, payload = c.hass.bus.async_fire.call_args[0]
+        assert payload["duration_sec"] is None
+
+    def test_none_when_the_room_start_was_not_seen(self):
+        """Home Assistant started while the robot was in room 10: the first
+        report already shows room 11's drive."""
+        c = TestPrimeFiresRoomCompleted._coordinator()
+
+        c._fire_room_completed_if_changed(self._report("10", 1784483000, kind="travel"))
+        c._fire_room_completed_if_changed(self._report("11", 1784483700, kind="travel"))
+
+        _name, payload = c.hass.bus.async_fire.call_args[0]
+        assert payload["duration_sec"] is None

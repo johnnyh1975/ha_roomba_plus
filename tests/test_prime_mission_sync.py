@@ -741,60 +741,273 @@ class TestPartsRefreshOnMissionEnd:
         coordinator.hass.async_create_task.assert_not_called()
 
 
-class TestMeasuredRoomDurations:
-    """What Prime has instead of the cloud time estimates Classic reads.
+class TestRoomDataFromTheRealTimeline:
+    """Per-room data from the mission timeline, in the shape the library
+    actually delivers (4.2.21).
 
-    Prime's cloud supplies none: not in RoomFeatureProperties, not in
-    room metadata across two real captures, and the one endpoint that
-    would (`/v1/time-estimates`) assembles its request body in native
-    code -- an APK pass established there is no Kotlin request class and
-    therefore no determinable key names.
+    THE OLD TESTS BUILT EVENTS WITH DATETIMES. roombapy-prime parses
+    `ts`/`ets` as Unix-second integers in every release, and the old
+    conversion called `.total_seconds()` on their difference -- an
+    AttributeError, caught per event. Every Prime record went without
+    room data; these tests passed throughout. Everything here goes
+    through `MissionHistoryEntry.from_json`, the parser the sync uses.
+    """
 
-    So the durations are measured from the mission's own timeline. That
-    is arguably better than a prediction: it is this robot in this home,
-    not a model value. The cost is needing a room cleaned once."""
+    #: Fields of a real Prime room event (@chairstacker's Combo, the
+    #: live capture in roombapy-prime's own tests): `p2mapId`, integer
+    #: `ts`. `ets`, `status` and the areas as the history carries them.
+    P2MAP = "BLID-1758329350"
 
-    def _event(self, region_id, start_min, duration_min):
-        from datetime import datetime, timedelta, timezone
-        from unittest.mock import MagicMock
+    @staticmethod
+    def _record(fin_events, timestamp=1784484000):
+        from roombapy_prime.models import MissionHistoryEntry
 
-        base = datetime(2026, 7, 30, 6, 0, tzinfo=timezone.utc)
-        event = MagicMock(
-            start_time=base + timedelta(minutes=start_min),
-            end_time=base + timedelta(minutes=start_min + duration_min),
+        from custom_components.roomba_plus.prime_mission_sync import (
+            prime_entry_to_record,
         )
-        event.room = MagicMock(region_id=region_id) if region_id else None
-        return event
 
-    def _durations(self, events):
-        from custom_components.roomba_plus.prime_mission_sync import _room_durations
+        entry = MissionHistoryEntry.from_json({
+            "missionId": "M1",
+            "timestamp": timestamp,
+            "done": "ok",
+            "timeline": {"finEvents": fin_events},
+        })
+        return prime_entry_to_record(entry)
 
-        return _room_durations(events)
+    def _room(self, rid, ts, ets, status=0, pass_area=300, area=354):
+        return {
+            "type": "room", "ts": ts, "ets": ets,
+            "room": {"rid": rid, "status": status, "passArea": pass_area,
+                     "area": area, "p2mapId": self.P2MAP},
+        }
 
-    def test_a_room_visit_is_measured(self):
-        assert self._durations([self._event("13", 0, 8)]) == {"13": 480.0}
+    def test_the_real_captured_timeline_yields_its_rooms(self):
+        """A real cloud mission (Braava m6, tests/fixtures): two rooms,
+        233 s and 742 s, both finished. Classic and Prime histories come
+        from the same cloud schema, which is why this capture serves."""
+        import json
+        from pathlib import Path
+
+        data = json.loads(
+            Path("tests/fixtures/roomba_plus_export_braava_m6.json").read_text()
+        )
+        events = data["timeline"]["finEvents"]
+        end = max(ev.get("ets") or ev["ts"] for ev in events)
+
+        record = self._record(events, timestamp=end)
+
+        assert record["rooms_cleaned"] == ["10", "16"]
+        assert record["room_durations_sec"] == {"10": 233.0, "16": 742.0}
+        start = min(ev["ts"] for ev in events)
+        assert record["room_ended_at"]["16"] == datetime.fromtimestamp(
+            start + 1025, tz=timezone.utc
+        ).isoformat()
+
+    def test_integer_seconds_are_measured(self):
+        """The case that never worked: Prime fields, integer times."""
+        record = self._record([self._room("11", 1784483054, 1784483654)])
+
+        assert record["room_durations_sec"] == {"11": 600.0}
+        assert record["rooms_cleaned"] == ["11"]
+
+    def test_each_room_is_dated_by_its_own_end(self):
+        """A multi-room mission: the kitchen is done long before the
+        mission ends."""
+        record = self._record([
+            self._room("11", 1784483000, 1784483600),
+            {"type": "travel", "ts": 1784483600, "ets": 1784483620},
+            self._room("12", 1784483620, 1784484000),
+        ])
+
+        ended = record["room_ended_at"]
+        assert ended["11"] < ended["12"]
+        assert ended["11"] == datetime.fromtimestamp(
+            1784483600, tz=timezone.utc
+        ).isoformat()
 
     def test_revisits_accumulate_rather_than_overwrite(self):
         """A robot that leaves a room to empty its bin and comes back
-        spent the sum of both visits there. Taking the last one would
-        report two minutes for a ten-minute room."""
-        events = [
-            self._event("13", 0, 8),
-            self._event(None, 8, 1),   # travel
-            self._event("13", 9, 2),
-        ]
+        spent the sum of both visits there."""
+        record = self._record([
+            self._room("13", 1784483000, 1784483480),
+            {"type": "evac", "ts": 1784483480, "ets": 1784483540},
+            self._room("13", 1784483540, 1784483660),
+        ])
 
-        assert self._durations(events) == {"13": 600.0}
+        assert record["room_durations_sec"] == {"13": 600.0}
 
-    def test_events_without_a_room_are_skipped(self):
-        """A real mission is mostly travel, traversal and reloc."""
-        assert self._durations([self._event(None, 0, 5)]) == {}
+    def test_a_room_closed_without_cleaning_is_not_cleaned(self):
+        """Classic's rule: no finished pass and no cleaned floor -- a
+        room the user ended before the robot started on it. Its time
+        still counts for nothing it does not claim."""
+        record = self._record([self._room("14", 1784483000, 1784483060,
+                                          status=5, pass_area=0)])
 
-    def test_implausible_durations_are_dropped(self):
-        """Clock skew, or an event that never closed. A negative or
-        four-hour room visit would poison the median it feeds."""
-        assert self._durations([self._event("13", 0, -5)]) == {}
-        assert self._durations([self._event("13", 0, 300)]) == {}
+        assert record["rooms_cleaned"] == []
+        assert "room_ended_at" not in record
+        # Nor does it teach the room time estimates a minute-long room.
+        assert "room_durations_sec" not in record
+
+    def test_a_room_closed_at_the_end_with_cleaned_floor_counts(self):
+        """The same rule the other way: force-closed (5) with floor
+        cleaned counts, as the app shows it."""
+        record = self._record([self._room("15", 1784483000, 1784483300,
+                                          status=5, pass_area=200)])
+
+        assert record["rooms_cleaned"] == ["15"]
+
+    def test_a_doorway_strip_is_not_a_cleaned_room(self):
+        """Finished, but only a sliver of the room (MIN_CLEANED_ROOM_SHARE)."""
+        record = self._record([self._room("16", 1784483000, 1784483030,
+                                          pass_area=5, area=354)])
+
+        assert record["rooms_cleaned"] == []
+        assert "room_durations_sec" not in record
+
+    def test_a_short_cleaned_visit_does_not_teach_the_estimates(self):
+        """Under half a minute is not a room clean, as for Classic's
+        learned times: the median would read a room as done on arrival."""
+        record = self._record([self._room("17", 1784483000, 1784483020)])
+
+        assert record["rooms_cleaned"] == ["17"]
+        assert "room_durations_sec" not in record
+
+    def test_a_saved_zone_counts_like_a_room(self):
+        """Prime's per-region sensors cover zones too (#84)."""
+        record = self._record([{
+            "type": "zone", "ts": 1784483000, "ets": 1784483300,
+            "zone": {"zid": "100", "status": 0, "passArea": 40, "area": 50},
+        }])
+
+        assert record["rooms_cleaned"] == ["100"]
+        assert record["room_durations_sec"] == {"100": 300.0}
+
+    def test_no_region_events_leave_the_fields_out(self):
+        """A whole-house run without room events says nothing about
+        rooms; an empty list would claim "none were cleaned"."""
+        record = self._record([{"type": "travel", "ts": 1784483000,
+                                "ets": 1784483100}])
+
+        assert "rooms_cleaned" not in record
+        assert "room_durations_sec" not in record
+
+    def test_datetimes_are_still_accepted(self):
+        """No capture has them, but the conversion takes both."""
+        from datetime import timedelta
+
+        from custom_components.roomba_plus.prime_mission_sync import (
+            prime_entry_to_record,
+        )
+
+        base = datetime(2026, 7, 30, 6, 0, tzinfo=timezone.utc)
+        event = MagicMock(
+            event_type="room",
+            start_time=base,
+            end_time=base + timedelta(minutes=8),
+            zone=None,
+        )
+        event.room = MagicMock(region_id="13", status=0, pass_area=100,
+                               area=120, total_area=None)
+        record = prime_entry_to_record(_entry(
+            mission_id="M1", timestamp=base + timedelta(minutes=9),
+            done_code="ok", timeline=[event],
+        ))
+
+        assert record["room_durations_sec"] == {"13": 480.0}
+        assert record["rooms_cleaned"] == ["13"]
+
+
+class TestStoredRecordsGetTheirRooms:
+    """Every Prime record stored before 4.2.21 has no room data, and the
+    sync only appends missions it has not seen. Without filling them in,
+    the per-room values would stay empty until each room had been
+    cleaned again -- and the overdue rooms would count every room as
+    never cleaned."""
+
+    MISSION = "01KXXQM8XZEDJ24701JF121CCH"
+
+    def _history(self):
+        from roombapy_prime.models import MissionHistoryEntry
+
+        return [MissionHistoryEntry.from_json({
+            "missionId": self.MISSION,
+            "timestamp": 1784484000,
+            "done": "ok",
+            "timeline": {"finEvents": [{
+                "type": "room", "ts": 1784483054, "ets": 1784483654,
+                "room": {"rid": "11", "status": 0, "passArea": 300, "area": 354},
+            }]},
+        })]
+
+    def _setup(self, stored):
+        from custom_components.roomba_plus.mission_store import MissionStore
+
+        store = MissionStore()
+        store._records.append(stored)
+        store.async_save = AsyncMock()
+        store.async_backfill_statistics = AsyncMock()
+        entry = MagicMock()
+        entry.entry_id = "e1"
+        entry.title = "Roomba"
+        entry.runtime_data.blid = "BLID1"
+        entry.runtime_data.mission_store = store
+        entry.runtime_data.prime_robot.get_mission_history = AsyncMock(
+            return_value=self._history()
+        )
+        return entry, store
+
+    def _stored(self, **extra):
+        return {"id": f"p_{self.MISSION}", "ended_at": "2026-07-19T17:20:00+00:00",
+                "started_at": "2026-07-19T17:00:00+00:00", "result": "completed",
+                **extra}
+
+    @pytest.mark.asyncio
+    async def test_a_record_without_rooms_gets_them_and_is_saved(self):
+        from custom_components.roomba_plus import prime_mission_sync as pms
+
+        entry, store = self._setup(self._stored())
+        with patch.object(pms, "async_dispatcher_send") as send:
+            added = await pms.async_sync_prime_missions(entry)
+
+        assert added == 0, "filling in is not adding a mission"
+        assert len(store._records) == 1
+        assert store._records[0]["rooms_cleaned"] == ["11"]
+        assert store._records[0]["room_durations_sec"] == {"11": 600.0}
+        store.async_save.assert_awaited_once()
+        send.assert_called_once()
+        # And no "finished cleaning" for a mission that ended long ago.
+        fired = [c.args[0] for c in pms._hass_of(entry).bus.async_fire.call_args_list]
+        assert "roomba_plus_mission_completed" not in fired
+
+    @pytest.mark.asyncio
+    async def test_a_record_that_has_rooms_is_left_alone(self):
+        from custom_components.roomba_plus import prime_mission_sync as pms
+
+        entry, store = self._setup(self._stored(rooms_cleaned=["99"]))
+        with patch.object(pms, "async_dispatcher_send") as send:
+            await pms.async_sync_prime_missions(entry)
+
+        assert store._records[0]["rooms_cleaned"] == ["99"]
+        store.async_save.assert_not_awaited()
+        send.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_the_filled_record_reaches_the_per_room_history(self):
+        """End to end: history entry, stored record, the sensors' read."""
+        from custom_components.roomba_plus import prime_mission_sync as pms
+
+        entry, store = self._setup(self._stored())
+        with patch.object(pms, "async_dispatcher_send"):
+            await pms.async_sync_prime_missions(entry)
+
+        details = store.region_last_cleaned_details()
+        assert details["11"]["ended_at"] == datetime.fromtimestamp(
+            1784483654, tz=timezone.utc
+        ).isoformat()
+        assert details["11"]["seconds"] == 600.0
+        assert store.room_cleaning_history({"11": "Hall"}) == {
+            "Hall": details["11"]["ended_at"]
+        }
 
 
 class TestRoomEstimates:
