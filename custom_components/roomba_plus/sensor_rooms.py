@@ -20,6 +20,7 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.const import EntityCategory
 from homeassistant.core import callback
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.typing import StateType
 
@@ -27,6 +28,7 @@ from homeassistant.util import dt as dt_util
 
 from .const import CONF_ROOM_SCHEDULE
 from .entity import IRobotEntity
+from .prime_room_map import SIGNAL_PRIME_ROOM_NAMES
 from .models import RoombaConfigEntry
 from .prime_coordinator import prime_current_state, prime_last_command
 from .room_times import current_cleaning_mode, measured_room_seconds, typical_room_seconds
@@ -1771,9 +1773,25 @@ class RoombaRoomCleaningHistorySensor(IRobotEntity, SensorEntity):
         return len(self._history)
 
     @property
-    def extra_state_attributes(self) -> dict[str, str]:
-        """Dict mapping room display name → ISO timestamp of last clean."""
-        return self._history
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Room display name → ISO timestamp of its last clean.
+
+        TWICE: flat, as since v3.1.0, so `state_attr(history, 'Kitchen')`
+        keeps working; and under `rooms`, so a template can list the
+        rooms without also getting `friendly_name`, `state_class` and
+        whatever Home Assistant adds next. @mrsnyds built his clean order
+        by enumerating the attributes and rejecting the two that were
+        not rooms, which breaks the day a third appears.
+
+        A room literally named "rooms" loses its flat key to the nested
+        one; it keeps its entry inside `rooms`.
+        """
+        history = self._history
+        return {**history, ROOMS_ATTRIBUTE: dict(history)}
+
+
+#: The nested room → last-clean mapping on the cleaning history sensor.
+ROOMS_ATTRIBUTE = "rooms"
 
 
 def _regions_by_pmap_for(runtime_data: Any) -> dict[str, dict[str, str]] | None:
@@ -2132,6 +2150,17 @@ class PrimeRoomsOverdueSensor(RoombaRoomsOverdueSensor):
             self.async_on_remove(
                 coordinator.async_add_listener(self.schedule_update_ha_state)
             )
+        # AND WHEN THE ROOM NAMES ARRIVE. They are read from the map a
+        # few seconds after start-up, and a robot at rest sends nothing
+        # that would redraw this -- so the history kept showing region
+        # numbers until the next command made the robot talk (@mrsnyds).
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass,
+                SIGNAL_PRIME_ROOM_NAMES.format(self._config_entry.entry_id),
+                self.async_write_ha_state,
+            )
+        )
 
 
 class PrimeRoomCleaningHistorySensor(RoombaRoomCleaningHistorySensor):
@@ -2179,3 +2208,14 @@ class PrimeRoomCleaningHistorySensor(RoombaRoomCleaningHistorySensor):
             self.async_on_remove(
                 coordinator.async_add_listener(self.schedule_update_ha_state)
             )
+        # AND WHEN THE ROOM NAMES ARRIVE. They are read from the map a
+        # few seconds after start-up, and a robot at rest sends nothing
+        # that would redraw this -- so the history kept showing region
+        # numbers until the next command made the robot talk (@mrsnyds).
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass,
+                SIGNAL_PRIME_ROOM_NAMES.format(self._config_entry.entry_id),
+                self.async_write_ha_state,
+            )
+        )

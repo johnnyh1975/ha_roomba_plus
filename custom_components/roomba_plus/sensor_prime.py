@@ -2431,10 +2431,23 @@ class PrimeRegionLastCleanedSensor(IRobotEntity, SensorEntity):
 
     def _detail(self) -> dict[str, Any] | None:
         """This region's newest clean: `{"ended_at", "seconds"}`, or None."""
+        return self._lookup("region_last_cleaned_details")
+
+    def _typical(self) -> dict[str, Any] | None:
+        """This region's usual time: `{"seconds", "samples"}`, or None."""
+        return self._lookup("region_typical_seconds")
+
+    def _lookup(self, reader: str) -> dict[str, Any] | None:
+        """This region's entry in one of the store's per-region views.
+
+        Both views are keyed the same way, so both need the same three
+        tries below; one lookup keeps them from drifting apart.
+        """
         store = getattr(self._config_entry.runtime_data, "mission_store", None)
-        if store is None:
+        read = getattr(store, reader, None) if store is not None else None
+        if not callable(read):
             return None
-        history = store.region_last_cleaned_details()
+        history = read()
         if not isinstance(history, dict):
             return None
         # Qualified form first; the bare id is the fallback for records
@@ -2481,6 +2494,20 @@ class PrimeRegionLastCleanedSensor(IRobotEntity, SensorEntity):
         seconds = detail.get("seconds") if detail else None
         if isinstance(seconds, (int, float)) and not isinstance(seconds, bool) and seconds > 0:
             attrs["last_duration_min"] = round(seconds / 60, 1)
+        # HOW LONG IT USUALLY TAKES (4.2.22): the median of the newest
+        # cleans' own times, the same measure as `last_duration_min`, so
+        # charging is not in it either. @mrsnyds wanted exactly this,
+        # "a fully charged robot takes 13 minutes for room 1", and had
+        # been building it from status changes and tracker updates.
+        typical = self._typical()
+        typical_s = typical.get("seconds") if typical else None
+        if (
+            isinstance(typical_s, (int, float))
+            and not isinstance(typical_s, bool)
+            and typical_s > 0
+        ):
+            attrs["typical_duration_min"] = round(typical_s / 60, 1)
+            attrs["typical_duration_cleans"] = int((typical or {}).get("samples") or 0)
         return attrs
 
     async def async_added_to_hass(self) -> None:

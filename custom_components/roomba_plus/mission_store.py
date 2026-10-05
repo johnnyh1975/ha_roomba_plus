@@ -16,6 +16,7 @@ import importlib
 import logging
 import re
 import statistics
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -50,6 +51,18 @@ STORAGE_VERSION = 1
 #: rebuilt from anywhere else.
 PAYLOAD_VERSION = 1
 MAX_RECORDS = 365
+
+#: How many of a region's newest cleans its typical duration is the
+#: median of (4.2.22). The same window `prime_mission_sync`'s progress
+#: estimate uses: enough that one stuck or cut-short clean does not
+#: move it, few enough to follow a room whose furniture moved.
+TYPICAL_REGION_CLEANS = 10
+
+#: How long one computed per-region index serves its readers (4.2.22).
+#: Every per-room sensor asks for it on every render, and they all
+#: render together; one pass then serves the whole burst. A record
+#: changed in place shows within this time, an added one at once.
+REGION_INDEX_TTL_S = 2.0
 
 _SEGMENT_SUFFIX_RE = re.compile(r"_r\d+$")
 # Replay pulses (stale MQTT re-delivery of a terminal event) arrive within
@@ -193,6 +206,9 @@ class MissionStore:
         # append_validated(). None until first use; kept in sync by all
         # append paths afterwards. Not persisted (rebuilt on demand).
         self._record_ids: set[str] | None = None
+        #: (record count, monotonic time, details, typical) -- see
+        #: `_region_index()`. Not persisted.
+        self._region_index_cache: tuple[int, float, Any, Any] | None = None
 
     # ── Public read API (v3.3.0 STORE-ENCAP) ────────────────────────────────
 
@@ -251,6 +267,7 @@ class MissionStore:
             return
         try:
             self._records = list(data.get("records", []))
+            self._region_index_cache = None
             # DUPLICATES FROM 4.2.10 AND EARLIER. The Prime history sync
             # re-stored older missions whose ids it failed to recognise, and
             # the duplicate check compared only the last five records, so a
@@ -259,6 +276,7 @@ class MissionStore:
             # statistics are rebuilt from these records at every setup, so
             # the double counts disappear with it.
             self._records, _dropped = _without_duplicate_ids(self._records)
+            self._region_index_cache = None
             if _dropped:
                 _LOGGER.info(
                     "MissionStore: removed %d duplicate mission record(s) on load", _dropped
@@ -267,9 +285,15 @@ class MissionStore:
         except (TypeError, ValueError) as exc:
             _LOGGER.warning("MissionStore: failed to load — %s; starting empty", exc)
             self._records = []
+            self._region_index_cache = None
 
     async def async_save(self, hass: HomeAssistant, entry_id: str) -> None:
         """Persist current records to hass.storage."""
+        # EVERY CHANGE IS SAVED, including the ones made to a record in
+        # place (cloud corrections, timelines filled in later), so this
+        # is where the per-region index learns about all of them -- not
+        # only the appends that change the record count.
+        self._region_index_cache = None
         # `hass=None` IS A DOCUMENTED NO-OP, not an error. Callers that
         # hold only a config entry resolve hass through
         # `prime_mission_sync._hass_of()`, whose own docstring says a
@@ -319,6 +343,7 @@ class MissionStore:
             for key in self.ROOM_DATA_KEYS:
                 if key in record:
                     existing[key] = record[key]
+            self._region_index_cache = None
             return True
         return False
 
@@ -366,6 +391,7 @@ class MissionStore:
                     )
                     break
         self._records.append(record)
+        self._region_index_cache = None
         if self._record_ids is not None and record.get("id"):
             self._record_ids.add(record["id"])
         self._trim()
@@ -468,6 +494,7 @@ class MissionStore:
         if record_id in self._record_ids:
             return False
         self._records.append(record)
+        self._region_index_cache = None
         self._record_ids.add(record_id)
         self._trim()
         return True
@@ -478,6 +505,7 @@ class MissionStore:
         endpoint, the documented bug source)."""
         if len(self._records) > MAX_RECORDS:
             self._records = self._records[-MAX_RECORDS:]
+            self._region_index_cache = None
             # Ids may have been trimmed away — invalidate, rebuilt lazily.
             self._record_ids = None
 
@@ -1405,7 +1433,48 @@ class MissionStore:
     def region_last_cleaned_details(self) -> dict[str, dict[str, Any]]:
         """region_last_cleaned() with the time spent in the region on that
         clean: `{key: {"ended_at": iso, "seconds": float | None}}` (4.2.21)."""
+        return dict(self._region_index()[0])
+
+    def region_typical_seconds(self) -> dict[str, dict[str, Any]]:
+        """How long a region usually takes: `{key: {"seconds": median,
+        "samples": n}}` over its newest TYPICAL_REGION_CLEANS cleans that
+        carry a time of their own (4.2.22). Keys as region_last_cleaned().
+
+        THE SAME TIME AS `last_duration_min`: the robot's time in the
+        region, every visit of a clean added up, so charging and the
+        drives to and from the dock are not in it (@mrsnyds, who wanted
+        "vacuuming time" per room and fought the charge breaks with
+        automations). Median, so a clean cut short or stuck does not
+        drag it; not split by cleaning mode.
+        """
+        return dict(self._region_index()[1])
+
+    def _region_index(self) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+        """Both per-region views, from ONE newest-first pass, briefly kept.
+
+        EVERY PER-ROOM SENSOR READS THIS ON EVERY RENDER, and they render
+        together on each coordinator update: nine rooms meant nine full
+        passes over up to 365 records, each deriving every record's room
+        times again. Kept for REGION_INDEX_TTL_S, and dropped at once
+        when a record is added or filled in.
+        """
+        cache = getattr(self, "_region_index_cache", None)
+        now = time.monotonic()
+        if (
+            cache is not None
+            and cache[0] == len(self._records)
+            and now - cache[1] < REGION_INDEX_TTL_S
+        ):
+            return cache[2], cache[3]
+        details, typical = self._build_region_index()
+        self._region_index_cache = (len(self._records), now, details, typical)
+        return details, typical
+
+    def _build_region_index(
+        self,
+    ) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
         result: dict[str, dict[str, Any]] = {}
+        samples: dict[str, list[float]] = {}
         for rec in reversed(self._records):
             ended_at = rec.get("ended_at")
             if not ended_at or not isinstance(ended_at, str):
@@ -1418,14 +1487,23 @@ class MissionStore:
             times = self.record_region_times(rec)
             for rid in self.record_region_ids(rec):
                 key = f"{pmap_id}/{rid}" if pmap_id else rid
+                own = times.get(rid) or {}
+                seconds = own.get("seconds")
+                bucket = samples.setdefault(key, [])
+                if seconds and len(bucket) < TYPICAL_REGION_CLEANS:
+                    bucket.append(float(seconds))
                 if key in result:
                     continue
-                own = times.get(rid) or {}
                 result[key] = {
                     "ended_at": own.get("ended_at") or ended_at,
-                    "seconds": own.get("seconds"),
+                    "seconds": seconds,
                 }
-        return result
+        typical = {
+            key: {"seconds": statistics.median(values), "samples": len(values)}
+            for key, values in samples.items()
+            if values
+        }
+        return result, typical
 
     def room_visit_counts(
         self,
@@ -2403,6 +2481,7 @@ class MissionStore:
             # IN TIME ORDER. latest() is the last element, and an adopted
             # mission can be older than one recorded since.
             self._records.sort(key=lambda r: str(r.get("ended_at") or ""))
+            self._region_index_cache = None
         return adopted
 
     def merge_latest_from_cloud(

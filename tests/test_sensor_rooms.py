@@ -291,13 +291,13 @@ class TestRoomCleaningHistorySensor:
         """No records → native_value = 0, attributes = {}."""
         sensor = _make_room_cleaning_history_sensor(mission_store=_store_with())
         assert sensor.native_value == 0
-        assert sensor.extra_state_attributes == {}
+        assert sensor.extra_state_attributes == {"rooms": {}}
 
     def test_no_store_returns_zero(self):
         """MissionStore not initialised → native_value = 0."""
         sensor = _make_room_cleaning_history_sensor(mission_store=None)
         assert sensor.native_value == 0
-        assert sensor.extra_state_attributes == {}
+        assert sensor.extra_state_attributes == {"rooms": {}}
 
     def test_single_mission_populates_rooms(self):
         """Record with last_cleaned_rooms → each room gets ended_at timestamp."""
@@ -311,6 +311,26 @@ class TestRoomCleaningHistorySensor:
         attrs = sensor.extra_state_attributes
         assert attrs["Kitchen"] == "2026-06-29T08:45:00"
         assert attrs["Living Room"] == "2026-06-29T08:45:00"
+
+    def test_the_rooms_are_also_nested(self):
+        """@mrsnyds listed his rooms by rejecting `friendly_name` and
+        `state_class`, which breaks once another attribute appears.
+        `rooms` holds the rooms and nothing else; the flat keys stay for
+        every `state_attr(history, 'Kitchen')` already written."""
+        record = {
+            "last_cleaned_rooms": ["Kitchen", "Living Room"],
+            "ended_at": "2026-06-29T08:45:00",
+            "result": "completed",
+        }
+        sensor = _make_room_cleaning_history_sensor(mission_store=_store_with(record))
+        attrs = sensor.extra_state_attributes
+        assert attrs["rooms"] == {
+            "Kitchen": "2026-06-29T08:45:00",
+            "Living Room": "2026-06-29T08:45:00",
+        }
+        assert attrs["Kitchen"] == "2026-06-29T08:45:00"
+        # The count is still the rooms, not the rooms plus the new key.
+        assert sensor.native_value == 2
 
     def test_newest_record_wins_per_room(self):
         """Multiple records — each room shows its most recent ended_at."""
@@ -840,6 +860,10 @@ class TestPrimeRoomsOverdueSensor:
             "custom_components.roomba_plus.sensor_rooms.RoombaRoomsOverdueSensor"
             ".async_added_to_hass",
             AsyncMock(),
+        ), patch(
+            # The names signal is covered in test_hass_from_runtime_data.
+            "custom_components.roomba_plus.sensor_rooms.async_dispatcher_connect",
+            MagicMock(return_value=lambda: None),
         ):
             asyncio.run(sensor.async_added_to_hass())
 

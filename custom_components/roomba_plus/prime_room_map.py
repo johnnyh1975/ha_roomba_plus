@@ -43,11 +43,75 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
-#: Prime coordinates are metres, the renderer works in millimetres.
 #: Fired when `runtime_data.prime_room_names` gains entries.
 SIGNAL_PRIME_ROOM_NAMES = "roomba_plus_prime_room_names_{}"
 
+#: Where the room names are kept between restarts (4.2.22). Listed in
+#: `_STORAGE_KEYS_TO_REMOVE`, so deleting the entry deletes them.
+PRIME_ROOM_NAMES_STORAGE_KEY = "roomba_plus_prime_room_names_{entry_id}"
+_ROOM_NAMES_STORAGE_VERSION = 1
+
+#: Prime coordinates are metres, the renderer works in millimetres.
+
 METRES_TO_MM = 1000.0
+
+
+def _room_names_store(hass: Any, entry_id: str) -> Any:
+    from homeassistant.helpers.storage import Store  # noqa: PLC0415
+
+    return Store(
+        hass,
+        _ROOM_NAMES_STORAGE_VERSION,
+        PRIME_ROOM_NAMES_STORAGE_KEY.format(entry_id=entry_id),
+    )
+
+
+async def async_restore_prime_room_names(hass: Any, config_entry: Any) -> None:
+    """Put the room names from the last run back before anything reads them.
+
+    THEY WERE KEPT IN MEMORY ONLY. Every start-up began without names
+    until the map had been read, and everything set up before that saw
+    region numbers: the history (`10`, `11`, ...) and, until 4.2.22, no
+    per-room sensors at all (@mrsnyds). Reading the map is a cloud call
+    that can fail or be slow, and it runs in the map entity, which a user
+    can disable.
+
+    Names already in memory win: they are this run's. A failed read is
+    logged and ignored -- the map still supplies them as before.
+    """
+    runtime = getattr(config_entry, "runtime_data", None)
+    if runtime is None:
+        return
+    try:
+        stored = await _room_names_store(hass, config_entry.entry_id).async_load()
+    except Exception:  # noqa: BLE001
+        _LOGGER.debug("roomba_plus: could not read the saved room names", exc_info=True)
+        return
+    if not isinstance(stored, dict):
+        return
+    names = stored.get("names")
+    if isinstance(names, dict):
+        runtime.prime_room_names = {
+            **{str(k): str(v) for k, v in names.items() if k and v},
+            **(getattr(runtime, "prime_room_names", None) or {}),
+        }
+    map_ids = stored.get("map_ids")
+    if isinstance(map_ids, dict):
+        runtime.prime_room_map_ids = {
+            **{str(k): str(v) for k, v in map_ids.items() if k and v},
+            **(getattr(runtime, "prime_room_map_ids", None) or {}),
+        }
+
+
+async def _async_save_prime_room_names(hass: Any, config_entry: Any) -> None:
+    runtime = config_entry.runtime_data
+    try:
+        await _room_names_store(hass, config_entry.entry_id).async_save({
+            "names": dict(getattr(runtime, "prime_room_names", None) or {}),
+            "map_ids": dict(getattr(runtime, "prime_room_map_ids", None) or {}),
+        })
+    except Exception:  # noqa: BLE001
+        _LOGGER.debug("roomba_plus: could not save the room names", exc_info=True)
 
 
 def _ring_mm(geometry: Any) -> list[tuple[float, float]]:
@@ -610,7 +674,8 @@ async def async_build_prime_floor_plan(
         # `_named_regions_across_maps()`, reads region names per map
         # from the cloud and is the more direct evidence. This fills the
         # gaps it leaves.
-        _map_ids = dict(getattr(runtime, "prime_room_map_ids", None) or {})
+        _map_ids_before = dict(getattr(runtime, "prime_room_map_ids", None) or {})
+        _map_ids = dict(_map_ids_before)
         for _region_id in names_for_others:
             _map_ids.setdefault(str(_region_id), p2map_id)
         runtime.prime_room_map_ids = _map_ids
@@ -627,11 +692,22 @@ async def async_build_prime_floor_plan(
                 async_dispatcher_send,
             )
 
-            _hass = getattr(config_entry, "hass", None)
+            # FROM RUNTIME DATA. `config_entry.hass` does not exist, so
+            # reading it gave None and this signal was never sent: the
+            # per-room sensors appeared only when the map happened to
+            # be built before the sensor platform set up, and the
+            # history showed region numbers until the robot next
+            # pushed something (@mrsnyds, Roomba 105).
+            _hass = getattr(runtime, "hass_ref", None)
             if _hass is not None:
                 async_dispatcher_send(
                     _hass, SIGNAL_PRIME_ROOM_NAMES.format(config_entry.entry_id)
                 )
+        # AND KEEP THEM for the next start-up (4.2.22), only when
+        # something changed: this runs on every map refresh.
+        _hass = getattr(runtime, "hass_ref", None)
+        if _hass is not None and (existing != before or _map_ids != _map_ids_before):
+            await _async_save_prime_room_names(_hass, config_entry)
 
     plan = PrimeFloorPlan(
         p2map_id=p2map_id,

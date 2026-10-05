@@ -407,8 +407,11 @@ def _selected_cleaning_mode(config_entry: Any) -> int | None:
     """
     from homeassistant.helpers import entity_registry as er  # noqa: PLC0415
 
-    hass = getattr(config_entry, "hass", None)
+    # FROM RUNTIME DATA. `config_entry.hass` does not exist, so this
+    # returned None on every call and the selector's mode was never
+    # applied to a room clean that named none.
     data = getattr(config_entry, "runtime_data", None)
+    hass = getattr(data, "hass_ref", None)
     if hass is None or data is None:
         return None
     try:
@@ -1861,10 +1864,32 @@ class ClassicRoomCleaning(RoomCleaningBackend):
                 for item in source:
                     if not (item.get("id") and item.get("name")):
                         continue
+                    # A ZONE CARRIES ITS TYPE IN ITS ID, as on Prime.
+                    #
+                    # Rooms and zones are numbered separately, so room
+                    # `0` and zone `0` can sit on the same map. The type
+                    # was kept in `_type_by_region`, keyed by the bare
+                    # id and filled rooms first, zones second -- so the
+                    # zone overwrote the room, and `clean_room: Hallway`
+                    # went out as `{"region_id": "0", "type": "zid"}`
+                    # and cleaned a 9 sq ft toilet zone instead of a
+                    # 305 sq ft hallway, twice (@FJSoninC, j7+).
+                    #
+                    # The name is what the user picked, so the name has
+                    # to carry the type: `zid_0`, which `clean_rooms()`
+                    # already strips and types for `clean_zone`.
+                    rid = str(item["id"])
                     entries.append(
-                        (str(item["id"]), item["name"], str(item.get("pmap_id") or ""))
+                        (
+                            f"{ZID_PREFIX}{rid}" if region_type == "zid" else rid,
+                            item["name"],
+                            str(item.get("pmap_id") or ""),
+                        )
                     )
-                    self._type_by_region[str(item["id"])] = region_type
+                    # The bare-id lookup stays for callers that pass a
+                    # bare id, and a room keeps its id: rooms are read
+                    # first, and a zone no longer overwrites one.
+                    self._type_by_region.setdefault(rid, region_type)
 
             # ROOMS ON THE OTHER MAPS TOO, added last on purpose.
             #
@@ -1911,12 +1936,20 @@ class ClassicRoomCleaning(RoomCleaningBackend):
                 ]
 
         for rid, name, pmap_id in entries:
+            bare = rid[len(ZID_PREFIX):] if rid.startswith(ZID_PREFIX) else rid
+            if name in rooms:
+                # THE SAME REGION, NOW WITH ITS TYPE. Stored zone data
+                # comes first and carries no type; the cloud's entry
+                # for the same name and id says it is a zone. Keeping
+                # the bare id would send it as whatever the bare-id
+                # lookup says, which is a room when the ids collide.
+                if rid != bare and rooms[name] == bare:
+                    rooms[name] = rid
+                continue
             # FIRST ONE WINS. `rooms[name] = rid` overwrote, so the last
             # entry decided -- which put the non-active maps in charge
             # the moment they were added above. Order carries the
             # priority here, and it has to be read that way.
-            if name in rooms:
-                continue
             rooms[name] = rid
             # THE SAME RULE, AND IT WAS NOT.
             #
@@ -1939,7 +1972,10 @@ class ClassicRoomCleaning(RoomCleaningBackend):
             # `tM_GAK...` and failed on `oGwE...` with error 224, after
             # four theories of mine had each been ruled out by one of
             # his messages.
-            self._pmap_by_region.setdefault(rid, pmap_id)
+            #
+            # Keyed by the BARE id: `clean_rooms()` strips the zone
+            # prefix before it looks the map up.
+            self._pmap_by_region.setdefault(bare, pmap_id)
 
         # THE NAME THE USER SEES, TOO.
         #
@@ -1962,6 +1998,11 @@ class ClassicRoomCleaning(RoomCleaningBackend):
                 name = str(alias or "").strip()
                 if not name or rid not in self._pmap_by_region:
                     continue
+                # The alias is stored against the BARE id, so it stays
+                # bare: the type lookup in `clean_rooms()` still types a
+                # zone that has no room twin. Where a room and a zone
+                # share the id, the alias names the room -- the stored
+                # alias cannot say which it meant.
                 owner = rooms.get(name)
                 if owner is None:
                     rooms[name] = rid
