@@ -726,7 +726,7 @@ class TestStorageKeyRegistry:
 
         Bumping this number is the point at which you confirm you added
         the entry deliberately rather than making a test pass."""
-        assert len(_STORAGE_KEYS_TO_REMOVE) == 16
+        assert len(_STORAGE_KEYS_TO_REMOVE) == 18
 
     def test_no_duplicate_keys(self):
         templates = [k for _, k in _STORAGE_KEYS_TO_REMOVE]
@@ -752,6 +752,8 @@ class TestStorageKeyRegistry:
         "roomba_plus_roomseg_{entry_id}",
         "roomba_plus_map_{entry_id}",
         "roomba_plus_map_checkpoint_{entry_id}",
+        "roomba_plus_prime_live_bundle_{entry_id}",
+        "roomba_plus_prime_room_names_{entry_id}",
     ])
     def test_each_known_store_key_present(self, expected_key):
         templates = [k for _, k in _STORAGE_KEYS_TO_REMOVE]

@@ -4978,7 +4978,10 @@ def _seed_entry(store, hr=500):
     entry = MagicMock()
     entry.runtime_data.maintenance_store = store
     entry.runtime_data.roomba.master_state = {"state": {"reported": {}}}
-    entry.hass = MagicMock()
+    # `hass` lives on runtime data. A ConfigEntry has no `hass`, and a
+    # bare MagicMock answering one hid that the save never ran.
+    entry.runtime_data.hass_ref = MagicMock()
+    del entry.hass
     entry.entry_id = "e1"
     return entry, {"bbrun": {"hr": hr}}
 
@@ -5093,7 +5096,7 @@ class TestSeedMaintenanceBaselines:
         cb._seed_maintenance_baselines(entry, reported)
         assert store.filter_reset_hr == 500 and store.filter_baseline_seeded is True
         assert store.brush_reset_hr == 0, "an already seeded part is left alone"
-        entry.hass.async_create_task.assert_called_once()
+        entry.runtime_data.hass_ref.async_create_task.assert_called_once()
 
     def test_a_part_with_reset_history_is_not_reseeded(self):
         store = self._store()
@@ -5112,7 +5115,7 @@ class TestSeedMaintenanceBaselines:
         store = self._store(filter=True, brush=True, side_brush=True, clean_base_bag=True)
         entry, reported = _seed_entry(store)
         cb._seed_maintenance_baselines(entry, reported)
-        entry.hass.async_create_task.assert_not_called()
+        entry.runtime_data.hass_ref.async_create_task.assert_not_called()
 
 
 class TestRealign:

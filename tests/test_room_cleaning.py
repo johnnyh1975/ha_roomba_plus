@@ -1403,6 +1403,12 @@ class TestTheFactoryNeverReadsHassOffTheConfigEntry:
                 code = code.replace(doc, "")
 
             assert not re.search(r"config_entry\.hass\b", code), path.name
+            # THE SAME MISTAKE SPELLED AS getattr(), which the line above
+            # never saw: it returned None quietly in three places, one of
+            # them the signal that creates the per-room sensors (@mrsnyds).
+            assert not re.search(
+                r"getattr\(\s*(config_entry|entry)\s*,\s*[\"']hass[\"']", code
+            ), path.name
 
     def test_a_backend_without_hass_still_works(self):
         """hass is only needed to record the mission plan. Callers that
@@ -3698,7 +3704,10 @@ class TestNameAndMapUseTheSamePrecedence:
 
         source = inspect.getsource(ClassicRoomCleaning.available_rooms)
 
-        assert "self._pmap_by_region.setdefault(rid, pmap_id)" in source
+        # Keyed by the bare id since a zone's id carries its type
+        # (@FJSoninC): `clean_rooms()` strips the prefix before looking up.
+        assert "self._pmap_by_region.setdefault(bare, pmap_id)" in source
+        assert "self._pmap_by_region[bare] = pmap_id" not in source
         assert "self._pmap_by_region[rid] = pmap_id" not in source
 
     def test_a_region_only_on_the_other_map_still_resolves(self) -> None:
@@ -4061,15 +4070,21 @@ class TestPrimeAvailableRooms:
 class TestSelectedCleaningMode:
 
     def _entry(self, hass, *, entity_id="select.robbie_mode", state=None):
+        # Like a real ConfigEntry: no `hass` of its own. A MagicMock
+        # answering `entry.hass` hid that the mode was never read.
         entry = MagicMock()
-        entry.hass = hass
+        del entry.hass
+        entry.runtime_data.hass_ref = hass
         entry.runtime_data.blid = "B1"
         if state is not None:
             hass.states.async_set(entity_id, state)
         return entry
 
     def test_without_hass_there_is_no_mode(self):
-        assert rc._selected_cleaning_mode(SimpleNamespace(hass=None, runtime_data=None)) is None
+        assert rc._selected_cleaning_mode(SimpleNamespace(runtime_data=None)) is None
+        assert rc._selected_cleaning_mode(
+            SimpleNamespace(runtime_data=SimpleNamespace(hass_ref=None, blid="B1"))
+        ) is None
 
     def test_the_selects_state_gives_the_mode(self, hass, monkeypatch):
         from custom_components.roomba_plus.select_prime import PrimeCleaningModeSelect

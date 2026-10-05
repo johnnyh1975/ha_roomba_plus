@@ -246,6 +246,122 @@ class TestZonesGoOutAsZones:
         assert backend._type_by_region.get("99", "rid") == "rid"
 
 
+class TestARoomAndAZoneWithTheSameId:
+    """`clean_room: Hallway` cleaned a 9 sq ft toilet zone (@FJSoninC, j7+).
+
+    Rooms and zones are numbered separately, so his map has room `0`
+    (Hallway, about 305 sq ft) and zone `0` (Toilet). The type was kept
+    by bare id, rooms first and zones second, so the zone overwrote the
+    room and the command went out as `{"region_id": "0", "type": "zid"}`
+    -- twice in a row, three minutes each. Deleting the zone in the
+    iRobot app made the same call clean the hallway.
+
+    The name is what the user picked, so the id the name resolves to has
+    to carry the type: `zid_0`, the marker `clean_zone` already uses.
+    """
+
+    HIS_ROOMS = [
+        {"id": "0", "name": "Hallway", "pmap_id": "map1"},
+        {"id": "3", "name": "Kitchen", "pmap_id": "map1"},
+    ]
+    HIS_ZONES = [
+        {"id": "0", "name": "Toilet", "pmap_id": "map1"},
+        {"id": "7", "name": "Under Table", "pmap_id": "map1"},
+    ]
+
+    @staticmethod
+    def _backend(regions, zones, options=None):
+        from custom_components.roomba_plus.room_cleaning import ClassicRoomCleaning
+
+        coordinator = MagicMock()
+        coordinator.data = {"pmaps": []}
+        coordinator.regions = regions
+        coordinator.zones = zones
+        coordinator.regions_by_pmap = {}
+        coordinator.active_pmap_id = "map1"
+
+        backend = ClassicRoomCleaning.__new__(ClassicRoomCleaning)
+        backend._config_entry = SimpleNamespace(options=options or {})
+        backend._data = MagicMock()
+        backend._data.blid = "BLID1"
+        backend._data.cloud_coordinator = coordinator
+        backend._data.roomba_reported_state = MagicMock(return_value={})
+        backend._pmap_by_region = {}
+        backend._type_by_region = {}
+        backend._hass = MagicMock()
+        backend._roomba = MagicMock()
+        return backend
+
+    async def _sent(self, backend, name):
+        """What reaches the robot for `clean_room: <name>`."""
+        from unittest.mock import patch
+
+        from custom_components.roomba_plus.room_cleaning import ClassicRoomCleaning
+
+        captured: dict = {}
+
+        async def _send(command, params):
+            captured["params"] = params
+
+        backend._roomba.send_command = _send
+        rooms = await backend.available_rooms()
+        with patch.object(
+            ClassicRoomCleaning, "_raise_if_map_updating", MagicMock()
+        ), patch.object(
+            ClassicRoomCleaning, "_current_pmap_ids",
+            MagicMock(return_value=("map1", "V1")), create=True,
+        ):
+            await backend.clean_rooms([rooms[name]])
+        region = captured["params"]["regions"][0]
+        return region["region_id"], region["type"]
+
+    async def test_the_room_goes_out_as_a_room(self) -> None:
+        backend = self._backend(self.HIS_ROOMS, self.HIS_ZONES)
+
+        assert await self._sent(backend, "Hallway") == ("0", "rid")
+
+    async def test_the_zone_goes_out_as_a_zone(self) -> None:
+        backend = self._backend(self.HIS_ROOMS, self.HIS_ZONES)
+
+        assert await self._sent(backend, "Toilet") == ("0", "zid")
+
+    async def test_a_zone_without_a_twin_is_unchanged(self) -> None:
+        backend = self._backend(self.HIS_ROOMS, self.HIS_ZONES)
+
+        assert await self._sent(backend, "Under Table") == ("7", "zid")
+        assert await self._sent(backend, "Kitchen") == ("3", "rid")
+
+    async def test_untyped_stored_data_takes_the_cloud_type(self) -> None:
+        """Stored zone data is read first and has no type. Left bare, the
+        toilet would now go out as room `0` -- the same fault reversed."""
+        backend = self._backend(
+            self.HIS_ROOMS, self.HIS_ZONES,
+            options={"smart_zone_data": {
+                "0": {"name": "Toilet", "pmap_id": "map1"},
+            }},
+        )
+
+        assert await self._sent(backend, "Toilet") == ("0", "zid")
+
+    async def test_an_alias_on_a_zone_names_the_zone(self) -> None:
+        from custom_components.roomba_plus.const import CONF_SMART_ZONE_ALIASES
+
+        backend = self._backend(
+            self.HIS_ROOMS, self.HIS_ZONES,
+            options={CONF_SMART_ZONE_ALIASES: {"7": "Dining corner"}},
+        )
+
+        assert await self._sent(backend, "Dining corner") == ("7", "zid")
+
+    async def test_both_still_map_to_their_floor(self) -> None:
+        backend = self._backend(self.HIS_ROOMS, self.HIS_ZONES)
+
+        await backend.available_rooms()
+
+        assert backend._pmap_by_region["0"] == "map1"
+        assert backend._type_by_region["0"] == "rid"
+
+
 class TestThePrimeZoneSelectorLoadsItsList:
     """It shipped in 4.1.0 permanently unavailable (@chairstacker).
 

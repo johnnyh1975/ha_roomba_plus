@@ -993,7 +993,9 @@ def _seed_maintenance_baselines(
     """
     data = getattr(entry, "runtime_data", None)
     store = getattr(data, "maintenance_store", None)
-    hass = getattr(entry, "hass", None)
+    # FROM RUNTIME DATA. `entry.hass` does not exist, so the seeded
+    # baseline was never saved and was seeded again after every restart.
+    hass = getattr(data, "hass_ref", None)
     if store is None:
         return
 

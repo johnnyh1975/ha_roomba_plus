@@ -59,6 +59,7 @@ from .callbacks import (
     make_cloud_refresh_callback,
 )
 from .room_cleaning import region_names_across_maps
+from .prime_room_map import async_restore_prime_room_names
 from .room_times import learn_via, robot_default_mode
 from .const import (
     ISSUE_TRACKER_URL,
@@ -1835,6 +1836,11 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
         hass_ref=hass,
     )
 
+    # THE ROOM NAMES FROM THE LAST RUN, before any platform reads them
+    # (4.2.22). Without them the history showed region numbers and the
+    # per-room sensors waited for the map to be read (@mrsnyds).
+    await async_restore_prime_room_names(hass, config_entry)
+
     # THE REST API FOR PRIME TOO (I1). Registered here, not only in the
     # Classic setup: a household with only Prime robots had none.
     _async_register_views(hass)
@@ -2408,6 +2414,12 @@ _STORAGE_KEYS_TO_REMOVE: Final[list[tuple[str, str]]] = [
     # without a matching entry here, so uninstalling would have left a
     # file behind containing a picture of someone's home.
     ("image (prime map)", "roomba_plus_prime_map_{entry_id}"),
+    # The Prime live-map bundle: the floor plan of someone's home. Its
+    # Store was added without an entry here, the same miss as the map
+    # PNG above; found while adding the room names below.
+    ("image (prime live bundle)", "roomba_plus_prime_live_bundle_{entry_id}"),
+    # Prime room names kept across restarts (4.2.22).
+    ("prime room names", "roomba_plus_prime_room_names_{entry_id}"),
 ]
 
 
