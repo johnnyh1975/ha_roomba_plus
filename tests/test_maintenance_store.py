@@ -2073,3 +2073,26 @@ class TestMaintenanceLoad:
         s = self._with(monkeypatch, {"filter_reset_hr": "not a number"})
         await s.async_load(hass, "e1")
         assert "failed to load data" in caplog.text
+
+
+# ── Due on a j-series (@msva17) ──────────────────────────────────────────
+#
+# The due check read `bbrun.hr`, 0 on a j7+/j9+, and found nothing due.
+
+_J_SERIES_STATE = {
+    "bbrun": {"nStuck": 12, "nPanics": 3},
+    "runtimeStats": {"hr": 512, "min": 7, "sqft": 1400},
+}
+
+
+class TestDueOnAJSeries:
+    def test_a_used_up_filter_is_due(self) -> None:
+        """Was never due: the due check read 0 hours and found 60 left."""
+        store = MaintenanceStore()
+        store.filter_reset_hr = 400
+        assert "filter" in store.due_items(_J_SERIES_STATE, {})
+
+    def test_a_fresh_filter_is_not(self) -> None:
+        store = MaintenanceStore()
+        store.filter_reset_hr = 500
+        assert "filter" not in store.due_items(_J_SERIES_STATE, {})

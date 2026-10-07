@@ -3565,3 +3565,88 @@ class TestLivePositionOptionNeedsTheMap:
         flow.async_show_form = MagicMock(side_effect=lambda **kw: kw)
         result = await flow.async_step_settings(None)
         assert "live_position_requests" not in [str(k) for k in result["data_schema"].schema]
+
+
+class TestRest980ImportTakesRoomsOfThisMapOnly:
+    """The import against roomba_rest980 v1.20.0-beta4 as it is: one select
+    per room AND per clean zone, on every map, unique id
+    `{entry}_p_{id}_{r|z}_{pmap}` (its select.py, CleanRoomPasses)."""
+
+    @staticmethod
+    def _rest980(*items):
+        """items: (region id, name, 'r'|'z', pmap id)."""
+        hass = MagicMock()
+        hass.config_entries.async_entries.return_value = [MagicMock(entry_id="r980")]
+        ents, states = [], {}
+        for rid, name, kind, pmap in items:
+            ent = MagicMock()
+            ent.entity_id = f"select.clean_{name.lower().replace(' ', '_')}_{pmap}"
+            ent.domain = "select"
+            ent.unique_id = f"BLID123_p_{rid}_{kind}_{pmap}"
+            ents.append(ent)
+            data = {"id": rid, "name": name}
+            data["zone_type" if kind == "z" else "region_type"] = "custom"
+            st = MagicMock()
+            st.attributes = {
+                "room_data": data,
+                "room_json": {"region_id": rid, "type": "zid" if kind == "z" else "rid"},
+            }
+            states[ent.entity_id] = st
+        hass.states.get.side_effect = lambda eid: states.get(eid)
+        return hass, ents
+
+    def _discover(self, hass, ents, pmap=None):
+        with patch.object(cf.er, "async_get"), \
+             patch.object(cf.er, "async_entries_for_config_entry", return_value=ents):
+            return cf._discover_rest980_rooms(hass, pmap)
+
+    def test_a_zone_does_not_overwrite_the_room_with_its_id(self) -> None:
+        """Rooms and zones are numbered separately (@FJSoninC's map)."""
+        for order in ((0, 1), (1, 0)):
+            items = [("0", "Hallway", "r", "MAP_A"), ("0", "Toilet", "z", "MAP_A")]
+            hass, ents = self._rest980(*(items[i] for i in order))
+            assert self._discover(hass, ents) == {"0": "Hallway"}
+
+    def test_zones_are_not_imported_as_rooms(self) -> None:
+        hass, ents = self._rest980(
+            ("3", "Kitchen", "r", "MAP_A"), ("7", "Under Table", "z", "MAP_A"),
+        )
+        assert self._discover(hass, ents) == {"3": "Kitchen"}
+
+    def test_only_the_robots_map(self) -> None:
+        """Room ids repeat across floors; the import files every room under
+        the robot's current map."""
+        hass, ents = self._rest980(
+            ("3", "Kitchen", "r", "MAP_A"), ("3", "Office", "r", "MAP_B"),
+            ("4", "Attic", "r", "MAP_B"),
+        )
+        assert self._discover(hass, ents, "MAP_A") == {"3": "Kitchen"}
+
+    def test_a_map_id_with_underscores_is_read_whole(self) -> None:
+        hass, ents = self._rest980(("3", "Kitchen", "r", "oG_wE-49Y_Te"))
+        assert self._discover(hass, ents, "oG_wE-49Y_Te") == {"3": "Kitchen"}
+
+    def test_without_a_unique_id_the_command_type_decides(self) -> None:
+        hass, ents = self._rest980(
+            ("0", "Hallway", "r", "MAP_A"), ("0", "Toilet", "z", "MAP_A"),
+        )
+        for ent in ents:
+            ent.unique_id = None
+            # and no cloud type keys either: room_json alone
+            data = hass.states.get(ent.entity_id).attributes["room_data"]
+            data.pop("zone_type", None)
+            data.pop("region_type", None)
+        assert self._discover(hass, ents) == {"0": "Hallway"}
+
+    @pytest.mark.asyncio
+    async def test_the_step_asks_for_the_robots_map(self) -> None:
+        flow, _ = _make_flow_m(discovered_rooms={})
+        with patch(
+            "custom_components.roomba_plus.config_flow.roomba_reported_state",
+            return_value={"lastCommand": {"pmap_id": "MAP_A"}},
+        ), patch(
+            "custom_components.roomba_plus.config_flow._discover_rest980_rooms",
+            return_value={"3": "Kitchen"},
+        ) as discover:
+            await flow.async_step_rest980_migrate()
+        assert discover.call_args.args[1] == "MAP_A"

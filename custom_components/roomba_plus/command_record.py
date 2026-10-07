@@ -67,6 +67,12 @@ def _summarise(payload: Any) -> dict[str, Any]:
                 r.get("region_id") if isinstance(r, dict) else r
                 for r in value
             ]
+            # AND WHAT EACH ID WAS SENT AS. A room and a zone can share
+            # a number, so `["0"]` alone cannot say which was meant
+            # (@Hardy-196 could not tell his zone test from a room).
+            types = [r.get("type") for r in value if isinstance(r, dict)]
+            if any(types):
+                out["region_types"] = types
         else:
             out[key] = value
     return out

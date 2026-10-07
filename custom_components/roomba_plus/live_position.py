@@ -4,10 +4,16 @@ A 900-series puts its position into its own shadow as it drives, and the
 cleaning map has drawn from that since v1. Newer Classic robots -- an i7
 or S9+ on lewis, an i3 on daredevil -- keep it to themselves: the shadow
 never carries `pose`, and the map fell back to the cloud's record of the
-last finished mission. Those answer when asked (rrtp: publish to `req`,
+last finished mission. lewis answers when asked (rrtp: publish to `req`,
 the reply arrives on `data`), which roombapy 2.0 implements as
-`RoombaClient.watch_position()`. A j-series has not been tried; it gets
-the same treatment and gives up on its own if it does not answer.
+`RoombaClient.watch_position()`.
+
+daredevil does not, on the one i3 measured (2.6.0, @AlakazipLabs): no
+reply to 2,875 requests at 1 Hz over a 51-minute driving spell. An
+earlier version of this note counted it among the robots that answer;
+nothing on record supports that. It gets the same treatment as a
+j-series, which has not been tried: three unanswered requests and this
+module stops asking until the next mission.
 
 This module asks, and only while it is worth asking: during a mission,
 while the robot is moving, and only when the shadow carries no position

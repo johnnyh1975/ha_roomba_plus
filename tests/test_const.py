@@ -1814,3 +1814,90 @@ class TestARoomOnlyReachedIntoIsNotCleaned:
         store._records = [rec]
         assert store.store_rooms_from_timelines({"6": "Office"}) == 0
         assert rec["last_cleaned_rooms"] == ["Office"]
+
+
+# ── One hour meter: lifetime_hours() ─────────────────────────────────────
+#
+#: One hour meter for every maintenance read and write.
+#:
+#: @msva17, j9+ and j7+ on local MQTT, 4.2.22: the filter read 46 h and was
+#: counting down. The filter reset button was pressed, and 8 ms later the
+#: sensor read 0. The side brush and Clean Base bag sat at 0 and no reset
+#: moved them. `maintenance_due` stayed off throughout.
+#:
+#: One cause. The sensors compute with `run_stats`, where `runtimeStats.hr`
+#: -- the key an i/s/j-series carries -- wins. The reset buttons, the to-do
+#: list, the due check and the cloud hydration read `bbrun.hr` alone, which
+#: on these robots is 0. So the reset baseline was 0 while the sensor
+#: subtracted it from the real lifetime, and the due check, on a meter
+#: reading 0, never found anything due.
+#:
+#: THE STATE BELOW IS THE SHAPE, not a capture: `bbrun` present without
+#: `hr`, `runtimeStats.hr` carrying the lifetime. That is what the
+#: `run_stats` docstring documents for i/s/j-series, and the only shape
+#: that produces both observations at once -- remaining at 0 straight after
+#: a reset, and nothing ever due.
+
+from pathlib import Path as _Path  # noqa: E402
+import re as _re  # noqa: E402
+
+from custom_components.roomba_plus.const import lifetime_hours  # noqa: E402
+
+_J_SERIES_STATE = {
+    "bbrun": {"nStuck": 12, "nPanics": 3},
+    "runtimeStats": {"hr": 512, "min": 7, "sqft": 1400},
+}
+
+_COMPONENT = _Path(__file__).parent.parent / "custom_components" / "roomba_plus"
+
+
+class TestLifetimeHours:
+    def test_j_series_reads_runtime_stats(self) -> None:
+        assert lifetime_hours(_J_SERIES_STATE) == 512
+
+    def test_900_series_reads_bbrun(self) -> None:
+        assert lifetime_hours({"bbrun": {"hr": 2252}}) == 2252
+
+    def test_runtime_stats_wins_as_in_run_stats(self) -> None:
+        """The same priority the sensors use, so the two cannot disagree."""
+        assert lifetime_hours({"bbrun": {"hr": 9}, "runtimeStats": {"hr": 512}}) == 512
+
+    def test_a_zero_falls_through_to_the_other_meter(self) -> None:
+        assert lifetime_hours({"runtimeStats": {"hr": 0}, "bbrun": {"hr": 40}}) == 40
+
+    @pytest.mark.parametrize(
+        "state",
+        [
+            {},
+            {"bbrun": None, "runtimeStats": None},
+            {"bbrun": {"hr": None}},
+            {"runtimeStats": {"hr": "n/a"}},
+            {"runtimeStats": {"hr": True}},
+            {"bbrun": []},
+        ],
+    )
+    def test_unusable_values_read_as_zero(self, state: dict) -> None:
+        assert lifetime_hours(state) == 0
+
+
+class TestNoHourReadBypassesTheHelper:
+    """The guard. Every one of these sites looked right on its own; the
+    bug was that they disagreed with the sensor."""
+
+    _PATTERN = _re.compile(
+        r"""get\(\s*["']bbrun["'][^)]*\)[^\n]*?\.get\(\s*["']hr["']"""
+        r"""|_bbrun\.get\(\s*["']hr["']"""
+        r"""|bbrun["']\]\s*\[\s*["']hr["']"""
+    )
+
+    def test_only_const_reads_the_raw_hour_keys(self) -> None:
+        offenders = []
+        for path in sorted(_COMPONENT.glob("*.py")):
+            if path.name == "const.py":
+                continue
+            for number, line in enumerate(path.read_text().splitlines(), 1):
+                if line.lstrip().startswith("#"):
+                    continue
+                if self._PATTERN.search(line):
+                    offenders.append(f"{path.name}:{number}: {line.strip()}")
+        assert offenders == []

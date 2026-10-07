@@ -5,6 +5,7 @@ from collections.abc import Mapping
 
 import asyncio
 import logging
+import re
 from typing import Any
 
 # GUARDED, SO A WRONG LIBRARY SAYS SO.
@@ -364,6 +365,12 @@ async def validate_input(
 
 REST980_DOMAIN = "roomba_rest980"
 
+#: The tail of a roomba_rest980 room or zone select's unique id:
+#: `{entry}_p_{region id}_{r|z}_{pmap id}` (select.py, `CleanRoomPasses`,
+#: unchanged up to v1.20.0-beta4). The region id is digits, so the
+#: match cannot slide into a map id that itself contains `_`.
+_REST980_UID_RE = re.compile(r".*_p_(?P<rid>\d+)_(?P<kind>[rz])_(?P<pmap>.+)$")
+
 
 def _resolve_current_pmap_id(state: dict[str, Any]) -> str:
     """Best-effort current pmap_id from live local MQTT state.
@@ -386,10 +393,13 @@ def _resolve_current_pmap_id(state: dict[str, Any]) -> str:
     return ""
 
 
-def _discover_rest980_rooms(hass: HomeAssistant) -> dict[str, str]:
+def _discover_rest980_rooms(
+    hass: HomeAssistant, pmap_id: str | None = None
+) -> dict[str, str]:
     """Read room names from an existing roomba_rest980 installation.
 
-    Returns {region_id: name}. roomba_rest980's CleanRoomPasses select
+    Returns {region_id: name} for its ROOMS -- not its clean zones -- and,
+    given `pmap_id`, only for that map's rooms. roomba_rest980's CleanRoomPasses select
     entities expose a `room_data` attribute containing the raw cloud
     region/zone dict — {"id": region_id, "name": ..., "region_type"/"zone_type": ...}.
     pmap_id is NOT exposed there (it's a private attribute on the rest980
@@ -447,11 +457,44 @@ def _discover_rest980_rooms(hass: HomeAssistant) -> dict[str, str]:
             room_data = state.attributes.get("room_data")
             if not isinstance(room_data, dict):
                 continue
+            uid = getattr(entity, "unique_id", None)
+            match = _REST980_UID_RE.match(uid) if isinstance(uid, str) else None
+            # ROOMS ONLY. roomba_rest980 makes one of these selects for
+            # every room AND every clean zone, and the two are numbered
+            # separately: room 0 and zone 0 can sit on one map. Imported
+            # by bare id, a zone overwrote the room with the same id and
+            # went into the ROOM names -- the same collision @FJSoninC
+            # found in `clean_room`. Zones need no import: Roomba+ reads
+            # them from the account, typed.
+            if _rest980_is_zone(match, state.attributes, room_data):
+                continue
+            # AND ONLY THIS MAP'S. Room ids repeat across maps, and the
+            # import files every room under one map; a second floor's
+            # room 3 would otherwise overwrite this floor's.
+            if pmap_id and match is not None and match["pmap"] != pmap_id:
+                continue
             rid = room_data.get("id")
             name = room_data.get("name")
             if rid and name:
                 rooms[str(rid)] = str(name)
     return rooms
+
+
+def _rest980_is_zone(
+    match: re.Match[str] | None, attributes: Any, room_data: dict[str, Any]
+) -> bool:
+    """Whether a roomba_rest980 select is a clean zone rather than a room.
+
+    Its unique id says so (`_z_`); failing that, the command it would send
+    (`room_json.type`), and failing that, the cloud data it carries: a zone
+    has `zone_type`, a room `region_type`.
+    """
+    if match is not None:
+        return match["kind"] == "z"
+    room_json = attributes.get("room_json") if hasattr(attributes, "get") else None
+    if isinstance(room_json, dict) and room_json.get("type") in ("rid", "zid"):
+        return bool(room_json["type"] == "zid")
+    return "zone_type" in room_data and "region_type" not in room_data
 
 
 # ── Config Flow ───────────────────────────────────────────────────────────────
@@ -1598,7 +1641,16 @@ class RoombaPlusOptionsFlow(OptionsFlow):
         entries that are still missing. Never overwrites a name the user has
         already assigned through our own naming flow.
         """
-        discovered = _discover_rest980_rooms(self.hass)
+        # THE ROBOT'S MAP FIRST: the import files every room under it, so
+        # it may only take that map's rooms.
+        try:
+            state = roomba_reported_state(self.config_entry.runtime_data.roomba)
+        except Exception:  # noqa: BLE001 - no state yet: import unfiltered
+            state = {}
+        current_pmap_id = (
+            _resolve_current_pmap_id(state) if isinstance(state, dict) else ""
+        )
+        discovered = _discover_rest980_rooms(self.hass, current_pmap_id or None)
         existing_labels: dict[str, Any] = self.config_entry.options.get(
             "smart_zone_labels", {}
         )
@@ -1609,9 +1661,6 @@ class RoombaPlusOptionsFlow(OptionsFlow):
         if user_input is not None:
             if not user_input.get("confirm_import", False) or not new_rooms:
                 return self.async_create_entry(title="", data=self.config_entry.options)
-
-            state = roomba_reported_state(self.config_entry.runtime_data.roomba)
-            current_pmap_id = _resolve_current_pmap_id(state)
 
             new_labels = dict(existing_labels)
             new_zone_data: dict[str, Any] = dict(

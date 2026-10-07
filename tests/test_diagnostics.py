@@ -2459,3 +2459,49 @@ class TestPrimeRecordsWithRoomData:
 
         assert summary["mission_store"]["records_with_room_data"] == 2
         assert summary["mission_store"]["records_without_room_data"] == 1
+
+
+class TestCleanZoneIdsInDiagnostics:
+    """@Hardy-196: `clean_zone: Esstisch` went out as zone 0 while the
+    robot's own zone numbers were 16 and 21, and nothing in the download
+    showed which id field of the account's zone said what."""
+
+    @staticmethod
+    def _cc(zones, active="P1"):
+        return SimpleNamespace(
+            active_pmap_id=active,
+            data={"pmaps": [
+                {"active_pmapv_details": {
+                    "active_pmapv": {"pmap_id": active},
+                    "zones": zones,
+                }},
+                {"active_pmapv_details": {
+                    "active_pmapv": {"pmap_id": "OTHER"},
+                    "zones": [{"id": "9", "name": "Elsewhere"}],
+                }},
+            ]},
+        )
+
+    def test_every_id_field_is_shown_as_it_is(self):
+        from custom_components.roomba_plus.diagnostics import _clean_zone_ids
+
+        out = _clean_zone_ids(self._cc([
+            {"id": "21", "zone_id": "0", "name": "Esstisch", "zone_type": "default",
+             "geometry": {"type": "Polygon", "coordinates": [[[1, 2]]]}},
+            {"id": "16", "name": "Couch"},
+        ]))
+
+        assert out == [
+            {"name": "Esstisch", "zone_type": "default", "id": "21", "zone_id": "0"},
+            {"name": "Couch", "zone_type": None, "id": "16"},
+        ]
+
+    def test_no_geometry_and_only_the_active_map(self):
+        from custom_components.roomba_plus.diagnostics import _clean_zone_ids
+
+        out = _clean_zone_ids(self._cc([
+            {"id": "21", "name": "Esstisch", "geometry": {"coordinates": [[1, 2]]}},
+        ]))
+
+        assert "geometry" not in repr(out)
+        assert "Elsewhere" not in repr(out)

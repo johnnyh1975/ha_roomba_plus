@@ -56,6 +56,38 @@ def _room_command_versions(data: Any, state: dict[str, Any]) -> dict[str, Any]:
     return {pid: resolve_user_pmapv_id(state, cloud_data, pid) for pid in map_ids}
 
 
+#: The keys a clean zone of the account's map data has been seen to
+#: carry its number under. Read and reported as they are.
+_ZONE_ID_KEYS = ("id", "zone_id", "region_id")
+
+
+def _clean_zone_ids(cc: Any) -> list[dict[str, Any]]:
+    """Each clean zone of the active map: its name and every id it carries.
+
+    WHICH NUMBER IS THE ROBOT'S. A zone in the account's map data can
+    carry more than one id field, and Roomba+ picks one to send. On
+    @Hardy-196's i7+ `clean_zone: Esstisch` went out as zone 0 and the
+    robot cleaned near the couch, while the zone numbers the robot had
+    reported itself were 16 and 21. Nothing in this download showed
+    which field said what. Names and numbers only; no geometry.
+    """
+    active = getattr(cc, "active_pmap_id", None)
+    out: list[dict[str, Any]] = []
+    for pmap in (cc.data or {}).get("pmaps", []) or []:
+        details = pmap.get("active_pmapv_details") or {}
+        if (details.get("active_pmapv") or {}).get("pmap_id") != active:
+            continue
+        for zone in details.get("zones") or []:
+            if not isinstance(zone, dict):
+                continue
+            out.append({
+                "name": zone.get("name"),
+                "zone_type": zone.get("zone_type"),
+                **{key: zone[key] for key in _ZONE_ID_KEYS if key in zone},
+            })
+    return out
+
+
 def _umf_zone_shapes(cc: Any) -> dict[str, Any]:
     """How many obstacle and keep-out zones the map holds, and their shape.
 
@@ -117,6 +149,7 @@ def _cloud_diag(data: Any) -> dict[str, Any]:
         result["region_count_active"] = len(cc.regions)   # active pmap only (post-filter)
         result["zone_count_active"] = len(cc.zones)       # active pmap only (post-filter)
         result["umf_zone_shapes"] = _umf_zone_shapes(cc)
+        result["clean_zone_ids"] = _clean_zone_ids(cc)
 
         # WHO OWNS EACH MAP. A cloud pmap entry carries `robot_ids` and
         # `shared`, and this download dropped both -- so when a

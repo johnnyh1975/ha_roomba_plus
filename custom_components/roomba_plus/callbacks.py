@@ -26,6 +26,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 
 from .const import (
+    lifetime_hours,
     ROOM_EVENT_CLOSED_AT_END_STATUSES,
     ROOM_EVENT_DONE_STATUSES,
     ROOM_EVENT_PASS_DONE_STATUSES,
@@ -999,9 +1000,10 @@ def _seed_maintenance_baselines(
     if store is None:
         return
 
-    _bbrun = _merged_top_level(entry, reported, "bbrun")
-    _runtime = _merged_top_level(entry, reported, "runtimeStats")
-    current_hr = int(_bbrun.get("hr") or _runtime.get("hr") or 0)
+    current_hr = lifetime_hours({
+        "bbrun": _merged_top_level(entry, reported, "bbrun"),
+        "runtimeStats": _merged_top_level(entry, reported, "runtimeStats"),
+    })
     if current_hr <= 0:
         return
 

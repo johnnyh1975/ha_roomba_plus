@@ -33,3 +33,23 @@ class TestCommandRecord:
 
         entry = SimpleNamespace(runtime_data=SimpleNamespace(sent_commands=_Broken()))
         record_command(entry, "start", {"command": "start"})   # must not raise
+
+
+class TestEachRegionSaysWhatItWasSentAs:
+    """A room and a zone can share a number; `["0"]` alone could not say
+    which one went out (@Hardy-196)."""
+
+    def test_types_are_kept_beside_the_ids(self):
+        from custom_components.roomba_plus.command_record import _summarise
+
+        out = _summarise({"regions": [
+            {"region_id": "0", "type": "zid", "params": {"twoPass": False}},
+            {"region_id": "3", "type": "rid"},
+        ]})
+        assert out["regions"] == ["0", "3"]
+        assert out["region_types"] == ["zid", "rid"]
+
+    def test_bare_ids_add_no_types(self):
+        from custom_components.roomba_plus.command_record import _summarise
+
+        assert "region_types" not in _summarise({"region_ids": ["1", "2"]})

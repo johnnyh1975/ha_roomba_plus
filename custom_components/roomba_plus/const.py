@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any, Final
 
 from homeassistant.components.vacuum import VacuumActivity
@@ -2559,12 +2559,19 @@ def reports_local_pose(state: dict[str, Any]) -> bool:
     AND IT IS NOT THE WHOLE PICTURE. Newer Classic generations do not
     carry position in the shadow at all: they answer when asked (rrtp,
     topic `req`, reply on `data`, metres and radians from the dock).
-    An earlier probe on an i3 (daredevil, @AlakazipLabs) met silence on
-    six topic names, `req` among them; roombapy 2.0 later got positions
-    from daredevil and lewis (an i3, an i7+, two S9+), and a Braava jet
-    m6 (sanmarino) answered without one. Why the first
-    probe stayed silent was never established. `live_position.py` uses
-    the request for the live map.
+    lewis answers (an i7+, two S9+), and a Braava jet m6 (sanmarino)
+    answers without a fix. daredevil does NOT, as far as anything on
+    record shows: an i3 on 2.6.0 (@AlakazipLabs) met silence on six topic
+    names, `req` among them, and later on `req` alone at 1 Hz through a
+    51-minute driving spell -- 2,875 requests, no reply, link held.
+
+    CORRECTED. This said roombapy 2.0 "later got positions from
+    daredevil". That traced to roombapy's rrtp module docstring, which
+    lists daredevil (i3) among the confirmed families -- with no capture,
+    fixture or tester behind it, and a robot count ("four") that only
+    adds up without it. `live_position.py` uses the request for the live
+    map and gives up after three unanswered requests per mission, which
+    is what it will do on this i3.
 
     So a robot returning False here is behaving correctly and may still
     have a position available on request. This function answers "is there
@@ -2573,6 +2580,40 @@ def reports_local_pose(state: dict[str, Any]) -> bool:
     it is".
     """
     return state.get("pose") is not None
+
+
+def lifetime_hours(state: Mapping[str, Any]) -> int:
+    """The robot's lifetime runtime hours, from whichever key carries them.
+
+    A 900-series reports them in `bbrun.hr`; an i/s/j-series in
+    `runtimeStats.hr`. `IRobotEntity.run_stats` merges the two with
+    `runtimeStats` winning, and the maintenance sensors compute with that.
+    Every reset, seed and due check must read the SAME number, or the
+    baseline and the reading are on different meters.
+
+    THEY WERE NOT. The reset buttons, the to-do list, the due check and
+    the cloud hydration read `bbrun.hr` alone. On a j7+ and a j9+
+    (@msva17) that is 0, so a filter reset recorded a baseline of 0 hours
+    and the sensor, reading the real lifetime, dropped from 46 to 0 the
+    moment the button was pressed -- and the due check, on its meter of
+    0, never found anything due at all.
+
+    Null-safe: `dict.get(key, default)` does not cover an explicit null.
+    """
+    for key in ("runtimeStats", "bbrun"):
+        block = state.get(key)
+        if not isinstance(block, Mapping):
+            continue
+        value = block.get("hr")
+        if value is None or isinstance(value, bool):
+            continue
+        try:
+            hours = int(value)
+        except (TypeError, ValueError):
+            continue
+        if hours > 0:
+            return hours
+    return 0
 
 
 def has_smart_map(state: dict[str, Any]) -> bool:

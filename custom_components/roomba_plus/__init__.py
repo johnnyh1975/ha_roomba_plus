@@ -62,6 +62,7 @@ from .room_cleaning import region_names_across_maps
 from .prime_room_map import async_restore_prime_room_names
 from .room_times import learn_via, robot_default_mode
 from .const import (
+    lifetime_hours,
     ISSUE_TRACKER_URL,
     CONF_BLID,
     CONF_BLOCKING_SENSORS,
@@ -585,9 +586,7 @@ async def _phase_data(ctx: _SetupContext) -> None:
 
     # F4d — detect bbrun.hr firmware reset
     _state_for_bbrun = roomba_reported_state(ctx.roomba)
-    _bbrun = _state_for_bbrun.get("bbrun", {})
-    _runtime = _state_for_bbrun.get("runtimeStats", {})
-    _current_hr = _bbrun.get("hr") or _runtime.get("hr") or 0
+    _current_hr = lifetime_hours(_state_for_bbrun)
 
     # v3.4.1 MAINTENANCE-COLD-START: field-confirmed (mdarocha, i3+, 412
     # missions / 294h prior runtime, no reset ever recorded in this
@@ -836,7 +835,7 @@ async def _phase_cloud(ctx: _SetupContext) -> None:
             # drifting for a full replacement cycle.
             if ctx.maintenance_store is not None:
                 _parts = cloud_coordinator.parts
-                _hr = int((ctx.state.get("bbrun") or {}).get("hr", 0) or 0)
+                _hr = lifetime_hours(ctx.state)
                 if _parts and ctx.maintenance_store.hydrate_from_cloud_parts(
                     _parts, _hr
                 ):

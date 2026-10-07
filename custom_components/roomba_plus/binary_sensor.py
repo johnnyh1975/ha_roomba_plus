@@ -31,6 +31,7 @@ from homeassistant.util import dt as dt_util
 from . import roomba_reported_state
 from .geometry_utils import pose_point_to_map_mm
 from .const import (
+    lifetime_hours,
     POSE_POINT_CM_TO_MM,
     CONSUMABLE_ROLES,
     CONF_BLOCKING_SENSORS,
@@ -606,7 +607,7 @@ class RoombaMaintenanceDue(IRobotEntity, BinarySensorEntity):
         overdue: dict[str, int] = {}
         store = self._entry.runtime_data.maintenance_store
         if store and due:
-            current_hr = (self.vacuum_state.get("bbrun") or {}).get("hr", 0)
+            current_hr = lifetime_hours(self.vacuum_state)
             is_mop_device = is_mop(self.vacuum_state)
             for role, spec in CONSUMABLE_ROLES.items():
                 part = (

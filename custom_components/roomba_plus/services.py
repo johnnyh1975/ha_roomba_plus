@@ -36,6 +36,7 @@ from homeassistant.helpers.storage import Store
 from .command_record import record_command
 from .service_guard import register as register_guarded
 from .const import (
+    lifetime_hours,
     CONF_SMART_ZONE_ALIASES,
     maintenance_changed_signal,
     PRIME_ERROR_SEVERITY,
@@ -1389,10 +1390,7 @@ async def _handle_reset_service(
             runtime = (shadow or {}).get("runtimeStats") or {}
             current_hr = int(runtime.get("hours") or 0)
         else:
-            state = data.roomba_reported_state()
-            _bbrun   = state.get("bbrun", {})
-            _runtime = state.get("runtimeStats", {})
-            current_hr = int(_bbrun.get("hr") or _runtime.get("hr") or 0)
+            current_hr = lifetime_hours(data.roomba_reported_state())
         getattr(data.maintenance_store, f"reset_{part}")(current_hr)
         await data.maintenance_store.async_save(hass, config_entry.entry_id)
         _fire_maintenance_reset_event(hass, config_entry, part, current_hr)
