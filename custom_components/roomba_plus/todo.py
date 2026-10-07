@@ -44,7 +44,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
 import datetime as dt_stdlib
 
-from .const import is_mop
+from .const import is_mop, lifetime_hours
 
 from .entity import IRobotEntity
 from .models import ConnectionType, RoombaConfigEntry
@@ -75,7 +75,7 @@ class RoombaMaintenanceTodo(IRobotEntity, TodoListEntity):
     # ── Shared helpers (same pattern as button.py's reset buttons) ──────────
 
     def _current_hr(self) -> int:
-        return int((self.vacuum_state.get("bbrun") or {}).get("hr", 0))
+        return lifetime_hours(self.vacuum_state)
 
     def _maintenance_store(self) -> Any:
         return self._config_entry.runtime_data.maintenance_store

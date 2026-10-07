@@ -46,10 +46,12 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
+from roombapy_prime import RestClientError
+
 from .const import ROOM_EVENT_DONE_STATUSES, fin_events_in_order
 
 if TYPE_CHECKING:
-    from .cloud_api import IrobotCloudApi
+    from roombapy_prime import ClassicRestClient
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -58,6 +60,12 @@ STORAGE_KEY_PREFIX = "roomba_plus_mission_archive"
 MAX_RECORDS = 800          # FIFO cap — about 2 years at 1 mission/day
 _INITIAL_LOAD_BATCH = 100  # records per /missionhistory page
 _RATE_LIMIT_SLEEP = 2.0    # seconds between pagination requests
+#: The only page size measured with the paging parameters (980, i7).
+_MEASURED_PAGE_SIZE = 10
+#: Upper bound on pages per paging-back run. Every page that does not end
+#: the run stores at least one mission, so MAX_RECORDS at the measured
+#: page size bounds it already; this is the belt to that.
+_MAX_PAGE_BACK_PAGES = 100
 
 
 # ── Helpers (pure functions, no HA imports needed) ─────────────────────────
@@ -232,6 +240,10 @@ class MissionArchive:
         self._last_nMssn_start_ts: int = 0
         # Set to True once the initial load completes
         self._initial_load_done: bool = False
+        # 4.3.0b4 — set once paging back behind the first page has finished
+        # (see _async_page_back). Absent from archives written before, so
+        # those page back once.
+        self._paged_back_done: bool = False
         # v2.10.2 — DEDUP-V1. Set to True once the one-time cleanup of
         # pre-existing duplicate nMssn entries (residual corruption from
         # the discontinuity-guard bug fixed in v2.8.6 Round 1/2 — see the
@@ -296,6 +308,7 @@ class MissionArchive:
             self._last_nMssn = int(data.get("last_nMssn", 0))
             self._last_nMssn_start_ts = int(data.get("last_nMssn_start_ts", 0))
             self._initial_load_done = bool(data.get("initial_load_done", False))
+            self._paged_back_done = bool(data.get("paged_back_done", False))
             # Rebuild set from derived list (not persisted to save space)
             self._archived_nmssns = {
                 _safe_int(r.get("nMssn"))
@@ -378,6 +391,7 @@ class MissionArchive:
             "last_nMssn": self._last_nMssn,
             "last_nMssn_start_ts": self._last_nMssn_start_ts,
             "initial_load_done": self._initial_load_done,
+            "paged_back_done": self._paged_back_done,
             "dedup_v1_done": self._dedup_v1_done,
             "derived": self._derived,
             "timeline": self._timeline,
@@ -390,91 +404,211 @@ class MissionArchive:
 
     async def async_initial_load(
         self,
-        cloud_api: "IrobotCloudApi",
+        cloud_api: "ClassicRestClient",
         blid: str,
         hass: HomeAssistant,
         entry_id: str,
     ) -> None:
-        """One-time paginated back-fill of full cloud mission history.
+        """One-time back-fill of the cloud mission history, in two parts.
 
-        Fetches /missionhistory in batches of 100, oldest-to-newest after
-        reversal.  Respects a 2-second rate-limit sleep between pages.
-        Saves to storage after completion.
+        1. THE FIRST PAGE -- the Classic request the regular refresh makes
+           (get_mission_history()): the cloud's recent window, stored
+           newest-first. Marks the initial load done.
+        2. PAGING BACK from the oldest stored mission
+           (_async_page_back()), which appends older missions behind it.
+           Marks `paged_back_done`.
 
-        This runs as a background task — it must not block the HA event loop
-        and must handle failures gracefully (coordinator may not be available).
+        WHY TWO PARTS (4.3.0b4). Up to 4.3.0b3 the whole load paged with the
+        Classic `count`/`before` parameters. A 980 and an i7 both ignore
+        them and answer every page with the same recent window -- the
+        load only ever stored that window (the "page with nothing new"
+        rule below kept it to two requests). `maxReports` and
+        `exclusiveStartTimestamp` do page on both robots, so step 2 uses
+        those. Step 2 also runs,
+        once, for an archive whose first load finished under an older
+        version: it lacks `paged_back_done`.
+
+        Runs as a background task; handles failures itself.
         """
-        if self._initial_load_done and self._derived:
-            _LOGGER.debug(
-                "MissionArchive: initial load already done for %s (%d records)",
-                entry_id, len(self._derived),
-            )
-            return
+        if not (self._initial_load_done and self._derived):
+            await self._async_first_page(cloud_api, blid, hass, entry_id)
+        if self._initial_load_done and not self._paged_back_done:
+            await self._async_page_back(cloud_api, blid, hass, entry_id)
 
-        _LOGGER.info(
-            "MissionArchive: starting initial load for %s", entry_id
+    async def _async_first_page(
+        self,
+        cloud_api: "ClassicRestClient",
+        blid: str,
+        hass: HomeAssistant,
+        entry_id: str,
+    ) -> None:
+        """The cloud's recent window, stored newest-first."""
+        _LOGGER.info("MissionArchive: starting initial load for %s", entry_id)
+        try:
+            batch = await cloud_api.get_mission_history(blid, count=_INITIAL_LOAD_BATCH)
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.warning(
+                "MissionArchive: initial load failed for %s — %s", entry_id, exc
+            )
+            batch = []
+
+        mission_records = (
+            [r for r in batch if isinstance(r, dict)] if isinstance(batch, list) else []
         )
-        all_raw: list[dict[str, Any]] = []
-        before_ts: int | None = None
-        pages_fetched = 0
-
-        while True:
-            try:
-                batch = await cloud_api.get_mission_history(
-                    blid, count=_INITIAL_LOAD_BATCH, before_ts=before_ts
-                )
-            except Exception as exc:  # noqa: BLE001
-                _LOGGER.warning(
-                    "MissionArchive: initial load page %d failed for %s — %s; "
-                    "stopping with %d records so far",
-                    pages_fetched + 1, entry_id, exc, len(all_raw),
-                )
-                break
-
-            if not isinstance(batch, list) or not batch:
-                break
-
-            mission_records = [r for r in batch if isinstance(r, dict)]
-            if not mission_records:
-                break
-
-            all_raw.extend(mission_records)
-            pages_fetched += 1
-            before_ts = int(mission_records[-1].get("startTime", 0) or 0)
-            if not before_ts:
-                break
-
-            _LOGGER.debug(
-                "MissionArchive: fetched page %d (%d records, total=%d) for %s",
-                pages_fetched, len(mission_records), len(all_raw), entry_id,
-            )
-
-            # Stop if we've reached our storage cap
-            if len(all_raw) >= MAX_RECORDS:
-                _LOGGER.debug(
-                    "MissionArchive: reached MAX_RECORDS=%d for %s", MAX_RECORDS, entry_id
-                )
-                break
-
-            await asyncio.sleep(_RATE_LIMIT_SLEEP)
-
-        # Process all fetched records (oldest first → newest appended last)
-        # Skip any nMssn already in the archive (may have arrived via delta update)
-        all_raw.reverse()
+        # Oldest first, so each _append() (which prepends) leaves the
+        # archive newest-first. By start time, not by the cloud's order:
+        # the i3+ capture is newest-first, and nothing promises that.
+        mission_records.sort(key=lambda r: _safe_int(r.get("startTime")))
         skipped = 0
-        for raw in all_raw:
-            n = int(raw.get("nMssn", 0) or 0)
-            if n and n in self._archived_nmssns:
+        seen: set[tuple[Any, Any]] = set()
+        for raw in mission_records:
+            key = (raw.get("nMssn"), raw.get("startTime"))
+            n = _safe_int(raw.get("nMssn"))
+            if key in seen or (n and n in self._archived_nmssns):
                 skipped += 1
                 continue
+            seen.add(key)
             self._append(raw)
 
         self._initial_load_done = True
         await self.async_save(hass, entry_id)
         _LOGGER.info(
             "MissionArchive: initial load complete for %s — %d records stored "
-            "(%d skipped, last_nMssn=%d, pages=%d)",
-            entry_id, len(self._derived), skipped, self._last_nMssn, pages_fetched,
+            "(%d skipped, last_nMssn=%d)",
+            entry_id, len(self._derived), skipped, self._last_nMssn,
+        )
+
+    def _oldest_start(self) -> int | None:
+        """The start time (Unix seconds) of the oldest stored mission."""
+        starts = []
+        for rec in self._derived:
+            parsed = dt_util.parse_datetime(str(rec.get("start_ts") or ""))
+            if parsed is not None:
+                starts.append(int(parsed.timestamp()))
+        return min(starts) if starts else None
+
+    async def _async_page_back(
+        self,
+        cloud_api: "ClassicRestClient",
+        blid: str,
+        hass: HomeAssistant,
+        entry_id: str,
+    ) -> None:
+        """Appends the missions older than the oldest stored one, page by
+        page, with get_mission_history_page() -- `maxReports` and
+        `exclusiveStartTimestamp`, measured to page on a 980 and an i7.
+
+        DONE, and never asked again, when the cloud has nothing older (an
+        empty page, or no page that reaches further back), when the
+        archive is full, when the mission counter shows a reset (below),
+        or when the cloud refuses the request itself (a 4xx other than
+        403: asking again will not change the answer). ANY OTHER FAILURE
+        keeps what was fetched and leaves it pending: the next start
+        continues from the new oldest mission.
+
+        PAGE SIZE. Only 10 is measured. A refusal at the default of 100 is
+        tried once more at 10 before paging counts as refused.
+
+        A COUNTER RESET ENDS IT. Going back in time, mission numbers must
+        fall. An older mission with a number at or above the lowest one
+        stored comes from before a reset (a factory reset, a replacement
+        unit, a robot with a previous owner). Storing it would put two
+        missions under one number -- skipped as a duplicate, or taken for
+        a new reset by async_delta_update(), which then stores the recent
+        window twice. Paging stops there instead; the history before a
+        reset is another robot's, as far as the archive is concerned.
+
+        Never evicts: an older mission goes BEHIND the ones stored, so
+        _append()'s FIFO trim (which drops the oldest) would drop exactly
+        what was just fetched. Paging stops at MAX_RECORDS instead.
+        """
+        cursor = self._oldest_start()
+        if cursor is None:
+            return  # nothing stored to page back from; the next start tries again
+
+        stored_numbers = [n for n in self._archived_nmssns if n > 0]
+        lowest_number = min(stored_numbers) if stored_numbers else None
+        page_size = _INITIAL_LOAD_BATCH
+        added = pages = 0
+        finished = False
+        while pages < _MAX_PAGE_BACK_PAGES:
+            if len(self._derived) >= MAX_RECORDS:
+                finished = True
+                break
+            try:
+                batch = await cloud_api.get_mission_history_page(
+                    blid, before=cursor, page_size=page_size
+                )
+            except RestClientError as exc:
+                if exc.status == 403:
+                    # Left after the client's own relogin: an account or
+                    # cloud problem of the moment, not this request.
+                    _LOGGER.info(
+                        "MissionArchive: paging back not allowed for %s right now — %s; "
+                        "continuing on the next start",
+                        entry_id, exc,
+                    )
+                    break
+                if page_size > _MEASURED_PAGE_SIZE:
+                    page_size = _MEASURED_PAGE_SIZE
+                    continue
+                _LOGGER.info(
+                    "MissionArchive: the cloud refused paging back for %s — %s; "
+                    "keeping the %d mission(s) it has",
+                    entry_id, exc, len(self._derived),
+                )
+                finished = True
+                break
+            except Exception as exc:  # noqa: BLE001
+                _LOGGER.info(
+                    "MissionArchive: paging back failed for %s — %s; "
+                    "continuing on the next start",
+                    entry_id, exc,
+                )
+                break
+            pages += 1
+
+            older = [
+                r for r in (batch if isinstance(batch, list) else [])
+                if isinstance(r, dict) and 0 < _safe_int(r.get("startTime")) < cursor
+            ]
+            if not older:
+                finished = True
+                break
+            # Newest of the older ones first, so the archive stays
+            # newest-first as each one goes to the back.
+            older.sort(key=lambda r: _safe_int(r.get("startTime")), reverse=True)
+            for raw in older:
+                if len(self._derived) >= MAX_RECORDS:
+                    break
+                n = _safe_int(raw.get("nMssn"))
+                if n > 0 and lowest_number is not None and n >= lowest_number:
+                    _LOGGER.info(
+                        "MissionArchive: mission %d from before a counter reset "
+                        "for %s — paging back stops at mission %d",
+                        n, entry_id, lowest_number,
+                    )
+                    finished = True
+                    break
+                self._append(raw, older=True)
+                added += 1
+                if n > 0:
+                    lowest_number = n
+            if finished:
+                break
+            cursor = _safe_int(older[-1].get("startTime"))
+            await asyncio.sleep(_RATE_LIMIT_SLEEP)
+        else:
+            finished = True  # page limit: stop for good rather than grow forever
+
+        self._paged_back_done = finished
+        if added or finished:
+            await self.async_save(hass, entry_id)
+        _LOGGER.info(
+            "MissionArchive: paged back for %s — %d older mission(s) in %d page(s), "
+            "%d stored%s",
+            entry_id, added, pages, len(self._derived),
+            "" if finished else "; continuing on the next start",
         )
 
     # ── Delta update (called after each mission completion) ────────────────
@@ -577,11 +711,15 @@ class MissionArchive:
 
     # ── Internal append ───────────────────────────────────────────────────
 
-    def _append(self, raw: dict[str, Any]) -> None:
+    def _append(self, raw: dict[str, Any], *, older: bool = False) -> None:
         """Parse and prepend a raw record to all three layers.
 
         New records are prepended (index 0) so the archive stays newest-first.
         Trims to MAX_RECORDS when the cap is exceeded.
+
+        `older=True` (4.3.0b4, paging back): the record is older than every
+        stored one and goes to the END instead. No trim: the caller stops
+        at MAX_RECORDS, since trimming would drop the record just added.
         """
         derived = self._parse_derived(raw)
         timeline = self._parse_timeline(raw)
@@ -593,9 +731,14 @@ class MissionArchive:
         if _sqft:
             self._cumulative_sqft += _sqft
 
-        # Prepend to Layers 1 and 2 (newest first)
-        self._derived.insert(0, derived)
-        self._timeline.insert(0, timeline)
+        # Prepend to Layers 1 and 2 (newest first) -- or, for an older
+        # mission from paging back, append behind the oldest.
+        if older:
+            self._derived.append(derived)
+            self._timeline.append(timeline)
+        else:
+            self._derived.insert(0, derived)
+            self._timeline.insert(0, timeline)
 
         # Track archived nMssn for O(1) dedup
         if n_mssn:
@@ -609,13 +752,14 @@ class MissionArchive:
 
         # Update last-seen nMssn (and the start_ts that goes with it — see
         # async_delta_update's discontinuity guard for why these two must
-        # always move together).
-        if n_mssn and int(n_mssn) > self._last_nMssn:
+        # always move together). Never from an older mission: the high-water
+        # mark belongs to the newest one.
+        if not older and n_mssn and int(n_mssn) > self._last_nMssn:
             self._last_nMssn = int(n_mssn)
             self._last_nMssn_start_ts = _safe_int(raw.get("startTime"))
 
         # FIFO trim
-        if len(self._derived) > MAX_RECORDS:
+        if not older and len(self._derived) > MAX_RECORDS:
             removed = self._derived.pop()
             self._timeline.pop()
             old_n = removed.get("nMssn")
@@ -881,8 +1025,14 @@ class MissionArchive:
 
     @property
     def initial_load_done(self) -> bool:
-        """True once the one-time paginated back-fill has completed."""
+        """True once the first page of the back-fill is stored."""
         return self._initial_load_done
+
+    @property
+    def needs_cloud_load(self) -> bool:
+        """True while async_initial_load() still has work: the first page,
+        or paging back behind it (4.3.0b4)."""
+        return not self._initial_load_done or not self._paged_back_done
 
     def latest_derived(self, n: int = 1) -> list[dict[str, Any]]:
         """Return the n most recent derived records (newest first)."""

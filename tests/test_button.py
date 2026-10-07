@@ -645,6 +645,32 @@ class TestCloudPartReset:
         b._save.assert_not_awaited()
 
 
+class TestCloudPartResetSaysWhy:
+
+    @pytest.mark.asyncio
+    async def test_the_message_carries_the_reason_as_a_sentence(self, monkeypatch):
+        """Until 4.3 the placeholder held the exception's class name --
+        "RestServerError" in a German sentence."""
+        from roombapy_prime import RestServerError
+
+        from custom_components.roomba_plus import cloud_errors
+
+        b, _store, _cc, _slot = TestCloudPartReset()._b(
+            record={"part_id": "p7"}, error=RestServerError("x", 503)
+        )
+        seen = []
+
+        async def reason_text(hass, exc):
+            seen.append(exc)
+            return "SENTENCE."
+
+        monkeypatch.setattr(cloud_errors, "async_reason_text", reason_text)
+        with pytest.raises(HomeAssistantError) as exc_info:
+            await b.async_press()
+        assert exc_info.value.translation_placeholders == {"reason": "SENTENCE."}
+        assert isinstance(seen[0], RestServerError)
+
+
 class TestRepeatLastMission:
 
     def _b(self, state, monkeypatch, fresh="v9"):
@@ -1106,3 +1132,85 @@ class TestTheZoneButtonSendsAZoneAsAZone:
         b = _zone_button(monkeypatch, pickers=[_picker("3", "p1")])
         await b.async_press()
         assert _sent(b)["regions"][0]["type"] == "rid"
+
+
+class TestTheZoneButtonGoesOnTheRecord:
+    """@Hardy-196's diagnostics showed the service's region commands and
+    not the button's, so his button test could not be told apart."""
+
+    @pytest.mark.asyncio
+    async def test_the_press_is_recorded_with_its_type(self, monkeypatch):
+        picker = SimpleNamespace(
+            unique_id="roomba_B_cloud_zone_p1", selected_region_id="21",
+            selected_region_type="zid", selected_pmap_info={"pmap_id": "p1"},
+        )
+        b = _zone_button(monkeypatch, pickers=[picker])
+        b._config_entry.runtime_data.sent_commands = []
+        await b.async_press()
+        (entry,) = b._config_entry.runtime_data.sent_commands
+        assert entry["verb"] == "start (zone button)"
+        assert entry["payload"]["regions"] == ["21"]
+        assert entry["payload"]["region_types"] == ["zid"]
+
+
+# ── Reset buttons on a j-series: the hours the sensors read ──────────────
+#
+# @msva17, j9+/j7+: the reset buttons read `bbrun.hr`, which these robots
+# do not carry, so every reset recorded 0 hours. See lifetime_hours() and
+# its tests in tests/test_const.py.
+
+_J_SERIES_STATE = {
+    "bbrun": {"nStuck": 12, "nPanics": 3},
+    "runtimeStats": {"hr": 512, "min": 7, "sqft": 1400},
+}
+
+
+def _j_entry(store: MaintenanceStore) -> MagicMock:
+    entry = MagicMock()
+    entry.runtime_data.blid = "BLID1"
+    entry.runtime_data.maintenance_store = store
+    # No cloud part record: the push must skip, as it does for these robots.
+    entry.runtime_data.cloud_coordinator.api.set_robot_part_counter = AsyncMock(
+        return_value={"num_parts": 0}
+    )
+    entry.runtime_data.cloud_coordinator.async_request_refresh = AsyncMock()
+    return entry
+
+
+def _j_button(cls: type, store: MaintenanceStore) -> object:
+    button = cls.__new__(cls)
+    button._config_entry = _j_entry(store)
+    button._blid = "BLID1"
+    button.hass = MagicMock()
+    button.vacuum = MagicMock()
+    button.vacuum_state = dict(_J_SERIES_STATE)
+    button.schedule_update_ha_state = MagicMock()
+    button._maintenance_store = lambda: store
+    return button
+
+
+class TestResetButtonsOnAJSeries:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("cls", "slot", "role", "threshold"),
+        [
+            (btn.FilterResetButton, "filter", "filter", 60),
+            (btn.BrushResetButton, "brush", "main_brush", 200),
+            (btn.SideBrushResetButton, "side_brush", "side_brush", 150),
+            (btn.CleanBaseBagResetButton, "clean_base_bag", "clean_base_bag", 30),
+        ],
+    )
+    async def test_reset_restores_the_full_budget(
+        self, monkeypatch, cls, slot, role, threshold
+    ) -> None:
+        monkeypatch.setattr(btn, "async_dispatcher_send", lambda *a, **k: None)
+        store = MaintenanceStore()
+        store.async_save = AsyncMock()
+        # Seeded long ago: the part reads as used up before the press.
+        setattr(store, f"{slot}_reset_hr", 0)
+        assert store.remaining_hours(role, 512, threshold) == 0
+
+        await _j_button(cls, store).async_press()
+
+        assert getattr(store, f"{slot}_reset_hr") == 512
+        assert store.remaining_hours(role, 512, threshold) == threshold

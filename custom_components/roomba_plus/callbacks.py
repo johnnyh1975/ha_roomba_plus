@@ -26,6 +26,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 
 from .const import (
+    lifetime_hours,
     ROOM_EVENT_CLOSED_AT_END_STATUSES,
     ROOM_EVENT_DONE_STATUSES,
     ROOM_EVENT_PASS_DONE_STATUSES,
@@ -999,9 +1000,10 @@ def _seed_maintenance_baselines(
     if store is None:
         return
 
-    _bbrun = _merged_top_level(entry, reported, "bbrun")
-    _runtime = _merged_top_level(entry, reported, "runtimeStats")
-    current_hr = int(_bbrun.get("hr") or _runtime.get("hr") or 0)
+    current_hr = lifetime_hours({
+        "bbrun": _merged_top_level(entry, reported, "bbrun"),
+        "runtimeStats": _merged_top_level(entry, reported, "runtimeStats"),
+    })
     if current_hr <= 0:
         return
 
@@ -3232,8 +3234,13 @@ async def _async_bootstrap_umf_aligner(
             )
             try:
                 cloud_api = coordinator.api
-                older = await cloud_api.get_mission_history(
-                    blid, count=500, before_ts=oldest_ts
+                # 4.3.0b4: the paging request. The Classic one this used
+                # (count=500, before=...) is ignored by the cloud -- a 980
+                # and an i7 answered it with the same recent window this
+                # record set already came from, so it never found older
+                # traversal missions.
+                older = await cloud_api.get_mission_history_page(
+                    blid, before=oldest_ts, page_size=100
                 )
                 if older:
                     positions = _extract_traversal_umf_positions(older, aligner)

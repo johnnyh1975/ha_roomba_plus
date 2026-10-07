@@ -45,8 +45,11 @@ from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import roomba_reported_state
+from . import cloud_errors
 from .entity_cleanup import async_remove_stale_entities
+from .command_record import record_command
 from .const import (
+    lifetime_hours,
     maintenance_changed_signal,
     DOMAIN,
     has_clean_base,
@@ -472,8 +475,9 @@ class _MaintenanceResetButton(IRobotEntity, ButtonEntity):
         super().__init__(roomba, blid, config_entry)
 
     def _current_hr(self) -> int:
-        """Return current bbrun.hr (lifetime operating hours)."""
-        return int((self.vacuum_state.get("bbrun") or {}).get("hr", 0))
+        """Lifetime runtime hours, on the same meter the sensors read --
+        see `lifetime_hours()`."""
+        return lifetime_hours(self.vacuum_state)
 
     def _maintenance_store(self) -> Any:
         """Return the MaintenanceStore from runtime_data."""
@@ -675,7 +679,9 @@ class _CloudPartResetButton(_MaintenanceResetButton):
             raise HomeAssistantError(
                 translation_domain=DOMAIN,
                 translation_key="cloud_part_reset_failed",
-                translation_placeholders={"error": type(exc).__name__},
+                translation_placeholders={
+                    "reason": await cloud_errors.async_reason_text(self.hass, exc)
+                },
             ) from exc
         if not result.get("num_parts"):
             _LOGGER.warning(
@@ -1119,6 +1125,10 @@ class SmartZoneButton(IRobotEntity, ButtonEntity):
             region_id, pmap_id[:12],
         )
         await self.vacuum.send_command("start", params)
+        # ON THE RECORD LIKE EVERY OTHER REGION COMMAND. This one was
+        # not, so a diagnostics download after a button press showed
+        # the service's commands and not the button's (@Hardy-196).
+        record_command(self._config_entry, "start (zone button)", params)
 
 
 async def async_run_classic_favorite(

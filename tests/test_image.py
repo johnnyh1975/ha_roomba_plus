@@ -4904,3 +4904,204 @@ class TestARobotThatPromisesPoseAndNeverSendsOne:
 
         data.cloud_coordinator.api.get_pmap_umf.assert_not_awaited()
         assert result == b"local-render-bytes"
+
+
+class TestRequestedPositionsOnTheCleaningMap:
+    """4.3: positions requested from a robot that publishes none are drawn
+    on the cleaning map -- and only there."""
+
+    def _pos(self, x: float, y: float, theta: float = 0.0) -> object:
+        from roombapy import RobotPosition
+        return RobotPosition(x=x, y=y, theta=theta, timestamp=1, source="request")
+
+    def _entity(self, *, pose: object = None):
+        entry, scheduled = _entry()
+        renderer = MagicMock()
+        renderer.has_data = True
+        m = _map(MapCapability.SMART, entry, renderer)
+        reported = {"bbmssn": {"nMssn": 7}}
+        if pose is not None:
+            reported["pose"] = pose
+        m.vacuum.master_state = {"state": {"reported": reported}}
+        m.async_write_ha_state = MagicMock()
+        return m, renderer, entry, scheduled
+
+    def test_metres_to_millimetres_in_the_maps_frame(self):
+        """Metres and radians in; the shadow's millimetres and degrees out,
+        with the same axis swap every map applies to a shadow pose."""
+        m, renderer, _e, _s = self._entity()
+        m._handle_live_position(self._pos(1.5, -0.25, math.pi / 2))
+        renderer.add_pose.assert_called_once()
+        x, y, theta = renderer.add_pose.call_args.args
+        assert (x, y) == (-250.0, 1500.0)
+        assert theta == pytest.approx(90.0)
+        assert m._position_source == img.POSITION_SOURCE_REQUEST
+        m.async_write_ha_state.assert_called_once()
+
+    def test_not_fed_to_the_learning_stores(self):
+        """The requested frame is not confirmed against the cloud map; a
+        wrong frame in GridStore would not wash out."""
+        m, _r, _e, _s = self._entity()
+        m._handle_live_position(self._pos(1.0, 1.0))
+        assert m._mission_points == []
+        assert m._mission_thetas == []
+
+    def test_ignored_while_the_shadow_carries_a_pose(self):
+        m, renderer, _e, _s = self._entity(pose={"point": {"x": 1, "y": 2}, "theta": 0})
+        m._handle_live_position(self._pos(1.0, 1.0))
+        renderer.add_pose.assert_not_called()
+
+    def test_a_requested_path_gets_no_calibration(self):
+        m, _r, entry, _s = self._entity()
+        entry.runtime_data.umf_aligner = _make_aligner()
+        m._handle_live_position(self._pos(1.0, 1.0))
+        assert m.extra_state_attributes == {"position_source": "request"}
+
+    def test_a_shadow_path_keeps_its_attributes(self):
+        """The guard is for requested paths only: a 900-series path with an
+        aligner still gets its calibration."""
+        m, renderer, entry, _s = self._entity()
+        aligner = _make_aligner()
+        aligner._regions = [{"id": "r1", "name": "Kitchen"}]
+        aligner._room_polygons = {"r1": [(0.0, 0.0), (1000.0, 0.0), (1000.0, 1000.0)]}
+        entry.runtime_data.umf_aligner = aligner
+        entry.runtime_data.cloud_coordinator.regions = []
+        renderer._mm_to_px_fit.side_effect = lambda x, y: (int(x), int(y))
+        m._handle_pose({"point": {"x": 10, "y": 20}, "theta": 0})
+        attrs = m.extra_state_attributes
+        assert "position_source" not in attrs
+        assert "rooms" in attrs
+
+    def test_the_path_is_saved_at_mission_end(self):
+        """_mission_points stays empty for a requested path, and the save
+        sat behind the early return for an empty one."""
+        m, _r, _e, scheduled = self._entity()
+        m._handle_live_position(self._pos(1.0, 1.0))
+        m._handle_mission_end("charge")
+        assert any("_async_save_map_state" in name for name in scheduled)
+
+    def test_an_empty_shadow_mission_still_saves_nothing(self):
+        m, _r, _e, scheduled = self._entity()
+        m._handle_mission_end("charge")
+        assert not any("_async_save_map_state" in name for name in scheduled)
+
+    def test_mission_start_forgets_the_last_source(self):
+        m, _r, _e, _s = self._entity()
+        m._handle_live_position(self._pos(1.0, 1.0))
+        m.vacuum.master_state = {"state": {"reported": {
+            "cleanMissionStatus": {"phase": "run", "cycle": "clean"}}}}
+        m.on_message({"state": {"reported": {
+            "cleanMissionStatus": {"phase": "run", "cycle": "clean"}}}})
+        assert m._position_source is None
+
+    @pytest.mark.asyncio
+    async def test_the_source_survives_a_restart(self, monkeypatch):
+        saved: dict = {}
+
+        class _Store:
+            def __init__(self, *_a, **_k): pass
+            async def async_save(self, data): saved.update(data)
+            async def async_load(self): return dict(saved)
+
+        monkeypatch.setattr(img, "Store", _Store)
+        m, renderer, entry, _s = self._entity()
+        entry.entry_id = "e"
+        renderer.dump_state.return_value = {"version": 1, "points": []}
+        m._handle_live_position(self._pos(1.0, 1.0))
+        await m._async_save_map_state()
+        assert saved["position_source"] == img.POSITION_SOURCE_REQUEST
+
+        fresh, renderer2, entry2, _s2 = self._entity()
+        entry2.entry_id = "e"
+        renderer2.restore_state.return_value = True
+        await fresh._async_restore_map_state()
+        assert fresh._position_source == img.POSITION_SOURCE_REQUEST
+
+    @pytest.mark.asyncio
+    async def test_no_zone_overlay_or_shared_frame_over_a_requested_path(self):
+        m, renderer, entry, _s = self._entity()
+        renderer.render.return_value = b"path"
+        m.hass.async_add_executor_job = AsyncMock(side_effect=lambda f, *a: f(*a))
+        aligner = MagicMock()
+        aligner.aligned = True
+        aligner.keepout_polygon_umf.return_value = [(0, 0), (1, 0), (1, 1)]
+        aligner.umf_to_pose.side_effect = lambda x, y: (x, y)
+        entry.runtime_data.umf_aligner = aligner
+        entry.runtime_data.cloud_coordinator.keepout_zones = [{"id": "k"}]
+        entry.runtime_data.cloud_coordinator.observed_zone_centroids = []
+        renderer._mm_to_px_fit.side_effect = lambda x, y: (int(x), int(y))
+        renderer.render_keepout_zones.return_value = b"overlay"
+        entry.runtime_data.room_map_extent_mm = (0, 1000, 0, 1000)
+        m._handle_live_position(self._pos(1.0, 1.0))
+        assert await m.async_image() == b"path"
+        renderer.render_keepout_zones.assert_not_called()
+        assert renderer._fit_bounds_px is None
+
+    @pytest.mark.asyncio
+    async def test_the_map_listens_to_the_stream(self, hass):
+        from custom_components.roomba_plus.live_position import LivePositionStream
+
+        m, _r, entry, _s = self._entity()
+        robot = MagicMock()
+        stream = LivePositionStream(hass, robot, enabled=lambda: True)
+        entry.runtime_data.live_position = stream
+        m.async_update_token = MagicMock()
+        m._async_restore_map_state = AsyncMock()
+        m._async_load_pending_checkpoint = AsyncMock()
+        removers = []
+        m.async_on_remove = removers.append
+        await m.async_added_to_hass()
+        assert m._handle_live_position in stream._listeners
+
+
+class TestRequestedPathReviewFindings:
+    """Found in the independent review of the first version."""
+
+    def _entity(self, *, pose: object = None):
+        return TestRequestedPositionsOnTheCleaningMap()._entity(pose=pose)
+
+    def test_a_pose_less_mission_with_no_path_clears_the_saved_one(self):
+        """Otherwise an older requested path came back after a restart and
+        hid the cloud's record of the newer mission."""
+        m, renderer, _e, scheduled = self._entity()
+        renderer.has_data = False
+        m._handle_mission_end("charge")
+        assert any("_async_clear_map_state" in n for n in scheduled)
+
+    def test_a_900_series_keeps_its_saved_path(self):
+        m, renderer, _e, scheduled = self._entity(
+            pose={"point": {"x": 1, "y": 2}, "theta": 0}
+        )
+        renderer.has_data = False
+        m._handle_mission_end("charge")
+        assert not any("_async_clear_map_state" in n for n in scheduled)
+
+    @pytest.mark.asyncio
+    async def test_a_saved_shadow_path_restores_as_pose(self, monkeypatch):
+        """A dump from before 4.3 has no source key; it is a shadow path
+        and keeps its calibration."""
+        class _Store:
+            def __init__(self, *_a, **_k): pass
+            async def async_load(self): return {"version": 1, "points": []}
+
+        monkeypatch.setattr(img, "Store", _Store)
+        m, renderer, entry, _s = self._entity()
+        entry.entry_id = "e"
+        renderer.restore_state.return_value = True
+        await m._async_restore_map_state()
+        assert m._position_source == img.POSITION_SOURCE_POSE
+
+    @pytest.mark.asyncio
+    async def test_a_requested_path_is_not_restored_with_the_option_off(self, monkeypatch):
+        class _Store:
+            def __init__(self, *_a, **_k): pass
+            async def async_load(self):
+                return {"version": 1, "points": [], "position_source": "request"}
+
+        monkeypatch.setattr(img, "Store", _Store)
+        m, renderer, entry, _s = self._entity()
+        entry.entry_id = "e"
+        entry.options = {"live_position_requests": False}
+        await m._async_restore_map_state()
+        renderer.restore_state.assert_not_called()
+        assert m._position_source is None

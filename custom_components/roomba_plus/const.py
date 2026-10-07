@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any, Final
 
 from homeassistant.components.vacuum import VacuumActivity
@@ -174,6 +174,10 @@ CONF_MAP_NOMOP_ZONES: Final = "map_nomop_zones"
 DEFAULT_MAP_ZONES: Final = False
 
 CONF_MAP_ENABLED: Final = "map_enabled"
+#: Ask a robot that does not publish its position where it is, for the
+#: live cleaning map (4.3, live_position.py). Offered only to robots
+#: whose shadow carries no `pose`; on a 900-series it would do nothing.
+CONF_LIVE_POSITION_REQUESTS: Final = "live_position_requests"
 CONF_MAP_SIZE_PX: Final = "map_size_px"
 CONF_MAP_SCALE: Final = "map_scale_mm_per_px"
 CONF_FILTER_HOURS: Final = "filter_threshold_hours"
@@ -273,6 +277,7 @@ DEFAULT_DELAY: Final = 30
 DEFAULT_CERT: Final = "/etc/ssl/certs/ca-certificates.crt"
 
 DEFAULT_MAP_ENABLED: Final = True
+DEFAULT_LIVE_POSITION_REQUESTS: Final = True
 DEFAULT_ENABLE_SCHEDULE_CALENDAR: Final = True
 DEFAULT_MAP_SIZE_PX: Final = 600
 DEFAULT_MAP_SCALE: Final = 10.0  # mm per pixel → 600px = 6 m × 6 m
@@ -2552,44 +2557,21 @@ def reports_local_pose(state: dict[str, Any]) -> bool:
     a last-mission render, not a live position.
 
     AND IT IS NOT THE WHOLE PICTURE. Newer Classic generations do not
-    carry position in the shadow at all: it is requested over the `rrtp`
-    channel (`{"reqId": ..., "reqType": "current", "conType": "local"}`)
-    and answered on a separate report topic, map-bound -- the reply
-    carries `pmap_id`, `pmapv_id` and `xyt` triples.
+    carry position in the shadow at all: they answer when asked (rrtp,
+    topic `req`, reply on `data`, metres and radians from the dock).
+    lewis answers (an i7+, two S9+), and a Braava jet m6 (sanmarino)
+    answers without a fix. daredevil does NOT, as far as anything on
+    record shows: an i3 on 2.6.0 (@AlakazipLabs) met silence on six topic
+    names, `req` among them, and later on `req` alone at 1 Hz through a
+    51-minute driving spell -- 2,875 requests, no reply, link held.
 
-    Request and response field names are code-proven from the app's
-    serializer and the robot's response builder. What is NOT resolved:
-    the units and coordinate frame of `xyt` (explicitly not assumed to
-    match the 900-series millimetres-from-dock), and the exact local MQTT
-    topic.
-
-    FIRST HARDWARE RESULT, AND IT IS NEGATIVE (@AlakazipLabs, i3 on
-    daredevil 2.6.0). Six candidate topics -- `req`, `rrtp`,
-    `rrtp/request`, `local/rrtp/request`, `mission/rrtp/request`,
-    `$aws/things/<blid>/mission/rrtp/request` -- one fixed body, single
-    local slot, subscribed `#`. All six silent: no `data`, no new topic,
-    no `reqId` echo.
-
-    Controlled and instrumented, which is what makes it worth recording:
-
-      * `cmd` carrying the same body reflected in 240 ms, `reqId` back
-        inside `state.reported`, so publishes from that session reach a
-        handler and the silences are not a dead link.
-      * At the PACKET level the only inbound frame after each send was
-        `PINGRESP`. No `PUBACK`, no `DISCONNECT`, nothing undecoded --
-        which rules out both "the broker drops the connection on a
-        denied publish" and "there is a reply we fail to parse".
-
-    WHAT IT DOES NOT SETTLE: a topic-scoped ACL silently dropping these
-    topics is indistinguishable on the wire from a robot that never had
-    the path. QoS 1 does not separate them either -- brokers differ on
-    whether a denied publish still gets its PUBACK.
-
-    SCOPE, deliberately narrow: one `reqType` (`current`), one `conType`
-    (`local`), robot docked, one firmware, n=1. So this says daredevil
-    does not answer these six names under these conditions. It does not
-    locate the generation boundary -- that needs the same probe on an
-    S9+, j7+, Braava m6 or an i7 on lewis, and nobody has run it.
+    CORRECTED. This said roombapy 2.0 "later got positions from
+    daredevil". That traced to roombapy's rrtp module docstring, which
+    lists daredevil (i3) among the confirmed families -- with no capture,
+    fixture or tester behind it, and a robot count ("four") that only
+    adds up without it. `live_position.py` uses the request for the live
+    map and gives up after three unanswered requests per mission, which
+    is what it will do on this i3.
 
     So a robot returning False here is behaving correctly and may still
     have a position available on request. This function answers "is there
@@ -2598,6 +2580,40 @@ def reports_local_pose(state: dict[str, Any]) -> bool:
     it is".
     """
     return state.get("pose") is not None
+
+
+def lifetime_hours(state: Mapping[str, Any]) -> int:
+    """The robot's lifetime runtime hours, from whichever key carries them.
+
+    A 900-series reports them in `bbrun.hr`; an i/s/j-series in
+    `runtimeStats.hr`. `IRobotEntity.run_stats` merges the two with
+    `runtimeStats` winning, and the maintenance sensors compute with that.
+    Every reset, seed and due check must read the SAME number, or the
+    baseline and the reading are on different meters.
+
+    THEY WERE NOT. The reset buttons, the to-do list, the due check and
+    the cloud hydration read `bbrun.hr` alone. On a j7+ and a j9+
+    (@msva17) that is 0, so a filter reset recorded a baseline of 0 hours
+    and the sensor, reading the real lifetime, dropped from 46 to 0 the
+    moment the button was pressed -- and the due check, on its meter of
+    0, never found anything due at all.
+
+    Null-safe: `dict.get(key, default)` does not cover an explicit null.
+    """
+    for key in ("runtimeStats", "bbrun"):
+        block = state.get(key)
+        if not isinstance(block, Mapping):
+            continue
+        value = block.get("hr")
+        if value is None or isinstance(value, bool):
+            continue
+        try:
+            hours = int(value)
+        except (TypeError, ValueError):
+            continue
+        if hours > 0:
+            return hours
+    return 0
 
 
 def has_smart_map(state: dict[str, Any]) -> bool:

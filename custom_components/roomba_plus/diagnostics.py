@@ -15,6 +15,7 @@ from typing import Any, Final
 from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.core import HomeAssistant
 
+from .live_position import LivePositionStream
 from .structural_failures import diagnostic_info
 from .const import (
     CONF_PRIME_FAVORITE_BUTTONS,
@@ -31,6 +32,7 @@ from .const import (
 )
 from .models import ConnectionType, RoombaConfigEntry
 from .binary_sensor import _prime_reports_tank
+from .cloud_account import async_diagnostics as cloud_account_diagnostics
 from .cloud_coordinator import pmap_record_id, pmap_version_report
 from .room_cleaning import resolve_user_pmapv_id
 
@@ -52,6 +54,38 @@ def _room_command_versions(data: Any, state: dict[str, Any]) -> dict[str, Any]:
             if pid and pid not in map_ids:
                 map_ids.append(pid)
     return {pid: resolve_user_pmapv_id(state, cloud_data, pid) for pid in map_ids}
+
+
+#: The keys a clean zone of the account's map data has been seen to
+#: carry its number under. Read and reported as they are.
+_ZONE_ID_KEYS = ("id", "zone_id", "region_id")
+
+
+def _clean_zone_ids(cc: Any) -> list[dict[str, Any]]:
+    """Each clean zone of the active map: its name and every id it carries.
+
+    WHICH NUMBER IS THE ROBOT'S. A zone in the account's map data can
+    carry more than one id field, and Roomba+ picks one to send. On
+    @Hardy-196's i7+ `clean_zone: Esstisch` went out as zone 0 and the
+    robot cleaned near the couch, while the zone numbers the robot had
+    reported itself were 16 and 21. Nothing in this download showed
+    which field said what. Names and numbers only; no geometry.
+    """
+    active = getattr(cc, "active_pmap_id", None)
+    out: list[dict[str, Any]] = []
+    for pmap in (cc.data or {}).get("pmaps", []) or []:
+        details = pmap.get("active_pmapv_details") or {}
+        if (details.get("active_pmapv") or {}).get("pmap_id") != active:
+            continue
+        for zone in details.get("zones") or []:
+            if not isinstance(zone, dict):
+                continue
+            out.append({
+                "name": zone.get("name"),
+                "zone_type": zone.get("zone_type"),
+                **{key: zone[key] for key in _ZONE_ID_KEYS if key in zone},
+            })
+    return out
 
 
 def _umf_zone_shapes(cc: Any) -> dict[str, Any]:
@@ -115,6 +149,7 @@ def _cloud_diag(data: Any) -> dict[str, Any]:
         result["region_count_active"] = len(cc.regions)   # active pmap only (post-filter)
         result["zone_count_active"] = len(cc.zones)       # active pmap only (post-filter)
         result["umf_zone_shapes"] = _umf_zone_shapes(cc)
+        result["clean_zone_ids"] = _clean_zone_ids(cc)
 
         # WHO OWNS EACH MAP. A cloud pmap entry carries `robot_ids` and
         # `shared`, and this download dropped both -- so when a
@@ -760,8 +795,15 @@ def _position_chain(data: Any) -> dict[str, Any]:
     """
     aligner = getattr(data, "umf_aligner", None)
     renderer = getattr(data, "renderer", None)
+    live = getattr(data, "live_position", None)
     return {
         "position_points_collected": getattr(renderer, "point_count", None),
+        # REQUESTED POSITIONS (4.3), for a robot that publishes none:
+        # whether the stream ran, how much arrived and why it stopped.
+        # Counts and a status only -- no coordinates.
+        "live_position": (
+            live.diagnostics() if isinstance(live, LivePositionStream) else None
+        ),
         "aligner_present": aligner is not None,
         "aligner_aligned": getattr(aligner, "aligned", None),
         # THE TWO NUMBERS THAT SAY WHY IT IS NOT ALIGNED.
@@ -1545,6 +1587,8 @@ async def _build_diagnostics(
             "connection_type": data.connection_type.value,
             "config": async_redact_data(dict(config_entry.data), _CLOUD_REDACT),
             "options": async_redact_data(dict(config_entry.options), _CLOUD_REDACT),
+            # The account login this entry shares (4.3).
+            "cloud_account": cloud_account_diagnostics(hass, config_entry.entry_id),
             "prime": {
                 "household_id_resolved": data.prime_household_id is not None,
                 # WHETHER THE LOGIN TELLS US WHEN IT EXPIRES.
@@ -2354,6 +2398,8 @@ async def _build_diagnostics(
 
         # Cloud coordinator status
         "cloud": _cloud_diag(data),
+        # The account login this entry shares with others (4.3).
+        "cloud_account": cloud_account_diagnostics(hass, config_entry.entry_id),
 
         # All top-level keys in master_state (for debugging unknown models)
         "master_state_keys": sorted(state.keys()),

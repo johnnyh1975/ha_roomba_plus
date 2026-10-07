@@ -111,6 +111,16 @@ def _collect_used_keys() -> set[str]:
             for kw in node.keywords:
                 if kw.arg == "translation_key" and isinstance(kw.value, ast.Constant):
                     keys.add(kw.value.value)
+                elif (
+                    kw.arg == "translation_key"
+                    and isinstance(kw.value, ast.Call)
+                    and ast.unparse(kw.value.func) == "cloud_errors.translation_key"
+                ):
+                    # One key per reason, chosen at runtime (4.3). A raise
+                    # through cloud_errors can produce any of them.
+                    from roombapy_prime import CloudErrorReason
+
+                    keys |= {f"cloud_{r.value}" for r in CloudErrorReason}
     return keys
 
 

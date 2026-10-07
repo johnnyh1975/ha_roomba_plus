@@ -9,6 +9,68 @@ note are listed — most releases need zero action beyond updating.
 
 ---
 
+## v4.3.0 — from v4.2.x
+
+Everything in the 4.2.x notes below applies: 4.3.0 carries every fix
+through 4.2.22, the last 4.2 release. On top of them:
+
+**One login per iRobot account.** Robots on the same account share one
+cloud login instead of logging in one by one, at start and on every
+renewal. Prime robots renew their live connection through it too
+(roombapy-prime 0.5, installed with the update). Nothing to configure.
+
+**A password change is entered once.** When one robot gets the new
+password, every robot with the same account address and the same old
+password takes it and restarts; their own prompts go away.
+
+**Setting up more robots of an account:** after the first, the others
+appear under *Discovered*. *Set up with my iRobot account* is the
+recommended way to add a robot; a Classic robot connecting locally still
+needs its network address, found or asked for.
+
+**Cloud errors say what to do, in your language.** A locked account in
+particular now says so. Do not re-enter the password then; wait about
+ten minutes.
+
+**The mission archive pages back once after the update,** in the
+background, one page every two seconds, up to 800 missions. Lifetime
+figures and statistics can change once when it finishes.
+
+**A live cleaning path for Classic robots that report no position.**
+An i7 or S9+ on lewis, or a Braava jet m6: Roomba+ now asks the robot
+where it is while it cleans, about once a second, and draws the path live instead of showing
+the last finished mission from the cloud. An i3 on daredevil has not
+answered (2,875 requests over a whole run, @AlakazipLabs); a j-series
+has not been tried. Both get the option and stop asking on their own
+after three unanswered requests per mission. The option also needs the map switched on. On by
+default for these robots; Configure → *Connection settings* → *Ask the
+robot for its position*. The option does not appear for a 900-series,
+which reports its position itself. While the map shows such a path it
+carries no `calibration_points` or `rooms` (`position_source: request`
+instead), and the path is not added to the coverage heatmap: whether it
+lines up with the cloud map has not been checked yet.
+
+**A part that read 0 straight after its reset: press the reset once
+more.** On robots that keep their running hours in `runtimeStats`
+(seen on a j7+ and a j9+, @msva17), the filter, brush, side brush and
+bag resets recorded 0 hours, so the part read as used up the moment it
+was reset, and *Maintenance due* never came on. 4.3.0 reads the same
+hours the sensors do, but a reset already stored at 0 stays until the
+next one.
+
+**Importing rooms from roomba_rest980 takes rooms only, and only the
+current map's.** It also took clean zones, which could overwrite a
+room with the same number, and filed a second floor's rooms under the
+current map. Names already imported stay; check *Rooms & zones* if a
+room carries a zone's name.
+
+**Prime: closing means closed.** Unloading the integration or stopping
+Home Assistant now ends a Prime robot's cloud connection for good.
+Before, a hidden connection could stay behind and compete with the next
+one.
+
+---
+
 ## v4.2.21 — from v4.2.20
 
 **Nothing to do.** On a Prime robot the per-room values fill in at the

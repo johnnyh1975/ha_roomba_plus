@@ -25,6 +25,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
 from .const import (
+    lifetime_hours,
     CONSUMABLE_ROLES,
     is_mop,
     part_role,
@@ -590,7 +591,7 @@ class MaintenanceStore:
         self, vacuum_state: Mapping[str, Any], options: Mapping[str, Any]
     ) -> list[str]:
         """Return due consumables using the shared four-role lifecycle."""
-        current_hr = (vacuum_state.get("bbrun") or {}).get("hr", 0)
+        current_hr = lifetime_hours(vacuum_state)
         is_mop_device = is_mop(dict(vacuum_state))
         items: list[str] = []
         for role, spec in CONSUMABLE_ROLES.items():

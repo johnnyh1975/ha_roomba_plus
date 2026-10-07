@@ -5174,6 +5174,34 @@ class TestBootstrapAligner:
         await cb._async_bootstrap_umf_aligner(hass, entry, coordinator)
         aligner.align.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_older_traversal_missions_come_from_the_paging_request(self, hass, monkeypatch):
+        """4.3.0b4. Without traversal evidence in the refresh's records,
+        the bootstrap asks for OLDER missions. It used the Classic request
+        (count=500, before=...), which a 980 and an i7 answer with the same
+        recent window -- the records that had no evidence. It now uses
+        get_mission_history_page(), measured to page on both."""
+        from custom_components.roomba_plus.const import CONF_BLID
+
+        aligner = MagicMock(aligned=False, _door_candidates=[1])
+        entry, coordinator = _align_env(hass, aligner=aligner)
+        entry.data = {CONF_BLID: "BLID1"}
+        coordinator.raw_records = [{"startTime": 500}, {"startTime": 300}]
+        older = [{"startTime": 200, "nMssn": 7}]
+        coordinator.api.get_mission_history_page = AsyncMock(return_value=older)
+        coordinator.api.get_mission_history = AsyncMock(side_effect=AssertionError("Classic request"))
+        monkeypatch.setattr(
+            cb, "_extract_traversal_umf_positions",
+            lambda records, _aligner: ["door"] if records is older else [],
+        )
+
+        await cb._async_bootstrap_umf_aligner(hass, entry, coordinator)
+
+        coordinator.api.get_mission_history_page.assert_awaited_once_with(
+            "BLID1", before=300, page_size=100
+        )
+        aligner.set_bootstrap_markers.assert_called_once_with(["door"])
+
 
 class TestCloudRefreshHook:
 

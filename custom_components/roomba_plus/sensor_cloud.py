@@ -174,7 +174,7 @@ def _raw_dirt_events(records: list[dict[str, Any]]) -> StateType:
 def _cloud_last_error_record(records: list[dict[str, Any]]) -> dict[str, Any] | None:
     """Newest failed/stuck record within the entity's 30-day framing.
 
-    `records` is a count-based API window (cloud_api.get_mission_history),
+    `records` is a count-based API window (ClassicRestClient.get_mission_history),
     not itself bounded to 30 days, so a candidate older than
     event_counts_30d's own framing is skipped rather than surfaced as if it
     were recent. Shared by state, timestamp and catalogue attributes so the

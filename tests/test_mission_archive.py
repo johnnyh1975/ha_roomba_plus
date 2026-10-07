@@ -1254,66 +1254,301 @@ def _archive():
     return a
 
 
+def _api(first=None, pages=None):
+    """A cloud client: `first` answers get_mission_history() (the first
+    page), `pages` answers get_mission_history_page() (paging back)."""
+    api = MagicMock()
+    api.get_mission_history = AsyncMock(return_value=[] if first is None else first)
+    api.get_mission_history_page = AsyncMock(
+        side_effect=list(pages) if pages is not None else [[]]
+    )
+    return api
+
+
+def _befores(api):
+    return [c.kwargs.get("before") for c in api.get_mission_history_page.await_args_list]
+
+
 class TestInitialLoad:
+    """4.3.0b4: the first page with the Classic request, then paging back
+    with get_mission_history_page() (maxReports/exclusiveStartTimestamp),
+    which a 980 and an i7 were measured to answer correctly."""
 
     @pytest.fixture(autouse=True)
     def _no_wait(self, monkeypatch):
         monkeypatch.setattr(ma.asyncio, "sleep", AsyncMock())
 
     @pytest.mark.asyncio
-    async def test_pages_backwards_and_stores_oldest_first(self):
-        api = MagicMock()
-        api.get_mission_history = AsyncMock(side_effect=[
-            [_raw_m(3, 300), _raw_m(2, 200)], [_raw_m(1, 100)], [],
-        ])
+    async def test_first_page_then_pages_back_and_stays_newest_first(self):
+        api = _api(
+            first=[_raw_m(3, 300), _raw_m(2, 200)],
+            pages=[[_raw_m(1, 100), _raw_m(0, 50)], []],
+        )
         a = _archive()
         await a.async_initial_load(api, "B", MagicMock(), "e1")
-        befores = [c.kwargs.get("before_ts") for c in api.get_mission_history.await_args_list]
-        assert befores == [None, 200, 100], "each page continues before the last one's oldest"
-        # The archive keeps the NEWEST first (each mission is inserted at
-        # the front). Reversing the fetched pages before appending is what
-        # makes the initial load end in that same order.
-        assert [d["nMssn"] for d in a._derived] == [3, 2, 1]
-        a.async_save.assert_awaited_once()
+
+        api.get_mission_history.assert_awaited_once_with("B", count=100)
+        assert _befores(api) == [200, 50], "each page continues before the oldest so far"
+        assert all(
+            c.kwargs.get("page_size") == 100
+            for c in api.get_mission_history_page.await_args_list
+        )
+        assert [d["nMssn"] for d in a._derived] == [3, 2, 1, 0]
+        assert len(a._timeline) == 4
+        assert a.initial_load_done and not a.needs_cloud_load
+        assert a._paged_back_done is True
 
     @pytest.mark.asyncio
-    async def test_a_failing_page_keeps_what_was_fetched(self):
-        api = MagicMock()
-        api.get_mission_history = AsyncMock(side_effect=[[_raw_m(2, 200)], RuntimeError("cloud")])
+    async def test_the_first_page_is_stored_by_start_time_whatever_the_cloud_order(self):
+        api = _api(first=[_raw_m(2, 200), _raw_m(3, 300), _raw_m(1, 100)])
         a = _archive()
         await a.async_initial_load(api, "B", MagicMock(), "e1")
-        assert [d["nMssn"] for d in a._derived] == [2]
+        assert [d["nMssn"] for d in a._derived] == [3, 2, 1]
+
+    @pytest.mark.asyncio
+    async def test_a_cloud_that_ignores_the_cursor_is_asked_once(self):
+        """A page that brings nothing older than the cursor ends paging:
+        this is what the Classic `before` did (the same window again), and
+        it must not become a loop if a cloud does it with the new one."""
+        window = [_raw_m(n, 1000 - n) for n in range(33, 0, -1)]
+        api = _api(first=list(window), pages=[list(window), list(window)])
+        a = _archive()
+        await a.async_initial_load(api, "B", MagicMock(), "e1")
+        api.get_mission_history.assert_awaited_once()
+        assert api.get_mission_history_page.await_count == 1
+        assert len(a._derived) == 33
+        assert a._paged_back_done is True
+
+    @pytest.mark.asyncio
+    async def test_an_overlapping_page_adds_only_what_is_older(self):
+        """The boundary mission on both pages -- even one without a
+        mission number -- is not stored twice."""
+        api = _api(
+            first=[_raw_m(3, 300), _raw_m(None, 200)],
+            pages=[[_raw_m(None, 200), _raw_m(1, 100)], [_raw_m(1, 100)]],
+        )
+        a = _archive()
+        await a.async_initial_load(api, "B", MagicMock(), "e1")
+        assert _befores(api) == [200, 100]
+        assert len(a._derived) == 3
+
+    @pytest.mark.asyncio
+    async def test_a_failing_page_keeps_what_was_fetched_and_resumes_next_start(self):
+        api = _api(first=[_raw_m(3, 300)], pages=[[_raw_m(2, 200)], RuntimeError("cloud")])
+        a = _archive()
+        await a.async_initial_load(api, "B", MagicMock(), "e1")
+        assert [d["nMssn"] for d in a._derived] == [3, 2]
+        assert a._paged_back_done is False and a.needs_cloud_load
+
+        api2 = _api(first=[_raw_m(9, 900)], pages=[[_raw_m(1, 100)], []])
+        await a.async_initial_load(api2, "B", MagicMock(), "e1")
+        api2.get_mission_history.assert_not_awaited()
+        assert _befores(api2) == [200, 100], "resumes from the oldest stored mission"
+        assert [d["nMssn"] for d in a._derived] == [3, 2, 1]
+        assert not a.needs_cloud_load
+
+    @pytest.mark.asyncio
+    async def test_a_refused_request_is_tried_at_the_measured_size_then_ends_paging(self):
+        """Only 10 a page is measured. A 4xx at 100 is tried once at 10;
+        a 4xx at 10 means the cloud refuses the request itself, and asking
+        at every start would not change that."""
+        from roombapy_prime import RestClientError
+
+        api = _api(
+            first=[_raw_m(3, 300)],
+            pages=[RestClientError("bad request", 400), RestClientError("bad request", 400)],
+        )
+        a = _archive()
+        await a.async_initial_load(api, "B", MagicMock(), "e1")
+        sizes = [c.kwargs["page_size"] for c in api.get_mission_history_page.await_args_list]
+        assert sizes == [100, 10]
+        assert [d["nMssn"] for d in a._derived] == [3]
+        assert a._paged_back_done is True and not a.needs_cloud_load
+
+    @pytest.mark.asyncio
+    async def test_a_page_size_the_cloud_refuses_falls_back_to_the_measured_one(self):
+        from roombapy_prime import RestClientError
+
+        api = _api(
+            first=[_raw_m(3, 300)],
+            pages=[RestClientError("bad request", 400), [_raw_m(2, 200)], []],
+        )
+        a = _archive()
+        await a.async_initial_load(api, "B", MagicMock(), "e1")
+        sizes = [c.kwargs["page_size"] for c in api.get_mission_history_page.await_args_list]
+        assert sizes == [100, 10, 10]
+        assert [d["nMssn"] for d in a._derived] == [3, 2]
+        assert a._paged_back_done is True
+
+    @pytest.mark.asyncio
+    async def test_a_403_left_after_relogin_is_retried_next_start(self):
+        from roombapy_prime import RestClientError
+
+        api = _api(first=[_raw_m(3, 300)], pages=[RestClientError("forbidden", 403)])
+        a = _archive()
+        await a.async_initial_load(api, "B", MagicMock(), "e1")
+        assert api.get_mission_history_page.await_count == 1
+        assert a._paged_back_done is False and a.needs_cloud_load
+
+    @pytest.mark.asyncio
+    async def test_paging_back_stops_at_a_mission_counter_reset(self):
+        """Review finding. A robot with a previous owner (or a factory
+        reset, or a replacement unit) has older missions whose numbers
+        are NOT lower than today's. Storing them put two missions under
+        one number: the old 1-3 were skipped as duplicates, the old 4-10
+        raised the high-water mark, and the next refresh took the real
+        mission 1 for a new reset and stored the window twice."""
+        api = _api(
+            first=[_raw_m(3, 3000), _raw_m(2, 2000), _raw_m(1, 1000)],
+            pages=[[_raw_m(n, n * 10) for n in range(10, 0, -1)], []],
+        )
+        a = _archive()
+        await a.async_initial_load(api, "B", MagicMock(), "e1")
+        assert [d["nMssn"] for d in a._derived] == [3, 2, 1]
+        assert a.last_nMssn == 3
+        assert a._paged_back_done is True
+        assert api.get_mission_history_page.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_numbers_that_keep_falling_are_stored_up_to_a_reset(self):
+        api = _api(
+            first=[_raw_m(12, 1200), _raw_m(11, 1100)],
+            pages=[[_raw_m(10, 1000), _raw_m(9, 900)], [_raw_m(8, 800), _raw_m(40, 700)]],
+        )
+        a = _archive()
+        await a.async_initial_load(api, "B", MagicMock(), "e1")
+        assert [d["nMssn"] for d in a._derived] == [12, 11, 10, 9, 8]
+        assert a.last_nMssn == 12
+        assert a._paged_back_done is True
+
+    @pytest.mark.asyncio
+    async def test_a_failing_first_page_marks_the_load_done_but_not_the_paging(self):
+        api = _api()
+        api.get_mission_history = AsyncMock(side_effect=RuntimeError("cloud"))
+        a = _archive()
+        await a.async_initial_load(api, "B", MagicMock(), "e1")
+        assert a.initial_load_done and a._derived == []
+        api.get_mission_history_page.assert_not_awaited()
+        assert a.needs_cloud_load, "an empty archive tries the first page again next start"
 
     @pytest.mark.asyncio
     async def test_already_archived_missions_are_not_stored_twice(self):
-        api = MagicMock()
-        api.get_mission_history = AsyncMock(side_effect=[[_raw_m(2, 200), _raw_m(1, 100)], []])
+        api = _api(first=[_raw_m(2, 200), _raw_m(1, 100)], pages=[[]])
         a = _archive()
         a._archived_nmssns = {1}
         await a.async_initial_load(api, "B", MagicMock(), "e1")
         assert [d["nMssn"] for d in a._derived] == [2]
 
-    @pytest.mark.parametrize("pages", [
-        [["junk", 42]],                 # nothing that is a record
-        [[_raw_m(1, 0)]],                 # no timestamp to page on
-        ["not a list"],
+    @pytest.mark.parametrize("first", [
+        ["junk", 42],                 # nothing that is a record
+        [_raw_m(1, 0)],               # no timestamp to page from
+        "not a list",
     ])
     @pytest.mark.asyncio
-    async def test_it_stops_on_a_page_it_cannot_continue_from(self, pages):
-        api = MagicMock()
-        api.get_mission_history = AsyncMock(side_effect=pages + [[_raw_m(9, 900)]])
+    async def test_it_does_not_page_from_a_first_page_without_a_start_time(self, first):
+        api = _api(first=first, pages=[[_raw_m(9, 900)]])
         a = _archive()
         await a.async_initial_load(api, "B", MagicMock(), "e1")
-        assert api.get_mission_history.await_count == 1
+        api.get_mission_history_page.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_a_second_run_does_nothing(self):
-        api = MagicMock()
-        api.get_mission_history = AsyncMock()
+    async def test_a_finished_archive_asks_nothing(self):
+        api = _api()
         a = _archive()
-        a._initial_load_done, a._derived = True, [{"nMssn": 1}]
+        a._initial_load_done, a._paged_back_done = True, True
+        a._append(_raw_m(1, 100))
         await a.async_initial_load(api, "B", MagicMock(), "e1")
         api.get_mission_history.assert_not_awaited()
+        api.get_mission_history_page.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_an_archive_from_an_older_version_pages_back_once(self):
+        """Loaded without `paged_back_done`: its first load paged with
+        parameters the cloud ignored, so it holds only the recent window.
+        Only the paging runs; the older missions go behind the stored
+        ones and the newest stay first."""
+        a = _archive()
+        for n, ts in ((1, 1000), (2, 2000)):
+            a._append(_raw_m(n, ts))
+        a._initial_load_done = True
+        sqft_before = a.cumulative_sqft
+        api = _api(pages=[[_raw_m(None, 900, sqft=10), _raw_m(0, 800)], []])
+
+        await a.async_initial_load(api, "B", MagicMock(), "e1")
+
+        api.get_mission_history.assert_not_awaited()
+        assert _befores(api) == [1000, 800]
+        assert [d["start_ts"] for d in a._derived] == [
+            _ts_to_iso(ts) for ts in (2000, 1000, 900, 800)
+        ]
+        assert a.last_nMssn == 2, "older missions do not move the high-water mark"
+        assert a.cumulative_sqft == sqft_before + 10
+        a.async_save.assert_awaited()
+
+    @pytest.mark.asyncio
+    async def test_paging_back_stops_at_the_cap_without_evicting(self, monkeypatch):
+        """_append()'s trim drops the OLDEST record -- exactly what paging
+        back just fetched. Paging stops at the cap instead."""
+        monkeypatch.setattr(ma, "MAX_RECORDS", 3)
+        api = _api(
+            first=[_raw_m(5, 500), _raw_m(4, 400)],
+            pages=[[_raw_m(3, 300), _raw_m(2, 200)], [_raw_m(1, 100)]],
+        )
+        a = _archive()
+        await a.async_initial_load(api, "B", MagicMock(), "e1")
+        assert [d["nMssn"] for d in a._derived] == [5, 4, 3]
+        assert api.get_mission_history_page.await_count == 1
+        assert a._paged_back_done is True
+
+    @pytest.mark.asyncio
+    async def test_paging_back_has_a_page_limit(self, monkeypatch):
+        monkeypatch.setattr(ma, "_MAX_PAGE_BACK_PAGES", 2)
+        api = _api(
+            first=[_raw_m(9, 900)],
+            pages=[[_raw_m(8, 800)], [_raw_m(7, 700)], [_raw_m(6, 600)]],
+        )
+        a = _archive()
+        await a.async_initial_load(api, "B", MagicMock(), "e1")
+        assert api.get_mission_history_page.await_count == 2
+        assert a._paged_back_done is True
+
+
+class TestAppendOlder:
+
+    def test_an_older_mission_never_moves_the_high_water_mark(self):
+        a = MissionArchive()
+        a._append(_raw_m(3, 300))
+        a._append(_raw_m(7, 100), older=True)
+        assert a.last_nMssn == 3 and a._last_nMssn_start_ts == 300
+        assert [d["nMssn"] for d in a._derived] == [3, 7]
+
+
+class TestPagedBackPersistence:
+
+    @pytest.mark.asyncio
+    async def test_paged_back_done_roundtrips_and_is_absent_from_older_files(self):
+        stored: dict = {}
+
+        async def mock_save(data):
+            stored.update(data)
+
+        store_mock = MagicMock()
+        store_mock.async_save = mock_save
+        store_mock.async_load = AsyncMock(side_effect=lambda: dict(stored))
+        a = MissionArchive()
+        a._append(_raw_m(1, 100))
+        a._initial_load_done = a._paged_back_done = True
+        with patch("custom_components.roomba_plus.mission_archive.Store",
+                   return_value=store_mock):
+            await a.async_save(_make_hass(), "e")
+            b = MissionArchive()
+            await b.async_load(_make_hass(), "e")
+            assert b._paged_back_done is True and not b.needs_cloud_load
+
+            del stored["paged_back_done"]
+            c = MissionArchive()
+            await c.async_load(_make_hass(), "e")
+        assert c.initial_load_done and c.needs_cloud_load
 
 
 class TestClassification:

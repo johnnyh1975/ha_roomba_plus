@@ -166,6 +166,11 @@ DELIBERATE: dict[str, dict[str, str]] = {
         ),
     },
     "config_flow.py::async_step_settings": {
+        "_robot_reports_no_pose": (
+            "decides whether to offer 'Ask the robot for its position' "
+            "(4.3), a Classic local request; a Prime robot's live map comes "
+            "from the cloud stream and has nothing to ask"
+        ),
         "All": "Classic's form has numeric fields with ranges; Prime's does not",
         "Coerce": (
             "part of the numeric map-scale field, which Prime has no use for"

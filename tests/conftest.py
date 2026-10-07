@@ -91,7 +91,7 @@ def pytest_configure(config):
 import pytest  # noqa: E402  (after pytest_configure, which needs none of it)
 
 
-# ── Test-suite speed (4.2.15) ─────────────────────────────────────────────
+# ── Test-suite speed (4.3.0b2) ─────────────────────────────────────────────
 #
 # The suite took nearly four minutes on GitHub. Two costs had nothing to
 # do with what the tests check; both are removed here, the rest by

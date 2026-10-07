@@ -363,8 +363,23 @@ entity would otherwise stay blank white indefinitely, with nothing logged to exp
 i-series models behave this way — an i3/i3+ on `daredevil` firmware, for instance — but the
 fallback keys off what the robot reports about itself, not off any model list.)
 
-With cloud credentials configured, such a robot falls back to the **last completed mission's
-coverage as recorded by iRobot's cloud** — the same data the official app draws its post-clean map
+**Since 4.3 Roomba+ asks such a robot where it is** while it cleans, about once a second over the
+local connection, and draws the path live — the same request the iRobot app uses. Configure →
+*Connection settings* → *Ask the robot for its position* (on by default; offered only to robots that
+report no position themselves). The robot's tracker carries the same position (`x_mm`/`y_mm`,
+`map_x_mm`/`map_y_mm`, `position_source: request`).
+
+What a requested path does **not** do yet: it is not fed into the coverage heatmap, door markers or
+room learning, and the map carries no `calibration_points`/`rooms` while it shows one — the image
+says `position_source: request` instead. The robot reports the position from its dock, as a
+900-series does; that this matches the cloud map's frame has not been checked on any robot yet, and
+a wrong frame in those stores would not wash out. A robot that never answers, or has not delivered a
+first position two minutes after the start (a Braava jet m6 answered without one for a whole run), is
+not asked again until its next mission; the
+diagnostics download says which (`position_chain.live_position`).
+
+Without that, or when the robot does not answer, and with cloud credentials configured, such a robot
+falls back to the **last completed mission's coverage as recorded by iRobot's cloud** — the same data the official app draws its post-clean map
 from. Nothing changes for a robot that does report position: there, an empty renderer means "this
 mission hasn't started yet", which still renders as it always did.
 
@@ -1164,6 +1179,7 @@ Settings → Devices → Roomba+ → Configure
 | Parameter | Default | Description |
 |---|---|---|
 | Map enabled | `true` | Enable live map rendering (900-series) |
+| Ask the robot for its position | `true` | Robots that report no position themselves only (4.3): asked about once a second while cleaning, for the live path |
 | Map size (px) | `600` | Rendered map image size (400–1200) |
 | Map scale (mm/px) | `10.0` | Millimetres per pixel |
 

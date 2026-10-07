@@ -37,6 +37,7 @@ from aiohttp.typedefs import LooseHeaders
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
+from roombapy_prime import CloudError
 
 from .const import DOMAIN, SQFT_TO_M2
 from .mission_store import MissionStore
@@ -1421,7 +1422,6 @@ async def _mission_map_payload(
     self.json_message (bug-hunt round 1: the first draft called the
     instance method json_message with the CLASS as self — worked only by
     accident because it delegates to the static json())."""
-    from .cloud_api import CloudApiError
     from .mission_map import (
         MissionMapMismatch,
         MissionMapUnavailable,
@@ -1459,6 +1459,6 @@ async def _mission_map_payload(
         return None, None, (404, str(exc))
     except MissionMapMismatch as exc:
         return None, None, (409, str(exc))
-    except CloudApiError as exc:
+    except CloudError as exc:
         return None, None, (502, f"Cloud error: {exc}")
     return payload, data, None

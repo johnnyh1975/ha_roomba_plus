@@ -28,7 +28,7 @@ concurrency:
 # and each has its own concurrency group. Deliberately NOT badged as one
 # combined status for this file: ten jobs means ten unrelated ways to
 # put a red mark on the README.
-# SPEED (4.2.15). The two test jobs took nearly four minutes. Measured
+# SPEED (4.3.0b2). The two test jobs took nearly four minutes. Measured
 # locally on the HA 2025.5 set, the suite alone took 212 s serially with
 # branch coverage; the rest was installing Home Assistant with pip.
 #
@@ -121,9 +121,9 @@ jobs:
       # Kept anyway, so both test jobs install it identically and the
       # roombapy-prime pin guard sees the same string in both.
       - name: Install roombapy-prime (--no-deps, for parity with the pinned job)
-        run: uv pip install --system --no-deps "roombapy-prime==0.3.4"
+        run: uv pip install --system --no-deps "roombapy-prime==0.5.0"
 
-      # COVERAGE LIVES HERE since 4.2.15, not in the minimum-version
+      # COVERAGE LIVES HERE since 4.3.0b2, not in the minimum-version
       # job: see the note at the top of `jobs`. Every module is at 95 %
       # on both HA versions, so the gate below means the same thing it
       # did there.
@@ -220,7 +220,7 @@ jobs:
 
       - name: Install roombapy and roombapy-prime
         run: |
-          uv pip install --system "roombapy==2.0.2" "roombapy-prime[map]==0.3.4"
+          uv pip install --system "roombapy==2.0.2" "roombapy-prime[map]==0.5.0"
 
       # THESE THREE NEED THE LIBRARIES. They ran in the markdown job, which
       # installs nothing: one failed on `import yaml`, and the other two

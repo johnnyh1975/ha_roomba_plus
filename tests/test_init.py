@@ -2527,3 +2527,67 @@ class TestRobotProfileArrivesLate:
             fn({"state": {"reported": {"sku": "i755840"}}})
 
         assert ctx.config_entry.runtime_data.robot_profile is not None
+
+
+class TestPhaseFinalizeCreatesTheLivePositionStream:
+    """4.3: a robot with a cleaning map gets a position stream, created
+    before the platforms (so the map and tracker find it) and started
+    after them; one without a map gets none."""
+
+    @staticmethod
+    def _ctx(hass: Any, *, renderer: Any) -> Any:
+        from unittest.mock import AsyncMock
+
+        ctx = _ctx_for_finalize(hass)
+        ctx.config_entry.runtime_data.renderer = renderer
+        ctx.config_entry.runtime_data.live_position = None
+        hass.http = MagicMock()
+        order: list[str] = []
+
+        async def _forward(*_a: Any, **_k: Any) -> None:
+            stream = ctx.config_entry.runtime_data.live_position
+            started = stream is not None and any(
+                c.args and c.args[0] == stream._on_message
+                for c in ctx.roomba.register_on_message_callback.call_args_list
+            )
+            order.append(
+                "forward:"
+                + ("stream" if stream is not None else "none")
+                + (":started" if started else "")
+            )
+
+        hass.config_entries.async_forward_entry_setups = AsyncMock(side_effect=_forward)
+        ctx._order = order
+        return ctx
+
+    @pytest.mark.asyncio
+    async def test_created_before_and_started_after_the_platforms(
+        self, hass: Any
+    ) -> None:
+        from custom_components.roomba_plus import _phase_finalize
+        from custom_components.roomba_plus.live_position import LivePositionStream
+
+        ctx = self._ctx(hass, renderer=MagicMock())
+        registered_before = len(ctx.roomba.register_on_message_callback.call_args_list)
+        await _phase_finalize(ctx)
+        TestPhaseFinalizeWiresTheRobotUp._teardown(ctx)
+
+        stream = ctx.config_entry.runtime_data.live_position
+        assert isinstance(stream, LivePositionStream)
+        assert ctx._order == ["forward:stream"]
+        callbacks = [
+            c.args[0] for c in ctx.roomba.register_on_message_callback.call_args_list
+        ][registered_before:]
+        assert stream._on_message in callbacks
+        # The unload hook is the synchronous stop.
+        hooks = [c.args[0] for c in ctx.config_entry.async_on_unload.call_args_list]
+        assert stream.stop in hooks
+
+    @pytest.mark.asyncio
+    async def test_none_without_a_map(self, hass: Any) -> None:
+        from custom_components.roomba_plus import _phase_finalize
+
+        ctx = self._ctx(hass, renderer=None)
+        await _phase_finalize(ctx)
+        TestPhaseFinalizeWiresTheRobotUp._teardown(ctx)
+        assert ctx.config_entry.runtime_data.live_position is None

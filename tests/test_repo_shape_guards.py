@@ -771,7 +771,7 @@ def test_every_runtime_followed_target_has_its_test() -> None:
         assert f"def {test_name}(" in text, test_name
 
 
-# ── the parse cache in conftest.py (4.2.15) ─────────────────────────────────
+# ── the parse cache in conftest.py (4.3.0b2) ─────────────────────────────────
 
 
 def test_the_parse_cache_is_scoped_to_our_own_calls() -> None:

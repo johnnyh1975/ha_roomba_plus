@@ -2410,6 +2410,35 @@ class TestUmfZoneShapes:
         assert '"umf_zone_shapes"' in inspect.getsource(diagnostics._cloud_diag)
 
 
+class TestLivePositionInThePositionChain:
+    """4.3: the requested-position stream reports how it ran -- status and
+    counts, no coordinates."""
+
+    def test_reported_when_there_is_a_stream(self):
+        from types import SimpleNamespace
+
+        from roombapy import RobotPosition
+        from custom_components.roomba_plus.diagnostics import _position_chain
+        from custom_components.roomba_plus.live_position import LivePositionStream
+
+        stream = LivePositionStream(MagicMock(), MagicMock(), enabled=lambda: True)
+        stream.positions_received = 3
+        stream.latest = RobotPosition(
+            x=4.321, y=8.765, theta=0.0, timestamp=1, source="request", pmap_id="p"
+        )
+        chain = _position_chain(SimpleNamespace(live_position=stream))
+        assert chain["live_position"]["positions_received"] == 3
+        assert chain["live_position"]["enabled"] is True
+        assert "4.321" not in repr(chain) and "8.765" not in repr(chain)
+
+    def test_none_without_one(self):
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.diagnostics import _position_chain
+
+        assert _position_chain(SimpleNamespace())["live_position"] is None
+
+
 class TestPrimeRecordsWithRoomData:
     """4.2.21: whether the Prime records carry rooms -- before that none
     did, and the download could not show it."""
@@ -2430,3 +2459,49 @@ class TestPrimeRecordsWithRoomData:
 
         assert summary["mission_store"]["records_with_room_data"] == 2
         assert summary["mission_store"]["records_without_room_data"] == 1
+
+
+class TestCleanZoneIdsInDiagnostics:
+    """@Hardy-196: `clean_zone: Esstisch` went out as zone 0 while the
+    robot's own zone numbers were 16 and 21, and nothing in the download
+    showed which id field of the account's zone said what."""
+
+    @staticmethod
+    def _cc(zones, active="P1"):
+        return SimpleNamespace(
+            active_pmap_id=active,
+            data={"pmaps": [
+                {"active_pmapv_details": {
+                    "active_pmapv": {"pmap_id": active},
+                    "zones": zones,
+                }},
+                {"active_pmapv_details": {
+                    "active_pmapv": {"pmap_id": "OTHER"},
+                    "zones": [{"id": "9", "name": "Elsewhere"}],
+                }},
+            ]},
+        )
+
+    def test_every_id_field_is_shown_as_it_is(self):
+        from custom_components.roomba_plus.diagnostics import _clean_zone_ids
+
+        out = _clean_zone_ids(self._cc([
+            {"id": "21", "zone_id": "0", "name": "Esstisch", "zone_type": "default",
+             "geometry": {"type": "Polygon", "coordinates": [[[1, 2]]]}},
+            {"id": "16", "name": "Couch"},
+        ]))
+
+        assert out == [
+            {"name": "Esstisch", "zone_type": "default", "id": "21", "zone_id": "0"},
+            {"name": "Couch", "zone_type": None, "id": "16"},
+        ]
+
+    def test_no_geometry_and_only_the_active_map(self):
+        from custom_components.roomba_plus.diagnostics import _clean_zone_ids
+
+        out = _clean_zone_ids(self._cc([
+            {"id": "21", "name": "Esstisch", "geometry": {"coordinates": [[1, 2]]}},
+        ]))
+
+        assert "geometry" not in repr(out)
+        assert "Elsewhere" not in repr(out)

@@ -5,6 +5,7 @@ from collections.abc import Mapping
 
 import asyncio
 import logging
+import re
 from typing import Any
 
 # GUARDED, SO A WRONG LIBRARY SAYS SO.
@@ -31,17 +32,27 @@ try:
 except ImportError as _exc:  # pragma: no cover - depends on environment
     RoombaClient = RoombaInfo = RoombaDiscovery = RoombaPassword = None  # type: ignore[assignment,misc]
     ROOMBAPY_IMPORT_ERROR = str(_exc)
-from roombapy_prime import LoginResult
+from roombapy_prime import CloudAccount, CloudError
 import voluptuous as vol
 from homeassistant.helpers.selector import (
     EntitySelector as SelectorEntitySelector,
     EntitySelectorConfig as SelectorEntitySelectorConfig,
+    SelectOptionDict,
     SelectSelector,
     SelectSelectorConfig,
     SelectSelectorMode,
 )
 
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult, OptionsFlow
+from homeassistant.config_entries import (
+    SOURCE_IGNORE,
+    SOURCE_INTEGRATION_DISCOVERY,
+    ConfigEntryState,
+    ConfigFlow,
+    ConfigFlowResult,
+    OptionsFlow,
+)
+from homeassistant.helpers import discovery_flow
+from homeassistant.helpers.typing import DiscoveryInfoType
 from homeassistant.const import CONF_DELAY, CONF_HOST, CONF_NAME, CONF_PASSWORD
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
@@ -49,15 +60,10 @@ from homeassistant.helpers.service_info.dhcp import DhcpServiceInfo
 from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 
 from . import CannotConnect, async_connect_or_timeout, async_disconnect_or_timeout, roomba_reported_state
-from ._prime_login_bridge import store_pending_login
-from .cloud_api import (
-    AuthenticationError,
-    CloudApiError,
-    IrobotCloudApi,
-    RateLimitedError,
-    SSLCertificateError,
-)
+from . import cloud_errors
+from .cloud_account import async_login, async_offer, async_peek
 from .const import (
+    reports_local_pose,
     CONF_CORRELATION_ENTITIES,
     CONF_ROOM_SCHEDULE,
     ROOM_SCHEDULE_INTERVALS,
@@ -77,6 +83,7 @@ from .const import (
     CONF_FLOOR,
     CONF_IROBOT_PASSWORD,
     CONF_IROBOT_USERNAME,
+    CONF_LIVE_POSITION_REQUESTS,
     CONF_MAP_ENABLED,
     CONF_MAP_SCALE,
     CONF_MAP_SIZE_PX,
@@ -100,6 +107,7 @@ from .const import (
     DEFAULT_DELAY,
     DEFAULT_ENABLE_MAINTENANCE_LIST,
     DEFAULT_ENABLE_SCHEDULE_CALENDAR,
+    DEFAULT_LIVE_POSITION_REQUESTS,
     DEFAULT_MAP_ENABLED,
     DEFAULT_MAP_SCALE,
     DEFAULT_MAP_SIZE_PX,
@@ -118,6 +126,99 @@ from .room_cleaning import smart_rooms_to_name
 from .room_seg_store import RoomSegStore, area_number
 
 _LOGGER = logging.getLogger(__name__)
+
+
+async def _async_check_cloud_login(
+    hass: HomeAssistant, username: str, password: str
+) -> tuple[CloudAccount | None, str | None]:
+    """Logs in with what the user typed: the account, or the form error
+    that says why not.
+
+    ONE ERROR PER CAUSE (4.3). The form showed four errors for every way
+    a login can fail, and one of them -- `cannot_connect` -- told the user
+    to check the ROBOT, which a cloud login never touches. The library
+    now names the cause (CloudError.reason), and each cause has its own
+    text in the form (cloud_errors.flow_error())."""
+    try:
+        account = await async_login(hass, username, password)
+    except CloudError as exc:
+        _LOGGER.debug("iRobot cloud login failed: %s (%s)", exc.reason, exc)
+        return None, cloud_errors.flow_error(exc)
+    return account, None
+
+
+@callback
+def _async_update_account_siblings(
+    hass: HomeAssistant, source: RoombaConfigEntry, username: str, password: str
+) -> int:
+    """Gives the new credentials of one entry to every other entry that
+    had the same old ones, and reloads them (4.3).
+
+    ONE PASSWORD CHANGE, ONE PROMPT. Since the robots of an account
+    share a login, a password changed in the iRobot app makes all of
+    them fail together, and each asked for the new password on its own:
+    three robots, three prompts, the same password typed three times.
+    The reload also ends the reauthentication the others were waiting
+    in.
+
+    ONLY A NEW PASSWORD FOR THE SAME ACCOUNT. A different address is a
+    different account: this robot moved to another household's account,
+    or was set up on the wrong one, and the others keep working on
+    theirs. Only a changed password is passed on -- an account has one
+    password, so the others cannot still be working with the old one.
+
+    ONLY WHERE THE OLD CREDENTIALS WERE THE SAME. An entry with the same
+    address and a different password is left alone -- it may be working
+    with a password this one never had. Clearing the credentials (cloud
+    off for one robot) is not passed on either: that is a choice per
+    robot, and this is only called with new credentials.
+
+    Called before the source entry itself is updated, while its data
+    still holds the old credentials. Returns how many entries followed.
+    """
+    old_username = source.data.get(CONF_IROBOT_USERNAME)
+    old_password = source.data.get(CONF_IROBOT_PASSWORD)
+    if not (isinstance(old_username, str) and isinstance(old_password, str)
+            and old_username and old_password):
+        return 0
+    old_key = old_username.strip().casefold()
+    if username.strip().casefold() != old_key or old_password == password:
+        return 0
+    followed = 0
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        if entry.entry_id == source.entry_id or entry.source == SOURCE_IGNORE:
+            continue
+        their_username = entry.data.get(CONF_IROBOT_USERNAME)
+        if not isinstance(their_username, str) or their_username.strip().casefold() != old_key:
+            continue
+        if entry.data.get(CONF_IROBOT_PASSWORD) != old_password:
+            continue
+        hass.config_entries.async_update_entry(
+            entry,
+            data={**entry.data, CONF_IROBOT_USERNAME: username, CONF_IROBOT_PASSWORD: password},
+        )
+        hass.config_entries.async_schedule_reload(entry.entry_id)
+        followed += 1
+    if followed:
+        _LOGGER.info(
+            "iRobot account credentials changed: %d other robot(s) of the "
+            "same account follow", followed,
+        )
+    return followed
+
+
+def _robots_of(account: CloudAccount | None) -> dict[str, Any]:
+    """The login response's raw robot records, keyed by BLID: name, sku
+    and the robot's local password. Empty for anything unexpected."""
+    if account is None:
+        return {}
+    robots = account.login_result.raw.get("robots")
+    return robots if isinstance(robots, dict) else {}
+
+
+#: The two fixed choices of the known_account step, next to the accounts.
+_OTHER_ACCOUNT = "__other__"
+_NO_ACCOUNT = "__none__"
 
 
 def _area_field(room_id: str) -> str:
@@ -264,6 +365,12 @@ async def validate_input(
 
 REST980_DOMAIN = "roomba_rest980"
 
+#: The tail of a roomba_rest980 room or zone select's unique id:
+#: `{entry}_p_{region id}_{r|z}_{pmap id}` (select.py, `CleanRoomPasses`,
+#: unchanged up to v1.20.0-beta4). The region id is digits, so the
+#: match cannot slide into a map id that itself contains `_`.
+_REST980_UID_RE = re.compile(r".*_p_(?P<rid>\d+)_(?P<kind>[rz])_(?P<pmap>.+)$")
+
 
 def _resolve_current_pmap_id(state: dict[str, Any]) -> str:
     """Best-effort current pmap_id from live local MQTT state.
@@ -286,10 +393,13 @@ def _resolve_current_pmap_id(state: dict[str, Any]) -> str:
     return ""
 
 
-def _discover_rest980_rooms(hass: HomeAssistant) -> dict[str, str]:
+def _discover_rest980_rooms(
+    hass: HomeAssistant, pmap_id: str | None = None
+) -> dict[str, str]:
     """Read room names from an existing roomba_rest980 installation.
 
-    Returns {region_id: name}. roomba_rest980's CleanRoomPasses select
+    Returns {region_id: name} for its ROOMS -- not its clean zones -- and,
+    given `pmap_id`, only for that map's rooms. roomba_rest980's CleanRoomPasses select
     entities expose a `room_data` attribute containing the raw cloud
     region/zone dict — {"id": region_id, "name": ..., "region_type"/"zone_type": ...}.
     pmap_id is NOT exposed there (it's a private attribute on the rest980
@@ -347,11 +457,44 @@ def _discover_rest980_rooms(hass: HomeAssistant) -> dict[str, str]:
             room_data = state.attributes.get("room_data")
             if not isinstance(room_data, dict):
                 continue
+            uid = getattr(entity, "unique_id", None)
+            match = _REST980_UID_RE.match(uid) if isinstance(uid, str) else None
+            # ROOMS ONLY. roomba_rest980 makes one of these selects for
+            # every room AND every clean zone, and the two are numbered
+            # separately: room 0 and zone 0 can sit on one map. Imported
+            # by bare id, a zone overwrote the room with the same id and
+            # went into the ROOM names -- the same collision @FJSoninC
+            # found in `clean_room`. Zones need no import: Roomba+ reads
+            # them from the account, typed.
+            if _rest980_is_zone(match, state.attributes, room_data):
+                continue
+            # AND ONLY THIS MAP'S. Room ids repeat across maps, and the
+            # import files every room under one map; a second floor's
+            # room 3 would otherwise overwrite this floor's.
+            if pmap_id and match is not None and match["pmap"] != pmap_id:
+                continue
             rid = room_data.get("id")
             name = room_data.get("name")
             if rid and name:
                 rooms[str(rid)] = str(name)
     return rooms
+
+
+def _rest980_is_zone(
+    match: re.Match[str] | None, attributes: Any, room_data: dict[str, Any]
+) -> bool:
+    """Whether a roomba_rest980 select is a clean zone rather than a room.
+
+    Its unique id says so (`_z_`); failing that, the command it would send
+    (`room_json.type`), and failing that, the cloud data it carries: a zone
+    has `zone_type`, a room `region_type`.
+    """
+    if match is not None:
+        return match["kind"] == "z"
+    room_json = attributes.get("room_json") if hasattr(attributes, "get") else None
+    if isinstance(room_json, dict) and room_json.get("type") in ("rid", "zid"):
+        return bool(room_json["type"] == "zid")
+    return "zone_type" in room_data and "region_type" not in room_data
 
 
 # ── Config Flow ───────────────────────────────────────────────────────────────
@@ -364,6 +507,25 @@ class RoombaPlusConfigFlow(ConfigFlow, domain=DOMAIN):
     """
 
     VERSION = 25
+
+    # Class-level defaults as well as instance ones: several tests build
+    # the flow with object.__new__() and set only what they use.
+    #: Which path the known_account step continues: "account" (robot
+    #: picker) or "local" (a robot paired over the network).
+    _known_account_for: str = "account"
+    #: The user chose "another account": ask for credentials instead.
+    _skip_known_account: bool = False
+    #: The known account preselected in the known_account step.
+    _preferred_account: str | None = None
+    #: A known account was already tried for this robot's password.
+    _tried_account_link: bool = False
+    #: What an integration_discovery flow was started with.
+    _discovered: dict[str, Any] = {}
+    #: The robot password in _pending_config came from an account and
+    #: has not been tried on the robot yet.
+    _account_password_unverified: bool = False
+    #: A login error to show on the account form when it first appears.
+    _account_error: str | None = None
 
     def __init__(self) -> None:
         """Initialise the flow."""
@@ -378,14 +540,14 @@ class RoombaPlusConfigFlow(ConfigFlow, domain=DOMAIN):
         self._prime_account_password: str = ""
         self._prime_account_robots: dict[str, Any] = {}
         self._prime_selected_blid: str | None = None
-        # NEW (this session, prompted by a real "onboarding is slow" field
-        # report): the LoginResult from this same validation login, handed
-        # to _async_create_prime_entry() -> _prime_login_bridge so the
-        # immediate first async_setup_entry() call can skip a fully
-        # redundant second login. See _prime_login_bridge.py's own
-        # docstring for the full reasoning and the deliberately narrow
-        # risk profile (in-memory, single-use, short TTL).
-        self._prime_account_login_result: LoginResult | None = None
+        # The account this flow's own login produced. Handed to the entry
+        # it creates (cloud_account.async_offer), so setup does not log
+        # in a second time moments later.
+        self._prime_account: CloudAccount | None = None
+        #: Logins made during this flow, by casefolded username -- so one
+        #: login serves every step that needs it.
+        self._flow_accounts: dict[str, CloudAccount] = {}
+        self._discovered = {}
 
     @staticmethod
     @callback
@@ -434,6 +596,12 @@ class RoombaPlusConfigFlow(ConfigFlow, domain=DOMAIN):
             # returns an explicit None unchanged, and only a missing key
             # reaches the default.
             flow_unique_id = progress["context"].get("unique_id") or ""
+            # A flow with no robot yet -- "Add integration" sitting at
+            # the account or robot-list step -- is not a shorter BLID.
+            # Every string starts with "", so without this a robot
+            # showing up on the network aborted the user's own setup.
+            if not flow_unique_id:
+                continue
             if flow_unique_id.startswith(self.blid):
                 return self.async_abort(reason="short_blid")
             if self.blid.startswith(flow_unique_id):
@@ -562,28 +730,28 @@ class RoombaPlusConfigFlow(ConfigFlow, domain=DOMAIN):
             if matching is not None and _is_prime_sku(matching.sku):
                 return await self.async_step_prime_account()
 
+        # THE ACCOUNT COMES FIRST (4.3). It works for every robot, finds
+        # all of them on the account at once (the others are then
+        # announced as discovered), and needs no button on the robot.
+        # Local pairing stays for anyone who wants no cloud at all.
+        #
+        # AND IT IS ALSO THE FALLBACK. Its old wording read "for newer
+        # models with no local setup, e.g. Combo" -- which told an i7
+        # owner it was not for him, when it is exactly what he needs if
+        # the password cannot be fetched automatically. A forum user
+        # with two i7s read that and ran a third-party script to extract
+        # his password by hand.
         hosts: dict[str | None, str] = {
+            _CLOUD_ACCOUNT_SENTINEL: (
+                "Set up with my iRobot account (recommended -- works for any "
+                "robot, finds all robots on the account, no button to press)"
+            ),
             **{
                 device.ip: f"{device.robot_name} ({device.ip})"
                 for device in devices
                 if device.blid not in already_configured and not _is_prime_sku(device.sku)
             },
             None: "Add manually (I know my robot's local IP)",
-            # THIS IS ALSO THE FALLBACK, and the old wording said the
-            # opposite. It read "for newer models with no local setup,
-            # e.g. Combo" -- which tells an i7 owner this is not for
-            # them, when it is exactly what they need if the password
-            # cannot be fetched automatically.
-            #
-            # A forum user with two i7s on the same network read that,
-            # concluded the option did not apply, and ran a third-party
-            # script to extract his password by hand. He did the right
-            # thing and the interface told him not to.
-            _CLOUD_ACCOUNT_SENTINEL: (
-                "Set up with my iRobot account (works for any robot -- "
-                "and the way to go if the password could not be found "
-                "automatically)"
-            ),
         }
 
         return self.async_show_form(
@@ -642,13 +810,19 @@ class RoombaPlusConfigFlow(ConfigFlow, domain=DOMAIN):
     ) -> ConfigFlowResult:
         """Cloud account login.
 
-        Reuses the existing IrobotCloudApi wrapper (same login/error-
-        translation already used by async_step_cloud_credentials)
-        rather than calling roombapy-prime directly: api.robots already
-        contains sku/password per robot (LoginResult.raw's own "robots"
-        dict), everything async_step_prime_robot_picker() needs.
+        The same login and error mapping as async_step_cloud_credentials
+        (_async_check_cloud_login). The login response's raw "robots"
+        dict carries sku and password per robot, everything
+        async_step_prime_robot_picker() needs.
         """
+        if user_input is None and not self._skip_known_account and self._known_accounts():
+            self._known_account_for = "account"
+            return await self.async_step_known_account()
+
         errors: dict[str, str] = {}
+        if user_input is None and self._account_error:
+            errors["base"] = self._account_error
+            self._account_error = None
 
         if user_input is not None:
             username = user_input.get(CONF_IROBOT_USERNAME, "").strip()
@@ -662,30 +836,14 @@ class RoombaPlusConfigFlow(ConfigFlow, domain=DOMAIN):
                 # a blank submission -- voluptuous's Required only
                 # enforces the KEY being present, not the value being
                 # non-empty, so this path is reachable in practice.
-                errors["base"] = "invalid_cloud_credentials"
+                errors["base"] = "cloud_credentials_rejected"
             elif username and password:
-                from homeassistant.helpers.aiohttp_client import async_get_clientsession
-                country_code = (self.hass.config.country or "US").upper()
-                api = IrobotCloudApi(
-                    username, password, async_get_clientsession(self.hass),
-                    country_code=country_code,
-                )
-                try:
-                    await api.authenticate()
-                except AuthenticationError:
-                    errors["base"] = "invalid_cloud_credentials"
-                except RateLimitedError:
-                    errors["base"] = "cloud_rate_limited"
-                except SSLCertificateError:
-                    errors["base"] = "cloud_ssl_certificate_error"
-                except CloudApiError:
-                    errors["base"] = "cannot_connect"
+                account, error = await self._async_login(username, password)
+                if account is None:
+                    errors["base"] = error or "cloud_unknown"
                 else:
-                    self._prime_account_username = username
-                    self._prime_account_password = password
-                    self._prime_account_robots = api.robots
-                    self._prime_account_login_result = api.login_result
-                    return await self.async_step_prime_robot_picker()
+                    self._use_account(username, password, account)
+                    return await self._async_continue_with_account()
 
         return self.async_show_form(
             step_id="prime_account",
@@ -704,11 +862,15 @@ class RoombaPlusConfigFlow(ConfigFlow, domain=DOMAIN):
         network, see async_step_prime_classic_ip()) by SKU. Already-
         configured blids are filtered out.
 
-        One robot per flow run, matching async_step_user()'s own local-
-        discovery dropdown convention -- add additional robots via a
-        second "Add integration" run, rather than inventing a new
-        multi-add mechanism that doesn't exist anywhere else in this
-        integration.
+        ONE ROBOT PER FLOW RUN -- Home Assistant's rule: a flow creates
+        one entry. The account's OTHER robots are not left to a second
+        "Add integration" run any more (4.3): once this one is created,
+        each of them is announced as discovered (_announce_other_robots),
+        one click each.
+
+        Robots already set up are named in the description rather than
+        dropped silently, so a robot missing from the list does not look
+        like one the account lacks.
         """
         already_configured = self._async_current_ids(False)
         candidates = {
@@ -743,10 +905,329 @@ class RoombaPlusConfigFlow(ConfigFlow, domain=DOMAIN):
             )
             for blid, info in candidates.items()
         }
+        configured = [
+            str(info.get("name") or blid)
+            for blid, info in self._prime_account_robots.items()
+            if blid in already_configured and isinstance(info, dict)
+        ]
         return self.async_show_form(
             step_id="prime_robot_picker",
             data_schema=vol.Schema({vol.Required(CONF_BLID): vol.In(choices)}),
+            description_placeholders={"configured": ", ".join(configured) or "–"},
         )
+
+    # ── One account, several robots (4.3) ──────────────────────────────────
+
+    def _known_accounts(self) -> dict[str, tuple[str, str]]:
+        """The iRobot accounts entries of this integration already use,
+        by casefolded username: (username, password).
+
+        Where two entries of one account disagree on the password (one
+        still has an old one), the loaded entry's wins -- its password
+        is the one that currently works."""
+        known: dict[str, tuple[str, str]] = {}
+        for entry in self._async_current_entries(include_ignore=False):
+            username = entry.data.get(CONF_IROBOT_USERNAME)
+            password = entry.data.get(CONF_IROBOT_PASSWORD)
+            if not (isinstance(username, str) and isinstance(password, str)
+                    and username and password):
+                continue
+            key = username.strip().casefold()
+            if key not in known or entry.state is ConfigEntryState.LOADED:
+                known[key] = (username, password)
+        return known
+
+    async def _async_login(
+        self, username: str, password: str
+    ) -> tuple[CloudAccount | None, str | None]:
+        """_async_check_cloud_login(), once per account and flow: a step
+        that needs the account again takes the login an earlier step of
+        this flow made."""
+        if "_flow_accounts" not in self.__dict__:   # a flow built by hand in a test
+            self._flow_accounts = {}
+        # By password too: a user who picks "another account" and types
+        # the same address with a different password must get a login
+        # with THAT password, not the one an earlier step made.
+        key = f"{username.strip().casefold()}\0{password}"
+        cached = self._flow_accounts.get(key)
+        if cached is not None:
+            return cached, None
+        account, error = await _async_check_cloud_login(self.hass, username, password)
+        if account is not None:
+            self._flow_accounts[key] = account
+        return account, error
+
+    def _use_account(self, username: str, password: str, account: CloudAccount) -> None:
+        """The account the rest of the flow works with."""
+        self._prime_account_username = username
+        self._prime_account_password = password
+        self._prime_account_robots = _robots_of(account)
+        self._prime_account = account
+
+    async def async_step_known_account(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """An iRobot account another entry already uses, instead of typing
+        it again for every robot (4.3).
+
+        Choosing it still logs in: only a fresh login lists a robot added
+        to the account since the other entry was set up, and it checks
+        the stored password still works. What it saves is the typing.
+
+        Two paths lead here. From "Set up with my iRobot account" the
+        choice leads to the robot list. After pairing a robot over the
+        network it replaces the optional credentials form, and "no cloud"
+        stays a choice.
+        """
+        known = self._known_accounts()
+        local = self._known_account_for == "local"
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            if local and self._account_password_unverified:
+                refused = await self._async_verify_account_password()
+                if refused is not None:
+                    return refused
+            choice = str(user_input.get("account", ""))
+            if local and choice == _NO_ACCOUNT:
+                return self._async_create_local_entry(None, None, None)
+            creds = known.get(choice.strip().casefold())
+            if creds is None:
+                self._skip_known_account = True
+                if local:
+                    return await self.async_step_cloud_credentials()
+                return await self.async_step_prime_account()
+            username, password = creds
+            account, error = await self._async_login(username, password)
+            if account is None:
+                errors["base"] = error or "cloud_unknown"
+            elif local:
+                return self._async_create_local_entry(username, password, account)
+            else:
+                self._use_account(username, password, account)
+                return await self._async_continue_with_account()
+
+        options = [SelectOptionDict(value=u, label=u) for u, _p in known.values()]
+        options.append(SelectOptionDict(value=_OTHER_ACCOUNT, label=_OTHER_ACCOUNT))
+        if local:
+            options.append(SelectOptionDict(value=_NO_ACCOUNT, label=_NO_ACCOUNT))
+        preferred = (self._preferred_account or "").strip().casefold()
+        default = known[preferred][0] if preferred in known else options[0]["value"]
+        return self.async_show_form(
+            step_id="known_account",
+            data_schema=vol.Schema({
+                vol.Required("account", default=default): SelectSelector(
+                    SelectSelectorConfig(
+                        options=options,
+                        mode=SelectSelectorMode.LIST,
+                        translation_key="known_account",
+                    )
+                ),
+            }),
+            errors=errors,
+        )
+
+    @callback
+    def _announce_other_robots(
+        self, account: CloudAccount | None, username: str, created_blid: str
+    ) -> None:
+        """Every other robot on the account that is not set up yet
+        appears under "Discovered", one click each (4.3).
+
+        Home Assistant lets one flow create one entry, so a multiple
+        choice cannot add three robots at once; a discovery per robot is
+        its own way of saying "there are more". A robot the user ignored
+        stays ignored: Home Assistant keeps that as a configured id.
+
+        The discovery carries no secret -- only the BLID, what to show,
+        and which account. The password comes from that account's entry
+        when the user adds it, however much later that is.
+
+        Not from a discovery flow itself, which would announce the same
+        robots again."""
+        if account is None or self.source == SOURCE_INTEGRATION_DISCOVERY:
+            return
+        taken = self._async_current_ids(include_ignore=True)
+        for blid, info in _robots_of(account).items():
+            if blid == created_blid or blid in taken or not isinstance(info, dict):
+                continue
+            discovery_flow.async_create_flow(
+                self.hass,
+                DOMAIN,
+                context={"source": SOURCE_INTEGRATION_DISCOVERY},
+                data={
+                    CONF_BLID: blid,
+                    CONF_NAME: str(info.get("name") or blid),
+                    "sku": str(info.get("sku") or ""),
+                    CONF_IROBOT_USERNAME: username,
+                },
+            )
+
+    async def async_step_integration_discovery(
+        self, discovery_info: DiscoveryInfoType
+    ) -> ConfigFlowResult:
+        """Another robot on an account just set up -- see
+        _announce_other_robots()."""
+        blid = str(discovery_info[CONF_BLID])
+        await self.async_set_unique_id(blid)
+        self._abort_if_unique_id_configured()
+        self._discovered = dict(discovery_info)
+        self.blid = blid
+        self.name = str(discovery_info.get(CONF_NAME) or blid)
+        self.context["title_placeholders"] = {CONF_NAME: self.name}
+        return await self.async_step_integration_discovery_confirm()
+
+    async def async_step_integration_discovery_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """One click: add this robot of the account.
+
+        The password is the one of an entry that uses the account now,
+        not the one at discovery time. If no entry uses it any more, the
+        flow asks for the account like a fresh setup would."""
+        errors: dict[str, str] = {}
+        username = str(self._discovered.get(CONF_IROBOT_USERNAME) or "")
+        if user_input is not None:
+            creds = self._known_accounts().get(username.strip().casefold())
+            if creds is None:
+                self._skip_known_account = True
+                return await self.async_step_prime_account()
+            username, password = creds
+            # The login an entry holds anyway lists this robot: it was
+            # announced from it. Only a robot missing there needs a login.
+            account: CloudAccount | None = async_peek(self.hass, username, password)
+            if account is None or self.blid not in _robots_of(account):
+                account, error = await self._async_login(username, password)
+                if account is None:
+                    # NOT the same button again: every click would try
+                    # the same stored password, and against a locked
+                    # account every attempt extends the lock. Ask for
+                    # the account instead, saying why.
+                    self._skip_known_account = True
+                    self._account_error = error or "cloud_unknown"
+                    return await self.async_step_prime_account()
+            self._use_account(username, password, account)
+            return await self._async_add_discovered()
+
+        sku = str(self._discovered.get("sku") or "")
+        self._set_confirm_only()
+        return self.async_show_form(
+            step_id="integration_discovery_confirm",
+            errors=errors,
+            description_placeholders={
+                CONF_NAME: self.name or self.blid,
+                "model": sku or "?",
+                "account": username,
+            },
+        )
+
+    async def _async_continue_with_account(self) -> ConfigFlowResult:
+        """Where a flow goes once it has an account: the robot list -- or,
+        for a flow started for one robot of the account, that robot.
+
+        A discovery flow that had to ask for the account must not offer
+        the whole list: picking another robot there would add that one
+        under this robot's card, and the robot the card was for would
+        not be announced again."""
+        if self.source == SOURCE_INTEGRATION_DISCOVERY:
+            return await self._async_add_discovered()
+        return await self.async_step_prime_robot_picker()
+
+    async def _async_add_discovered(self) -> ConfigFlowResult:
+        """Adds the robot this discovery flow is for, with the account
+        the flow now has."""
+        info = self._prime_account_robots.get(self.blid)
+        if not isinstance(info, dict):
+            return self.async_abort(reason="robot_not_on_account")
+        self._prime_selected_blid = self.blid
+        if _is_prime_sku(info.get("sku")):
+            return await self._async_create_prime_entry(self.blid, info)
+        return await self.async_step_prime_classic_ip()
+
+    async def _async_verify_account_password(self) -> ConfigFlowResult | None:
+        """Tries the password the account gave on the robot -- once the
+        user has answered, not when the robot was merely found.
+
+        None when the robot accepts it. Otherwise the HOME button step,
+        saying why it appears after all."""
+        self._account_password_unverified = False
+        try:
+            result = await validate_input(self.hass, self._pending_config)
+        except CannotConnect:
+            _LOGGER.debug(
+                "Robot %s did not accept the password from the iRobot "
+                "account; falling back to the HOME button", self.blid,
+            )
+            self._pending_config = {}
+            return self.async_show_form(
+                step_id="link",
+                description_placeholders={CONF_NAME: self.name or self.blid},
+                errors={"base": "account_password_refused"},
+            )
+        self.name = self.name or result[CONF_NAME]
+        return None
+
+    async def _async_link_via_known_account(self) -> ConfigFlowResult | None:
+        """A robot found on the network whose BLID is on an account this
+        integration already knows needs no HOME button (4.3): the login
+        response carries every robot's local password.
+
+        NOTHING GOES OVER THE NETWORK HERE. This runs as soon as Home
+        Assistant finds a robot -- a DHCP discovery shows its first form
+        without anyone clicking -- so it only reads the logins that
+        loaded entries already hold. No cloud login (against an account
+        with a stale stored password, every discovery after every
+        restart would be another failed attempt), and no connection to
+        the robot. The password is tried on the robot once the user
+        answers (_async_verify_account_password).
+
+        A robot added to the account after the entries logged in is not
+        in their logins; it gets the HOME button, as before, or the
+        account path, which logs in fresh."""
+        self._tried_account_link = True
+        for username, password in self._known_accounts().values():
+            info = _robots_of(async_peek(self.hass, username, password)).get(self.blid)
+            robot_password = info.get("password") if isinstance(info, dict) else None
+            if not robot_password:
+                continue
+            self._pending_config = {
+                CONF_HOST: self.host,
+                CONF_BLID: self.blid,
+                CONF_PASSWORD: robot_password,
+                **DEFAULT_OPTIONS,
+            }
+            self._account_password_unverified = True
+            self._preferred_account = username
+            return await self.async_step_cloud_credentials()
+        return None
+
+    @callback
+    def _async_create_local_entry(
+        self,
+        username: str | None,
+        password: str | None,
+        account: CloudAccount | None,
+    ) -> ConfigFlowResult:
+        """The entry of a robot paired over the network, with or without
+        an account. With one, the login goes to the entry and the
+        account's other robots are announced."""
+        config = dict(self._pending_config)
+        if username and password:
+            config[CONF_IROBOT_USERNAME] = username
+            config[CONF_IROBOT_PASSWORD] = password
+            if account is not None:
+                async_offer(self.hass, account, username, password)
+                self._announce_other_robots(account, username, str(config.get(CONF_BLID, "")))
+        return self.async_create_entry(title=self.name or "Roomba+", data=config)
+
+    @callback
+    def _offer_account(self) -> None:
+        """Hands this flow's login to the entry it is about to create."""
+        if self._prime_account is not None:
+            async_offer(
+                self.hass, self._prime_account,
+                self._prime_account_username, self._prime_account_password,
+            )
 
     async def _async_create_prime_entry(
         self, blid: str, info: dict[str, Any]
@@ -758,25 +1239,14 @@ class RoombaPlusConfigFlow(ConfigFlow, domain=DOMAIN):
         PrimeCoordinator.async_start()'s own ConfigEntryNotReady
         mapping, not here.
 
-        NEW (this session, prompted by a real "onboarding is slow"
-        field report): also hands the LoginResult from that same
-        validation login to _prime_login_bridge, keyed by blid. HA
-        calls async_setup_entry() for this entry essentially
-        immediately after this method returns -- see
-        _async_setup_entry_prime() in __init__.py, which checks this
-        bridge before doing its own (otherwise fully redundant) login.
-        Single-use, short TTL, in-memory only -- see the bridge
-        module's own docstring for the full reasoning and risk
-        profile. If _prime_account_login_result is somehow None here
-        (shouldn't happen -- it's set in the same step that produced
-        this entry's robots list -- but defensive rather than assumed),
-        simply nothing gets stored and the setup step does its own
-        fresh login exactly as it always did before this existed.
+        Also hands this flow's login to the entry (_offer_account()),
+        which HA sets up moments after this returns -- so setup takes
+        the login instead of running a second one.
         """
         await self.async_set_unique_id(blid, raise_on_progress=False)
         self._abort_if_unique_id_configured()
-        if self._prime_account_login_result is not None:
-            store_pending_login(blid, self._prime_account_login_result)
+        self._offer_account()
+        self._announce_other_robots(self._prime_account, self._prime_account_username, blid)
         return self.async_create_entry(
             title=info.get("name") or blid,
             data={
@@ -847,40 +1317,28 @@ class RoombaPlusConfigFlow(ConfigFlow, domain=DOMAIN):
 
         self.blid = blid
         self.name = result[CONF_NAME]
+        # THE ACCOUNT STAYS WITH THE ROBOT (4.3). A separate step asked
+        # whether to keep the credentials for cloud features, defaulting
+        # to yes -- one more click on every Classic robot added from the
+        # account, for an answer the user already gave by choosing the
+        # account. Cloud features can still be turned off in the options.
         self._pending_config = config
-        return await self.async_step_prime_classic_analytics()
-
-    async def async_step_prime_classic_analytics(
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
-        """Classic robot found+completed via cloud login -- offers to
-        also keep these same cloud credentials for the existing
-        cloud_coordinator enrichment feature (SMART-tier only), instead
-        of making the user re-enter them via the separate
-        async_step_cloud_credentials step right afterward. Default:
-        enabled -- the credentials are already validated and in memory
-        either way; the only real question is whether to persist them.
-        """
-        if user_input is not None:
-            config = dict(self._pending_config)
-            if user_input.get("enable_cloud_analytics", True):
-                config[CONF_IROBOT_USERNAME] = self._prime_account_username
-                config[CONF_IROBOT_PASSWORD] = self._prime_account_password
-            return self.async_create_entry(title=self.name or "Roomba+", data=config)
-
-        return self.async_show_form(
-            step_id="prime_classic_analytics",
-            data_schema=vol.Schema({
-                vol.Optional("enable_cloud_analytics", default=True): bool,
-            }),
-            description_placeholders={CONF_NAME: self.name or self.blid},
+        return self._async_create_local_entry(
+            self._prime_account_username, self._prime_account_password, self._prime_account
         )
 
     async def async_step_link(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Ask the user to press and hold the HOME button to retrieve the password."""
+        """Ask the user to press and hold the HOME button to retrieve the password.
+
+        Not when an account this integration already knows lists the
+        robot: then its password comes from there (4.3)."""
         if user_input is None:
+            if not self._tried_account_link and self._known_accounts():
+                linked = await self._async_link_via_known_account()
+                if linked is not None:
+                    return linked
             return self.async_show_form(
                 step_id="link",
                 description_placeholders={CONF_NAME: self.name or self.blid},
@@ -953,35 +1411,23 @@ class RoombaPlusConfigFlow(ConfigFlow, domain=DOMAIN):
         functionality continues to work normally.
         """
 
+        if user_input is None and not self._skip_known_account and self._known_accounts():
+            self._known_account_for = "local"
+            return await self.async_step_known_account()
+
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            config = dict(self._pending_config)
             username = user_input.get(CONF_IROBOT_USERNAME, "").strip()
             password = user_input.get(CONF_IROBOT_PASSWORD, "").strip()
-            if username and password:
-                # Validate credentials before storing
-                from homeassistant.helpers.aiohttp_client import async_get_clientsession
-                country_code = (self.hass.config.country or "US").upper()
-                api = IrobotCloudApi(
-                    username, password, async_get_clientsession(self.hass),
-                    country_code=country_code,
-                )
-                try:
-                    await api.authenticate()
-                except AuthenticationError:
-                    errors["base"] = "invalid_cloud_credentials"
-                except RateLimitedError:
-                    errors["base"] = "cloud_rate_limited"
-                except SSLCertificateError:
-                    errors["base"] = "cloud_ssl_certificate_error"
-                except CloudApiError:
-                    errors["base"] = "cannot_connect"
-                else:
-                    config[CONF_IROBOT_USERNAME] = username
-                    config[CONF_IROBOT_PASSWORD] = password
-            if not errors:
-                return self.async_create_entry(title=self.name or "Roomba+", data=config)
+            if not (username and password):
+                return self._async_create_local_entry(None, None, None)
+            # Validate credentials before storing
+            account, error = await self._async_login(username, password)
+            if account is None:
+                errors["base"] = error or "cloud_unknown"
+            else:
+                return self._async_create_local_entry(username, password, account)
 
         return self.async_show_form(
             step_id="cloud_credentials",
@@ -1088,23 +1534,18 @@ class RoombaPlusConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             username = user_input.get(CONF_IROBOT_USERNAME, "").strip()
             password = user_input.get(CONF_IROBOT_PASSWORD, "").strip()
-            from homeassistant.helpers.aiohttp_client import async_get_clientsession
-            country_code = (self.hass.config.country or "US").upper()
-            api = IrobotCloudApi(
-                username, password, async_get_clientsession(self.hass),
-                country_code=country_code,
+            account, error = await _async_check_cloud_login(
+                self.hass, username, password
             )
-            try:
-                await api.authenticate()
-            except AuthenticationError:
-                errors["base"] = "invalid_cloud_credentials"
-            except RateLimitedError:
-                errors["base"] = "cloud_rate_limited"
-            except SSLCertificateError:
-                errors["base"] = "cloud_ssl_certificate_error"
-            except CloudApiError:
-                errors["base"] = "cannot_connect"
+            if account is None:
+                errors["base"] = error or "cloud_unknown"
             else:
+                # The entry reloads with these credentials and takes this
+                # login instead of making another.
+                async_offer(self.hass, account, username, password)
+                _async_update_account_siblings(
+                    self.hass, reauth_entry, username, password
+                )
                 new_data = dict(reauth_entry.data)
                 new_data[CONF_IROBOT_USERNAME] = username
                 new_data[CONF_IROBOT_PASSWORD] = password
@@ -1200,7 +1641,16 @@ class RoombaPlusOptionsFlow(OptionsFlow):
         entries that are still missing. Never overwrites a name the user has
         already assigned through our own naming flow.
         """
-        discovered = _discover_rest980_rooms(self.hass)
+        # THE ROBOT'S MAP FIRST: the import files every room under it, so
+        # it may only take that map's rooms.
+        try:
+            state = roomba_reported_state(self.config_entry.runtime_data.roomba)
+        except Exception:  # noqa: BLE001 - no state yet: import unfiltered
+            state = {}
+        current_pmap_id = (
+            _resolve_current_pmap_id(state) if isinstance(state, dict) else ""
+        )
+        discovered = _discover_rest980_rooms(self.hass, current_pmap_id or None)
         existing_labels: dict[str, Any] = self.config_entry.options.get(
             "smart_zone_labels", {}
         )
@@ -1211,9 +1661,6 @@ class RoombaPlusOptionsFlow(OptionsFlow):
         if user_input is not None:
             if not user_input.get("confirm_import", False) or not new_rooms:
                 return self.async_create_entry(title="", data=self.config_entry.options)
-
-            state = roomba_reported_state(self.config_entry.runtime_data.roomba)
-            current_pmap_id = _resolve_current_pmap_id(state)
 
             new_labels = dict(existing_labels)
             new_zone_data: dict[str, Any] = dict(
@@ -1361,92 +1808,122 @@ class RoombaPlusOptionsFlow(OptionsFlow):
             updated.update(user_input)
             return self.async_create_entry(title="", data=updated)
 
-        return self.async_show_form(
-            step_id="settings",
-            data_schema=vol.Schema(
-                {
-                    # CONTINUOUS AND DELAY ARE GONE FROM THIS FORM (4.2).
-                    #
-                    # roombapy 2.x keeps one supervised connection and
-                    # reconnects on its own -- the behaviour `continuous:
-                    # true` used to select, and what this form's own
-                    # description already recommended. There is no
-                    # polling mode left to ask for, so offering the
-                    # choice would be offering something nothing reads.
-                    #
-                    # The stored keys are left in the config entry
-                    # rather than migrated away: a value nothing reads is
-                    # harmless, and a migration whose only effect is to
-                    # delete two numbers is a risk with no upside.
-                    vol.Optional(
-                        CONF_MAP_ENABLED,
-                        default=options.get(CONF_MAP_ENABLED, DEFAULT_MAP_ENABLED),
-                    ): bool,
-                    vol.Optional(
-                        CONF_MAP_SIZE_PX,
-                        default=options.get(CONF_MAP_SIZE_PX, DEFAULT_MAP_SIZE_PX),
-                    ): vol.All(int, vol.Range(min=400, max=1200)),
-                    vol.Optional(
-                        CONF_MAP_SCALE,
-                        default=float(options.get(CONF_MAP_SCALE, DEFAULT_MAP_SCALE)),
-                    ): vol.All(vol.Coerce(float), vol.Range(min=5.0, max=30.0)),
-                    # Room names drawn INTO the map image. Same option
-                    # the Prime form offers: this is a preference about
-                    # maps, not about robot generations.
-                    #
-                    # Off by default, which reads backwards until you
-                    # know that v2.7.3 removed these labels on purpose --
-                    # the xiaomi-vacuum-map-card draws its own overlay
-                    # from the `rooms` attribute, and both at once
-                    # doubles them up.
-                    vol.Optional(
-                        CONF_REGION_SENSORS,
-                        default=options.get(
-                            CONF_REGION_SENSORS, DEFAULT_REGION_SENSORS
-                        ),
-                    ): bool,
-                    vol.Optional(
-                        CONF_MAP_ROOM_LABELS,
-                        default=options.get(
-                            CONF_MAP_ROOM_LABELS,
-                            DEFAULT_MAP_ROOM_LABELS,
-                        ),
-                    ): bool,
-                    vol.Optional(
-                        CONF_FLOOR,
-                        default=options.get(CONF_FLOOR, ""),
-                    ): str,
-                    # v3.3.0 CROSS-CORR — opt-in: external sensors whose
-                    # mission-start values get correlated with dirt counts
-                    vol.Optional(
-                        CONF_CORRELATION_ENTITIES,
-                        default=options.get(CONF_CORRELATION_ENTITIES, []),
-                    ): SelectorEntitySelector(
-                        SelectorEntitySelectorConfig(
-                            domain="sensor",
-                            multiple=True,
-                        )
+        schema: dict[Any, Any] = {
+            # CONTINUOUS AND DELAY ARE GONE FROM THIS FORM (4.2).
+            #
+            # roombapy 2.x keeps one supervised connection and
+            # reconnects on its own -- the behaviour `continuous:
+            # true` used to select, and what this form's own
+            # description already recommended. There is no
+            # polling mode left to ask for, so offering the
+            # choice would be offering something nothing reads.
+            #
+            # The stored keys are left in the config entry
+            # rather than migrated away: a value nothing reads is
+            # harmless, and a migration whose only effect is to
+            # delete two numbers is a risk with no upside.
+            vol.Optional(
+                CONF_MAP_ENABLED,
+                default=options.get(CONF_MAP_ENABLED, DEFAULT_MAP_ENABLED),
+            ): bool,
+        }
+        # ASKING A ROBOT WHERE IT IS (4.3) -- offered only to one whose
+        # shadow carries no position. A 900-series publishes its own and
+        # the option would do nothing there; showing it would invite a
+        # question nobody can answer from the form.
+        # Without the map there is nothing to draw the positions on, so
+        # no stream either (__init__.py creates it only with a renderer).
+        if options.get(
+            CONF_MAP_ENABLED, DEFAULT_MAP_ENABLED
+        ) and self._robot_reports_no_pose():
+            schema[
+                vol.Optional(
+                    CONF_LIVE_POSITION_REQUESTS,
+                    default=options.get(
+                        CONF_LIVE_POSITION_REQUESTS, DEFAULT_LIVE_POSITION_REQUESTS
                     ),
-                    vol.Optional(
-                        CONF_ENABLE_SCHEDULE_CALENDAR,
-                        default=options.get(
-                            CONF_ENABLE_SCHEDULE_CALENDAR, DEFAULT_ENABLE_SCHEDULE_CALENDAR
-                        ),
-                    ): bool,
-                    # THE MAINTENANCE LIST FOR CLASSIC TOO. It became opt-in
-                    # on both generations in 4.0.0a30, with the toggle added
-                    # to the Prime form only -- so a Classic robot's list
-                    # could not be switched back on at all (@ScenicSystemsLLC,
-                    # 4.3.0b4: gone after removing and re-adding a robot).
-                    vol.Optional(
-                        CONF_ENABLE_MAINTENANCE_LIST,
-                        default=options.get(
-                            CONF_ENABLE_MAINTENANCE_LIST, DEFAULT_ENABLE_MAINTENANCE_LIST
-                        ),
-                    ): bool,
-                }
-            ),
+                )
+            ] = bool
+        schema.update(
+            {
+                vol.Optional(
+                    CONF_MAP_SIZE_PX,
+                    default=options.get(CONF_MAP_SIZE_PX, DEFAULT_MAP_SIZE_PX),
+                ): vol.All(int, vol.Range(min=400, max=1200)),
+                vol.Optional(
+                    CONF_MAP_SCALE,
+                    default=float(options.get(CONF_MAP_SCALE, DEFAULT_MAP_SCALE)),
+                ): vol.All(vol.Coerce(float), vol.Range(min=5.0, max=30.0)),
+                # Room names drawn INTO the map image. Same option
+                # the Prime form offers: this is a preference about
+                # maps, not about robot generations.
+                #
+                # Off by default, which reads backwards until you
+                # know that v2.7.3 removed these labels on purpose --
+                # the xiaomi-vacuum-map-card draws its own overlay
+                # from the `rooms` attribute, and both at once
+                # doubles them up.
+                vol.Optional(
+                    CONF_REGION_SENSORS,
+                    default=options.get(
+                        CONF_REGION_SENSORS, DEFAULT_REGION_SENSORS
+                    ),
+                ): bool,
+                vol.Optional(
+                    CONF_MAP_ROOM_LABELS,
+                    default=options.get(
+                        CONF_MAP_ROOM_LABELS,
+                        DEFAULT_MAP_ROOM_LABELS,
+                    ),
+                ): bool,
+                vol.Optional(
+                    CONF_FLOOR,
+                    default=options.get(CONF_FLOOR, ""),
+                ): str,
+                # v3.3.0 CROSS-CORR — opt-in: external sensors whose
+                # mission-start values get correlated with dirt counts
+                vol.Optional(
+                    CONF_CORRELATION_ENTITIES,
+                    default=options.get(CONF_CORRELATION_ENTITIES, []),
+                ): SelectorEntitySelector(
+                    SelectorEntitySelectorConfig(
+                        domain="sensor",
+                        multiple=True,
+                    )
+                ),
+                vol.Optional(
+                    CONF_ENABLE_SCHEDULE_CALENDAR,
+                    default=options.get(
+                        CONF_ENABLE_SCHEDULE_CALENDAR, DEFAULT_ENABLE_SCHEDULE_CALENDAR
+                    ),
+                ): bool,
+                # THE MAINTENANCE LIST FOR CLASSIC TOO. It became opt-in
+                # on both generations in 4.0.0a30, with the toggle added
+                # to the Prime form only -- so a Classic robot's list
+                # could not be switched back on at all (@ScenicSystemsLLC,
+                # 4.3.0b4: gone after removing and re-adding a robot).
+                vol.Optional(
+                    CONF_ENABLE_MAINTENANCE_LIST,
+                    default=options.get(
+                        CONF_ENABLE_MAINTENANCE_LIST, DEFAULT_ENABLE_MAINTENANCE_LIST
+                    ),
+                ): bool,
+            }
         )
+        return self.async_show_form(
+            step_id="settings", data_schema=vol.Schema(schema)
+        )
+
+    def _robot_reports_no_pose(self) -> bool:
+        """True when the robot's shadow carries no `pose`.
+
+        Read when the form opens. A robot not yet connected reports
+        nothing at all and gets the option -- which then does nothing
+        until a mission shows whether a pose arrives.
+        """
+        roomba = getattr(self.config_entry.runtime_data, "roomba", None)
+        state = roomba_reported_state(roomba) if roomba is not None else {}
+        return not reports_local_pose(state if isinstance(state, dict) else {})
 
     # ── v1.7.0 L5 — Blocking sensors configuration ───────────────────────────
 
@@ -2131,7 +2608,7 @@ class RoombaPlusOptionsFlow(OptionsFlow):
 
         CF2-FULL (v2.7.0): form collects credentials only; connection test
         runs in async_step_test_cloud_connection before saving so the user
-        gets a specific error (invalid_cloud_credentials / cannot_connect)
+        gets a specific error (one per cause, cloud_<reason>)
         rather than a silent post-reload failure.
 
         Saves credentials to config_entry.data (not options), then triggers a
@@ -2178,8 +2655,7 @@ class RoombaPlusOptionsFlow(OptionsFlow):
 
         Validates the pending credentials stored by async_step_cloud_credentials.
         Returns to the credentials form with a specific error on failure:
-          invalid_cloud_credentials — wrong email/password
-          cannot_connect           — network or cloud service error
+          cloud_<reason> — one per cause (cloud_errors.flow_error())
         On success (or when credentials were cleared): saves and reloads.
         """
         pending = getattr(self, "_pending_cloud_creds", {})
@@ -2189,26 +2665,16 @@ class RoombaPlusOptionsFlow(OptionsFlow):
         new_data = dict(self.config_entry.data)
 
         if username and password:
-            from homeassistant.helpers.aiohttp_client import async_get_clientsession
-            country_code = (self.hass.config.country or "US").upper()
-            api = IrobotCloudApi(
-                username, password, async_get_clientsession(self.hass),
-                country_code=country_code,
+            account, error = await _async_check_cloud_login(
+                self.hass, username, password
             )
-            try:
-                await api.authenticate()
-            except AuthenticationError:
-                self._cloud_cred_errors = {"base": "invalid_cloud_credentials"}
+            if account is None:
+                self._cloud_cred_errors = {"base": error or "cloud_unknown"}
                 return await self.async_step_cloud_credentials()
-            except RateLimitedError:
-                self._cloud_cred_errors = {"base": "cloud_rate_limited"}
-                return await self.async_step_cloud_credentials()
-            except SSLCertificateError:
-                self._cloud_cred_errors = {"base": "cloud_ssl_certificate_error"}
-                return await self.async_step_cloud_credentials()
-            except CloudApiError:
-                self._cloud_cred_errors = {"base": "cannot_connect"}
-                return await self.async_step_cloud_credentials()
+            async_offer(self.hass, account, username, password)
+            _async_update_account_siblings(
+                self.hass, self.config_entry, username, password
+            )
             new_data[CONF_IROBOT_USERNAME] = username
             new_data[CONF_IROBOT_PASSWORD] = password
         else:

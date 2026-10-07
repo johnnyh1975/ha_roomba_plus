@@ -15,6 +15,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from typing import Any
 
 from custom_components.roomba_plus import (
     _async_setup_entry_prime,
@@ -57,19 +58,24 @@ def _make_hass_and_entry() -> tuple[MagicMock, MagicMock]:
 
 
 @pytest.fixture(autouse=True)
-def _mock_clientsession():
-    """async_get_clientsession(hass) with a plain MagicMock() hass falls
-    through to creating a REAL aiohttp.ClientSession() (HA's real
-    implementation checks hass.data, which a bare MagicMock doesn't
-    behave like a dict for) -- leaks an unclosed-session warning/error
-    in every test here, none of which make real network calls anyway
-    (PrimeFactory.create_prime_robot is always mocked). Patched for
-    every test in this file rather than per-test."""
+def _account():
+    """The account login every Prime entry takes its first login from
+    (cloud_account.async_acquire, 4.3). Replaced with one whose
+    login_result is a marker, so a test can see it handed on."""
+    account = MagicMock()
+    account.login_result = MagicMock(name="shared_login_result")
+    _CURRENT["account"] = account
     with patch(
-        "custom_components.roomba_plus.async_get_clientsession",
-        return_value=MagicMock(),
-    ):
-        yield
+        "custom_components.roomba_plus.async_acquire",
+        new=AsyncMock(return_value=account),
+    ) as acquire:
+        acquire.account = account
+        yield acquire
+
+
+#: The account the autouse fixture hands out. The robot is built by
+#: its prime_robot() since 4.3.0b6, so that is what the tests replace.
+_CURRENT: dict[str, Any] = {}
 
 
 class TestConnectionType:
@@ -120,20 +126,16 @@ class TestAsyncSetupEntryPrime:
         # MagicMock's .get() returns something truthy.
         hass.data = {}
 
-        with patch(
-            "custom_components.roomba_plus.PrimeFactory.create_prime_robot",
+        with patch.object(
+            _CURRENT["account"], "prime_robot",
             new=AsyncMock(return_value=fake_prime_robot),
         ) as mock_create:
             result = await _async_setup_entry_prime(hass, config_entry)
 
         assert result is True
-        mock_create.assert_awaited_once()
-        call = mock_create.call_args
-        assert call.args[1] == "user@example.com"
-        assert call.args[2] == "hunter2"
-        assert call.args[3] == "US"
-        assert call.kwargs["blid"] == "BLID123"
-        assert call.kwargs["auto_refresh"] is True
+        # Built by the account, so it renews through the account's login
+        # (4.3.0b6) -- no credentials of its own.
+        mock_create.assert_awaited_once_with("BLID123", auto_refresh=True)
 
         runtime_data: RoombaData = config_entry.runtime_data
         assert runtime_data.blid == "BLID123"
@@ -177,8 +179,8 @@ class TestAsyncSetupEntryPrime:
 
         fake_prime_robot.watch_named_shadows_updates = _empty_named_shadows_updates
 
-        with patch(
-            "custom_components.roomba_plus.PrimeFactory.create_prime_robot",
+        with patch.object(
+            _CURRENT["account"], "prime_robot",
             new=AsyncMock(return_value=fake_prime_robot),
         ):
             result = await _async_setup_entry_prime(hass, config_entry)
@@ -212,8 +214,8 @@ class TestAsyncSetupEntryPrime:
 
         fake_prime_robot.watch_named_shadows_updates = _empty_named_shadows_updates
 
-        with patch(
-            "custom_components.roomba_plus.PrimeFactory.create_prime_robot",
+        with patch.object(
+            _CURRENT["account"], "prime_robot",
             new=AsyncMock(return_value=fake_prime_robot),
         ):
             result = await _async_setup_entry_prime(hass, config_entry)
@@ -229,8 +231,8 @@ class TestAsyncSetupEntryPrime:
 
         hass, config_entry = _make_hass_and_entry()
 
-        with patch(
-            "custom_components.roomba_plus.PrimeFactory.create_prime_robot",
+        with patch.object(
+            _CURRENT["account"], "prime_robot",
             new=AsyncMock(side_effect=AuthCredentialsError("wrong password")),
         ):
             with pytest.raises(ConfigEntryAuthFailed, match="BLID123"):
@@ -242,8 +244,8 @@ class TestAsyncSetupEntryPrime:
 
         hass, config_entry = _make_hass_and_entry()
 
-        with patch(
-            "custom_components.roomba_plus.PrimeFactory.create_prime_robot",
+        with patch.object(
+            _CURRENT["account"], "prime_robot",
             new=AsyncMock(side_effect=AuthRateLimitedError("close the app")),
         ):
             with pytest.raises(ConfigEntryNotReady):
@@ -255,8 +257,8 @@ class TestAsyncSetupEntryPrime:
 
         hass, config_entry = _make_hass_and_entry()
 
-        with patch(
-            "custom_components.roomba_plus.PrimeFactory.create_prime_robot",
+        with patch.object(
+            _CURRENT["account"], "prime_robot",
             new=AsyncMock(side_effect=AuthConnectionError("dns failure")),
         ):
             with pytest.raises(ConfigEntryNotReady):
@@ -274,12 +276,90 @@ class TestAsyncSetupEntryPrime:
         fake_prime_robot = MagicMock()
         fake_prime_robot.connect = AsyncMock(side_effect=ShadowConnectionError("mqtt unreachable"))
 
-        with patch(
-            "custom_components.roomba_plus.PrimeFactory.create_prime_robot",
+        with patch.object(
+            _CURRENT["account"], "prime_robot",
             new=AsyncMock(return_value=fake_prime_robot),
         ):
             with pytest.raises(ConfigEntryNotReady):
                 await _async_setup_entry_prime(hass, config_entry)
+
+
+class TestPrimeTakesTheAccountLogin:
+    """4.3: the first login of a Prime entry is the account's, shared
+    with every other entry on it -- no login of its own."""
+
+    @pytest.mark.asyncio
+    async def test_the_account_login_is_handed_to_the_robot(self, _account) -> None:
+        hass, config_entry = _make_hass_and_entry()
+        with patch.object(
+            _CURRENT["account"], "prime_robot",
+            new=AsyncMock(side_effect=AuthConnectionError("stop here")),
+        ) as create:
+            with pytest.raises(Exception):
+                await _async_setup_entry_prime(hass, config_entry)
+
+        _account.assert_awaited_once_with(
+            hass, config_entry.entry_id, "user@example.com", "hunter2",
+            mqtt_blid="BLID123",
+        )
+        create.assert_awaited_once_with("BLID123", auto_refresh=True)
+
+    @pytest.mark.asyncio
+    async def test_the_share_is_released_on_unload(self, _account) -> None:
+        """Registered before the login, so a setup that fails after it
+        releases too: Home Assistant runs on_unload callbacks for a
+        failed setup."""
+        from custom_components.roomba_plus import cloud_account
+
+        hass, config_entry = _make_hass_and_entry()
+        with patch.object(
+            _CURRENT["account"], "prime_robot",
+            new=AsyncMock(side_effect=AuthConnectionError("stop here")),
+        ):
+            with pytest.raises(Exception):
+                await _async_setup_entry_prime(hass, config_entry)
+
+        registered = [c.args[0] for c in config_entry.async_on_unload.call_args_list]
+        releases = [f for f in registered if getattr(f, "func", None) is cloud_account.async_release]
+        assert len(releases) == 1
+        assert releases[0].args == (hass, config_entry.entry_id)
+
+    @pytest.mark.parametrize("error,exc_name,key", [
+        (AuthCredentialsError("wrong"), "ConfigEntryAuthFailed", "cloud_credentials_rejected"),
+        (AuthRateLimitedError("close the app"), "ConfigEntryNotReady", "cloud_too_many_sessions"),
+        (AuthConnectionError("dns"), "ConfigEntryNotReady", "cloud_connection_failed"),
+    ])
+    @pytest.mark.asyncio
+    async def test_a_failed_account_login_is_translated_by_reason(
+        self, _account, error, exc_name, key
+    ) -> None:
+        """What the integration card shows comes from the error's reason,
+        in the user's language -- no English library text in a German
+        sentence any more."""
+        from homeassistant import exceptions
+
+        hass, config_entry = _make_hass_and_entry()
+        _account.side_effect = error
+        with pytest.raises(getattr(exceptions, exc_name)) as excinfo:
+            await _async_setup_entry_prime(hass, config_entry)
+        assert excinfo.value.translation_key == key
+        assert excinfo.value.translation_placeholders == {}
+
+    @pytest.mark.asyncio
+    async def test_a_locked_account_asks_and_does_not_retry(self, _account) -> None:
+        """A lockout stays ConfigEntryAuthFailed: zero automatic
+        attempts against an account locked BECAUSE of attempts. The text
+        is the lockout's own."""
+        from homeassistant.exceptions import ConfigEntryAuthFailed
+        from roombapy_prime import CloudErrorReason
+
+        hass, config_entry = _make_hass_and_entry()
+        _account.side_effect = AuthCredentialsError(
+            "locked", reason=CloudErrorReason.ACCOUNT_LOCKED
+        )
+        with pytest.raises(ConfigEntryAuthFailed) as excinfo:
+            await _async_setup_entry_prime(hass, config_entry)
+        assert excinfo.value.translation_key == "cloud_account_locked"
 
 
 class TestAsyncUnloadEntryCloudOnly:

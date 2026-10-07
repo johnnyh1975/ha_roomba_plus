@@ -16,6 +16,7 @@ from collections.abc import Mapping
 import asyncio
 import contextlib
 import dataclasses
+import functools
 from datetime import timedelta
 import logging
 from typing import Any, Final
@@ -61,6 +62,7 @@ from .room_cleaning import region_names_across_maps
 from .prime_room_map import async_restore_prime_room_names
 from .room_times import learn_via, robot_default_mode
 from .const import (
+    lifetime_hours,
     ISSUE_TRACKER_URL,
     CONF_BLID,
     CONF_BLOCKING_SENSORS,
@@ -72,6 +74,7 @@ from .const import (
     CONF_FLOOR,
     CONF_IROBOT_PASSWORD,
     CONF_IROBOT_USERNAME,
+    CONF_LIVE_POSITION_REQUESTS,
     CONF_MAP_ENABLED,
     CONF_MAP_SCALE,
     CONF_MAP_SIZE_PX,
@@ -83,6 +86,7 @@ from .const import (
     DEFAULT_ENABLE_MAINTENANCE_LIST,
     DEFAULT_ENABLE_SCHEDULE_CALENDAR,
     DEFAULT_REGION_SENSORS,
+    DEFAULT_LIVE_POSITION_REQUESTS,
     DEFAULT_MAP_ENABLED,
     DEFAULT_MAP_SCALE,
     DEFAULT_MAP_SIZE_PX,
@@ -119,6 +123,7 @@ from .map_renderer import (
 )
 from .migrations import async_migrate_entry  # noqa: F401 -- re-exported for HA's own lookup
 from .structural_failures import record_failure, record_success
+from .live_position import LivePositionStream
 from .models import ConnectionType, MapCapability, RoombaConfigEntry, RoombaData
 from .services import async_register_services
 from .geometry_store import GeometryStore
@@ -128,17 +133,12 @@ from .prime_coordinator import (
     PrimeScheduleCoordinator,
     PrimeStatusCoordinator,
 )
-from ._prime_login_bridge import pop_pending_login
+from . import cloud_errors
+from .cloud_account import async_acquire, async_release
 
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from roombapy_prime import (
-    AuthConnectionError,
     AuthCredentialsError,
-    AuthError,
-    AuthRateLimitedError,
-    AuthSSLError,
-    AuthTimeoutError,
-    PrimeFactory,
+    CloudError,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -586,9 +586,7 @@ async def _phase_data(ctx: _SetupContext) -> None:
 
     # F4d — detect bbrun.hr firmware reset
     _state_for_bbrun = roomba_reported_state(ctx.roomba)
-    _bbrun = _state_for_bbrun.get("bbrun", {})
-    _runtime = _state_for_bbrun.get("runtimeStats", {})
-    _current_hr = _bbrun.get("hr") or _runtime.get("hr") or 0
+    _current_hr = lifetime_hours(_state_for_bbrun)
 
     # v3.4.1 MAINTENANCE-COLD-START: field-confirmed (mdarocha, i3+, 412
     # missions / 294h prior runtime, no reset ever recorded in this
@@ -837,7 +835,7 @@ async def _phase_cloud(ctx: _SetupContext) -> None:
             # drifting for a full replacement cycle.
             if ctx.maintenance_store is not None:
                 _parts = cloud_coordinator.parts
-                _hr = int((ctx.state.get("bbrun") or {}).get("hr", 0) or 0)
+                _hr = lifetime_hours(ctx.state)
                 if _parts and ctx.maintenance_store.hydrate_from_cloud_parts(
                     _parts, _hr
                 ):
@@ -1086,9 +1084,12 @@ async def _phase_finalize(ctx: _SetupContext) -> None:
     )
 
     # ARC1 — one-time paginated back-fill as background task
+    # Only with a login: without one the first page would fail and the
+    # back-fill end there. It stays pending and runs on the next start.
     if (ctx.mission_archive is not None
             and cloud_coordinator is not None
-            and not ctx.mission_archive.initial_load_done):
+            and cloud_coordinator.logged_in
+            and ctx.mission_archive.needs_cloud_load):
         config_entry.async_create_task(
             hass, ctx.mission_archive.async_initial_load(cloud_coordinator.api, config_entry.data[CONF_BLID], hass, config_entry.entry_id), name=f'roomba_plus_arc1_initial_load_{config_entry.entry_id}'
         )
@@ -1142,8 +1143,29 @@ async def _phase_finalize(ctx: _SetupContext) -> None:
     _watcher.start()
     config_entry.async_on_unload(_watcher.stop)
 
+    # LIVE POSITION FOR ROBOTS THAT DO NOT PUBLISH ONE (4.3). Created
+    # before the platforms so the map image and the tracker find it when
+    # they are added; started after them so the first position of a
+    # mission already running has somewhere to go.
+    _live_position = None
+    if config_entry.runtime_data.renderer is not None:
+        _live_position = LivePositionStream(
+            hass,
+            roomba,
+            enabled=lambda: bool(
+                config_entry.options.get(
+                    CONF_LIVE_POSITION_REQUESTS, DEFAULT_LIVE_POSITION_REQUESTS
+                )
+            ),
+        )
+        config_entry.runtime_data.live_position = _live_position
+        config_entry.async_on_unload(_live_position.stop)
+
     config_entry.runtime_data.loaded_platforms = list(platforms)
     await hass.config_entries.async_forward_entry_setups(config_entry, platforms)
+
+    if _live_position is not None:
+        _live_position.start()
 
     # REST API views (registered once per HA instance)
     _async_register_views(hass)
@@ -1506,105 +1528,71 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
     all), see ROOMBA_PLUS_VERSION_PLAN_v4_onwards.md's
     Implementierungs-Checkliste.
 
-    NEW (this session, prompted by a real "onboarding is slow" field
-    report): the very first time this runs for a freshly-created entry,
-    HA calls it essentially immediately after config_flow finishes --
-    which already ran a full login to validate credentials and list
-    robots. Checks _prime_login_bridge for a still-fresh, single-use
-    LoginResult from that same login before doing its own; on every
-    later restart (no config flow involved, or the bridge missed for
-    any reason) this is simply None and login proceeds exactly as
-    before. See _prime_login_bridge.py's own docstring for the full
-    reasoning and deliberately narrow risk profile.
+    THE LOGIN BELONGS TO THE ACCOUNT (4.3): cloud_account.async_acquire()
+    hands out the one every entry on the same account shares, or the one
+    the config flow has just made for this entry. See the comment at the
+    login below.
     """
     blid = config_entry.data[CONF_BLID]
     username = config_entry.data[CONF_IROBOT_USERNAME]
     password = config_entry.data[CONF_IROBOT_PASSWORD]
-    country_code = (hass.config.country or "US").upper()
-    session = async_get_clientsession(hass)
-
-    # NEW (this session, prompted by a real "onboarding is slow" field
-    # report): if config_flow just ran a validation login for this exact
-    # blid moments ago, reuse it instead of running the full Gigya+
-    # iRobot chain a second time. Single-use (removed on read whether or
-    # not it turns out to still be fresh) and short-TTL -- see
-    # _prime_login_bridge.py's own docstring for the full reasoning. On
-    # every later HA restart (no config flow involved), this simply
-    # returns None and the login below proceeds exactly as it always
-    # did before this existed.
-    cached_login_result = pop_pending_login(blid)
-
-    # ONE LOGIN PER CONFIG ENTRY, AND NOTHING IS SHARED BETWEEN THEM.
-    # The bridge above is keyed on blid and single-use, so it only ever
-    # helps the robot that was just added in the config flow.
+    # ONE LOGIN PER ACCOUNT (4.3), NOT PER ENTRY.
     #
-    # An account with two Prime robots therefore runs the full Gigya +
-    # iRobot chain twice, and a Home Assistant restart fires both within
-    # a second of each other. @jpatchMC hit exactly that when he added a
-    # second Combo 105: both entries failed with Gigya's "Account
-    # Temporarily Locked Out", while the iRobot app on his phone kept
-    # working. Disabling both for about ten minutes and re-enabling them
-    # one at a time cleared it.
+    # Until 4.2 each entry ran the full Gigya + iRobot chain on its own,
+    # and a Home Assistant restart fired them within a second of each
+    # other. The only thing shared was a single-use bridge from the
+    # config flow to the robot just added. @jpatchMC's account locked
+    # when he added a second Combo 105 (the cause there was a retry loop
+    # in the live map, fixed in roombapy-prime 0.3.3, but the reloads
+    # that followed were logins too).
+    #
+    # Now the entries of one account share one login: the first entry to
+    # start logs in, the others wait for it and take it, and a login the
+    # config flow has just made is taken by the entry it created. A
+    # failed login answers the others for half a minute instead of each
+    # trying again -- against a locked account, every attempt extends
+    # the lock. See cloud_account.py.
+    #
+    # PRIME RENEWS THROUGH THE ACCOUNT TOO (4.3.0b6, roombapy-prime
+    # 0.5.0b2). Until b5 only the first login was shared: each Prime robot
+    # then renewed its MQTT token with a login of its own, so robots from
+    # one login logged in once each about an hour later. The robot now
+    # takes the account's login when another robot has just made a fresh
+    # one, and otherwise logs in once for all of them. The token handed
+    # over here has at least ten minutes left, or the account logs in
+    # again first.
     #
     # AND A LOCKOUT DELIBERATELY STAYS IN THE AuthCredentialsError
     # BRANCH BELOW, which looks backwards and is not.
     #
     # ConfigEntryNotReady retries on `2 ** min(tries, 4) * 5` seconds:
-    # 11 attempts per entry in ten minutes, 22 across his two, against
-    # an account locked *because of* too many attempts. The
-    # AuthCredentialsError branch produces zero automatic attempts --
-    # Home Assistant stops and asks. Against a lockout, stopping is the
-    # correct behaviour and the retry loop is the harmful one.
-    #
-    # What roombapy-prime fixes is the WORDING, since that is what sent
-    # him resetting passwords. See _login_gigya() there for the
-    # measurement.
-    #
-    # AND IT APPLIES TO CLASSIC TOO, not just Prime: `CloudApi
-    # .authenticate()` calls the same `roombapy_prime.auth.login()`
-    # (consolidated in v3.6.0). Any household with cloud credentials and
-    # several robots runs several full Gigya chains.
-    #
-    # THE MULTIPLIER HAS NEVER CAUSED A PROBLEM, and that is the part
-    # worth writing down, because the arithmetic invites the opposite
-    # conclusion. Several testers run multi-robot accounts, Classic and
-    # mixed, for months without one.
-    #
-    # The one incident blamed on it was not it. @jpatchMC's account
-    # locked out, and the cause was the live-map keep-alive retrying a
-    # rate-limited endpoint every ten seconds with no backoff -- a
-    # PRIME-ONLY loop, absent from the Classic cloud path, which polls
-    # daily. He then reloaded repeatedly to clear the symptom, and the
-    # reloads locked the account. Fixed in roombapy-prime 0.3.3 by
-    # backing off, not by reducing logins.
-    #
-    # So one login per account remains a reasonable tidy-up -- fewer
-    # requests against shared limits, and the login response already
-    # carries every robot -- but it is NOT a fix for anything observed,
-    # and it is not small: the session outlives any single entry, so it
-    # needs an owner, a refresh policy and a teardown that does not
-    # strand the others. The natural moment is 4.2, when the cloud calls
-    # move into the library and one cache would serve both generations
-    # instead of two.
-
+    # 11 attempts per entry in ten minutes against an account locked
+    # *because of* too many attempts. The AuthCredentialsError branch
+    # produces zero automatic attempts -- Home Assistant stops and asks.
+    # Against a lockout, stopping is the correct behaviour. What the
+    # user reads comes from the error's reason (cloud_errors.py), and
+    # for a lockout it says first not to re-enter the password.
+    config_entry.async_on_unload(
+        functools.partial(async_release, hass, config_entry.entry_id)
+    )
     try:
-        prime_robot = await PrimeFactory.create_prime_robot(
-            session, username, password, country_code,
-            blid=blid, auto_refresh=True, login_result=cached_login_result,
+        account = await async_acquire(
+            hass, config_entry.entry_id, username, password, mqtt_blid=blid
         )
+        prime_robot = await account.prime_robot(blid, auto_refresh=True)
     except AuthCredentialsError as exc:
         raise exceptions.ConfigEntryAuthFailed(
-            f"V4/Prime cloud login rejected for {blid}: {exc}", translation_domain=DOMAIN, translation_key="prime_login_rejected", translation_placeholders={"blid": str(blid), "error": str(exc)}
+            f"V4/Prime cloud login rejected for {blid}: {exc}",
+            translation_domain=DOMAIN,
+            translation_key=cloud_errors.translation_key(exc),
+            translation_placeholders=cloud_errors.translation_placeholders(exc),
         ) from exc
-    except (
-        AuthRateLimitedError,
-        AuthSSLError,
-        AuthConnectionError,
-        AuthTimeoutError,
-        AuthError,
-    ) as exc:
+    except CloudError as exc:
         raise exceptions.ConfigEntryNotReady(
-            f"Could not log in to V4/Prime cloud for {blid}: {exc}", translation_domain=DOMAIN, translation_key="prime_login_failed", translation_placeholders={"blid": str(blid), "error": str(exc)}
+            f"Could not log in to V4/Prime cloud for {blid}: {exc}",
+            translation_domain=DOMAIN,
+            translation_key=cloud_errors.translation_key(exc),
+            translation_placeholders=cloud_errors.translation_placeholders(exc),
         ) from exc
 
     coordinator = PrimeCoordinator(hass, config_entry, blid, prime_robot)
