@@ -39,6 +39,7 @@ import logging
 import math
 import time as _time_mod
 from datetime import datetime as dt_datetime
+from collections.abc import Mapping
 from typing import Any
 
 from homeassistant.components.image import ImageEntity
@@ -353,6 +354,34 @@ def _apply_dock_correction(
         cos_r, sin_r = math.cos(rotation_rad), math.sin(rotation_rad)
         x, y = x * cos_r - y * sin_r, x * sin_r + y * cos_r
     return (x + dx, y + dy)
+
+
+#: The phase a robot reports while it sits on its dock between missions.
+_ON_DOCK_PHASES: frozenset[str] = frozenset({"charge"})
+
+
+def _mission_start_on_dock(phase_before: str) -> bool | None:
+    """Whether a mission began on the dock, from the phase before it.
+
+    THE ROBOT SAYS IT, nothing needs learning. Charging means it sat on
+    the dock; any other phase it was seen in (stopped, stuck, sent home
+    halfway) means it started where it stood. Nothing seen before the
+    start -- Home Assistant started mid-mission -- is unknown, None.
+
+    iRobot's own mission record agrees where it exists: `dockedAtStart`
+    was 0 for exactly the one mission of @liblit's four that started off
+    the dock, and 1 for the rest.
+    """
+    if not phase_before:
+        return None
+    return phase_before in _ON_DOCK_PHASES
+
+
+def _checkpoint_on_dock(checkpoint: Mapping[str, Any]) -> bool | None:
+    """The start flag a mission checkpoint carries; None from one saved
+    before it did."""
+    value = checkpoint.get("started_on_dock")
+    return value if isinstance(value, bool) else None
 
 
 def _anchored_mission_points(
@@ -1212,6 +1241,10 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
 
         # Mission tracking
         self._last_phase: str = ""
+        #: Whether this mission began on the dock: True, False, or None
+        #: when not known (the phase before it was not seen). See
+        #: _mission_start_on_dock().
+        self._mission_started_on_dock: bool | None = None
         self._last_stuck_count: int = 0
         #: Lifetime `bbrun.nPicks` at mission start, and whether it has
         #: risen since. The DELTA is what matters -- the lifetime counter
@@ -1836,6 +1869,9 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                     self._dock_contact_streak = 0
                     self._dock_contact_first_ts = 0.0
                     self._mission_start_ts: str | None = dt_util.now().isoformat()
+                    self._mission_started_on_dock = _mission_start_on_dock(
+                        self._last_phase
+                    )
                     # v2.8.2 — cached the same way callbacks.py caches it:
                     # needed so a later checkpoint (saved on a stuck event)
                     # can be matched against the live mission on restart.
@@ -2488,6 +2524,8 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
             self._map_capability == MapCapability.SMART
             and self._config_entry is not None
             and len(self._mission_points) >= 20
+            # Same reason as the grid below: a path in a shifted frame.
+            and getattr(self, "_mission_started_on_dock", None) is not False
         ):
             _data = self._config_entry.runtime_data
             if _data.geometry_store:
@@ -2526,11 +2564,35 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         # includes this just-finished mission's cells. See the block
         # after "Update GridStore for coverage heatmap".
 
+        # NOT A MISSION THAT STARTED AWAY FROM THE DOCK. Positions count
+        # from where a mission starts, so such a mission lands in the grid
+        # turned and shifted against every other: @liblit's 980 on 27
+        # August started off the dock, its whole path turned by about 95
+        # degrees, and 23% of the cells it left lay outside his house --
+        # two phantom areas that stayed. The live picture still shows it;
+        # only what Roomba+ learns from (grid, areas, doors) leaves it out.
+        # Unknown (no phase seen before the start) counts as on the dock,
+        # as every mission did before.
+        _learn_from_mission = (
+            getattr(self, "_mission_started_on_dock", None) is not False
+        )
+        if not _learn_from_mission and self._config_entry is not None:
+            _LOGGER.info(
+                "Map: mission started away from the dock; not adding it to "
+                "the coverage grid or the areas"
+            )
+            _rt = self._config_entry.runtime_data
+            _kept_out = getattr(_rt, "missions_kept_out_of_grid", 0)
+            _rt.missions_kept_out_of_grid = (
+                _kept_out if isinstance(_kept_out, int) else 0
+            ) + 1
+
         # Update GridStore for coverage heatmap (all pose-capable robots)
         if (
             self._config_entry is not None
             and self._mission_points
             and self._renderer is not None
+            and _learn_from_mission
         ):
             _gdata = self._config_entry.runtime_data
             if _gdata.grid_store is not None:
@@ -2752,6 +2814,9 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                     )
                     _gdata.trajectory_store.record_mission(
                         _mission_key, self._mission_points,
+                        # Was never passed: every stored trajectory had an
+                        # empty `ended_at` (@liblit's backup).
+                        ended_at=dt_util.now().isoformat(),
                         thetas_deg=self._mission_thetas,
                     )
                     self._config_entry.async_create_task(
@@ -2957,6 +3022,7 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
             self._mission_thetas = list(checkpoint.get("mission_thetas", []))
             self._stuck_mission_points = list(checkpoint.get("stuck_mission_points", []))
             self._mission_start_ts = checkpoint.get("mission_start_ts")
+            self._mission_started_on_dock = _checkpoint_on_dock(checkpoint)
             self._mission_checkpoint_mssn_strt_tm = live_mssn_strt_tm
             self._had_cleaning_phase = True
             # v2.8.2 bug-hunt fix — see _async_save_mission_checkpoint()
@@ -3009,6 +3075,7 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         self._mission_thetas = list(checkpoint.get("mission_thetas", []))
         self._stuck_mission_points = list(checkpoint.get("stuck_mission_points", []))
         self._mission_start_ts = checkpoint.get("mission_start_ts")
+        self._mission_started_on_dock = _checkpoint_on_dock(checkpoint)
         renderer_state = checkpoint.get("renderer_state")
         if self._renderer is not None and renderer_state:
             self._renderer.restore_state(renderer_state)
@@ -3037,6 +3104,7 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
             "mission_thetas": list(self._mission_thetas),
             "stuck_mission_points": list(self._stuck_mission_points),
             "mission_start_ts": self._mission_start_ts,
+            "started_on_dock": getattr(self, "_mission_started_on_dock", None),
             "renderer_state": self._renderer.dump_state() if self._renderer else None,
             # v2.8.2 bug-hunt fix — without this, a resumed mission would
             # see _last_stuck_count reset to its __init__ default of 0 (the

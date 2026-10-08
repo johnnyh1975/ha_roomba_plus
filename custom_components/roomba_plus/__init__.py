@@ -501,6 +501,11 @@ async def _phase_spatial(ctx: _SetupContext) -> None:
                 size_px=config_entry.options.get(CONF_MAP_SIZE_PX, DEFAULT_MAP_SIZE_PX),
                 scale=config_entry.options.get(CONF_MAP_SCALE, DEFAULT_MAP_SCALE),
                 robot_diameter_mm=_robot_diameter_mm,
+                # A 900-series' positions are in the pose frame, a mirror
+                # image of the floor; the picture turns them back (4.3.1).
+                # Confirmed on two 980s. A Smart Map robot draws as
+                # before until one is checked against its floor.
+                mirror_x=map_capability == MapCapability.EPHEMERAL,
             ),
             geometry_store=geometry_store,
         )
@@ -514,6 +519,8 @@ async def _phase_spatial(ctx: _SetupContext) -> None:
     grid_store: GridStore | None = None
     if map_capability != MapCapability.NONE and map_enabled:
         grid_store = GridStore()
+        # Drawn mirrored where the renderer is: see RendererConfig.mirror_x.
+        grid_store.mirror_x = map_capability == MapCapability.EPHEMERAL
         await grid_store.async_load(hass, config_entry.entry_id)
         _LOGGER.debug(
             "Roomba+ GridStore: loaded %d cell(s) for %s",

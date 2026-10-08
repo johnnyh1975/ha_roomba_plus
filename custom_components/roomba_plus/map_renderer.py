@@ -52,6 +52,35 @@ _LOGGER = logging.getLogger(__name__)
 _FONT_PATH = Path(__file__).parent / "fonts" / "DejaVuSans.ttf"
 
 
+def map_mm_to_view(x_mm: float, y_mm: float) -> tuple[float, float]:
+    """A point of the maps' frame, as a picture draws it: x mirrored.
+
+    THE MAPS' FRAME IS A MIRROR IMAGE OF THE FLOOR. `raw_pose_mm_to_map`
+    swaps the firmware's axes, and a swap is a reflection, not a turn. In
+    the firmware's own frame the robot's heading and its direction of
+    travel agree; in the swapped one they agree only as 90 deg minus the
+    heading. Every picture drawn from it came out flipped left to right:
+    @liblit's 980 against its floor plan, and a second 980 alike.
+
+    Mirrored HERE, where millimetres become a picture, and nowhere else.
+    Every store keeps the frame it was written in -- the coverage grid,
+    the areas, the doors, the trajectories, the tracker's `map_x_mm` --
+    so nothing stored moves and nothing needs migrating. A picture and
+    the `calibration_points` describing it go through the same
+    conversion, so an overlay still lands where it belongs.
+
+    The result is a quarter turn of the firmware's frame, (x, y) ->
+    (-y, x): the dock where it was, the floor the right way round.
+    """
+    return -x_mm, y_mm
+
+
+def raw_heading_to_view_deg(theta_deg: float) -> float:
+    """The firmware's heading, as a picture drawn through
+    `map_mm_to_view` shows it: a quarter turn, as the positions get."""
+    return theta_deg + 90.0
+
+
 def _load_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     """Load the bundled DejaVu Sans font at the given pixel size.
 
@@ -171,6 +200,11 @@ class RendererConfig:
     auto_fit: bool = True    # Scale and centre map to fill canvas
     fit_margin: int = 40     # Pixel margin on each side when auto-fitting
     robot_diameter_mm: int = ROBOT_DIAMETER_MM_DEFAULT  # Real chassis diameter
+    #: Positions arrive in the Classic pose frame, a mirror image of the
+    #: floor (see map_mm_to_view): draw them mirrored back, and turn the
+    #: firmware's heading with them. Off for Prime, whose polygons come in
+    #: their own frame.
+    mirror_x: bool = False
 
 
 class MapRenderer:
@@ -738,7 +772,10 @@ class MapRenderer:
                  rx + robot_r, ry + robot_r],
                 fill=ROBOT_COLOUR,
             )
-            angle_rad = math.radians(self._theta)
+            angle_rad = math.radians(
+                raw_heading_to_view_deg(self._theta)
+                if self._cfg.mirror_x else self._theta
+            )
             ex = rx + int(ARROW_LENGTH * math.cos(angle_rad))
             ey = ry - int(ARROW_LENGTH * math.sin(angle_rad))
             draw.line([rx, ry, ex, ey], fill=ARROW_COLOUR, width=3)
@@ -767,6 +804,9 @@ class MapRenderer:
             "stuck_px": list(self._stuck_px),       # list[tuple[int, int]]
             "robot_px": list(self._robot_px) if self._robot_px else None,
             "theta": self._theta,
+            # Which way the pixels face. A dump written before the view
+            # was mirrored has no key and is converted on restore.
+            "mirror_x": self._cfg.mirror_x,
             # v3.2.1 LANDMARK-LOG — additive field, no _STATE_VERSION
             # bump needed (same precedent as GridStore's FURNITURE/
             # DUAL-GRID fields): a state dump saved before this existed
@@ -797,6 +837,15 @@ class MapRenderer:
             self._stuck_px = [tuple(p) for p in state["stuck_px"]]
             robot_px = state.get("robot_px")
             self._robot_px = tuple(robot_px) if robot_px else None
+            # A PATH SAVED THE OTHER WAY ROUND, before 4.3.1 mirrored the
+            # view: the pixels are about the canvas centre, so mirroring
+            # them is 2*cx - x.
+            if bool(state.get("mirror_x", False)) != self._cfg.mirror_x:
+                twice_cx = 2 * (self._cfg.size_px // 2)
+                self._points = [(twice_cx - x, y) for x, y in self._points]
+                self._stuck_px = [(twice_cx - x, y) for x, y in self._stuck_px]
+                if self._robot_px:
+                    self._robot_px = (twice_cx - self._robot_px[0], self._robot_px[1])
             self._theta = float(state.get("theta", 0.0))
             self._last_png = None  # will be re-rendered on demand
             # v3.2.1 LANDMARK-LOG — .get() with [] default: old dumps
@@ -970,8 +1019,10 @@ class MapRenderer:
         last_mission_trajectory_mm)."""
         cx = cy = self._cfg.size_px // 2
         scale = self._cfg.scale
+        # Back into the maps' frame: the view's mirror undone.
+        sign = -1 if self._cfg.mirror_x else 1
         return [
-            ((px - cx) * scale, (cy - py) * scale)
+            (sign * (px - cx) * scale, (cy - py) * scale)
             for px, py in self._points
         ]
 
@@ -1076,7 +1127,11 @@ class MapRenderer:
         for door in self._geometry_store.doors:
             cx, cy = self._mm_to_px_fit(door.cx, door.cy)
             half_w_px = max(1, int(door.width_mm / 2 / self._fit_scale))
-            theta_rad = math.radians(door.theta_deg)
+            # The door's angle is in the maps' frame; mirrored with it.
+            door_theta = (
+                180.0 - door.theta_deg if self._cfg.mirror_x else door.theta_deg
+            )
+            theta_rad = math.radians(door_theta)
             # Gap line (dashed) along door orientation
             dx = int(half_w_px * math.cos(theta_rad))
             dy = int(half_w_px * math.sin(theta_rad))
@@ -1085,7 +1140,10 @@ class MapRenderer:
                 DOOR_FILL, (6, 4), width=3,
             )
             # Swing arc — quarter circle from gap end, radius = door width
-            self._draw_door_arc(draw, cx - dx, cy + dy, half_w_px * 2, door.theta_deg)
+            self._draw_door_arc(
+                draw, cx - dx, cy + dy, half_w_px * 2, door_theta,
+                clockwise=self._cfg.mirror_x,
+            )
             if door.label:
                 draw.text((cx, cy - 10), door.label, fill=DOOR_FILL, anchor="mm", font=LABEL_FONT_SMALL)
 
@@ -1153,16 +1211,19 @@ class MapRenderer:
         hinge_px: int, hinge_py: int,
         radius_px: int,
         theta_deg: float,
+        *,
+        clockwise: bool = False,
     ) -> None:
         """Draw a quarter-circle door swing arc.
 
-        The arc starts at theta_deg and sweeps 90° counter-clockwise.
+        The arc starts at theta_deg and sweeps 90° counter-clockwise, or
+        clockwise in a mirrored picture, where a turn changes direction.
         Filled with DOOR_ARC_FILL and outlined with DOOR_ARC_OUTLINE.
         Drawn as a polygon of short line segments for broad PIL compatibility.
         """
         steps = max(8, radius_px // 2)
         start_rad = math.radians(theta_deg)
-        end_rad = start_rad + math.pi / 2
+        end_rad = start_rad + (-math.pi / 2 if clockwise else math.pi / 2)
         pts = [(hinge_px, hinge_py)]
         for i in range(steps + 1):
             a = start_rad + (end_rad - start_rad) * i / steps
@@ -1216,6 +1277,8 @@ class MapRenderer:
         with the auto-zoomed content.
         """
         cx = cy = self._cfg.size_px // 2
+        if self._cfg.mirror_x:
+            x_mm, y_mm = map_mm_to_view(x_mm, y_mm)
         return (
             int(cx + x_mm / self._cfg.scale),
             int(cy - y_mm / self._cfg.scale),
@@ -1229,6 +1292,8 @@ class MapRenderer:
         obstacles, door markers) so they stay spatially aligned with the
         auto-zoomed cleaning path.
         """
+        if self._cfg.mirror_x:
+            x_mm, y_mm = map_mm_to_view(x_mm, y_mm)
         return (
             int(self._fit_cx + x_mm / self._fit_scale),
             int(self._fit_cy - y_mm / self._fit_scale),
@@ -1432,8 +1497,8 @@ def render_area_map(
     -- no path, no door markers -- except the dock, so there is one
     known point to turn the picture by.
 
-    Same frame and orientation as the cleaning path map: x to the right,
-    y up, the dock at (0, 0). `cell_mm` is the grid the cells index.
+    Drawn as the cleaning path map is: through map_mm_to_view, y up, the
+    dock at (0, 0). `cell_mm` is the grid the cells index.
     """
     img = Image.new("RGBA", (size_px, size_px), BG_COLOUR)
     draw = ImageDraw.Draw(img)
@@ -1455,16 +1520,21 @@ def render_area_map(
     off_y = (size_px - (y_max - y_min) / scale) / 2
 
     def to_px(x_mm: float, y_mm: float) -> tuple[float, float]:
-        return (off_x + (x_mm - x_min) / scale, off_y + (y_max - y_mm) / scale)
+        # Mirrored, as every Classic picture is: the right edge of the
+        # view is the smallest x of the maps' frame.
+        vx, _ = map_mm_to_view(x_mm, y_mm)
+        return (off_x + (vx + x_max) / scale, off_y + (y_max - y_mm) / scale)
 
     colours = _area_colours(cell_sets)
     owner = {c: i for i, cells in enumerate(cell_sets) for c in cells}
     for i, cells in enumerate(cell_sets):
         fill = (*NAMING_AREA_PALETTE[colours[i]], 255)
         for x, y in cells:
-            x0, y0 = to_px(x * cell_mm, (y + 1) * cell_mm)
-            x1, y1 = to_px((x + 1) * cell_mm, y * cell_mm)
-            draw.rectangle([x0, y0, x1, y1], fill=fill)
+            ax, ay = to_px(x * cell_mm, (y + 1) * cell_mm)
+            bx, by = to_px((x + 1) * cell_mm, y * cell_mm)
+            draw.rectangle(
+                [min(ax, bx), min(ay, by), max(ax, bx), max(ay, by)], fill=fill
+            )
 
     # Borders: wherever a cell's neighbour belongs to another area, or
     # to none.

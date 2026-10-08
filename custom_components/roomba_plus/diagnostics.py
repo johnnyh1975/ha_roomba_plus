@@ -798,6 +798,8 @@ def _position_chain(data: Any) -> dict[str, Any]:
     live = getattr(data, "live_position", None)
     return {
         "position_points_collected": getattr(renderer, "point_count", None),
+        # Drawn, not learned from: began away from the dock (4.3.1).
+        "missions_kept_out_of_grid": getattr(data, "missions_kept_out_of_grid", None),
         # REQUESTED POSITIONS (4.3), for a robot that publishes none:
         # whether the stream ran, how much arrived and why it stopped.
         # Counts and a status only -- no coordinates.

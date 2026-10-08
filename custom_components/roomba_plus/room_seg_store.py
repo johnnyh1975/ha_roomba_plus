@@ -209,6 +209,10 @@ class SegDoor:
     cy: float = 0.0
     observations: list[list[float]] = field(default_factory=list)
     # observations stored as [[x_mm, y_mm], ...] — plain lists for JSON round-trip.
+    #: Diagnostics only (4.3.1): the opening at its widest and how much it
+    #: narrows the floor -- see room_segmentation.segment_rooms.
+    opening_mm: float = 0.0
+    constriction: float = 0.0
 
     def update_position(self, cell: tuple[int, int]) -> None:
         """Record this recompute's door-crossing cell and recompute the
@@ -239,6 +243,8 @@ class SegDoor:
             "cx": self.cx,
             "cy": self.cy,
             "observations": self.observations,
+            "opening_mm": self.opening_mm,
+            "constriction": self.constriction,
         }
 
     @staticmethod
@@ -252,6 +258,8 @@ class SegDoor:
             cx=float(d.get("cx", 0.0)),
             cy=float(d.get("cy", 0.0)),
             observations=[[float(p[0]), float(p[1])] for p in d.get("observations", [])],
+            opening_mm=float(d.get("opening_mm", 0.0)),
+            constriction=float(d.get("constriction", 0.0)),
         )
 
 
@@ -456,6 +464,9 @@ class RoomSegStore:
             if len(absorbed) / len(room.cells) >= STALE_ABSORPTION_RATIO:
                 stale_ids.append(rid)
         for rid in stale_ids:
+            self._carry_name_on_absorption(
+                self.rooms[rid], matched_existing | created_this_round
+            )
             _LOGGER.debug(
                 "RoomSegStore: deleting %s — %d cells absorbed into another room",
                 rid, len(self.rooms[rid].cells),
@@ -463,6 +474,42 @@ class RoomSegStore:
             del self.rooms[rid]
 
         return label_to_id
+
+    def _carry_name_on_absorption(self, gone: SegRoom, live_ids: set[str]) -> None:
+        """A name the user gave is not deleted with the area that held it.
+
+        When a recompute divides the floor differently, an area can be
+        absorbed by another -- most often an unnamed one this round
+        created, which then asked to be named again (@liblit's 980, where
+        his kitchen and dining room are several areas each). The name
+        goes to whichever live area took most of the old one's cells, if
+        that area has none of its own. An area with its own name keeps
+        it; the old name is logged, not lost silently. Hidden is not
+        carried: hiding a real room because a phantom overlapped it would
+        be worse than showing the phantom's replacement.
+        """
+        if not (gone.confirmed and gone.name):
+            return
+        best_id, best_overlap = None, 0
+        for lid in live_ids:
+            live = self.rooms.get(lid)
+            if live is None:
+                continue
+            overlap = len(gone.cells & live.cells)
+            if overlap > best_overlap:
+                best_id, best_overlap = lid, overlap
+        if best_id is None:
+            return
+        heir = self.rooms[best_id]
+        if heir.confirmed and heir.name:
+            if heir.name != gone.name:
+                _LOGGER.info(
+                    "RoomSegStore: area named %r merged into %r, which keeps its name",
+                    gone.name, heir.name,
+                )
+            return
+        heir.name = gone.name
+        heir.confirmed = True
 
     def _match_doors(
         self, result: RoomSegmentationResult, label_to_id: dict[int, str]
@@ -506,6 +553,8 @@ class RoomSegStore:
             ):
                 best_existing.update_position(raw["cell"])
                 best_existing.saddle_mm = raw["saddle_mm"]
+                best_existing.opening_mm = float(raw.get("opening_mm", 0.0))
+                best_existing.constriction = float(raw.get("constriction", 0.0))
                 matched_door_ids.add(best_existing.id)
                 new_doors.append(best_existing)
             else:
@@ -513,6 +562,8 @@ class RoomSegStore:
                     id=f"door_{self._next_door_n}",
                     room_a=room_a, room_b=room_b,
                     cell=raw["cell"], saddle_mm=raw["saddle_mm"],
+                    opening_mm=float(raw.get("opening_mm", 0.0)),
+                    constriction=float(raw.get("constriction", 0.0)),
                 )
                 door.update_position(raw["cell"])
                 self._next_door_n += 1
@@ -675,6 +726,8 @@ class RoomSegStore:
                 {
                     "id": d.id, "room_a": d.room_a, "room_b": d.room_b,
                     "saddle_mm": round(d.saddle_mm, 0),
+                    "opening_mm": round(d.opening_mm, 0),
+                    "constriction": round(d.constriction, 2),
                     "cx": round(d.cx), "cy": round(d.cy),
                     "observation_count": len(d.observations),
                 }

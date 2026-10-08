@@ -548,16 +548,30 @@ class MaintenanceStore:
     # ── L2 — Self-calibrating lifespan ───────────────────────────────────────
 
     def _learned_hours(self, slot: str) -> float | None:
-        """Median interval between a role's local resets, or None with
-        fewer than 2 recorded. Shared by the local-threshold fallback.
+        """Median interval between a role's local resets, or None when no
+        usable interval has been recorded. Shared by the local-threshold
+        fallback and `max_hours`.
+
+        AN INTERVAL THAT STARTS AT A RESET RECORDED AT 0 HOURS IS NOT A
+        LIFESPAN. Until 4.3.0 the reset buttons read `bbrun.hr`, which a
+        j7+/j9+ does not carry, so every reset there was recorded at 0.
+        The first correct reset after the update then made an "interval"
+        of the robot's whole lifetime: @msva17's filter, edge brush and bag
+        all learned 1556 h, and showed it as both remaining and
+        `max_hours`. With two resets that one interval is the whole median.
+
+        Read-side, on purpose: it corrects histories already stored on
+        every affected install without rewriting them, and it holds for a
+        reset recorded at 0 because the hours were not known yet. The cost
+        is one interval on a robot whose part was really replaced at hour
+        0; learning there starts one replacement later, on the configured
+        threshold until then.
         """
         history = getattr(self, f"{slot}_reset_history")
-        if len(history) < 2:
-            return None
         intervals = [
-            history[i] - history[i - 1]
-            for i in range(1, len(history))
-            if history[i] > history[i - 1]
+            end - start
+            for start, end in zip(history, history[1:])
+            if start > 0 and end > start
         ]
         return statistics.median(intervals) if intervals else None
 

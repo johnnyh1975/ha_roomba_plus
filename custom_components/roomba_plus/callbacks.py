@@ -520,7 +520,15 @@ def _capture_zone_names(
 
     data: RoombaData = entry.runtime_data
     if data.room_seg_store:                      # EPHEMERAL
-        return [r.name for r in data.room_seg_store.rooms.values() if r.confirmed]
+        # NOT THE HIDDEN ONES, and EACH NAME ONCE. Hiding an area is how a
+        # bogus one is put away (@liblit, 980: an area outside the house
+        # from a mission that started off the dock), so it must not be
+        # recorded as cleaned. And several areas may carry one name to
+        # make one room of them; the mission cleaned that room once.
+        return list(dict.fromkeys(
+            r.name for r in data.room_seg_store.rooms.values()
+            if r.confirmed and not r.hidden
+        ))
     if data.map_capability == MapCapability.SMART:
         last_cmd = _merged_top_level(entry, reported, "lastCommand")
         region_ids = [
@@ -774,8 +782,35 @@ async def async_record_mission(
         record["tracked_rooms"] = list(observed_rooms)
         record["rooms_source"] = ROOMS_AWAITING_CLOUD
 
+    # NOT A MISSION: under half a minute between a known start and the
+    # end, "completed", nothing cleaned, nothing stuck or lifted. @liblit's
+    # 980 stored eleven of these among sixteen records -- five within
+    # five minutes on one evening -- and iRobot's own history has none of
+    # them. They counted as missions everywhere a mission is counted.
+    # Kept when the start is not known: duration 0 then means a lost
+    # start time, not a short run.
+    if (
+        start_ts
+        and result == "completed"
+        and elapsed_sec < 30
+        and not record.get("area_sqft")
+        and nstuck_delta <= 0
+        and npicks_delta <= 0
+    ):
+        _LOGGER.debug(
+            "MissionStore: %.0f s run with nothing cleaned is not recorded as a mission",
+            elapsed_sec,
+        )
+        return
+
     if not data.mission_store.update_terminal_fields(record["id"], record):
-        await data.mission_store.async_append(record)
+        if not await data.mission_store.async_append(record):
+            # NOT STORED: the same mission is already there -- a re-
+            # delivered end, or one mission recorded under a second id.
+            # Whatever it added was folded in; nothing past this point
+            # (completion event, baselines, statistics) may run twice.
+            await data.mission_store.async_save(hass, entry.entry_id)
+            return
     await data.mission_store.async_save(hass, entry.entry_id)
     # AND SHOW IT NOW (4.2.15). Entities re-render on robot messages,
     # and a robot that has just docked sends few: the vacuum's

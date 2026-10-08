@@ -484,6 +484,9 @@ class RoombaData:
     #: MapRenderer. Sharing the extent is the small fix; merging the
     #: render paths would be a large one.
     room_map_extent_mm: tuple[float, float, float, float] | None = None
+    #: Missions since this start that were drawn but not learned from,
+    #: because they began away from the dock (image.py). Diagnostics only.
+    missions_kept_out_of_grid: int = 0
 
     # v3.2.1 — MQTT-watchdog resume grace: wall-clock timestamp of the last
     # observed phase transition INTO "run" from any non-run phase (fresh

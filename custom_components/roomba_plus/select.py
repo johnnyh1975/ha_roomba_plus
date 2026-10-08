@@ -560,10 +560,11 @@ class ZoneSelect(IRobotEntity, SelectEntity):
         """
         if not self._room_seg_store:
             return []
-        return [
+        # Each name once: several areas named alike are one room.
+        return list(dict.fromkeys(
             r.name for r in self._room_seg_store.rooms.values()
             if r.confirmed and not r.hidden
-        ]
+        ))
 
     @property
     def current_option(self) -> str | None:

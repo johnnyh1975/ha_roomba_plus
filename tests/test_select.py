@@ -241,6 +241,25 @@ class TestZoneSelectHiddenFilter:
 
         assert entity.options == ["Kitchen"]
 
+    def test_areas_sharing_a_name_are_offered_once(self):
+        """@liblit, 980: four areas named "Kitchen" are one room."""
+        from unittest.mock import MagicMock
+        from custom_components.roomba_plus.select import ZoneSelect
+        from custom_components.roomba_plus.room_seg_store import RoomSegStore, SegRoom
+
+        rss = RoomSegStore()
+        rss.rooms = {
+            rid: SegRoom(id=rid, name=name, confirmed=True)
+            for rid, name in (("room_9", "Kitchen"), ("room_3", "Dining"),
+                              ("room_2", "Kitchen"), ("room_5", "Kitchen"))
+        }
+        config_entry = MagicMock()
+        config_entry.runtime_data.room_seg_store = rss
+        entity = ZoneSelect.__new__(ZoneSelect)
+        entity._config_entry = config_entry
+
+        assert entity.options == ["Kitchen", "Dining"]
+
     def test_real_entity_options_empty_without_room_seg_store(self):
         from unittest.mock import MagicMock
         from custom_components.roomba_plus.select import ZoneSelect

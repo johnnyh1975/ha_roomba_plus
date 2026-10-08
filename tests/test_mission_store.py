@@ -125,8 +125,14 @@ def _make_record(
 ) -> dict:
     global _make_record_counter
     _make_record_counter += 1
-    started = _iso(days_ago, hour=8)
-    ended = _iso(days_ago, hour=9)
+    # EACH RECORD ITS OWN MINUTE. Records with one shared 08:00-09:00
+    # window are one mission recorded twice to the store since 4.3.1
+    # (_same_mission), and folded; a robot cleans one mission at a time.
+    # Five minutes apart, one minute long, all before 15:30.
+    offset = datetime.timedelta(minutes=5 * (_make_record_counter % 90))
+    start_dt = dt_util.parse_datetime(_iso(days_ago, hour=8)) + offset
+    started = start_dt.isoformat()
+    ended = (start_dt + datetime.timedelta(seconds=60)).isoformat()
     return {
         "id": f"m_{days_ago}_{_make_record_counter}",
         "started_at": started,
@@ -5130,3 +5136,67 @@ class TestEachRegionIsDatedByItsOwnEnd:
                            "rooms_cleaned": []}]
 
         assert store._record_room_names(store._records[0], {}) == []
+
+
+class TestOneMissionRecordedTwice:
+    """@liblit's 980 stored mission 119 twice: ids m_1788968200 and
+    m_1788968215, started 15 s apart, ended 12 s apart, both 49 minutes.
+    Both duplicate checks compare ids, so neither saw it, and the mission
+    counted twice everywhere."""
+
+    _FIRST = {
+        "id": "m_1788968200", "started_at": "2026-09-09T15:36:40+00:00",
+        "ended_at": "2026-09-09T16:26:07.679199+00:00", "duration_min": 49,
+        "area_sqft": 475, "result": "completed", "nMssn": 119, "recharge_min": None,
+    }
+    _SECOND = {
+        "id": "m_1788968215", "started_at": "2026-09-09T15:36:55+00:00",
+        "ended_at": "2026-09-09T16:25:55+00:00", "duration_min": 49,
+        "area_sqft": 475, "result": "completed", "nMssn": 119, "recharge_min": 0,
+    }
+
+    @pytest.mark.asyncio
+    async def test_the_second_is_folded_into_the_first(self):
+        store = MissionStore()
+        assert await store.async_append(dict(self._FIRST))
+        assert not await store.async_append(dict(self._SECOND))
+        assert [r["id"] for r in store.records] == ["m_1788968200"]
+        # What only the second had is kept.
+        assert store.records[0]["recharge_min"] == 0
+
+    @pytest.mark.asyncio
+    async def test_a_store_holding_both_is_cleaned_on_load(self):
+        hass = MagicMock()
+        store = MissionStore()
+        with patch(
+            "custom_components.roomba_plus.mission_store.Store"
+        ) as store_cls:
+            store_cls.return_value.async_load = AsyncMock(
+                return_value={"records": [dict(self._FIRST), dict(self._SECOND)]}
+            )
+            await store.async_load(hass, "e1")
+        assert [r["id"] for r in store.records] == ["m_1788968200"]
+
+    @pytest.mark.asyncio
+    async def test_recharge_segments_are_not_folded(self):
+        """A 980 keeps its mission start across recharges: segments share
+        the start and differ by hours at the end."""
+        store = MissionStore()
+        first = dict(self._FIRST, id="m_1", ended_at="2026-09-09T16:26:00+00:00")
+        later = dict(self._FIRST, id="m_1", ended_at="2026-09-09T18:40:00+00:00")
+        assert await store.async_append(first)
+        assert await store.async_append(later)
+        assert len(store.records) == 2
+
+    def test_times_without_zone_count_as_utc(self):
+        from custom_components.roomba_plus.mission_store import _same_mission
+        naive = dict(self._FIRST, started_at="2026-09-09T15:36:40",
+                     ended_at="2026-09-09T16:26:07")
+        assert _same_mission(naive, self._SECOND)
+
+    def test_records_without_times_or_under_a_minute_are_left_alone(self):
+        from custom_components.roomba_plus.mission_store import _same_mission
+        assert not _same_mission(None, self._SECOND)
+        assert not _same_mission(dict(self._FIRST, ended_at=None), self._SECOND)
+        short = dict(self._FIRST, ended_at="2026-09-09T15:37:20+00:00")
+        assert not _same_mission(short, dict(short, started_at="2026-09-09T15:36:45+00:00"))

@@ -185,6 +185,70 @@ def _without_duplicate_ids(records: list[Any]) -> tuple[list[Any], int]:
 
 
 
+#: How far apart the start and the end of two records may be for them to
+#: be one mission recorded twice.
+SAME_MISSION_TOLERANCE_SEC = 120
+
+
+def _span(record: Any) -> tuple[float, float] | None:
+    """A record's (start, end) in epoch seconds, or None."""
+    if not isinstance(record, dict):
+        return None
+    start = dt_util.parse_datetime(str(record.get("started_at") or ""))
+    end = dt_util.parse_datetime(str(record.get("ended_at") or ""))
+    if start is None or end is None:
+        return None
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=timezone.utc)
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=timezone.utc)
+    return start.timestamp(), end.timestamp()
+
+
+def _same_mission(a: Any, b: Any) -> bool:
+    """Whether two records are one mission recorded twice.
+
+    @liblit's 980 stored mission 119 twice: started 15 s apart, ended 12 s
+    apart, both 49 minutes, under different ids, so neither duplicate
+    check saw it -- they compare ids.
+
+    BOTH ENDS MUST AGREE, not just overlap. A 980 keeps its mission start
+    across recharges, so each recharge segment is stored from the same
+    start to a later end: segments overlap by design and are told apart
+    by their ends. Records under a minute are left alone.
+    """
+    sa, sb = _span(a), _span(b)
+    if sa is None or sb is None:
+        return False
+    if min(sa[1] - sa[0], sb[1] - sb[0]) < 60:
+        return False
+    return (
+        abs(sa[0] - sb[0]) <= SAME_MISSION_TOLERANCE_SEC
+        and abs(sa[1] - sb[1]) <= SAME_MISSION_TOLERANCE_SEC
+    )
+
+
+def _fill_from(kept: dict[str, Any], other: dict[str, Any]) -> None:
+    """Take from `other` only what `kept` does not have."""
+    for key, value in other.items():
+        if value is not None and kept.get(key) is None:
+            kept[key] = value
+
+
+def _without_same_mission_twice(records: list[Any]) -> tuple[list[Any], int]:
+    """Fold records of one mission recorded twice into the first one."""
+    kept: list[Any] = []
+    dropped = 0
+    for record in records:
+        twin = next((k for k in kept if _same_mission(k, record)), None)
+        if twin is not None:
+            _fill_from(twin, record)
+            dropped += 1
+            continue
+        kept.append(record)
+    return kept, dropped
+
+
 class MissionStore:
     """Append-only mission log — max 365 records FIFO.
 
@@ -276,6 +340,9 @@ class MissionStore:
             # statistics are rebuilt from these records at every setup, so
             # the double counts disappear with it.
             self._records, _dropped = _without_duplicate_ids(self._records)
+            # AND ONE MISSION UNDER TWO IDS (4.3.1): see _same_mission().
+            self._records, _twice = _without_same_mission_twice(self._records)
+            _dropped += _twice
             self._region_index_cache = None
             if _dropped:
                 _LOGGER.info(
@@ -390,6 +457,18 @@ class MissionStore:
                         record["id"],
                     )
                     break
+        # ONE MISSION, A SECOND ID: folded into the record already there
+        # (see _same_mission). Only the recent ones: a duplicate arrives
+        # within minutes of the first.
+        for existing in self._records[-5:]:
+            if _same_mission(existing, record):
+                _fill_from(existing, record)
+                self._region_index_cache = None
+                _LOGGER.info(
+                    "MissionStore: %s covers the same time as %s; recorded once",
+                    record.get("id"), existing.get("id"),
+                )
+                return False
         self._records.append(record)
         self._region_index_cache = None
         if self._record_ids is not None and record.get("id"):

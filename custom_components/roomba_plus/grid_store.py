@@ -203,6 +203,10 @@ class GridStore:
     """
 
     def __init__(self) -> None:
+        #: Draw the heatmap mirrored in x, as the 900-series' cleaning path
+        #: is (4.3.1): their grid's frame is a mirror image of the floor.
+        #: A display setting only -- the cells keep their frame.
+        self.mirror_x: bool = False
         self._cells: dict[tuple[int, int], float] = {}   # (gx, gy) → EMA weight
         # L7 (v2.7.0): _stuck extended from plain count to structured dict.
         # Format: {(gx, gy): {"count": int, "times": [(weekday, hour), ...]}}
@@ -1111,6 +1115,11 @@ class GridStore:
         A point at (x, y) mm is drawn at pixel
         ((x - x_min) * scale, (y_max - y) * scale), with
         scale = size_px / (x_max - x_min). None before the first cell.
+
+        MIRRORED ON A 900-SERIES SINCE 4.3.1 (`mirror_x`), as its cleaning
+        path is (see `map_renderer.map_mm_to_view`): there the point is
+        drawn at ((x_max - x) * scale, ...), the picture's left edge being
+        the grid's largest x. The extent is the same rectangle either way.
         """
         bbox = self.bounding_box_mm()
         if bbox is None:
@@ -1119,9 +1128,13 @@ class GridStore:
         span_x = max(x_max - x_min, CELL_SIZE_MM)
         span_y = max(y_max - y_min, CELL_SIZE_MM)
         side = max(span_x, span_y) + CELL_SIZE_MM
+        if self.mirror_x:
+            x_lo, x_hi = x_max - side, x_max
+        else:
+            x_lo, x_hi = x_min, x_min + side
         return {
-            "x_min": float(x_min),
-            "x_max": float(x_min + side),
+            "x_min": float(x_lo),
+            "x_max": float(x_hi),
             "y_min": float(y_max - side),
             "y_max": float(y_max),
             "size_px": float(size_px),
@@ -1154,6 +1167,7 @@ class GridStore:
         if extent is None:
             return None
         x_min = extent["x_min"]
+        x_max = extent["x_max"]
         y_max = extent["y_max"]
         # (Why the frame is one cell wider than the span:)
         # THE SPAN IS CORNER-TO-CORNER, so the last cell's own width has
@@ -1175,7 +1189,11 @@ class GridStore:
 
         for (gx, gy), weight in self._cells.items():
             x_mm, y_mm = _cell_to_mm(gx, gy)
-            px = int((x_mm - x_min) * scale)
+            # MIRRORED on a 900-series, measured from x_max: see
+            # render_extent_mm.
+            px = int(
+                (x_max - x_mm) * scale if self.mirror_x else (x_mm - x_min) * scale
+            )
             # Y-FLIP, the same one RoombaRoomsImage.to_px() applies.
             #
             # This measured downward from the bottom of the grid while

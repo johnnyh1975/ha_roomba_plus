@@ -1152,20 +1152,22 @@ class TestSelfCalibratingMaintenance:
         assert ms.learned_filter_hours is None, "Need ≥2 resets for a learned value"
 
     def test_learned_filter_hours_correct_median_after_three_resets(self):
+        # Not from hour 0: a reset recorded at 0 is what the pre-4.3.0
+        # buttons wrote on a j-series, and no interval starts there.
         ms = MaintenanceStore()
-        ms.reset_filter(0)    # baseline (never cleaned before)
-        ms.reset_filter(60)   # 60h interval
-        ms.reset_filter(130)  # 70h interval  → median of [60, 70] = 65
+        ms.reset_filter(10)   # baseline
+        ms.reset_filter(70)   # 60h interval
+        ms.reset_filter(140)  # 70h interval  → median of [60, 70] = 65
         assert ms.learned_filter_hours == pytest.approx(65.0)
 
     def test_filter_remaining_uses_learned_hours(self):
         ms = MaintenanceStore()
-        ms.reset_filter(0)
-        ms.reset_filter(60)   # learned = 60h interval; filter_reset_hr = 60
+        ms.reset_filter(10)
+        ms.reset_filter(70)   # learned = 60h interval; filter_reset_hr = 70
         # 10h after last reset: 60 - 10 = 50h remaining
-        assert ms.filter_remaining(current_hr=70, threshold=120) == 50
+        assert ms.filter_remaining(current_hr=80, threshold=120) == 50
         # 60h after last reset: exactly at boundary → 0h remaining
-        assert ms.filter_remaining(current_hr=120, threshold=120) == 0
+        assert ms.filter_remaining(current_hr=130, threshold=120) == 0
 
     def test_filter_remaining_round_not_truncate(self):
         """round() not int() — fractional learned hours round to nearest integer."""
@@ -1695,10 +1697,10 @@ class TestMaxHoursPerRole:
         from custom_components.roomba_plus.sensor_helpers import _consumable_max_hours
         store = MaintenanceStore()
         assert _consumable_max_hours(_wear_entity(0, store), "filter") == 60
-        store.reset_brush(0)
-        store.reset_brush(100)
-        store.reset_brush(220)
-        assert _consumable_max_hours(_wear_entity(220, store), "main_brush") == 110
+        store.reset_brush(10)
+        store.reset_brush(110)
+        store.reset_brush(230)
+        assert _consumable_max_hours(_wear_entity(230, store), "main_brush") == 110
         assert _consumable_max_hours(_wear_entity(50, store), "side_brush") == 150
         store.hydrate_from_cloud_parts(
             [_cloud_part("139", count_used=1200, count_remaining=2400)], 500,
@@ -2096,3 +2098,39 @@ class TestDueOnAJSeries:
         store = MaintenanceStore()
         store.filter_reset_hr = 500
         assert "filter" not in store.due_items(_J_SERIES_STATE, {})
+
+
+class TestLearnedLifespanIgnoresWhatIsNotALifespan:
+    """@msva17, j9+, on 4.3.0: filter, edge brush and bag all read 1556 h,
+    remaining and `max_hours` alike, right after their resets.
+
+    Their histories held a reset at 0 h from the 4.2 buttons (see
+    `lifetime_hours()`), and the first correct reset at 1556 h made an
+    interval of the robot's whole life -- the whole median after two
+    resets.
+    """
+
+    def test_an_interval_from_a_zero_hour_reset_is_not_learned(self) -> None:
+        store = MaintenanceStore()
+        store.reset_filter(0)
+        store.reset_filter(1556)
+        assert store.learned_filter_hours is None
+        assert store.filter_remaining(current_hr=1556, threshold=60) == 60
+
+    @pytest.mark.parametrize(
+        ("slot", "role", "default"),
+        [("side_brush", "side_brush", 150), ("clean_base_bag", "clean_base_bag", 30)],
+    )
+    def test_the_same_for_edge_brush_and_bag(self, slot, role, default) -> None:
+        store = MaintenanceStore()
+        getattr(store, f"reset_{slot}")(0)
+        getattr(store, f"reset_{slot}")(1556)
+        assert store.learned_hours(role) is None
+        assert store.remaining_hours(role, 1556, default) == default
+
+    def test_learning_resumes_with_the_next_real_interval(self) -> None:
+        store = MaintenanceStore()
+        for hours in (0, 1556, 1620):
+            store.reset_filter(hours)
+        assert store.learned_filter_hours == 64
+

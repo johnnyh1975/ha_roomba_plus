@@ -85,6 +85,8 @@ def segment_rooms(
         rooms.setdefault(r, set()).add(coord)
 
     final_ids = sorted(rooms.keys())
+    # Each area's widest point, for the constriction ratio below.
+    peak = {r: max(dist_smooth[c] for c in cs) for r, cs in rooms.items()}
     neighbors8 = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
     doors: list[dict[str, Any]] = []
     checked: set[tuple[int, int]] = set()
@@ -94,6 +96,7 @@ def segment_rooms(
                 continue
             checked.add((a, b))
             best = None
+            widest: float | None = None
             for coord in rooms[a]:
                 x, y = coord
                 for dx, dy in neighbors8:
@@ -116,6 +119,8 @@ def segment_rooms(
                         v = min(dist_smooth[coord], dist_smooth[nb])
                         if best is None or v < best[0]:
                             best = (v, coord)
+                        if widest is None or v > widest:
+                            widest = v
             if best is not None:
                 # THE MASK IS A CONFIGURATION SPACE, so the raw distance
                 # value is short by the robot's radius.
@@ -143,6 +148,27 @@ def segment_rooms(
                     #: The physical clearance, half-width and full.
                     "clearance_mm": saddle_raw_mm + robot_radius_mm,
                     "width_mm": 2.0 * (saddle_raw_mm + robot_radius_mm),
+                    # A SECOND MEASUREMENT, FOR DIAGNOSTICS ONLY (4.3.1).
+                    #
+                    # The narrowest point of a boundary is always at its
+                    # ends, where it meets the wall -- 90 to 190 mm on
+                    # @liblit's 980, whatever the opening. The widest
+                    # point is the middle of the opening. And the mask is
+                    # the robot's footprint, not where its centre could
+                    # go: its edge sits 23-46 mm from his walls, so no
+                    # radius is added. Measured this way his 1.80 m
+                    # dining-kitchen opening came out 1.86 and 1.54 m.
+                    #
+                    # `constriction` compares the opening with the wider
+                    # of the two areas' own widest point: 0.49-0.54 at
+                    # his real room boundary, 0.99 where an area was cut
+                    # in open floor. Not used for merging until it has
+                    # been seen on more than one house.
+                    "opening_mm": 2.0 * (widest or 0.0) * cell_mm,
+                    "constriction": (
+                        (widest or 0.0) / min(peak[a], peak[b])
+                        if min(peak[a], peak[b]) > 0 else 0.0
+                    ),
                 })
 
     return RoomSegmentationResult(rooms=rooms, doors=doors, dist=dist, seeds=seeds_coords)

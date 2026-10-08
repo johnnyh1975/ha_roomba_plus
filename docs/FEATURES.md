@@ -272,6 +272,7 @@ Configure: Settings → Devices & Services → Roomba+ → Configure → **Zone 
 - Browse all zones in a structured index
 - Rename any zone; Smart Map robots use the alias alongside the cloud name. `clean_room` takes the new name as well as the original (since 4.2.19)
 - Hide zones — removed from selectors, `clean_room`, and repair issues
+- **900-series areas:** hide an area that is not a real space (for example one left by a mission that started away from the dock): it is no longer drawn as an area, leaves the area select, and since 4.3.1 is no longer recorded as cleaned. Give several areas the same name to make one room of them: the select and the mission's cleaned rooms list that name once (since 4.3.1). The areas themselves stay separate on the map, and an area cannot be split
 - Changes saved atomically
 
 #### Cloud zone sync — Smart Map robots
@@ -326,6 +327,11 @@ this, that phase fell through to the active branch and the tracker read
 #### Room detection — 900-series (v2.10.0)
 
 Automatic room segmentation from the same coverage data used for the heatmap (distance-transform + watershed, the same core technique iRobot's own room-segmentation patent describes), not from travel-gap detection — the previous gap-based approach proved unreliable in the field and has been removed. Rooms and the doorways between them are identified from accumulated visit-density data across missions, with identity kept stable as more missions accumulate so a name you've assigned doesn't reset. New rooms surface via a Repair Issue for naming through the Options Flow; renaming also confirms a room so it appears in `select.{name}_select_zone`.
+
+What the areas learn from *(4.3.1)*:
+- **Only missions that started on the dock.** Positions count from where a mission starts, so a mission started elsewhere lands turned and shifted against all the others (@liblit: an area outside the house). Whether it started on the dock is read from the robot's own phase before the start (charging = on the dock). Such a mission is still drawn live; it is left out of the coverage grid, the areas and the doors, and counted in diagnostics as `position_chain.missions_kept_out_of_grid`. A start Roomba+ did not see (Home Assistant started mid-mission) counts as on the dock, as before.
+- **A name survives a recompute.** When the areas are divided differently and a named area is absorbed by another, the name moves to the area that took most of it, unless that one has a name of its own.
+- **Doors in diagnostics** carry `opening_mm` (the opening at its widest) and `constriction` (how much it narrows the floor) beside the older `saddle_mm`. Measurement only; how areas are merged has not changed.
 
 **Rooms are not derived until three missions have completed** *(v4.0.0a43)*. This technique is measurably unstable on incomplete coverage: a threshold the robot has not yet crossed is indistinguishable from a wall, so it splits a room that is not split, and the split disappears once a later mission drives through. On one real archive that showed as 7 rooms after one mission, 6 after four, and 5 once coverage settled — two of the seven were never rooms. Only *completed* missions count, because a run that ended early has no perimeter pass and its mask edges sit further from the real walls.
 
@@ -425,6 +431,15 @@ order, for anyone who already built on them; `map_x_mm`/`map_y_mm` are
 the same point in the frame of the maps, the cleaning path and the stuck
 pins, and are the pair to use when placing the robot on a map.
 
+**That frame is a mirror image of the floor** *(4.3.1)*: swapping two axes
+reflects, it does not turn. On a 900-series every picture is therefore
+drawn mirrored back in x — the cleaning path, the coverage map and the
+areas in *Rooms & zones* — and now shows the floor the right way round
+(@liblit, and a second 980). The millimetres are unchanged: `map_x_mm`,
+`rooms`, the hazards and everything stored keep the frame they had; only
+the step to pixels mirrors. Smart Map robots are drawn as before until one
+is checked against its floor.
+
 ### What the colours on the map mean
 
 Four kinds of zone are drawn, and the distinction that matters is not
@@ -474,7 +489,9 @@ plan usually is not. `x_min_mm`…`y_max_mm` are the bounding box of the
 visited cells; the attribute `render_extent_mm` (`x_min`, `x_max`,
 `y_min`, `y_max`, `size_px`) is the frame the picture is actually drawn
 in. A point at (x, y) mm sits at pixel
-`((x − x_min) · s, (y_max − y) · s)` with `s = size_px / (x_max − x_min)`.
+`((x − x_min) · s, (y_max − y) · s)` with `s = size_px / (x_max − x_min)`;
+on a 900-series since 4.3.1 at `((x_max − x) · s, (y_max − y) · s)`, the
+picture being mirrored in x (see *Robot position in the maps' frame*).
 
 ---
 
@@ -523,7 +540,7 @@ data:
 | Battery capacity retention (%) | Degradation relative to design capacity (profile-corrected, v2.5+) |
 | Estimated battery end of life (days) | Projected days until battery replacement — self-calibrated against this robot's own measurement noise floor (v3.1.0), so a near-new battery with normal estCap jitter no longer produces a meaningless multi-decade projection |
 
-**Self-calibrating thresholds (v2.5+):** After two or more filter or brush replacements, Roomba+ learns your personal replacement interval from the actual hours between resets. The learned value is visible in diagnostics under `learned_maintenance`.
+**Self-calibrating thresholds (v2.5+):** After two or more replacements of a part, Roomba+ learns your personal replacement interval from the actual hours between resets. The learned value is visible in diagnostics under `learned_maintenance`. Since 4.3.1 an interval that starts at a reset recorded at 0 hours is not counted: before 4.3.0 the reset buttons recorded 0 on robots that keep their hours in `runtimeStats` (j-series).
 
 **First install on an already-used robot:** if this is the first time Roomba+ has seen this robot and it already has significant runtime hours (e.g. installed after months of use via the official app), the remaining-hours countdown assumes maintenance is current as of install time rather than treating the robot's entire prior lifetime as "overdue" — you won't see a false "0h remaining" the moment you add the integration. The countdown then behaves normally from that point on; press the reset buttons whenever you actually replace something to keep it accurate. **With cloud credentials configured this assumption is replaced by the real thing** — see cloud consumable counters below.
 
@@ -619,7 +636,7 @@ Two states are worth knowing about:
 
 **Calendar-based inspect tracking (v2.7+):** wheel module, charging contacts, and bin are cleaned on a calendar cadence rather than hours-of-use. Three new timestamp sensors and services track when each was last cleaned so you can build reminders from them.
 
-**Reset learned profile:** `roomba_plus.reset_robot_profile` wipes all self-calibrated baselines (dirt thresholds, maintenance intervals, coverage baseline) so the robot starts learning fresh after a move or major layout change. Mission history is unaffected.
+**Reset learned profile:** `roomba_plus.reset_robot_profile` wipes the self-calibrated baselines in the robot profile (dirt thresholds and room dirt index, coverage and relocalisation baselines, mission duration and area statistics, battery noise floor, dock heading) so the robot starts learning fresh after a move or major layout change. Mission history is unaffected, and so are the maintenance counters: a part's replacement interval is learned from its own reset history, which only a part reset changes.
 
 Every reset above (button or service) writes a searchable Logbook entry and fires `roomba_plus_maintenance_reset` — see [Events & device triggers](#events--device-triggers).
 

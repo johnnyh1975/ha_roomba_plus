@@ -1503,6 +1503,7 @@ class TestMissionCheckpointV282:
             "mission_thetas": [],
             "stuck_mission_points": [(1.0, 2.0)],
             "mission_start_ts": "2026-06-18T09:00:00+00:00",
+            "started_on_dock": None,
             "renderer_state": {"r": 1},
             "last_stuck_count": 0,
             "dock_anchor_buffering": False,
@@ -5105,3 +5106,125 @@ class TestRequestedPathReviewFindings:
         await m._async_restore_map_state()
         renderer.restore_state.assert_not_called()
         assert m._position_source is None
+
+
+class TestAMissionThatStartedOffTheDockIsNotLearnedFrom:
+    """@liblit's 980, 27 August: a mission that started away from the dock,
+    its path turned by about 95 degrees, 23% of its cells outside the
+    house, two phantom areas. iRobot's own record said `dockedAtStart: 0`
+    for exactly that one. The robot says it locally too: the phase before
+    the start was not `charge`.
+    """
+
+    def test_the_phase_before_the_start_decides(self):
+        from custom_components.roomba_plus.image import _mission_start_on_dock
+
+        assert _mission_start_on_dock("charge") is True
+        assert _mission_start_on_dock("stop") is False
+        assert _mission_start_on_dock("hmUsrDock") is False
+        assert _mission_start_on_dock("") is None
+
+    @pytest.mark.parametrize(
+        ("before", "expected"), [("charge", True), ("stop", False), ("", None)]
+    )
+    def test_a_start_records_where_it_began(self, before, expected):
+        entity = _make_map_entity()
+        if before:
+            _feed_map_entity(entity, _map_msg(before))
+        _feed_map_entity(entity, _map_msg("run"))
+        assert entity._mission_started_on_dock is expected
+
+    @staticmethod
+    def _ended(started_on_dock):
+        from custom_components.roomba_plus.image import RoombaMapImage
+
+        entry = entry_mock()
+        entry.entry_id = "test_entry"
+        entry.runtime_data = MagicMock()
+        entry.runtime_data.grid_store = MagicMock()
+        entry.runtime_data.umf_aligner = None
+        entry.runtime_data.missions_kept_out_of_grid = 0
+        route = RoombaMapImage.__new__(RoombaMapImage)
+        route.hass = hass_mock()
+        route._config_entry = entry
+        route._renderer = MagicMock()
+        route._renderer._cfg.robot_diameter_mm = 300
+        route._zone_store = None
+        route._map_capability = None
+        route._mission_points = [(0.0, 0.0), (100.0, 100.0)]
+        route._mission_thetas = [0.0, 0.0]
+        route._stuck_mission_points = []
+        route._mission_start_ts = "2026-08-27T17:28:43+00:00"
+        route._mission_checkpoint_mssn_strt_tm = 1
+        route._last_terminal_mission_key = None
+        route._mission_started_on_dock = started_on_dock
+        route.vacuum_state = {"cleanMissionStatus": {"mssnStrtTm": 1}, "bbmssn": {"nMssn": 118}}
+        route._cache = b"old"
+        scheduled = []
+        with patch.object(
+            entry, "async_create_task",
+            side_effect=lambda _h, coro, *_a: scheduled.append(coro) or MagicMock(),
+        ):
+            route._handle_mission_end()
+        for coro in scheduled:
+            coro.close()
+        return entry
+
+    def test_off_the_dock_is_kept_out_of_the_grid(self):
+        entry = self._ended(False)
+        entry.runtime_data.grid_store.update_from_mission.assert_not_called()
+        assert entry.runtime_data.missions_kept_out_of_grid == 1
+
+    @pytest.mark.parametrize("started_on_dock", [True, None])
+    def test_on_the_dock_or_unknown_is_learned_as_before(self, started_on_dock):
+        entry = self._ended(started_on_dock)
+        entry.runtime_data.grid_store.update_from_mission.assert_called_once()
+        assert entry.runtime_data.missions_kept_out_of_grid == 0
+
+    def test_a_checkpoint_keeps_the_flag(self):
+        from custom_components.roomba_plus.image import _checkpoint_on_dock
+
+        assert _checkpoint_on_dock({"started_on_dock": False}) is False
+        assert _checkpoint_on_dock({}) is None
+        assert _checkpoint_on_dock({"started_on_dock": "no"}) is None
+
+    def test_the_trajectory_is_stored_with_its_end_time(self):
+        """`ended_at` was never passed: every stored trajectory had it
+        empty (@liblit's backup)."""
+        entry = entry_mock()
+        entry.entry_id = "test_entry"
+        entry.runtime_data = MagicMock()
+        entry.runtime_data.grid_store = MagicMock()
+        entry.runtime_data.room_seg_store = None
+        entry.runtime_data.outline_store = None
+        entry.runtime_data.geometry_store = None
+        entry.runtime_data.umf_aligner = None
+        from custom_components.roomba_plus.image import RoombaMapImage
+
+        route = RoombaMapImage.__new__(RoombaMapImage)
+        route.hass = hass_mock()
+        route._config_entry = entry
+        route._renderer = MagicMock()
+        route._renderer._cfg.robot_diameter_mm = 340
+        route._zone_store = None
+        route._map_capability = MapCapability.EPHEMERAL
+        route._mission_points = [(0.0, 0.0), (100.0, 100.0)]
+        route._mission_thetas = [0.0, 0.0]
+        route._stuck_mission_points = []
+        route._mission_start_ts = "2026-09-18T17:58:54+00:00"
+        route._mission_checkpoint_mssn_strt_tm = 1
+        route._last_terminal_mission_key = None
+        route._mission_started_on_dock = True
+        route.vacuum_state = {"cleanMissionStatus": {"mssnStrtTm": 1}, "bbmssn": {"nMssn": 120}}
+        route._cache = b"old"
+        scheduled = []
+        with patch.object(
+            entry, "async_create_task",
+            side_effect=lambda _h, coro, *_a: scheduled.append(coro) or MagicMock(),
+        ):
+            route._handle_mission_end()
+        for coro in scheduled:
+            coro.close()
+        kwargs = entry.runtime_data.trajectory_store.record_mission.call_args.kwargs
+        assert kwargs["ended_at"]
+

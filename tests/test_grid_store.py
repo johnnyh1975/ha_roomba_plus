@@ -1751,3 +1751,58 @@ class TestTheHeatmapIsNotUpsideDown:
         ]
 
         assert painted, "the single cell must be visible at all"
+
+
+class TestTheCoverageMapMirrorsOnA900Series:
+    """Mirrored with the 900-series' cleaning path (4.3.1); unchanged for
+    every other robot, whose grids have not been checked against a floor.
+    """
+
+    @staticmethod
+    def _store(mirror: bool):
+        gs = GridStore()
+        gs.mirror_x = mirror
+        gs._cells = {(0, 0): 1.0, (20, 0): 1.0, (20, 1): 1.0}
+        return gs
+
+    @staticmethod
+    def _columns(png):
+        import io
+
+        from PIL import Image
+
+        img = Image.open(io.BytesIO(png)).convert("RGBA")
+        return {x for y in range(img.height) for x in range(img.width) if img.getpixel((x, y))[3]}
+
+    def test_the_high_x_cells_are_drawn_left(self):
+        mirrored = self._store(True)
+        extent = mirrored.render_extent_mm(400)
+        scale = 400 / (extent["x_max"] - extent["x_min"])
+        x_far, _ = _cell_to_mm(20, 0)
+        assert int((extent["x_max"] - x_far) * scale) == 0
+        assert min(self._columns(mirrored.render_heatmap(400))) == 0
+
+    def test_the_extent_says_where_a_point_lands_when_mirrored(self):
+        gs = self._store(True)
+        gs._stuck = {(20, 1): {"count": STUCK_HOTSPOT_THRESHOLD}}
+        extent = gs.render_extent_mm(400)
+        scale = 400 / (extent["x_max"] - extent["x_min"])
+        x_mm, y_mm = _cell_to_mm(20, 1)
+        expected = (int((extent["x_max"] - x_mm) * scale), int((extent["y_max"] - y_mm) * scale))
+
+        import io
+
+        from PIL import Image
+
+        img = Image.open(io.BytesIO(gs.render_heatmap(400))).convert("RGBA")
+        red = [
+            (x, y) for y in range(img.height) for x in range(img.width)
+            if img.getpixel((x, y))[:3] == (220, 50, 50)
+        ]
+        assert min(red) == expected
+
+    def test_not_mirrored_by_default(self):
+        plain = self._store(False)
+        extent = plain.render_extent_mm(400)
+        assert extent["x_min"] == _cell_to_mm(0, 0)[0]
+

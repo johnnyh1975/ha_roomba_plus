@@ -170,10 +170,10 @@ clean_sequence:
 reset_robot_profile:
   name: Reset robot profile
   description: >
-    Wipe all self-calibrated learned state (dirt baselines, navigation
-    efficiency, maintenance intervals) so the robot starts learning fresh.
-    Use after moving house, a major layout change, or replacing the robot.
-    Mission history is not affected.
+    Wipe the self-calibrated robot profile (dirt baselines, coverage and
+    navigation baselines, mission statistics) so the robot starts learning
+    fresh. Use after moving house, a major layout change, or replacing the
+    robot. Mission history and maintenance counters are not affected.
   target:
     entity:
       integration: roomba_plus

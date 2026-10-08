@@ -1452,3 +1452,91 @@ class TestConstrictionWidthIsPhysical:
 
         for d in result.doors:
             assert "saddle_mm" in d
+
+
+class TestTheOpeningIsMeasuredAtItsWidest:
+    """@liblit's 980: the narrowest point of a boundary is always where it
+    meets the wall, whatever the opening. A second measurement takes the
+    widest point and adds no robot radius (the mask is the footprint).
+    Diagnostics only: merging is unchanged."""
+
+    @staticmethod
+    def _rooms_joined_by(gap_rows):
+        cells = _rect_cells(0, 20, 0, 20)
+        cells.update(_rect_cells(26, 46, 0, 20))
+        for x in range(20, 26):
+            for y in gap_rows:
+                cells[(x, y)] = 1.0
+        result = segment_rooms(cells, min_distance_cells=5.0)
+        assert len(result.doors) == 1
+        return result.doors[0]
+
+    def test_a_wider_opening_measures_wider(self):
+        narrow = self._rooms_joined_by(range(9, 12))
+        wide = self._rooms_joined_by(range(6, 15))
+        assert wide["opening_mm"] > narrow["opening_mm"]
+        # The widest point lies inside the opening, so it cannot exceed it.
+        assert wide["opening_mm"] <= 9 * 150 + 150
+
+    def test_a_doorway_narrows_the_floor(self):
+        door = self._rooms_joined_by(range(9, 12))
+        assert 0.0 < door["constriction"] < 0.7
+
+    def test_the_store_keeps_and_reports_both(self):
+        from custom_components.roomba_plus.room_seg_store import SegDoor
+
+        door = SegDoor(
+            id="door_1", room_a="room_1", room_b="room_2", cell=(1, 1),
+            saddle_mm=90.0, opening_mm=1860.0, constriction=0.51,
+        )
+        back = SegDoor.from_dict(door.to_dict())
+        assert (back.opening_mm, back.constriction) == (1860.0, 0.51)
+        old = door.to_dict()
+        del old["opening_mm"], old["constriction"]
+        assert SegDoor.from_dict(old).opening_mm == 0.0
+
+        store = RoomSegStore()
+        store.doors = [door]
+        info = store.diagnostic_info()["doors"][0]
+        assert (info["opening_mm"], info["constriction"]) == (1860, 0.51)
+
+
+class TestANameSurvivesItsAreaBeingAbsorbed:
+    """A recompute that divides the floor differently can absorb a named
+    area into another. The name must not go with it."""
+
+    @staticmethod
+    def _store_with(named_cells, other_cells, other_name=""):
+        store = RoomSegStore()
+        store.rooms = {
+            "room_1": SegRoom(id="room_1", cells=set(named_cells), name="Kitchen", confirmed=True),
+            "room_2": SegRoom(
+                id="room_2", cells=set(other_cells),
+                name=other_name, confirmed=bool(other_name),
+            ),
+        }
+        store._next_room_n = 3
+        return store
+
+    @staticmethod
+    def _result(*clusters):
+        from custom_components.roomba_plus.room_segmentation import RoomSegmentationResult
+
+        return RoomSegmentationResult(
+            rooms={i: set(c) for i, c in enumerate(clusters)}, doors=[], dist={}, seeds=[],
+        )
+
+    def test_the_absorbing_area_takes_the_name(self):
+        small = {(x, y) for x in range(0, 4) for y in range(0, 4)}
+        big = {(x, y) for x in range(4, 20) for y in range(0, 10)}
+        store = self._store_with(small, big)
+        store._match_rooms(self._result(small | big))
+        assert [r.name for r in store.rooms.values()] == ["Kitchen"]
+        assert all(r.confirmed for r in store.rooms.values())
+
+    def test_an_area_with_its_own_name_keeps_it(self):
+        small = {(x, y) for x in range(0, 4) for y in range(0, 4)}
+        big = {(x, y) for x in range(4, 20) for y in range(0, 10)}
+        store = self._store_with(small, big, other_name="Dining")
+        store._match_rooms(self._result(small | big))
+        assert [r.name for r in store.rooms.values()] == ["Dining"]

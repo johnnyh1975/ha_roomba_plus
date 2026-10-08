@@ -9,6 +9,37 @@ note are listed — most releases need zero action beyond updating.
 
 ---
 
+## v4.3.1 — from v4.3.0
+
+**A 900-series' maps turn the right way round.** The cleaning path, the
+coverage map and the areas in *Rooms & zones* were mirror images of the
+floor and are now drawn mirrored back. Nothing to do, and nothing stored
+changes: area numbers and names, and every position in millimetres,
+stay as they were. A card that places points on the coverage map with
+`render_extent_mm` reads x from `x_max` on a 900-series now (see
+FEATURES). Smart Map robots are drawn as before.
+
+**A part reset that showed the robot's lifetime** (for example 1556 h
+remaining and as `max_hours`) corrects itself; nothing to press again.
+
+**Hiding an area** (Configure → *Zone management*) now also keeps it out
+of the rooms a mission records, and **areas sharing a name** are listed
+once.
+
+**A 900-series learns only from missions that started on the dock.** A
+mission started elsewhere is still drawn, but no longer added to the
+coverage grid, the areas or the doors. Areas already made from such a
+mission stay until you hide them (Configure → *Zone management*); cells
+nothing visits again fade out after about a dozen missions.
+
+**Fewer missions in the history, possibly.** A "mission" of under half a
+minute that cleaned nothing is no longer recorded. Ones already stored
+stay. A mission stored twice under two ids (same start and end within
+two minutes) is folded into one when Home Assistant starts; a 900-series'
+recharge segments are not touched.
+
+---
+
 ## v4.3.0 — from v4.2.x
 
 Everything in the 4.2.x notes below applies: 4.3.0 carries every fix

@@ -203,6 +203,9 @@ def _make_callback_env():
 
     async def _capture_append(record):
         recorded.append(record)
+        # As the real one: True when stored. A record that was not stored
+        # ends async_record_mission there (4.3.1).
+        return True
 
     mission_store.async_append.side_effect = _capture_append
 
@@ -304,6 +307,41 @@ class TestAsyncRecordMissionCompletedEvent:
         from tests.test_prime_mission_sync import MISSION_COMPLETED_KEYS
         assert set(payload) == MISSION_COMPLETED_KEYS
         assert payload["missions_added"] == 1
+
+    def test_one_mission_already_stored_under_another_id_fires_nothing(self):
+        """4.3.1: @liblit's store held nMssn 119 twice, 15 s apart. The
+        second end of one mission is folded into the first record, and
+        nothing downstream -- the completion event above all -- runs a
+        second time."""
+        import time
+        from custom_components.roomba_plus.callbacks import async_record_mission
+        from homeassistant.util import dt as dt_util
+
+        store = _make_store()
+        now = time.time()
+        start_ts = int(now) - 2940
+        store._records.append({
+            "id": f"m_{start_ts - 15}",
+            "started_at": dt_util.utc_from_timestamp(start_ts - 15).isoformat(),
+            "ended_at": dt_util.utc_from_timestamp(now - 12).isoformat(),
+            "result": "completed",
+            "area_sqft": 475,
+        })
+        loop = asyncio.new_event_loop()
+        entry = _make_entry(store)
+        hass = _make_hass(loop)
+        try:
+            loop.run_until_complete(
+                async_record_mission(
+                    hass, entry, {"phase": "charge", "error": 0, "sqft": 475},
+                    {}, [], start_ts, 0,
+                )
+            )
+        finally:
+            loop.close()
+
+        assert len(store.records) == 1
+        hass.bus.async_fire.assert_not_called()
 
     def test_explanation_fields_always_present_with_constant_shape(self):
         """v3.2.0 UX fix — ANOMALY-EXPLAIN's result is folded into the
@@ -6036,3 +6074,76 @@ class TestLiveRoomTimesOnlyWithoutACloudAccount:
     def test_a_braava_reporting_no_mode_mops(self):
         remember = self._advance(False, {"sku": "m611020"}, 0)
         assert remember.call_args.kwargs["mode"] == "mop"
+
+
+class TestEphemeralZoneNamesHiddenAndShared:
+    """@liblit, 980: area 7 lies outside the house (a mission that started
+    off the dock), and his kitchen is four areas. A hidden area is not a
+    cleaned room, and four areas named "Kitchen" are one."""
+
+    def _entry(self, rooms):
+        from custom_components.roomba_plus.room_seg_store import RoomSegStore, SegRoom
+
+        rss = RoomSegStore()
+        for rid, name, hidden in rooms:
+            rss.rooms[rid] = SegRoom(id=rid, name=name, confirmed=True, hidden=hidden)
+        entry = entry_mock()
+        entry.runtime_data.room_seg_store = rss
+        return entry
+
+    def test_a_hidden_area_is_not_recorded(self):
+        from custom_components.roomba_plus.callbacks import _capture_zone_names
+
+        entry = self._entry([("room_1", "Dining", False), ("room_7", "Nowhere", True)])
+        assert _capture_zone_names(entry, {}) == ["Dining"]
+
+    def test_areas_sharing_a_name_are_one_room(self):
+        from custom_components.roomba_plus.callbacks import _capture_zone_names
+
+        entry = self._entry([
+            ("room_9", "Kitchen", False), ("room_3", "Dining", False),
+            ("room_2", "Kitchen", False), ("room_5", "Kitchen", False),
+        ])
+        assert _capture_zone_names(entry, {}) == ["Kitchen", "Dining"]
+
+
+
+class TestAHalfMinuteOfNothingIsNotAMission:
+    """@liblit's 980 stored eleven zero-minute "completed" records among
+    sixteen, five within five minutes one evening; iRobot's history has
+    none of them. Under 30 s from a known start, nothing cleaned, nothing
+    stuck or lifted: not recorded. With no known start it is kept."""
+
+    @staticmethod
+    def _record(seconds_ago, *, sqft=None, start_known=True):
+        import time
+
+        from custom_components.roomba_plus.callbacks import async_record_mission
+
+        store = _make_store()
+        loop = asyncio.new_event_loop()
+        entry = _make_entry(store)
+        hass = _make_hass(loop)
+        mission = {"phase": "charge", "error": 0}
+        if sqft is not None:
+            mission["sqft"] = sqft
+        start_ts = int(time.time()) - seconds_ago if start_known else 0
+        try:
+            loop.run_until_complete(
+                async_record_mission(hass, entry, mission, {}, [], start_ts, 0)
+            )
+        finally:
+            loop.close()
+        return store
+
+    def test_a_few_seconds_with_nothing_cleaned_is_skipped(self):
+        assert self._record(10).records == []
+
+    def test_a_short_run_that_cleaned_is_kept(self):
+        assert len(self._record(10, sqft=12).records) == 1
+
+    def test_a_real_mission_is_kept(self):
+        assert len(self._record(600).records) == 1
+
+    def test_an_unknown_start_is_kept(self):
+        assert len(self._record(10, start_known=False).records) == 1

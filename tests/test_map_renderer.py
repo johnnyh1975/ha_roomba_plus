@@ -1468,3 +1468,81 @@ class TestNamingAreaMap:
     def test_no_areas_is_a_blank_picture_not_an_error(self):
         from custom_components.roomba_plus.map_renderer import render_area_map
         assert render_area_map([], 150.0, 100).startswith(b"\x89PNG")
+
+
+class TestTheClassicViewIsNotAMirrorImage:
+    """@liblit's 980 against its floor plan, and a second 980: every map
+    came out flipped left to right. The pose frame is a mirror image of
+    the floor (the firmware's axes swapped); a 900-series' pictures
+    mirror it back, and only the pictures -- nothing stored moves.
+
+    Each test pins the mirrored side AND that the default stays as it
+    was, so Prime (which shares the renderer) is held unchanged too.
+    """
+
+    @staticmethod
+    def _renderer(mirror: bool) -> MapRenderer:
+        return MapRenderer(RendererConfig(size_px=600, scale=10.0, auto_fit=False, mirror_x=mirror))
+
+    def test_positive_x_is_drawn_left_of_the_dock(self):
+        assert self._renderer(True)._mm_to_px(1000.0, 0.0)[0] < 300
+        assert self._renderer(False)._mm_to_px(1000.0, 0.0)[0] > 300
+
+    def test_y_is_not_touched(self):
+        assert self._renderer(True)._mm_to_px(0.0, 1000.0) == self._renderer(False)._mm_to_px(0.0, 1000.0)
+
+    def test_the_fit_transform_mirrors_too(self):
+        """Overlays and calibration_points go through _mm_to_px_fit."""
+        r = self._renderer(True)
+        assert r._mm_to_px_fit(1000.0, 0.0)[0] < r._mm_to_px_fit(0.0, 0.0)[0]
+
+    def test_points_mm_gives_back_the_maps_frame(self):
+        """Diagnostics read the path back in millimetres; the mirror is the
+        picture's, not the data's."""
+        r = self._renderer(True)
+        r.add_pose(0.0, 0.0, 0.0)
+        r.add_pose(500.0, 200.0, 0.0)
+        r.add_pose(800.0, 400.0, 0.0)
+        assert r.points_mm[-1] == pytest.approx((800.0, 400.0), abs=10.0)
+
+    def test_a_path_saved_before_the_mirror_is_turned_on_restore(self):
+        old = self._renderer(False)
+        old.add_pose(0.0, 0.0, 0.0)
+        old.add_pose(1000.0, 0.0, 0.0)
+        dump = old.dump_state()
+        dump.pop("mirror_x")  # as 4.3.0 wrote it
+
+        new = self._renderer(True)
+        assert new.restore_state(dump)
+        assert new._points[-1] == new._mm_to_px(1000.0, 0.0)
+
+    def test_the_heading_turns_with_the_positions(self):
+        """Heading 0 runs along the firmware's x, which the view draws
+        upward: a quarter turn, the same as the positions get."""
+        from custom_components.roomba_plus.map_renderer import (
+            map_mm_to_view, raw_heading_to_view_deg,
+        )
+        # Firmware (x=1, y=0) -> maps' frame (0, 1) -> view (0, 1): up.
+        assert map_mm_to_view(0.0, 1.0) == (0.0, 1.0)
+        assert raw_heading_to_view_deg(0.0) == 90.0
+
+    def test_the_naming_map_is_mirrored_as_well(self):
+        """An area at positive x sits left of the dock in the picture."""
+        import io
+
+        from PIL import Image
+
+        from custom_components.roomba_plus.map_renderer import (
+            DOCK_COLOUR, NAMING_AREA_PALETTE, render_area_map,
+        )
+        area = frozenset((x, y) for x in range(4, 8) for y in range(-1, 2))
+        img = Image.open(io.BytesIO(render_area_map([("1", area)], 150.0, 300))).convert("RGB")
+        pixels = [
+            (x, img.getpixel((x, y))[:3])
+            for y in range(img.height) for x in range(img.width)
+        ]
+        painted = [x for x, c in pixels if c in NAMING_AREA_PALETTE]
+        dock = [x for x, c in pixels if c == DOCK_COLOUR[:3]]
+        assert painted and dock
+        assert max(painted) < min(dock)
+
