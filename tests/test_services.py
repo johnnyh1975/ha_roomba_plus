@@ -2408,6 +2408,80 @@ class TestASwallowedCommandIsReported:
         return caplog.text
 
     @pytest.mark.asyncio
+    async def test_a_start_into_an_open_mission_is_recorded(self, caplog):
+        """4.3.2: the paused-robot blind spot. No accepted case has ever
+        been seen, so before and after go into the diagnostics."""
+        import logging
+        from collections import deque
+        from unittest.mock import MagicMock, patch
+
+        from custom_components.roomba_plus.services import _async_warn_if_swallowed
+
+        entry = MagicMock()
+        entry.runtime_data.region_starts_in_open_cycle = deque(maxlen=10)
+        before = {"cycle": "clean", "phase": "stop", "nMssn": 488}
+        after = {
+            "cleanMissionStatus": {"cycle": "clean", "phase": "run", "nMssn": 488},
+            "lastCommand": {"command": "start", "initiator": "localApp", "time": 1},
+        }
+        caplog.set_level(logging.INFO)
+        with patch(
+            "custom_components.roomba_plus.roomba_reported_state",
+            return_value=after,
+        ), patch(
+            "custom_components.roomba_plus.services._SWALLOWED_COMMAND_GRACE_SEC", 0,
+        ):
+            await _async_warn_if_swallowed(MagicMock(), entry, "clean_room", before)
+
+        (rec,) = entry.runtime_data.region_starts_in_open_cycle
+        assert rec["before"] == before
+        assert rec["after"]["phase"] == "run"
+        assert rec["after"]["lastCommand"]["command"] == "start"
+        assert "mission was open" in caplog.text
+        assert "no mission started" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_a_running_mission_without_a_before_is_not_recorded(self):
+        from collections import deque
+        from unittest.mock import MagicMock, patch
+
+        from custom_components.roomba_plus.services import _async_warn_if_swallowed
+
+        entry = MagicMock()
+        entry.runtime_data.region_starts_in_open_cycle = deque(maxlen=10)
+        with patch(
+            "custom_components.roomba_plus.roomba_reported_state",
+            return_value={"cleanMissionStatus": {"cycle": "clean", "phase": "run"}},
+        ), patch(
+            "custom_components.roomba_plus.services._SWALLOWED_COMMAND_GRACE_SEC", 0,
+        ):
+            await _async_warn_if_swallowed(MagicMock(), entry, "clean_room", None)
+        assert not entry.runtime_data.region_starts_in_open_cycle
+
+    def test_the_snapshot_holds_no_position_and_survives_no_state(self):
+        from unittest.mock import MagicMock, patch
+
+        from custom_components.roomba_plus.services import _mission_snapshot
+
+        reported = {
+            "cleanMissionStatus": {"cycle": "clean", "phase": "stop", "notReady": 0},
+            "lastCommand": {"command": "pause", "initiator": "rmtApp", "time": 5},
+            "pose": {"point": {"x": 1, "y": 2}},
+        }
+        with patch(
+            "custom_components.roomba_plus.roomba_reported_state", return_value=reported,
+        ):
+            snap = _mission_snapshot(MagicMock())
+        assert snap["phase"] == "stop"
+        assert snap["lastCommand"] == {"command": "pause", "initiator": "rmtApp", "time": 5}
+        assert "pose" not in snap
+        with patch(
+            "custom_components.roomba_plus.roomba_reported_state",
+            side_effect=RuntimeError,
+        ):
+            assert _mission_snapshot(MagicMock()) is None
+
+    @pytest.mark.asyncio
     async def test_no_cycle_after_the_grace_window_warns(self, caplog):
         text = await self._run(
             {"cycle": "none", "phase": "stop", "notReady": 0, "error": 0},

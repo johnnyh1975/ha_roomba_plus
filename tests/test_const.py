@@ -1901,3 +1901,39 @@ class TestNoHourReadBypassesTheHelper:
                 if self._PATTERN.search(line):
                     offenders.append(f"{path.name}:{number}: {line.strip()}")
         assert offenders == []
+
+
+
+class TestMaintenanceProfileHours:
+    """4.3.2: the series' replacement intervals from ROBOT_PROFILES are
+    the fallback before the global defaults."""
+
+    @pytest.mark.parametrize(("sku", "expected"), [
+        ("R980020", {"filter": 60, "main_brush": 150, "side_brush": 150}),
+        # A 675 is a 600, not a 900, for its parts.
+        ("R675020", {"filter": 60, "main_brush": 120, "side_brush": 120}),
+        ("e515020", {"filter": 60, "main_brush": 150, "side_brush": 150}),
+        # Corrected to the i3+'s own counters.
+        ("i355640", {"filter": 52, "main_brush": 312, "side_brush": 157}),
+        # Main brushes corrected to the j9+'s counter.
+        ("j755840", {"filter": 60, "main_brush": 312, "side_brush": 150}),
+        ("s955020", {"filter": 60, "main_brush": 200, "side_brush": 200}),
+        # A Braava has none of these parts.
+        ("m611020", {}),
+        # No profile: the global defaults answer.
+        ("c755020", {}),
+        ("B123456", {}),
+        (None, {}),
+        ("", {}),
+    ])
+    def test_by_series(self, sku, expected):
+        from custom_components.roomba_plus.const import maintenance_profile_hours
+
+        assert maintenance_profile_hours(sku) == expected
+
+    def test_the_battery_mapping_of_an_r6_is_unchanged(self):
+        """Only the parts follow the 600 profile; the battery figures of
+        an R6 SKU stay where they were until someone checks them."""
+        from custom_components.roomba_plus.const import get_robot_profile
+
+        assert get_robot_profile("R675020").name == "900-series"

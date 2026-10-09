@@ -2751,7 +2751,22 @@ class TestTheCommittedVersionIsTheActiveOne:
                 "pmapv_id", "active_pmapv_id", "last_user_pmapv_id",
                 "last_user_ts", "proc_state", "creator", "create_time")},
             "committed_version_used": None,
+            "orientation_rad": None,
         }]
+
+    def test_the_report_carries_the_maps_turn(self):
+        """4.3.2, @frnchfrgg: the app turns a Smart Map by the user's angle;
+        the diagnostics now say which angles the map carries."""
+        import json
+        from pathlib import Path
+
+        from custom_components.roomba_plus.cloud_coordinator import pmap_version_report
+
+        pmaps = json.loads(Path("tests/fixtures/irobot_pmaps_i3plus.json").read_text())
+        report = pmap_version_report({"pmaps": pmaps if isinstance(pmaps, list) else [pmaps]})
+        assert report[0]["orientation_rad"] == {
+            "user_orientation_rad": 3.2012, "robot_orientation_rad": 3.2012,
+        }
 
 
 # ── formerly tests/test_cloud_api.py (removed in 4.3 with cloud_api.py) ───────

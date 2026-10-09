@@ -6,7 +6,8 @@
     "weekday_3": "Śr",
     "weekday_4": "Cz",
     "weekday_5": "Pt",
-    "weekday_6": "So"
+    "weekday_6": "So",
+    "save_and_close": "Zapisz i zamknij"
   },
   "config": {
     "step": {
@@ -208,7 +209,10 @@
           "map_keepout_zones": "Pokaż strefy zakazane",
           "map_nomop_zones": "Pokaż strefy bez mopowania",
           "enable_maintenance_list": "Pokaż konserwację jako listę zadań",
-          "region_sensors": "Osobny czujnik dla każdego pomieszczenia i strefy"
+          "region_sensors": "Osobny czujnik dla każdego pomieszczenia i strefy",
+          "map_rotation": "Obrót mapy",
+          "care_reminders": "Przypomnienia o czyszczeniu",
+          "pets_in_household": "Zwierzęta w domu"
         },
         "data_description": {
           "map_enabled": "Włącz mapę sprzątania na żywo dla robotów z wykrywaniem pozycji (Roomba 900, i, s, j, Braava m).",
@@ -224,7 +228,10 @@
           "map_keepout_zones": "Obrysowuje strefy zakazane na obrazie mapy.",
           "map_nomop_zones": "Obrysowuje strefy bez mopowania na obrazie mapy.",
           "enable_maintenance_list": "Pokazuje należną konserwację jako listę zadań.",
-          "region_sensors": "Tworzy osobny czujnik dla każdego pomieszczenia i strefy."
+          "region_sensors": "Tworzy osobny czujnik dla każdego pomieszczenia i strefy.",
+          "map_rotation": "Obraca każdy obraz mapy zgodnie z ruchem wskazówek zegara. Mapa nie ma północy: góra to kierunek, w którym robot był zwrócony, opuszczając stację, więc zależy od ustawienia stacji.",
+          "care_reminders": "Przypomina o czyszczeniu filtra, szczotek, kół, czujników uskoku i styków ładowania według harmonogramu pielęgnacji iRobot. Dodaje czujnik „następne czyszczenie” i przyciski „wyczyszczono”. Przypomnienia o wymianie działają bez tego.",
+          "pets_in_household": "Przypomina o czyszczeniu filtra i szczotek głównych dwa razy w tygodniu zamiast raz, jak zaleca iRobot dla domów ze zwierzętami. Tylko przy włączonych przypomnieniach o czyszczeniu."
         }
       },
       "smart_zones_manual": {
@@ -270,7 +277,7 @@
         "data": {
           "selected_zone": "Strefa do edycji"
         },
-        "description": "Wybierz strefę do zmiany nazwy lub ukrycia. Zatwierdź bez wybranej strefy, aby zapisać zmiany.\n\n{zone_summary}",
+        "description": "{map}\n\nWybierz strefę do zmiany nazwy lub ukrycia. Zatwierdź bez wybranej strefy, aby zapisać zmiany.\n\n{zone_summary}",
         "data_description": {
           "selected_zone": "Strefa do zmiany nazwy lub ukrycia. Zatwierdź bez wybranej strefy, aby zapisać zmiany."
         }
@@ -1347,6 +1354,9 @@
       },
       "prime_dock_tank_level": {
         "name": "Zbiornik czystej wody stacji dokującej"
+      },
+      "next_care": {
+        "name": "Konserwacja – Następne czyszczenie"
       }
     },
     "binary_sensor": {
@@ -1527,6 +1537,18 @@
       },
       "reset_bin_cleaning": {
         "name": "Wyczyszczono pojemnik"
+      },
+      "reset_filter_cleaning": {
+        "name": "Wyczyszczono filtr"
+      },
+      "reset_brushes_cleaning": {
+        "name": "Wyczyszczono szczotki główne"
+      },
+      "reset_side_brush_cleaning": {
+        "name": "Wyczyszczono szczotkę boczną"
+      },
+      "reset_cliff_sensors_cleaning": {
+        "name": "Wyczyszczono czujniki uskoku"
       }
     },
     "switch": {
@@ -2325,6 +2347,32 @@
       "options": {
         "__other__": "Inne konto iRobot",
         "__none__": "Bez funkcji chmury dla tego robota (tylko sterowanie lokalne)"
+      }
+    },
+    "map_rotation": {
+      "options": {
+        "0": "0°",
+        "90": "90° zgodnie z ruchem wskazówek zegara",
+        "180": "180°",
+        "270": "270° zgodnie z ruchem wskazówek zegara (90° przeciwnie)"
+      }
+    },
+    "maintenance_item": {
+      "options": {
+        "replace_filter": "Wymień filtr",
+        "replace_main_brushes": "Wymień szczotki główne",
+        "replace_mop_pad": "Wymień nakładkę mopującą",
+        "replace_side_brush": "Wymień szczotkę boczną",
+        "replace_clean_base_bag": "Wymień worek stacji Clean Base",
+        "clean_filter": "Wyczyść filtr",
+        "clean_brushes": "Wyczyść szczotki główne",
+        "clean_side_brush": "Wyczyść szczotkę boczną",
+        "clean_wheel": "Wyczyść koła",
+        "clean_cliff_sensors": "Wyczyść czujniki uskoku",
+        "clean_contact": "Wyczyść styki ładowania",
+        "every_days": "Co {days} dni, zgodnie z zaleceniem iRobot.",
+        "reconfigure_rooms": "Nazwij pomieszczenia",
+        "reconfigure_rooms_description": "Niektóre pomieszczenia nie mają jeszcze nazwy. Otwórz Konfiguruj → Pomieszczenia i strefy: pokazuje mapę robota z ich numerami albo informuje, czego brakuje. Ta pozycja zniknie sama, gdy każde pomieszczenie będzie miało nazwę."
       }
     }
   }

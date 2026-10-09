@@ -1504,6 +1504,27 @@ def _safe_region_names_from_command(data: Any) -> dict[str, str]:
         return {}
 
 
+def _field_evidence(data: Any) -> dict[str, Any]:
+    """Readings collected for two open questions (4.3.2), on both
+    generations so the shape is constant.
+
+    - `readiness_observations` (Prime): each change of `notReady`, read
+      both as the app's index and as Classic's wire value, with battery,
+      phase and dock. One refusal whose cause is known decides which.
+    - `region_starts_in_open_cycle` (Classic): a region start sent while
+      a mission was open, state before and after. The first ACCEPTED one
+      gives the success signature the swallow warning lacks.
+    """
+    return {
+        "readiness_observations": list(
+            getattr(data, "readiness_observations", None) or []
+        ),
+        "region_starts_in_open_cycle": list(
+            getattr(data, "region_starts_in_open_cycle", None) or []
+        ),
+    }
+
+
 async def async_get_config_entry_diagnostics(
     hass: HomeAssistant,
     config_entry: RoombaConfigEntry,
@@ -1648,6 +1669,7 @@ async def _build_diagnostics(
             # and the second is not.
             # OUR SIDE OF THE WIRE, and the robot's.
             "sent_commands": _sent_commands(data),
+            "field_evidence": _field_evidence(data),
             # WHICH VERSION OF WHICH MAP, as last read from the cloud.
             #
             # Read in two places and recorded in neither, so its
@@ -2080,6 +2102,7 @@ async def _build_diagnostics(
         # fails silently at whichever link is missing, and nothing said
         # which.
         "position_chain": _position_chain(data),
+        "field_evidence": _field_evidence(data),
     }
     if data.renderer is not None:
         map_diag["renderer"] = data.renderer.diagnostic_info()

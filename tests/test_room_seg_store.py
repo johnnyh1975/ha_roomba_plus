@@ -72,6 +72,42 @@ class TestMaybeRecompute:
         assert ran is True
         assert len(store.rooms) == 3
 
+    def test_a_shrunken_grid_recomputes_and_the_lost_area_goes(self):
+        """4.3.2: decay prunes cells, and a grid that had once been larger
+        never grew past its old count again. The maintainer's 980 kept
+        areas of 5817 cells over a grid of 3056."""
+        store = _store()
+        big = _two_room_grid()
+        big.update(_rect(20, 30, 20, 30))
+        store.maybe_recompute(big)
+        assert len(store.rooms) == 3
+
+        assert store.maybe_recompute(_two_room_grid()) is True  # 100 pruned
+        assert len(store.rooms) == 2
+        held = set().union(*(r.cells for r in store.rooms.values()))
+        assert held == set(_two_room_grid())
+        # and it settles: nothing to do on the same grid again
+        assert store.maybe_recompute(_two_room_grid()) is False
+
+    def test_cells_replaced_at_the_same_count_recompute(self):
+        store = _store()
+        cells = _two_room_grid()
+        cells.update(_rect(20, 26, 20, 26))
+        store.maybe_recompute(cells)
+
+        moved = _two_room_grid()
+        moved.update(_rect(40, 46, 40, 46))  # 36 pruned, 36 new
+        assert store.maybe_recompute(moved) is True
+
+    def test_a_few_pruned_cells_do_not_recompute(self):
+        store = _store()
+        cells = _two_room_grid()
+        store.maybe_recompute(cells)
+        fewer = dict(cells)
+        for x in range(5):
+            del fewer[(x, 0)]
+        assert store.maybe_recompute(fewer) is False
+
 
 class TestIdentityMatchingAcrossRecomputes:
     def test_name_and_confirmation_survive_recompute(self):
@@ -265,30 +301,43 @@ class TestStaleRoomAbsorptionCleanup:
         # cells -> still correctly deleted, not miscounted as >100%.
         assert "room_tiny_phantom" not in store.rooms
 
-
-        """Below STALE_ABSORPTION_RATIO — must NOT be deleted, preserving
-        the existing decay-tolerant behaviour for genuine boundary
-        wobble (only a small fringe shared, not near-total absorption)."""
+    def _mostly_gone(self, **room_fields):
+        """A room ~20% inside a live room, the rest on floor the grid no
+        longer has: below STALE_ABSORPTION_RATIO, and unmatched."""
         store = _store()
         store.maybe_recompute(_two_room_grid())
-        room_ids = list(store.rooms.keys())
-        live_id = room_ids[1]
-
-        # Only ~20% of this room's cells overlap the live room — well
-        # below the 0.8 threshold.
-        live_cells = list(store.rooms[live_id].cells)
-        overlap_cells = set(live_cells[:2])
-        disjoint_cells = {(200 + i, 200) for i in range(8)}
+        live_id = list(store.rooms.keys())[1]
+        overlap_cells = set(list(store.rooms[live_id].cells)[:2])
+        gone_cells = {(200 + i, 200) for i in range(8)}
         store.rooms["room_mostly_elsewhere"] = SegRoom(
-            id="room_mostly_elsewhere", cells=overlap_cells | disjoint_cells
+            id="room_mostly_elsewhere", cells=overlap_cells | gone_cells,
+            **room_fields,
         )
-
         cells = _two_room_grid()
         cells.update(_rect(30, 40, 30, 40))
         store.last_cell_count = 0
         store._recompute(cells)
+        return store, overlap_cells, gone_cells
 
-        assert "room_mostly_elsewhere" in store.rooms
+    def test_an_unnamed_area_the_grid_has_lost_is_removed(self):
+        """4.3.2. It was kept whole, over the areas that now cover the
+        same floor: the maintainer's 980 kept eleven such areas and a
+        recompute added four on top. This test had lost its `def` line
+        and ran inside the one above, pinning the old behaviour."""
+        store, _, _ = self._mostly_gone()
+        assert "room_mostly_elsewhere" not in store.rooms
+
+    def test_a_named_area_stays_with_only_the_floor_no_other_area_has(self):
+        """The room behind a door kept shut decays like any other floor;
+        its name and place stay. Cells another area now covers are that
+        area's, so nothing is drawn twice."""
+        store, overlap, gone = self._mostly_gone(name="Bedroom", confirmed=True)
+        assert store.rooms["room_mostly_elsewhere"].cells == gone
+        assert not overlap & store.rooms["room_mostly_elsewhere"].cells
+
+    def test_a_hidden_area_stays_hidden(self):
+        store, _, gone = self._mostly_gone(hidden=True)
+        assert store.rooms["room_mostly_elsewhere"].cells == gone
 
     def test_absorbed_rooms_doors_are_dropped(self):
         """A door referencing a room deleted by stale-absorption cleanup
@@ -1540,3 +1589,93 @@ class TestANameSurvivesItsAreaBeingAbsorbed:
         store = self._store_with(small, big, other_name="Dining")
         store._match_rooms(self._result(small | big))
         assert [r.name for r in store.rooms.values()] == ["Dining"]
+
+
+class TestLiblitsHome:
+    """@liblit's 980, kept with his permission (tests/fixtures/liblit_980,
+    no BLID, no credentials, no addresses): the second home every change to
+    the 900-series areas is checked against, beside the maintainer's own.
+
+    A dining room and a kitchen with furniture the coverage breaks around,
+    so his areas are split by furniture rather than by walls -- the
+    opposite failure to the maintainer's flat. Areas 7 and 8 are the
+    mission of 27 August that did not start on the dock (every cell at the
+    same low weight, 0.113)."""
+
+    import json as _json
+    from pathlib import Path as _Path
+
+    _DIR = _Path("tests/fixtures/liblit_980")
+    _GRID = _json.loads((_DIR / "grid.json").read_text())
+    _SEG = _json.loads((_DIR / "roomseg.json").read_text())
+    _CELLS = {tuple(int(n) for n in k.split(",")): v for k, v in _GRID["cells"].items()}
+    _SIZES = {"room_1": 516, "room_2": 273, "room_3": 416, "room_4": 741,
+              "room_5": 157, "room_7": 534, "room_8": 98, "room_9": 249}
+
+    def _stored(self):
+        store = RoomSegStore()
+        for r in self._SEG["rooms"]:
+            store.rooms[r["id"]] = SegRoom(
+                id=r["id"], cells=set(tuple(c) for c in r["cells"]),
+                name=r.get("name", ""), confirmed=r.get("confirmed", False),
+            )
+        store.last_cell_count = self._SEG["last_cell_count"]
+        return store
+
+    def test_the_fixture(self):
+        assert len(self._CELLS) == 2984
+        assert {r["id"]: len(r["cells"]) for r in self._SEG["rooms"]} == self._SIZES
+
+    def test_areas_that_are_right_are_not_recomputed(self):
+        """4.3.2 recomputes when the grid moved 30 cells either way. His
+        areas cover his grid exactly, so nothing may move."""
+        assert self._stored()._grid_changed(self._CELLS) is False
+
+    def test_a_recompute_reproduces_his_areas(self):
+        store = self._stored()
+        before = {rid: set(r.cells) for rid, r in store.rooms.items()}
+        store._recompute(self._CELLS)
+        assert {rid: set(r.cells) for rid, r in store.rooms.items()} == before
+
+    def test_segmenting_from_scratch_gives_the_same_eight_areas(self):
+        store = RoomSegStore()
+        store._recompute(self._CELLS)
+        assert sorted(len(r.cells) for r in store.rooms.values()) == sorted(self._SIZES.values())
+
+    def test_the_phantom_mission_is_areas_7_and_8(self):
+        """Every cell of both at the weight one visit leaves after the
+        decays since; nothing else visited them."""
+        for rid in ("room_7", "room_8"):
+            cells = next(r["cells"] for r in self._SEG["rooms"] if r["id"] == rid)
+            weights = {round(self._GRID["cells"][f"{c[0]},{c[1]}"], 3) for c in cells}
+            assert weights == {0.113}
+
+    def test_once_the_grid_has_lost_them_unnamed_phantoms_go(self):
+        """What happens when the coverage map has decayed past them: the
+        count moves by 632 cells, the areas recompute, and an unnamed
+        area whose floor is gone is removed (4.3.2)."""
+        phantom = set()
+        for r in self._SEG["rooms"]:
+            if r["id"] in ("room_7", "room_8"):
+                phantom |= {tuple(c) for c in r["cells"]}
+        remaining = {c: w for c, w in self._CELLS.items() if c not in phantom}
+        store = self._stored()
+        assert store._grid_changed(remaining) is True
+        store._recompute(remaining)
+        held = set().union(*(r.cells for r in store.rooms.values()))
+        assert not held & phantom
+
+    def test_a_named_phantom_stays_until_the_user_hides_or_removes_it(self):
+        """The rule for a room behind a door kept shut: named means kept.
+        It also keeps a phantom the user happened to name."""
+        phantom = set()
+        for r in self._SEG["rooms"]:
+            if r["id"] in ("room_7", "room_8"):
+                phantom |= {tuple(c) for c in r["cells"]}
+        remaining = {c: w for c, w in self._CELLS.items() if c not in phantom}
+        store = self._stored()
+        store.rooms["room_7"].name = "Patio"
+        store.rooms["room_7"].confirmed = True
+        store._recompute(remaining)
+        assert "room_7" in store.rooms
+        assert "room_8" not in store.rooms

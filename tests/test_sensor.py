@@ -1726,6 +1726,28 @@ class TestSensorSetupEntryCloud:
         assert keys == {"recent_area_30d", "recent_time_30d", "lifetime_missions"}
 
 
+class TestCareSensorIsOptIn:
+    """4.3.2: the next-cleaning sensor exists only with care reminders on."""
+
+    @pytest.mark.parametrize(("options", "present"), [({}, False), ({"care_reminders": True}, True)])
+    @pytest.mark.asyncio
+    async def test_gate(self, options, present):
+        from custom_components.roomba_plus import sensor as sensor_mod
+
+        entry = TestSensorSetupEntryCloud()._make_entry(has_cloud=False)
+        entry.options = options
+        created = []
+
+        def sync_add(entities, **kw):
+            created.extend(entities)
+
+        with patch.object(sensor_mod, "roomba_reported_state", return_value={}):
+            await sensor_mod.async_setup_entry(MagicMock(), entry, sync_add)
+        keys = {getattr(getattr(e, "entity_description", None), "key", None) for e in created}
+        assert ("next_care" in keys) is present
+        assert "filter_last_replaced" in keys or "wheel_last_cleaned" in keys
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # LAST-MISSION-SUMMARY (v3.1.0)
 # ─────────────────────────────────────────────────────────────────────────────

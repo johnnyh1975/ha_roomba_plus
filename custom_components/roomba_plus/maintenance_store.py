@@ -24,7 +24,11 @@ from dataclasses import dataclass, field
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
+from datetime import datetime, timedelta
+
 from .const import (
+    CARE_TASKS,
+    CareTask,
     lifetime_hours,
     CONSUMABLE_ROLES,
     is_mop,
@@ -48,6 +52,18 @@ STORAGE_VERSION    = 1
 #: rebuilt from anything -- unlike the pose-derived stores, which just
 #: refuse to load an unknown version and fill again on the next mission.
 PAYLOAD_VERSION    = 1
+
+
+def _parse(value: Any) -> datetime | None:
+    """An ISO timestamp from the store as an aware datetime, or None."""
+    if not isinstance(value, str) or not value:
+        return None
+    parsed = dt_util.parse_datetime(value)
+    if parsed is None:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt_util.DEFAULT_TIME_ZONE)
+    return parsed
 
 
 def _iso_from_epoch(ts: Any) -> str | None:
@@ -153,6 +169,23 @@ class MaintenanceStore:
     contact_cleaned_at: str | None = None
     bin_cleaned_at: str | None = None
 
+    # 4.3.2 care reminders -- the cleaning counterparts of the replacement
+    # slots above, and the other half of CARE_TASKS next to wheel and
+    # contact. `care_since` is when reminders began: a task never marked
+    # done counts from there. Without it an upgrade would show every task
+    # overdue at once, and filling the `*_cleaned_at` fields in instead
+    # would make the "last cleaned" sensors claim a cleaning nobody did.
+    filter_cleaned_at: str | None = None
+    brushes_cleaned_at: str | None = None
+    side_brush_cleaned_at: str | None = None
+    cliff_sensors_cleaned_at: str | None = None
+    care_since: str | None = None
+
+    # 4.3.2 -- the robot's series intervals from ROBOT_PROFILES, by role
+    # (maintenance_profile_hours). Set at setup from the SKU, or when a
+    # late SKU arrives; never persisted, since the SKU decides it anew.
+    profile_hours: dict[str, int] = field(default_factory=dict)
+
     async def async_load(self, hass: HomeAssistant, entry_id: str) -> None:
         """Load persisted reset values from hass.storage."""
         store: Store[dict[str, Any]] = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY_PREFIX}_{entry_id}")
@@ -227,6 +260,11 @@ class MaintenanceStore:
             self.wheel_cleaned_at   = data.get("wheel_cleaned_at")
             self.contact_cleaned_at = data.get("contact_cleaned_at")
             self.bin_cleaned_at     = data.get("bin_cleaned_at")
+            self.filter_cleaned_at = data.get("filter_cleaned_at")
+            self.brushes_cleaned_at = data.get("brushes_cleaned_at")
+            self.side_brush_cleaned_at = data.get("side_brush_cleaned_at")
+            self.cliff_sensors_cleaned_at = data.get("cliff_sensors_cleaned_at")
+            self.care_since = data.get("care_since")
             _LOGGER.debug(
                 "MaintenanceStore: loaded — filter_reset=%dh brush_reset=%dh",
                 self.filter_reset_hr, self.brush_reset_hr,
@@ -265,6 +303,11 @@ class MaintenanceStore:
             "wheel_cleaned_at":   self.wheel_cleaned_at,
             "contact_cleaned_at": self.contact_cleaned_at,
             "bin_cleaned_at":     self.bin_cleaned_at,
+            "filter_cleaned_at": self.filter_cleaned_at,
+            "brushes_cleaned_at": self.brushes_cleaned_at,
+            "side_brush_cleaned_at": self.side_brush_cleaned_at,
+            "cliff_sensors_cleaned_at": self.cliff_sensors_cleaned_at,
+            "care_since": self.care_since,
         })
 
     # ── Reset methods ─────────────────────────────────────────────────────────
@@ -287,6 +330,7 @@ class MaintenanceStore:
         After 2+ replacements, learned_filter_hours provides the personal interval.
         """
         self._reset_slot("filter", current_hr)
+        self.filter_cleaned_at = self.filter_reset_at
         _LOGGER.info("MaintenanceStore: filter reset at %dh (history len=%d)",
                      current_hr, len(self.filter_reset_history))
 
@@ -297,6 +341,7 @@ class MaintenanceStore:
         After 2+ replacements, learned_brush_hours provides the personal interval.
         """
         self._reset_slot("brush", current_hr)
+        self.brushes_cleaned_at = self.brush_reset_at
         _LOGGER.info("MaintenanceStore: brush reset at %dh (history len=%d)",
                      current_hr, len(self.brush_reset_history))
 
@@ -317,6 +362,7 @@ class MaintenanceStore:
         SideBrushResetButton press also performs, so wear-rate/days-until-due
         keep a baseline through a cloud outage."""
         self._reset_slot("side_brush", current_hr)
+        self.side_brush_cleaned_at = self.side_brush_reset_at
         _LOGGER.info("MaintenanceStore: side brush reset at %dh (history len=%d)",
                      current_hr, len(self.side_brush_reset_history))
 
@@ -523,6 +569,91 @@ class MaintenanceStore:
         self.bin_cleaned_at = dt_util.now().isoformat()
         _LOGGER.info("MaintenanceStore: bin cleaning reset at %s", self.bin_cleaned_at)
 
+    # ── 4.3.2 — care reminders ───────────────────────────────────────────────
+    # A new part is a clean part: reset_filter, reset_brush and
+    # reset_side_brush record the cleaning too, so replacing the filter
+    # does not leave a "clean the filter" reminder standing. reset_pad
+    # does not -- it shares the brush slot only on a Braava, which has no
+    # brushes to clean.
+
+    def reset_filter_cleaning(self) -> None:
+        """Record wall-clock time as the filter last-cleaned timestamp."""
+        self.filter_cleaned_at = dt_util.now().isoformat()
+
+    def reset_brushes_cleaning(self) -> None:
+        """Record wall-clock time as the main brushes last-cleaned timestamp."""
+        self.brushes_cleaned_at = dt_util.now().isoformat()
+
+    def reset_side_brush_cleaning(self) -> None:
+        """Record wall-clock time as the side brush last-cleaned timestamp."""
+        self.side_brush_cleaned_at = dt_util.now().isoformat()
+
+    def reset_cliff_sensors_cleaning(self) -> None:
+        """Record wall-clock time as the cliff sensors last-cleaned timestamp."""
+        self.cliff_sensors_cleaned_at = dt_util.now().isoformat()
+
+    def seed_care(self, enabled: bool = True) -> bool:
+        """Start or stop the care reminders. True when it changed the store.
+
+        Runs at every setup. Switched on, it sets `care_since` once:
+        reminders count from the moment they exist, not from a cleaning
+        nobody recorded. Switched off, it clears it, so switching on
+        again months later starts afresh instead of opening with every
+        task overdue. Recorded cleanings are kept either way -- they
+        are facts, and the "last cleaned" sensors show them.
+        """
+        if not enabled:
+            if self.care_since is None:
+                return False
+            self.care_since = None
+            return True
+        if self.care_since is not None:
+            return False
+        self.care_since = dt_util.now().isoformat()
+        return True
+
+    def care_due(self, task: CareTask, pets: bool) -> datetime | None:
+        """When this task is next due, or None before reminders started.
+
+        Counts from the later of the last recorded cleaning and
+        `care_since`. A cleaning recorded before the reminders started
+        -- the wheels, cleaned in 2024 through a button that exists
+        since 2.7 -- must not make that task overdue on the first day.
+        A timestamp that does not parse counts as not recorded.
+        """
+        since = _parse(self.care_since)
+        if since is None:
+            return None
+        cleaned = _parse(getattr(self, f"{task.slot}_cleaned_at"))
+        start = max(since, cleaned) if cleaned is not None else since
+        return start + timedelta(days=task.days_with_pets if pets else task.days)
+
+    def care_schedule(
+        self, braava: bool, pets: bool, now: datetime | None = None,
+    ) -> list[dict[str, Any]]:
+        """Every care task this robot has, earliest due first.
+
+        Each entry: `task`, `last_done` (ISO or None), `due` (ISO),
+        `interval_days`, `overdue`. Empty before `seed_care` ran.
+        """
+        now = now or dt_util.now()
+        rows: list[tuple[datetime, dict[str, Any]]] = []
+        for task in CARE_TASKS:
+            if braava and not task.braava:
+                continue
+            due = self.care_due(task, pets)
+            if due is None:
+                continue
+            rows.append((due, {
+                "task": task.slot,
+                "last_done": getattr(self, f"{task.slot}_cleaned_at"),
+                "due": due.isoformat(),
+                "interval_days": task.days_with_pets if pets else task.days,
+                "overdue": due <= now,
+            }))
+        rows.sort(key=lambda r: r[0])
+        return [row for _, row in rows]
+
     # ── F5d — Battery capacity baseline ──────────────────────────────────────
 
     def record_estcap_if_needed(self, estcap_mah: float) -> bool:
@@ -591,15 +722,35 @@ class MaintenanceStore:
 
     # ── Remaining-life calculations ───────────────────────────────────────────
 
-    def threshold_hours(self, role: str, options: Mapping[str, Any]) -> int:
-        """Return a role's configured or built-in local threshold."""
+    def interval_source(self, role: str, options: Mapping[str, Any]) -> str:
+        """Where a role's interval comes from, best first (4.3.2):
+        `cloud` (iRobot's counter for this robot), `learned` (this
+        household's own resets), `configured` (an hour option set by
+        hand), `profile` (the robot's series in ROBOT_PROFILES) or
+        `irobot_budget` (the last fallback, iRobot's budget read off an
+        i3+ -- see DEFAULT_FILTER_HOURS)."""
+        if self.cloud_full_life_hours(role) is not None:
+            return "cloud"
+        if self.learned_hours(role) is not None:
+            return "learned"
         spec = CONSUMABLE_ROLES[role]
-        if spec.conf_key is None:
-            return spec.default_hours
+        if spec.conf_key is not None and spec.conf_key in options:
+            return "configured"
+        if role in self.profile_hours:
+            return "profile"
+        return "irobot_budget"
+
+    def threshold_hours(self, role: str, options: Mapping[str, Any]) -> int:
+        """A role's local threshold: the hour option, else the robot's
+        series profile, else the global default."""
+        spec = CONSUMABLE_ROLES[role]
+        fallback = self.profile_hours.get(role, spec.default_hours)
+        if spec.conf_key is None or spec.conf_key not in options:
+            return fallback
         try:
-            return int(options.get(spec.conf_key, spec.default_hours))
+            return int(options[spec.conf_key])
         except (TypeError, ValueError):
-            return spec.default_hours
+            return fallback
 
     def due_items(
         self, vacuum_state: Mapping[str, Any], options: Mapping[str, Any]

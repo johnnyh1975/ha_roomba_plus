@@ -24,3 +24,21 @@ cannot be recreated by writing more code.
 If you are adding tests for mop mission handling — pad type per mission,
 `clean` versus `start`, region names straight off the wire — this is the
 data to use.
+
+## liblit_980/ — a second home for the 900-series areas
+
+@liblit's Roomba 980, from his Roomba+ backup of 6 October 2026, kept
+**with his permission** (October 2026). Three stores, as the backup holds
+them: `grid.json` (coverage grid, 2984 cells), `roomseg.json` (eight
+areas) and `missions.json` (sixteen records). Left out on purpose: the
+backup's manifest (it carries the BLID), the trajectories, the floor
+plans he shared for the analysis, and every other store. None of the
+three files holds a BLID, a credential or an address.
+
+His home fails the opposite way to the maintainer's: furniture splits
+his dining room and kitchen, where walls split the maintainer's flat. A
+change to the area logic that helps one and harms the other has been
+proposed before (hole filling, see `LIBLIT_980_ANALYSE.md` in the
+project notes), so every such change runs against both.
+Tests: `TestLiblitsHome` in `test_room_seg_store.py`,
+`TestLiblitsWholeStore` in `test_mission_store.py`.

@@ -1214,3 +1214,76 @@ class TestResetButtonsOnAJSeries:
 
         assert getattr(store, f"{slot}_reset_hr") == 512
         assert store.remaining_hours(role, 512, threshold) == threshold
+
+
+class TestCareCleaningButtons:
+    """4.3.2 care reminders: four "cleaned" buttons, three of them not on
+    a Braava, each recording into its own store field."""
+
+    async def _names(self, hass, monkeypatch, sku, care=True):
+        state = {"sku": sku}
+        roomba = MagicMock()
+        roomba.master_state = {"state": {"reported": state}}
+        entry = MagicMock()
+        entry.options = {"care_reminders": True} if care else {}
+        data = entry.runtime_data
+        data.connection_type = ConnectionType.LOCAL_PUSH
+        data.roomba, data.blid, data.has_cloud = roomba, "B", False
+        added = []
+        await btn.async_setup_entry(hass, entry, lambda ents, *a, **k: added.extend(ents))
+        return [type(e).__name__ for e in added]
+
+    @pytest.mark.asyncio
+    async def test_a_vacuum_gets_all_four(self, hass, monkeypatch):
+        names = await self._names(hass, monkeypatch, "R980040")
+        for cls in ("FilterCleaningResetButton", "BrushesCleaningResetButton",
+                    "SideBrushCleaningResetButton", "CliffSensorsCleaningResetButton"):
+            assert cls in names
+
+    @pytest.mark.asyncio
+    async def test_without_the_option_there_are_none(self, hass, monkeypatch):
+        """Opt-in: off by default, and off means no "cleaned" buttons."""
+        names = await self._names(hass, monkeypatch, "R980040", care=False)
+        for cls in ("FilterCleaningResetButton", "BrushesCleaningResetButton",
+                    "SideBrushCleaningResetButton", "CliffSensorsCleaningResetButton"):
+            assert cls not in names
+        # The replacement and older cleaning buttons stay.
+        assert "FilterResetButton" in names and "WheelCleaningResetButton" in names
+
+    @pytest.mark.asyncio
+    async def test_a_braava_gets_only_the_cliff_sensors(self, hass, monkeypatch):
+        names = await self._names(hass, monkeypatch, "m611020")
+        assert "CliffSensorsCleaningResetButton" in names
+        for cls in ("FilterCleaningResetButton", "BrushesCleaningResetButton",
+                    "SideBrushCleaningResetButton"):
+            assert cls not in names
+
+    @pytest.mark.parametrize(("cls", "field"), [
+        (btn.FilterCleaningResetButton, "filter_cleaned_at"),
+        (btn.BrushesCleaningResetButton, "brushes_cleaned_at"),
+        (btn.SideBrushCleaningResetButton, "side_brush_cleaned_at"),
+        (btn.CliffSensorsCleaningResetButton, "cliff_sensors_cleaned_at"),
+    ])
+    @pytest.mark.asyncio
+    async def test_each_records_its_own_field_and_leaves_the_counter(self, cls, field):
+        from custom_components.roomba_plus.maintenance_store import MaintenanceStore
+
+        store = MaintenanceStore(filter_reset_hr=10, brush_reset_hr=20, side_brush_reset_hr=30)
+        b = cls.__new__(cls)
+        b._maintenance_store = lambda: store
+        b._save = AsyncMock()
+        await b.async_press()
+        assert getattr(store, field) is not None
+        # Cleaning is not replacing: no replacement counter moved.
+        assert (store.filter_reset_hr, store.brush_reset_hr, store.side_brush_reset_hr) == (10, 20, 30)
+        b._save.assert_awaited_once()
+
+    def test_unique_ids_do_not_collide(self):
+        ids = set()
+        for cls in (btn.FilterCleaningResetButton, btn.BrushesCleaningResetButton,
+                    btn.SideBrushCleaningResetButton, btn.CliffSensorsCleaningResetButton,
+                    btn.WheelCleaningResetButton, btn.FilterResetButton):
+            with patch.object(btn._MaintenanceResetButton, "__init__", lambda self, *a: None), \
+                 patch.object(btn._MaintenanceResetButton, "robot_unique_id", "rid"):
+                ids.add(cls(MagicMock(), "B", MagicMock()).unique_id)
+        assert len(ids) == 6

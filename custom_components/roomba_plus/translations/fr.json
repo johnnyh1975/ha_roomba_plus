@@ -6,7 +6,8 @@
     "weekday_3": "Mer",
     "weekday_4": "Jeu",
     "weekday_5": "Ven",
-    "weekday_6": "Sam"
+    "weekday_6": "Sam",
+    "save_and_close": "Enregistrer et fermer"
   },
   "config": {
     "step": {
@@ -208,7 +209,10 @@
           "map_keepout_zones": "Afficher les zones interdites",
           "map_nomop_zones": "Afficher les zones sans lavage",
           "enable_maintenance_list": "Afficher l'entretien comme liste de tâches",
-          "region_sensors": "Capteur distinct par pièce et zone"
+          "region_sensors": "Capteur distinct par pièce et zone",
+          "map_rotation": "Rotation de la carte",
+          "care_reminders": "Rappels de nettoyage",
+          "pets_in_household": "Animaux dans le foyer"
         },
         "data_description": {
           "map_enabled": "Activer la carte de nettoyage en direct pour les robots avec détection de position (Roomba 900, i, s, j, Braava m).",
@@ -224,7 +228,10 @@
           "map_keepout_zones": "Trace le contour des zones interdites sur l'image de la carte.",
           "map_nomop_zones": "Trace le contour des zones sans lavage sur l'image de la carte.",
           "enable_maintenance_list": "Affiche l'entretien à faire sous forme de liste de tâches.",
-          "region_sensors": "Crée un capteur distinct pour chaque pièce et zone."
+          "region_sensors": "Crée un capteur distinct pour chaque pièce et zone.",
+          "map_rotation": "Fait pivoter chaque image de carte dans le sens horaire. La carte n'a pas de nord : son haut est la direction du robot quand il quitte la base, elle dépend donc de l'orientation de la base.",
+          "care_reminders": "Rappelle de nettoyer le filtre, les brosses, les roues, les capteurs de vide et les contacts de charge selon le calendrier d'entretien d'iRobot. Ajoute un capteur « prochain nettoyage » et des boutons « nettoyé ». Les rappels de remplacement fonctionnent sans cela.",
+          "pets_in_household": "Rappelle de nettoyer le filtre et les brosses principales deux fois par semaine au lieu d'une, comme iRobot le recommande pour les foyers avec animaux. Uniquement avec les rappels de nettoyage activés."
         }
       },
       "smart_zones_manual": {
@@ -270,7 +277,7 @@
         "data": {
           "selected_zone": "Zone to edit"
         },
-        "description": "Sélectionnez une zone à renommer ou à masquer. Validez sans zone sélectionnée pour enregistrer.\n\n{zone_summary}",
+        "description": "{map}\n\nSélectionnez une zone à renommer ou à masquer. Validez sans zone sélectionnée pour enregistrer.\n\n{zone_summary}",
         "data_description": {
           "selected_zone": "La zone à renommer ou masquer. Validez sans zone pour enregistrer vos modifications."
         }
@@ -1347,6 +1354,9 @@
       },
       "prime_dock_tank_level": {
         "name": "Réservoir d'eau propre de la base"
+      },
+      "next_care": {
+        "name": "Maintenance – Prochain nettoyage prévu"
       }
     },
     "binary_sensor": {
@@ -1527,6 +1537,18 @@
       },
       "reset_bin_cleaning": {
         "name": "Bac nettoyé"
+      },
+      "reset_filter_cleaning": {
+        "name": "Filtre nettoyé"
+      },
+      "reset_brushes_cleaning": {
+        "name": "Brosses principales nettoyées"
+      },
+      "reset_side_brush_cleaning": {
+        "name": "Brosse latérale nettoyée"
+      },
+      "reset_cliff_sensors_cleaning": {
+        "name": "Capteurs de vide nettoyés"
       }
     },
     "switch": {
@@ -2325,6 +2347,32 @@
       "options": {
         "__other__": "Un autre compte iRobot",
         "__none__": "Aucune fonction cloud pour ce robot (commande locale uniquement)"
+      }
+    },
+    "map_rotation": {
+      "options": {
+        "0": "0°",
+        "90": "90° sens horaire",
+        "180": "180°",
+        "270": "270° sens horaire (90° sens antihoraire)"
+      }
+    },
+    "maintenance_item": {
+      "options": {
+        "replace_filter": "Remplacer le filtre",
+        "replace_main_brushes": "Remplacer les brosses principales",
+        "replace_mop_pad": "Remplacer la lingette",
+        "replace_side_brush": "Remplacer la brosse latérale",
+        "replace_clean_base_bag": "Remplacer le sac de la Clean Base",
+        "clean_filter": "Nettoyer le filtre",
+        "clean_brushes": "Nettoyer les brosses principales",
+        "clean_side_brush": "Nettoyer la brosse latérale",
+        "clean_wheel": "Nettoyer les roues",
+        "clean_cliff_sensors": "Nettoyer les capteurs de vide",
+        "clean_contact": "Nettoyer les contacts de charge",
+        "every_days": "Tous les {days} jours, comme le recommande iRobot.",
+        "reconfigure_rooms": "Nommer les pièces",
+        "reconfigure_rooms_description": "Certaines pièces n'ont pas encore de nom. Ouvrez Configurer → Pièces et zones : la carte du robot s'affiche avec leurs numéros, ou ce qui manque. Cette tâche disparaît d'elle-même dès que chaque pièce a un nom."
       }
     }
   }

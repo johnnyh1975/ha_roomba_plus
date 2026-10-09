@@ -1400,8 +1400,9 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         if not areas:
             return await self.async_image()
         size = self._renderer._cfg.size_px if self._renderer is not None else 600
+        turns = self._renderer._cfg.quarter_turns if self._renderer is not None else 0
         return await self.hass.async_add_executor_job(
-            render_area_map, areas, ROOM_SEG_CELL_MM, size
+            render_area_map, areas, ROOM_SEG_CELL_MM, size, turns
         )
 
     async def async_image(self) -> bytes | None:
@@ -1608,8 +1609,15 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         if ts is None:
             return None
         record_id = f"c_{int(ts)}"
+        # Turned like every other picture of this map (4.3.2). Not
+        # mirrored: the cloud's coverage is drawn in the Smart Map's own
+        # frame, which is not the pose frame and shows the right way
+        # round (@frnchfrgg).
+        raw_turns = getattr(getattr(self._renderer, "_cfg", None), "quarter_turns", 0)
+        turns = raw_turns % 4 if isinstance(raw_turns, int) else 0
+        cache_key = f"{record_id}@{turns}"
 
-        if self._cloud_coverage_png_for == record_id:
+        if self._cloud_coverage_png_for == cache_key:
             return self._cloud_coverage_png
 
         try:
@@ -1642,11 +1650,11 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
             coverage_mm,
             payload.get("point_area_m") or [],
             [],
-            # Unrotated: rotation is a per-request concern on the REST
-            # endpoint (?rotate=), with no entity-level setting to read.
-            0,
+            # The map rotation option (4.3.2); the REST endpoint still
+            # takes its own ?rotate= per request.
+            turns * 90,
         )
-        self._cloud_coverage_png_for = record_id
+        self._cloud_coverage_png_for = cache_key
         self._cloud_coverage_png = png
         _LOGGER.debug(
             "Roomba+ map: rendered cloud coverage for %s (%d cell(s), nMssn=%s)",
@@ -3006,6 +3014,22 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         if checkpoint is None:
             return
 
+        # ALREADY PROCESSED (4.3.2). A checkpoint can outlive the end of
+        # its mission; resumed or salvaged, its end was then processed a
+        # second time -- the maintainer's 980 stored 2 October twice,
+        # identical to the point, and fed it to the grid twice. A mission
+        # the trajectory store already holds is done: the leftover goes.
+        if self._checkpoint_already_recorded(checkpoint):
+            _LOGGER.debug(
+                "Map: checkpoint of %s was already processed; discarded",
+                checkpoint.get("mission_start_ts"),
+            )
+            if self._config_entry is not None:
+                self._config_entry.async_create_task(
+                    self.hass, self._async_clear_mission_checkpoint()
+                )
+            return
+
         live_mssn_strt_tm = (
             (self.vacuum_state.get("cleanMissionStatus") or {}).get("mssnStrtTm") or 0
         )
@@ -3054,6 +3078,20 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
             )
             self._salvage_orphaned_checkpoint(checkpoint)
 
+    def _checkpoint_already_recorded(self, checkpoint: Mapping[str, Any]) -> bool:
+        """Whether the trajectory store already holds this checkpoint's
+        mission. Without a trajectory store (Smart Map robots) or a start
+        time, nothing can be said: False."""
+        key = checkpoint.get("mission_start_ts")
+        if not key or self._config_entry is None:
+            return False
+        store = getattr(
+            getattr(self._config_entry, "runtime_data", None), "trajectory_store", None
+        )
+        has = getattr(store, "has_mission", None)
+        # `is True`: only a real answer counts, not a stand-in object.
+        return callable(has) and has(str(key)) is True
+
     def _salvage_orphaned_checkpoint(self, checkpoint: dict[str, Any]) -> None:
         """Process an orphaned checkpoint exactly once via _handle_mission_end().
 
@@ -3092,6 +3130,16 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         mission end (normal or salvaged), to avoid double-counting.
         """
         if self._config_entry is None:
+            return
+        # READ AFTER THE CURRENT MESSAGE, NOT DURING IT (4.3.2). Tasks
+        # start eagerly, so this body used to run inside the very
+        # message that confirmed dock contact -- and copied the full
+        # path a moment before the same message ended the mission and
+        # deleted the checkpoint. Two writes to one file, unordered: the
+        # copy could outlive the delete. Yielding once lets the message
+        # finish; a mission it ended leaves nothing to write.
+        await asyncio.sleep(0)
+        if self._mission_start_ts is None and not self._mission_points:
             return
         store: Store[dict[str, Any]] = Store(
             self.hass,

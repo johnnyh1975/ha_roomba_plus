@@ -58,6 +58,37 @@ class TestRoleLookup:
         assert part_role("36") == IROBOT_PART_ROLE_SIDE_BRUSH
 
 
+class TestTheJSeriesParts:
+    """4.3.2, @msva17's j9+: its parts are 46/47/48 and 139, read off the
+    app against the attributes."""
+
+    _J9 = [
+        {"part_id": "139", "count_type": "minutes", "count_used": None,
+         "count_remaining": None, "minutes_remaining": None, "counter": None},
+        {"part_id": "48", "count_type": "minutes", "count_used": 12042,
+         "count_remaining": 6720, "minutes_remaining": 6720, "counter": None},
+        {"part_id": "47", "count_type": "minutes", "count_used": None,
+         "count_remaining": None, "minutes_remaining": None, "counter": None},
+        {"part_id": "46", "count_type": "minutes", "count_used": 6608,
+         "count_remaining": 0, "minutes_remaining": 0, "counter": 100},
+    ]
+
+    def test_each_part_has_its_role(self):
+        assert {p["part_id"]: part_role(p["part_id"]) for p in self._J9} == {
+            "139": IROBOT_PART_ROLE_CLEAN_BASE_BAG,
+            "48": IROBOT_PART_ROLE_MAIN_BRUSH,
+            "47": IROBOT_PART_ROLE_SIDE_BRUSH,
+            "46": IROBOT_PART_ROLE_FILTER,
+        }
+
+    def test_the_app_screen_is_reproduced(self):
+        """"~112 HRS LEFT" on the brushes; the filter used up."""
+        store = MaintenanceStore()
+        store.hydrate_from_cloud_parts(self._J9, 1556)
+        assert store.cloud_remaining_hours(IROBOT_PART_ROLE_MAIN_BRUSH) == 112
+        assert store.cloud_remaining_hours(IROBOT_PART_ROLE_FILTER) == 0
+
+
 class TestCloudRemainingHours:
     @pytest.mark.parametrize(
         ("role", "expected_hours"),
@@ -304,8 +335,11 @@ class TestSensorsPreferCloud:
 
     def test_side_brush_and_bag_fall_back_to_local_estimate_without_cloud(self):
         empty = MaintenanceStore()
-        assert self._sensor("part_edge_brush", empty).native_value == 150
-        assert self._sensor("part_dirt_bag", empty).native_value == 30
+        from custom_components.roomba_plus.const import (
+            DEFAULT_CLEAN_BASE_BAG_HOURS, DEFAULT_SIDE_BRUSH_HOURS,
+        )
+        assert self._sensor("part_edge_brush", empty).native_value == DEFAULT_SIDE_BRUSH_HOURS
+        assert self._sensor("part_dirt_bag", empty).native_value == DEFAULT_CLEAN_BASE_BAG_HOURS
 
     def test_filter_falls_back_to_local_estimate_without_cloud(self):
         """Robots whose account serves no parts data must keep the

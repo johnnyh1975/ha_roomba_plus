@@ -6,7 +6,8 @@
     "weekday_3": "Wed",
     "weekday_4": "Thu",
     "weekday_5": "Fri",
-    "weekday_6": "Sat"
+    "weekday_6": "Sat",
+    "save_and_close": "Save and close"
   },
   "config": {
     "step": {
@@ -208,7 +209,10 @@
           "map_keepout_zones": "Draw keep-out zones",
           "map_nomop_zones": "Draw no-mop zones",
           "enable_maintenance_list": "Show maintenance as a to-do list",
-          "region_sensors": "Separate sensor per room and zone"
+          "region_sensors": "Separate sensor per room and zone",
+          "map_rotation": "Map rotation",
+          "care_reminders": "Cleaning reminders",
+          "pets_in_household": "Pets in the household"
         },
         "data_description": {
           "map_enabled": "Enable the live cleaning map for robots with position sensing (Roomba 900, i, s, j, Braava m).",
@@ -224,7 +228,10 @@
           "map_keepout_zones": "Outlines the keep-out zones on the map image.",
           "map_nomop_zones": "Outlines the no-mop zones on the map image.",
           "enable_maintenance_list": "Shows due maintenance as a to-do list.",
-          "region_sensors": "Creates a separate sensor for every room and zone."
+          "region_sensors": "Creates a separate sensor for every room and zone.",
+          "map_rotation": "Turns every map picture clockwise. The map has no north: its top is the way the robot faced when it left the dock, so it depends on how the dock stands.",
+          "care_reminders": "Reminds you to clean the filter, brushes, wheels, cliff sensors and charging contacts on iRobot's care calendar. Adds a “next cleaning due” sensor and “cleaned” buttons. Replacement reminders work without it.",
+          "pets_in_household": "Reminds you to clean the filter and the main brushes twice a week instead of once, as iRobot recommends for homes with pets. Only with cleaning reminders on."
         }
       },
       "smart_zones_manual": {
@@ -267,7 +274,7 @@
       },
       "map_management": {
         "title": "Zone management",
-        "description": "Select a zone to rename or hide. Submit with no zone selected to save changes.\n\n{zone_summary}",
+        "description": "{map}\n\nSelect a zone to rename or hide. Submit with no zone selected to save changes.\n\n{zone_summary}",
         "data": {
           "selected_zone": "Zone to edit"
         },
@@ -1347,6 +1354,9 @@
       },
       "prime_dock_tank_level": {
         "name": "Dock clean water tank"
+      },
+      "next_care": {
+        "name": "Maintenance – Next cleaning due"
       }
     },
     "device_tracker": {
@@ -1532,6 +1542,18 @@
       },
       "reset_bin_cleaning": {
         "name": "Bin cleaned"
+      },
+      "reset_filter_cleaning": {
+        "name": "Filter cleaned"
+      },
+      "reset_brushes_cleaning": {
+        "name": "Main brushes cleaned"
+      },
+      "reset_side_brush_cleaning": {
+        "name": "Side brush cleaned"
+      },
+      "reset_cliff_sensors_cleaning": {
+        "name": "Cliff sensors cleaned"
       }
     },
     "switch": {
@@ -2325,6 +2347,32 @@
       "options": {
         "__other__": "Another iRobot account",
         "__none__": "No cloud features for this robot (local control only)"
+      }
+    },
+    "map_rotation": {
+      "options": {
+        "0": "0°",
+        "90": "90° clockwise",
+        "180": "180°",
+        "270": "270° clockwise (90° anticlockwise)"
+      }
+    },
+    "maintenance_item": {
+      "options": {
+        "replace_filter": "Replace the filter",
+        "replace_main_brushes": "Replace the main brushes",
+        "replace_mop_pad": "Replace the mop pad",
+        "replace_side_brush": "Replace the side brush",
+        "replace_clean_base_bag": "Replace the Clean Base bag",
+        "clean_filter": "Clean the filter",
+        "clean_brushes": "Clean the main brushes",
+        "clean_side_brush": "Clean the side brush",
+        "clean_wheel": "Clean the wheels",
+        "clean_cliff_sensors": "Clean the cliff sensors",
+        "clean_contact": "Clean the charging contacts",
+        "every_days": "Every {days} days, as iRobot recommends.",
+        "reconfigure_rooms": "Name the rooms",
+        "reconfigure_rooms_description": "Some rooms have no name yet. Open Configure → Rooms & zones: it shows the robot's map with their numbers, or says what is missing. This item clears itself once every room has a name."
       }
     }
   }

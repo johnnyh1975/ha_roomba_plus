@@ -1227,6 +1227,60 @@ class TestSettingsCorrelationField:
         assert result["data"][CONF_CORRELATION_ENTITIES] == ["sensor.humidity"]
 
 
+class TestSettingsMapRotation:
+    """4.3.2: the map has no north; each robot's turn is chosen here."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("stored, shown", [(None, "0"), (90, "90"), ("270", "270")])
+    async def test_the_form_offers_the_turn(self, stored, shown):
+        from custom_components.roomba_plus.const import CONF_MAP_ROTATION
+        options = {} if stored is None else {CONF_MAP_ROTATION: stored}
+        flow, entry = _flow(options=options)
+        with patch.object(
+            RoombaPlusOptionsFlow, "config_entry", new=entry, create=True
+        ):
+            result = await flow.async_step_settings(None)
+        fields = {k.schema: (k, v) for k, v in result["data_schema"].schema.items()}
+        marker, picker = fields[CONF_MAP_ROTATION]
+        assert marker.default() == shown
+        assert picker.config["options"] == ["0", "90", "180", "270"]
+        assert picker.config["translation_key"] == "map_rotation"
+
+
+class TestSettingsCareReminders:
+    """4.3.2: care reminders are opt-in."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("stored, shown", [(None, False), (True, True)])
+    async def test_the_form_offers_it(self, stored, shown):
+        from custom_components.roomba_plus.const import CONF_CARE_REMINDERS
+        options = {} if stored is None else {CONF_CARE_REMINDERS: stored}
+        flow, entry = _flow(options=options)
+        with patch.object(
+            RoombaPlusOptionsFlow, "config_entry", new=entry, create=True
+        ):
+            result = await flow.async_step_settings(None)
+        fields = {k.schema: k for k in result["data_schema"].schema}
+        assert fields[CONF_CARE_REMINDERS].default() is shown
+
+
+class TestSettingsPets:
+    """4.3.2: the pets option for the care reminders, off by default."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("stored, shown", [(None, False), (True, True)])
+    async def test_the_form_offers_it(self, stored, shown):
+        from custom_components.roomba_plus.const import CONF_PETS
+        options = {} if stored is None else {CONF_PETS: stored}
+        flow, entry = _flow(options=options)
+        with patch.object(
+            RoombaPlusOptionsFlow, "config_entry", new=entry, create=True
+        ):
+            result = await flow.async_step_settings(None)
+        fields = {k.schema: k for k in result["data_schema"].schema}
+        assert fields[CONF_PETS].default() is shown
+
+
 class TestAWrongLibrarySaysSo:
     """`config_flow.py` imported `roombapy` at module level, so a wrong
     version stopped Home Assistant loading the flow at all and the user
@@ -1361,6 +1415,7 @@ class TestPresenceSchedulingOptionsStep:
         assert result["data"]["unrelated"] == 7
 
 
+@pytest.mark.usefixtures("naming_map")
 class TestMapManagementOptionsStep:
     """`async_step_map_management` had no test either.
 
@@ -1404,6 +1459,39 @@ class TestMapManagementOptionsStep:
         flow = self._flow_with_zones()
         result = await flow.async_step_map_management()
         assert result["type"] == "form"
+
+    @pytest.mark.asyncio
+    async def test_the_picker_shows_the_map_with_the_names(self):
+        """4.3.2: a list of names says nothing about which area is
+        which; the naming form's picture does."""
+        flow = self._flow_with_zones()
+        result = await flow.async_step_map_management()
+        assert result["description_placeholders"]["map"] == _MAP_MD
+
+    @pytest.mark.asyncio
+    async def test_save_and_close_is_in_the_users_language(self):
+        """It was English in every language (the maintainer's German
+        form)."""
+        flow = self._flow_with_zones()
+        with patch(
+            "homeassistant.helpers.translation.async_get_translations",
+            AsyncMock(return_value={
+                "component.roomba_plus.common.save_and_close": "Speichern und schließen",
+            }),
+        ):
+            result = await flow.async_step_map_management()
+        picker = next(iter(result["data_schema"].schema.values()))
+        labels = [o["label"] for o in picker.config["options"]]
+        assert labels[0] == "─── Speichern und schließen ───"
+
+    @pytest.mark.asyncio
+    async def test_save_and_close_falls_back_to_english(self):
+        flow = self._flow_with_zones()
+        with patch(
+            "homeassistant.helpers.translation.async_get_translations",
+            AsyncMock(side_effect=RuntimeError),
+        ):
+            assert await flow._save_and_close_label() == "Save and close"
 
     @pytest.mark.asyncio
     async def test_a_blank_selection_commits_the_pending_edits(self):
@@ -3650,3 +3738,71 @@ class TestRest980ImportTakesRoomsOfThisMapOnly:
         ) as discover:
             await flow.async_step_rest980_migrate()
         assert discover.call_args.args[1] == "MAP_A"
+
+
+UNKNOWN_SKU = "B123456"  # in neither table
+
+
+@pytest.mark.usefixtures('_mock_clientsession')
+class TestAnUnknownSkuTakesThePrimePath:
+    """4.3.2: Classic is the closed, older generation. An SKU in neither
+    table is routed like Prime -- it used to land in the Classic local
+    IP step after an account login, and in the local robot list."""
+
+    def test_the_rule(self):
+        from custom_components.roomba_plus.config_flow import _goes_to_prime
+
+        assert _goes_to_prime(UNKNOWN_SKU) is True
+        assert _goes_to_prime(None) is True
+        assert _goes_to_prime("G185020") is True
+        assert _goes_to_prime("R980020") is False
+        assert _goes_to_prime("i755840") is False
+
+    @pytest.mark.parametrize("sku", [UNKNOWN_SKU, None])
+    @pytest.mark.asyncio
+    async def test_the_account_picker_creates_a_prime_entry(self, sku):
+        flow = _make_flow()
+        flow._prime_account_username = "user@example.com"
+        flow._prime_account_password = "hunter2"
+        flow._prime_account_robots = {"BLID1": {"sku": sku, "name": "New"}}
+        with patch.object(flow, "_async_current_ids", return_value=set()):
+            shown = await flow.async_step_prime_robot_picker()
+            assert "V4/Prime" in shown["data_schema"].schema[CONF_BLID].container["BLID1"]
+            with patch.object(flow, "async_set_unique_id", new=AsyncMock()), \
+                 patch.object(flow, "_abort_if_unique_id_configured"):
+                result = await flow.async_step_prime_robot_picker({CONF_BLID: "BLID1"})
+        assert result["type"] == "create_entry"
+        assert result["data"][CONF_CONNECTION_TYPE] == ConnectionType.CLOUD_ONLY.value
+
+    @pytest.mark.asyncio
+    async def test_an_account_discovery_creates_a_prime_entry(self):
+        flow = _make_flow()
+        flow.blid = "BLID1"
+        flow._prime_account_username = "user@example.com"
+        flow._prime_account_password = "hunter2"
+        flow._prime_account_robots = {"BLID1": {"sku": UNKNOWN_SKU, "name": "New"}}
+        with patch.object(flow, "async_set_unique_id", new=AsyncMock()), \
+             patch.object(flow, "_abort_if_unique_id_configured"):
+            result = await flow._async_add_discovered()
+        assert result["type"] == "create_entry"
+        assert result["data"][CONF_CONNECTION_TYPE] == ConnectionType.CLOUD_ONLY.value
+
+    @pytest.mark.asyncio
+    async def test_the_local_list_does_not_offer_it(self):
+        flow = _make_flow()
+        devices = [_device(ip="10.0.0.8", blid="B1", sku="R980020", name="Classic"),
+                   _device(ip="10.0.0.9", blid="B2", sku=UNKNOWN_SKU, name="New")]
+        with _discovery(devices), patch.object(flow, "_async_current_ids", return_value=set()):
+            result = await flow.async_step_user()
+        choices = result["data_schema"].schema[next(iter(result["data_schema"].schema))].container
+        assert "10.0.0.8" in choices
+        assert "10.0.0.9" not in choices
+
+    @pytest.mark.asyncio
+    async def test_a_discovered_host_goes_to_the_account(self):
+        flow = _make_flow()
+        flow.host = "10.0.0.9"
+        devices = [_device(ip="10.0.0.9", blid="B2", sku=UNKNOWN_SKU, name="New")]
+        with _discovery(devices), patch.object(flow, "_async_current_ids", return_value=set()):
+            result = await flow.async_step_user()
+        assert result["step_id"] == "prime_account"

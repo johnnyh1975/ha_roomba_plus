@@ -6,7 +6,8 @@
     "weekday_3": "Qua",
     "weekday_4": "Qui",
     "weekday_5": "Sex",
-    "weekday_6": "Sáb"
+    "weekday_6": "Sáb",
+    "save_and_close": "Guardar e fechar"
   },
   "config": {
     "step": {
@@ -208,7 +209,10 @@
           "map_keepout_zones": "Mostrar zonas proibidas",
           "map_nomop_zones": "Mostrar zonas sem esfregar",
           "enable_maintenance_list": "Mostrar manutenção como lista de tarefas",
-          "region_sensors": "Sensor separado por divisão e zona"
+          "region_sensors": "Sensor separado por divisão e zona",
+          "map_rotation": "Rotação do mapa",
+          "care_reminders": "Lembretes de limpeza",
+          "pets_in_household": "Animais em casa"
         },
         "data_description": {
           "map_enabled": "Ativar o mapa de limpeza em tempo real para robôs com deteção de posição (Roomba 900, i, s, j, Braava m).",
@@ -224,7 +228,10 @@
           "map_keepout_zones": "Contorna as zonas proibidas na imagem do mapa.",
           "map_nomop_zones": "Contorna as zonas sem lavagem na imagem do mapa.",
           "enable_maintenance_list": "Mostra a manutenção pendente como lista de tarefas.",
-          "region_sensors": "Cria um sensor próprio para cada divisão e zona."
+          "region_sensors": "Cria um sensor próprio para cada divisão e zona.",
+          "map_rotation": "Roda cada imagem do mapa no sentido dos ponteiros do relógio. O mapa não tem norte: o topo é a direção em que o robô estava virado ao sair da base, por isso depende de como a base está colocada.",
+          "care_reminders": "Lembra de limpar o filtro, as escovas, as rodas, os sensores de queda e os contactos de carga segundo o calendário de cuidados da iRobot. Adiciona um sensor «próxima limpeza» e botões «limpo». Os lembretes de substituição funcionam sem isto.",
+          "pets_in_household": "Lembra de limpar o filtro e as escovas principais duas vezes por semana em vez de uma, como a iRobot recomenda para casas com animais. Apenas com os lembretes de limpeza ativos."
         }
       },
       "smart_zones_manual": {
@@ -270,7 +277,7 @@
         "data": {
           "selected_zone": "Zone to edit"
         },
-        "description": "Selecione uma zona para renomear ou ocultar. Submeta sem zona selecionada para guardar.\n\n{zone_summary}",
+        "description": "{map}\n\nSelecione uma zona para renomear ou ocultar. Submeta sem zona selecionada para guardar.\n\n{zone_summary}",
         "data_description": {
           "selected_zone": "A zona a renomear ou ocultar. Submeta sem zona para guardar as alterações."
         }
@@ -1347,6 +1354,9 @@
       },
       "prime_dock_tank_level": {
         "name": "Depósito de água limpa da base"
+      },
+      "next_care": {
+        "name": "Manutenção – Próxima limpeza prevista"
       }
     },
     "binary_sensor": {
@@ -1527,6 +1537,18 @@
       },
       "reset_bin_cleaning": {
         "name": "Depósito limpo"
+      },
+      "reset_filter_cleaning": {
+        "name": "Filtro limpo"
+      },
+      "reset_brushes_cleaning": {
+        "name": "Escovas principais limpas"
+      },
+      "reset_side_brush_cleaning": {
+        "name": "Escova lateral limpa"
+      },
+      "reset_cliff_sensors_cleaning": {
+        "name": "Sensores de queda limpos"
       }
     },
     "switch": {
@@ -2325,6 +2347,32 @@
       "options": {
         "__other__": "Outra conta iRobot",
         "__none__": "Sem funções de nuvem para este robô (apenas controlo local)"
+      }
+    },
+    "map_rotation": {
+      "options": {
+        "0": "0°",
+        "90": "90° no sentido horário",
+        "180": "180°",
+        "270": "270° no sentido horário (90° anti-horário)"
+      }
+    },
+    "maintenance_item": {
+      "options": {
+        "replace_filter": "Substituir o filtro",
+        "replace_main_brushes": "Substituir as escovas principais",
+        "replace_mop_pad": "Substituir o pano de esfregar",
+        "replace_side_brush": "Substituir a escova lateral",
+        "replace_clean_base_bag": "Substituir o saco da Clean Base",
+        "clean_filter": "Limpar o filtro",
+        "clean_brushes": "Limpar as escovas principais",
+        "clean_side_brush": "Limpar a escova lateral",
+        "clean_wheel": "Limpar as rodas",
+        "clean_cliff_sensors": "Limpar os sensores de queda",
+        "clean_contact": "Limpar os contactos de carga",
+        "every_days": "A cada {days} dias, como a iRobot recomenda.",
+        "reconfigure_rooms": "Dar nome às divisões",
+        "reconfigure_rooms_description": "Algumas divisões ainda não têm nome. Abra Configurar → Divisões e zonas: mostra o mapa do robô com os seus números, ou o que falta. Este item desaparece sozinho quando todas as divisões tiverem nome."
       }
     }
   }

@@ -208,3 +208,40 @@ class TestPersistence:
         with patch("homeassistant.helpers.storage.Store", return_value=store_mock):
             await store.async_load(MagicMock(), "e1")
         assert store.mission_count == MAX_MISSIONS
+
+
+class TestOneMissionOnce:
+    """4.3.2: the maintainer's 980 held 2 October twice, identical to the
+    point -- one mission end processed a second time from a leftover
+    checkpoint."""
+
+    def test_a_key_already_held_is_not_stored_again(self):
+        store = MissionTrajectoryStore()
+        assert store.record_mission("2026-10-02T08:59:58", [(0.0, 0.0)]) is True
+        assert store.record_mission("2026-10-02T08:59:58", [(0.0, 0.0)]) is False
+        assert store.mission_count == 1
+        assert store.has_mission("2026-10-02T08:59:58")
+        assert not store.has_mission("2026-10-01T09:00:00")
+
+    def test_missions_without_a_key_are_still_kept(self):
+        store = MissionTrajectoryStore()
+        store.record_mission("", [(0.0, 0.0)])
+        store.record_mission("", [(1.0, 1.0)])
+        assert store.mission_count == 2
+
+    @pytest.mark.asyncio
+    async def test_a_store_holding_one_twice_is_cleaned_on_load(self):
+        twice = {
+            "mission_key": "2026-10-02T08:59:58", "ended_at": "",
+            "points": [[0.0, -20.0], [-5240.0, 840.0]], "thetas": [0.0, 1.0],
+        }
+        other = dict(twice, mission_key="2026-10-01T09:00:00")
+        payload = {"version": PAYLOAD_VERSION, "missions": [other, twice, dict(twice)]}
+        fake = MagicMock()
+        fake.async_load = AsyncMock(return_value=payload)
+        store = MissionTrajectoryStore()
+        with patch.object(store, "_get_store", return_value=fake):
+            await store.async_load(MagicMock(), "e")
+        assert [m["mission_key"] for m in store.missions] == [
+            "2026-10-01T09:00:00", "2026-10-02T08:59:58",
+        ]

@@ -54,6 +54,7 @@ from .const import (
     DOMAIN,
     has_clean_base,
     is_braava,
+    care_reminders_enabled,
     IROBOT_PART_ROLE_CLEAN_BASE_BAG,
     IROBOT_PART_ROLE_SIDE_BRUSH,
     IROBOT_PART_ROLE_TO_STORE_SLOT,
@@ -359,6 +360,17 @@ async def async_setup_entry(
         BinCleaningResetButton(roomba, blid, config_entry),
         *_cloud_part_reset_buttons(roomba, blid, config_entry),
     ])
+    # Care reminders (4.3.2), opt-in: the "cleaned" buttons feed sensor
+    # next_care and exist only with it. The parts a Braava does not have
+    # get no button there.
+    if care_reminders_enabled(config_entry.options):
+        entities.append(CliffSensorsCleaningResetButton(roomba, blid, config_entry))
+        if not is_braava(state):
+            entities.extend([
+                FilterCleaningResetButton(roomba, blid, config_entry),
+                BrushesCleaningResetButton(roomba, blid, config_entry),
+                SideBrushCleaningResetButton(roomba, blid, config_entry),
+            ])
 
     # v3.2.1 REMOVED — ZoneCleanButton used to be created for EPHEMERAL
     # (900-series) robots too. On this tier it always sent a plain
@@ -637,6 +649,50 @@ class BinCleaningResetButton(_CleaningTaskResetButton):
     def __init__(self, roomba: Any, blid: str, config_entry: RoombaConfigEntry) -> None:
         super().__init__(roomba, blid, config_entry)
         self._attr_unique_id = f"{self.robot_unique_id}_reset_bin_cleaning"
+
+
+class FilterCleaningResetButton(_CleaningTaskResetButton):
+    """Button: filter cleaned (not replaced -- see FilterResetButton)."""
+
+    _attr_translation_key = "reset_filter_cleaning"
+    _task = "filter"
+
+    def __init__(self, roomba: Any, blid: str, config_entry: RoombaConfigEntry) -> None:
+        super().__init__(roomba, blid, config_entry)
+        self._attr_unique_id = f"{self.robot_unique_id}_reset_filter_cleaning"
+
+
+class BrushesCleaningResetButton(_CleaningTaskResetButton):
+    """Button: main brushes cleaned (not replaced -- see BrushResetButton)."""
+
+    _attr_translation_key = "reset_brushes_cleaning"
+    _task = "brushes"
+
+    def __init__(self, roomba: Any, blid: str, config_entry: RoombaConfigEntry) -> None:
+        super().__init__(roomba, blid, config_entry)
+        self._attr_unique_id = f"{self.robot_unique_id}_reset_brushes_cleaning"
+
+
+class SideBrushCleaningResetButton(_CleaningTaskResetButton):
+    """Button: side brush cleaned."""
+
+    _attr_translation_key = "reset_side_brush_cleaning"
+    _task = "side_brush"
+
+    def __init__(self, roomba: Any, blid: str, config_entry: RoombaConfigEntry) -> None:
+        super().__init__(roomba, blid, config_entry)
+        self._attr_unique_id = f"{self.robot_unique_id}_reset_side_brush_cleaning"
+
+
+class CliffSensorsCleaningResetButton(_CleaningTaskResetButton):
+    """Button: cliff sensors cleaned."""
+
+    _attr_translation_key = "reset_cliff_sensors_cleaning"
+    _task = "cliff_sensors"
+
+    def __init__(self, roomba: Any, blid: str, config_entry: RoombaConfigEntry) -> None:
+        super().__init__(roomba, blid, config_entry)
+        self._attr_unique_id = f"{self.robot_unique_id}_reset_cliff_sensors_cleaning"
 
 
 class _CloudPartResetButton(_MaintenanceResetButton):

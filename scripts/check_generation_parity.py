@@ -182,6 +182,12 @@ DELIBERATE: dict[str, dict[str, str]] = {
             "coerces the Classic map scale, a rendering concept Prime lacks"
         ),
         "SelectorEntitySelector": "correlation entities are a Classic concept",
+        "SelectSelector": (
+            "the map turn (4.3.2): a Classic map's up is how the robot left "
+            "the dock; a Prime map comes in the app's own orientation"
+        ),
+        "SelectSelectorConfig": "configures that map-turn picker",
+        "str": "the map-turn picker's values are strings",
         "SelectorEntitySelectorConfig": (
             "configures the correlation-entity picker, a Classic-only feature"
         ),

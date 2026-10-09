@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 import pytest
 import ast
 import pathlib
+from custom_components.roomba_plus.const import DEFAULT_SIDE_BRUSH_HOURS, DEFAULT_CLEAN_BASE_BAG_HOURS
 from custom_components.roomba_plus.sensor_core import RoombaSensor
 from types import SimpleNamespace
 from custom_components.roomba_plus import sensor_core as sc
@@ -355,8 +356,8 @@ class TestRoombaSensorMaxHoursAttribute:
 
         sensor = self._sensor("part_edge_brush", store=MaintenanceStore())
         attrs = sensor.extra_state_attributes
-        assert attrs["threshold_hours"] == 150
-        assert attrs["max_hours"] == 150
+        assert attrs["threshold_hours"] == DEFAULT_SIDE_BRUSH_HOURS
+        assert attrs["max_hours"] == DEFAULT_SIDE_BRUSH_HOURS
 
     def test_part_edge_brush_exposes_max_hours_with_cloud_data(self):
         from custom_components.roomba_plus.maintenance_store import MaintenanceStore
@@ -369,15 +370,15 @@ class TestRoombaSensorMaxHoursAttribute:
         sensor = self._sensor("part_edge_brush", store=store)
         attrs = sensor.extra_state_attributes
         assert attrs["max_hours"] == 60
-        assert attrs["threshold_hours"] == 150
+        assert attrs["threshold_hours"] == DEFAULT_SIDE_BRUSH_HOURS
 
     def test_part_dirt_bag_falls_back_to_hardcoded_threshold_without_cloud_data(self):
         from custom_components.roomba_plus.maintenance_store import MaintenanceStore
 
         sensor = self._sensor("part_dirt_bag", store=MaintenanceStore())
         attrs = sensor.extra_state_attributes
-        assert attrs["threshold_hours"] == 30
-        assert attrs["max_hours"] == 30
+        assert attrs["threshold_hours"] == DEFAULT_CLEAN_BASE_BAG_HOURS
+        assert attrs["max_hours"] == DEFAULT_CLEAN_BASE_BAG_HOURS
 
     def test_part_dirt_bag_exposes_max_hours_with_cloud_data(self):
         from custom_components.roomba_plus.maintenance_store import MaintenanceStore
@@ -390,7 +391,7 @@ class TestRoombaSensorMaxHoursAttribute:
         sensor = self._sensor("part_dirt_bag", store=store)
         attrs = sensor.extra_state_attributes
         assert attrs["max_hours"] == 60
-        assert attrs["threshold_hours"] == 30
+        assert attrs["threshold_hours"] == DEFAULT_CLEAN_BASE_BAG_HOURS
 
 
 class TestNewConsumableSensorDescriptors:
@@ -1113,3 +1114,147 @@ class TestNoTestLeaksIntoTheSensorClasses:
             for m in pattern.finditer(f.read_text(encoding="utf-8")):
                 offenders.append(f"{f.name}: {m.group(0).strip()}")
         assert not offenders, offenders
+
+
+class TestWhereTheIntervalComesFrom:
+    """4.3.2: each part sensor says where its interval comes from and,
+    where iRobot publishes one, its guidance in months."""
+
+    @staticmethod
+    def _attrs(key, *, sku=None, store=None, options=None):
+        from custom_components.roomba_plus.maintenance_store import MaintenanceStore
+        from custom_components.roomba_plus.sensor_core import RoombaSensor, SENSORS
+
+        sensor = object.__new__(RoombaSensor)
+        entry = MagicMock()
+        entry.options = options or {}
+        entry.runtime_data.maintenance_store = store or MaintenanceStore()
+        sensor._config_entry = entry
+        sensor.entity_description = next(d for d in SENSORS if d.key == key)
+        state = {"sku": sku} if sku else {}
+        sensor.__class__ = type(
+            "_S", (type(sensor),),
+            {"run_stats": property(lambda s: {}), "vacuum_state": property(lambda s: state)},
+        )
+        return sensor.extra_state_attributes
+
+    def test_without_cloud_or_history_it_is_irobots_budget(self):
+        attrs = self._attrs("filter_remaining_hours", sku="R980020")
+        assert attrs["interval_source"] == "irobot_budget"
+        assert attrs["replace_every_months"] == [2, 2]
+
+    def test_the_cloud_counter_wins(self):
+        from custom_components.roomba_plus.maintenance_store import MaintenanceStore
+
+        store = MaintenanceStore()
+        store.hydrate_from_cloud_parts([
+            {"part_id": "35", "count_used": 600, "count_remaining": 2400,
+             "count_type": "minutes", "last_updated_ts": 1700000000},
+        ], 100)
+        assert self._attrs("filter_remaining_hours", store=store)["interval_source"] == "cloud"
+
+    def test_own_resets_are_learned(self):
+        from custom_components.roomba_plus.maintenance_store import MaintenanceStore
+
+        store = MaintenanceStore()
+        for hr in (10, 70, 130):
+            store.reset_filter(hr)
+        assert self._attrs("filter_remaining_hours", store=store)["interval_source"] == "learned"
+
+    def test_an_hour_option_set_by_hand_is_configured(self):
+        attrs = self._attrs(
+            "filter_remaining_hours", options={"filter_threshold_hours": 80}
+        )
+        assert attrs["interval_source"] == "configured"
+
+    def test_no_month_guidance_where_irobot_gives_none(self):
+        # the i and j articles give the side brush a cleaning interval only
+        attrs = self._attrs("part_edge_brush", sku="i755840")
+        assert "replace_every_months" not in attrs
+        # the s-series names its corner brush
+        assert self._attrs("part_edge_brush", sku="s955840")["replace_every_months"] == [3, 3]
+        # main brushes on a j
+        assert self._attrs("brush_remaining_hours", sku="j755840")["replace_every_months"] == [6, 12]
+
+
+class TestGuidanceSeries:
+    def test_series_from_sku(self):
+        from custom_components.roomba_plus.const import guidance_series
+
+        assert guidance_series("R980020") == "classic"
+        assert guidance_series("i355640") == "classic"
+        assert guidance_series("s955840") == "s"
+        assert guidance_series("m611020") is None  # Braava: not in the table
+        assert guidance_series("G185020") is None  # Prime: its counters answer
+        assert guidance_series(None) is None
+
+
+class TestNextCareSensor:
+    """4.3.2: one timestamp sensor for the next cleaning, by iRobot's
+    calendar, with the pets option and the Braava's shorter list."""
+
+    @staticmethod
+    def _sensor(*, sku="R980020", store=None, options=None):
+        from custom_components.roomba_plus.sensor_core import RoombaSensor, SENSORS
+
+        sensor = object.__new__(RoombaSensor)
+        entry = MagicMock()
+        entry.options = options or {}
+        entry.runtime_data.maintenance_store = store
+        sensor._config_entry = entry
+        sensor.entity_description = next(d for d in SENSORS if d.key == "next_care")
+        state = {"sku": sku}
+        sensor.__class__ = type(
+            "_S", (type(sensor),),
+            {"run_stats": property(lambda s: {}), "vacuum_state": property(lambda s: state)},
+        )
+        return sensor
+
+    @staticmethod
+    def _seeded():
+        from custom_components.roomba_plus.maintenance_store import MaintenanceStore
+
+        store = MaintenanceStore()
+        store.care_since = "2026-10-01T12:00:00+00:00"
+        return store
+
+    def test_without_a_store_it_is_unknown(self):
+        s = self._sensor(store=None)
+        desc = s.entity_description
+        assert desc.value_fn(s) is None
+        assert desc.extra_attributes_fn(s)["schedule"] == []
+
+    def test_the_state_is_the_earliest_task(self):
+        s = self._sensor(store=self._seeded())
+        value = s.entity_description.value_fn(s)
+        attrs = s.entity_description.extra_attributes_fn(s)
+        assert value.isoformat() == "2026-10-08T12:00:00+00:00"
+        assert attrs["task"] in ("filter", "brushes")
+        assert attrs["pets"] is False
+
+    def test_pets_bring_it_forward(self):
+        s = self._sensor(store=self._seeded(), options={"pets_in_household": True})
+        assert s.entity_description.value_fn(s).isoformat() == "2026-10-05T00:00:00+00:00"
+        assert s.entity_description.extra_attributes_fn(s)["pets"] is True
+
+    def test_a_braava_is_reminded_of_its_sensors_only(self):
+        s = self._sensor(sku="m611020", store=self._seeded())
+        attrs = s.entity_description.extra_attributes_fn(s)
+        assert {row["task"] for row in attrs["schedule"]} == {"cliff_sensors", "contact"}
+        assert s.entity_description.value_fn(s).isoformat() == "2026-10-31T12:00:00+00:00"
+
+    def test_overdue_lists_the_tasks_past_due(self):
+        store = self._seeded()
+        store.care_since = "2020-01-01T00:00:00+00:00"
+        store.wheel_cleaned_at = "2020-01-10T00:00:00+00:00"
+        s = self._sensor(store=store)
+        attrs = s.entity_description.extra_attributes_fn(s)
+        assert set(attrs["overdue"]) == {"filter", "brushes", "side_brush", "wheel",
+                                         "cliff_sensors", "contact"}
+        assert attrs["task"] == "filter"
+
+    def test_it_is_enabled_by_default(self):
+        from custom_components.roomba_plus.sensor_core import SENSORS
+
+        desc = next(d for d in SENSORS if d.key == "next_care")
+        assert desc.entity_registry_enabled_default is True

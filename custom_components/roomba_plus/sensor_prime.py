@@ -66,6 +66,7 @@ from .const import (
     PRIME_BLOCKING_FAULTS,
     PRIME_ERROR_SEVERITY,
     READINESS_STATE_LABELS,
+    decode_not_ready,
     get_localized_error_entry,
     state_slug,
 )
@@ -2213,6 +2214,48 @@ class PrimePhaseSensor(_PrimeCurrentStateSensorBase):
         }
 
 
+def readiness_readings(code: int) -> dict[str, str | None]:
+    """Both ways a Prime `notReady` code can be read, above 10 where
+    they differ (4.3.2). `as_index` is what the sensor shows today, the
+    code looked up as is; `as_wire` is Classic's reading, the app's
+    offset of three applied first. Empty at or below 10, where the two
+    agree."""
+    if code <= 10:
+        return {}
+    as_index = READINESS_STATE_LABELS.get(code)
+    wire_index = decode_not_ready(code)
+    as_wire = READINESS_STATE_LABELS.get(wire_index) if wire_index is not None else None
+    return {
+        "as_index": state_slug(as_index) if as_index else None,
+        "as_wire": state_slug(as_wire) if as_wire else None,
+    }
+
+
+def readiness_observation(state: Any, at: str) -> dict[str, Any] | None:
+    """One readiness reading with what the robot was doing, for the
+    diagnostics. None without a usable code. No positions."""
+    status = None if state is None else state.clean_mission_status
+    raw = getattr(status, "not_ready", None)
+    if raw is None:
+        return None
+    try:
+        code = int(raw)
+    except (TypeError, ValueError):
+        return None
+    dock = getattr(state, "dock", None)
+    return {
+        "at": at,
+        "code": code,
+        **readiness_readings(code),
+        "cond_not_ready": list(getattr(status, "cond_not_ready", None) or []),
+        "battery_pct": getattr(state, "bat_pct", None),
+        "phase": getattr(status, "phase", None),
+        "cycle": getattr(status, "cycle", None),
+        "error": getattr(status, "error", None),
+        "dock_state": getattr(dock, "state", None),
+    }
+
+
 class PrimeReadinessSensor(_PrimeCurrentStateSensorBase):
     """Why the robot will not start, or that it will.
 
@@ -2289,9 +2332,33 @@ class PrimeReadinessSensor(_PrimeCurrentStateSensorBase):
         if code is None:
             return {}
         try:
-            return {"code": int(code)}
+            code_int = int(code)
         except (TypeError, ValueError):
             return {}
+        # BOTH READINGS, so whoever sees the robot refuse can say which
+        # one matched what it was doing (4.3.2).
+        return {"code": code_int, **readiness_readings(code_int)}
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        coordinator = self._config_entry.runtime_data.prime_status_coordinator
+        if coordinator is not None:
+            self.async_on_remove(coordinator.async_add_listener(self._record))
+        self._record()
+
+    def _record(self) -> None:
+        """Keep each change of the code for the diagnostics (4.3.2)."""
+        log = getattr(self._config_entry.runtime_data, "readiness_observations", None)
+        if log is None:
+            return
+        seen = readiness_observation(
+            self._current_state, dt_util.utcnow().isoformat(timespec="seconds")
+        )
+        if seen is None:
+            return
+        if log and log[-1].get("code") == seen["code"]:
+            return
+        log.append(seen)
 
 
 class PrimeJobInitiatorSensor(_PrimeCurrentStateSensorBase):

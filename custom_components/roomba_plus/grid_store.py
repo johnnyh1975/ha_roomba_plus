@@ -207,6 +207,9 @@ class GridStore:
         #: is (4.3.1): their grid's frame is a mirror image of the floor.
         #: A display setting only -- the cells keep their frame.
         self.mirror_x: bool = False
+        #: Clockwise quarter turns the user chose for every map picture
+        #: (4.3.2, map_renderer.turn_view). Display only, like mirror_x.
+        self.quarter_turns: int = 0
         self._cells: dict[tuple[int, int], float] = {}   # (gx, gy) → EMA weight
         # L7 (v2.7.0): _stuck extended from plain count to structured dict.
         # Format: {(gx, gy): {"count": int, "times": [(weekday, hour), ...]}}
@@ -1120,6 +1123,12 @@ class GridStore:
         path is (see `map_renderer.map_mm_to_view`): there the point is
         drawn at ((x_max - x) * scale, ...), the picture's left edge being
         the grid's largest x. The extent is the same rectangle either way.
+
+        TURNED AS THE USER CHOSE SINCE 4.3.2 (`quarter_turns`, published
+        with `mirror_x` in this dict). The extent is a square, so a turn
+        keeps it; only where a point lands changes. With p and q the
+        pixel position above divided by size_px, each clockwise quarter
+        turn takes (p, q) to (1 - q, p).
         """
         bbox = self.bounding_box_mm()
         if bbox is None:
@@ -1138,6 +1147,8 @@ class GridStore:
             "y_min": float(y_max - side),
             "y_max": float(y_max),
             "size_px": float(size_px),
+            "mirror_x": bool(self.mirror_x),
+            "quarter_turns": int(self.quarter_turns) % 4,
         }
 
     def render_heatmap(self, size_px: int = 400) -> bytes | None:
@@ -1221,6 +1232,10 @@ class GridStore:
             # consumes the full height. Anchoring on y_max instead
             # places that cell's top-left corner at 0, where it belongs.
             py = int((y_max - y_mm) * scale)
+            # TURNED (4.3.2): the cell as a box, so it stays on the canvas
+            # -- a corner turned alone would hang a cell off the edge.
+            for _ in range(int(self.quarter_turns) % 4):
+                px, py = size_px - py - cell_px, px
             if (gx, gy) in hotspot_cells:
                 colour: tuple[int, int, int, int] = (220, 50, 50, 220)
             else:

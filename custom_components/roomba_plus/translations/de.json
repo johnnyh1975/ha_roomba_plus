@@ -6,7 +6,8 @@
     "weekday_3": "Mi",
     "weekday_4": "Do",
     "weekday_5": "Fr",
-    "weekday_6": "Sa"
+    "weekday_6": "Sa",
+    "save_and_close": "Speichern und schließen"
   },
   "config": {
     "step": {
@@ -208,7 +209,10 @@
           "map_keepout_zones": "Sperrzonen zeichnen",
           "map_nomop_zones": "Wischverbotszonen zeichnen",
           "enable_maintenance_list": "Wartung als Aufgabenliste anzeigen",
-          "region_sensors": "Eigener Sensor je Raum und Zone"
+          "region_sensors": "Eigener Sensor je Raum und Zone",
+          "map_rotation": "Kartendrehung",
+          "care_reminders": "Reinigungs-Erinnerungen",
+          "pets_in_household": "Haustiere im Haushalt"
         },
         "data_description": {
           "map_enabled": "Aktiviert die Live-Reinigungskarte für Roboter mit Positionserkennung (Roomba 900, i, s, j, Braava m).",
@@ -224,7 +228,10 @@
           "map_keepout_zones": "Umrandet die Sperrzonen im Kartenbild.",
           "map_nomop_zones": "Umrandet die Nicht-Wischen-Zonen im Kartenbild.",
           "enable_maintenance_list": "Zeigt fällige Wartung als To-do-Liste.",
-          "region_sensors": "Legt für jeden Raum und jede Zone einen eigenen Sensor an."
+          "region_sensors": "Legt für jeden Raum und jede Zone einen eigenen Sensor an.",
+          "map_rotation": "Dreht jedes Kartenbild im Uhrzeigersinn. Die Karte hat keine Nordrichtung: Oben ist die Richtung, in die der Roboter beim Verlassen des Docks schaut. Sie hängt davon ab, wie das Dock steht.",
+          "care_reminders": "Erinnert nach iRobots Pflegeplan daran, Filter, Bürsten, Räder, Absturzsensoren und Ladekontakte zu reinigen. Legt einen Sensor „nächste Reinigung fällig“ und „gereinigt“-Tasten an. Erinnerungen an den Teilewechsel gibt es auch ohne.",
+          "pets_in_household": "Erinnert zweimal statt einmal pro Woche daran, Filter und Hauptbürsten zu reinigen, wie iRobot es für Haushalte mit Haustieren empfiehlt. Nur mit eingeschalteten Reinigungs-Erinnerungen."
         }
       },
       "smart_zones_manual": {
@@ -270,7 +277,7 @@
         "data": {
           "selected_zone": "Zu bearbeitende Zone"
         },
-        "description": "Zone zum Umbenennen oder Ausblenden auswählen. Ohne ausgewählte Zone absenden, um Änderungen zu speichern.\n\n{zone_summary}",
+        "description": "{map}\n\nZone zum Umbenennen oder Ausblenden auswählen. Ohne ausgewählte Zone absenden, um Änderungen zu speichern.\n\n{zone_summary}",
         "data_description": {
           "selected_zone": "Die Zone, die umbenannt oder ausgeblendet werden soll. Ohne Auswahl absenden, um die Änderungen zu speichern."
         }
@@ -1347,6 +1354,9 @@
       },
       "prime_dock_tank_level": {
         "name": "Frischwassertank Dockingstation"
+      },
+      "next_care": {
+        "name": "Wartung – Nächste Reinigung fällig"
       }
     },
     "binary_sensor": {
@@ -1527,6 +1537,18 @@
       },
       "reset_bin_cleaning": {
         "name": "Behälter gereinigt"
+      },
+      "reset_filter_cleaning": {
+        "name": "Filter gereinigt"
+      },
+      "reset_brushes_cleaning": {
+        "name": "Hauptbürsten gereinigt"
+      },
+      "reset_side_brush_cleaning": {
+        "name": "Seitenbürste gereinigt"
+      },
+      "reset_cliff_sensors_cleaning": {
+        "name": "Absturzsensoren gereinigt"
       }
     },
     "switch": {
@@ -2325,6 +2347,32 @@
       "options": {
         "__other__": "Anderes iRobot-Konto",
         "__none__": "Keine Cloud-Funktionen für diesen Roboter (nur lokale Steuerung)"
+      }
+    },
+    "map_rotation": {
+      "options": {
+        "0": "0°",
+        "90": "90° im Uhrzeigersinn",
+        "180": "180°",
+        "270": "270° im Uhrzeigersinn (90° gegen den Uhrzeigersinn)"
+      }
+    },
+    "maintenance_item": {
+      "options": {
+        "replace_filter": "Filter ersetzen",
+        "replace_main_brushes": "Hauptbürsten ersetzen",
+        "replace_mop_pad": "Wischpad ersetzen",
+        "replace_side_brush": "Seitenbürste ersetzen",
+        "replace_clean_base_bag": "Clean-Base-Beutel ersetzen",
+        "clean_filter": "Filter reinigen",
+        "clean_brushes": "Hauptbürsten reinigen",
+        "clean_side_brush": "Seitenbürste reinigen",
+        "clean_wheel": "Räder reinigen",
+        "clean_cliff_sensors": "Absturzsensoren reinigen",
+        "clean_contact": "Ladekontakte reinigen",
+        "every_days": "Alle {days} Tage, wie iRobot es empfiehlt.",
+        "reconfigure_rooms": "Räume benennen",
+        "reconfigure_rooms_description": "Einige Räume haben noch keinen Namen. Öffne Konfigurieren → Räume & Zonen: Dort siehst du die Karte des Roboters mit ihren Nummern, oder was noch fehlt. Dieser Eintrag verschwindet von selbst, sobald jeder Raum einen Namen hat."
       }
     }
   }

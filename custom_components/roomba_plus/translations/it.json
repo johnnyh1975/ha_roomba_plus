@@ -6,7 +6,8 @@
     "weekday_3": "Mer",
     "weekday_4": "Gio",
     "weekday_5": "Ven",
-    "weekday_6": "Sab"
+    "weekday_6": "Sab",
+    "save_and_close": "Salva e chiudi"
   },
   "config": {
     "step": {
@@ -208,7 +209,10 @@
           "map_keepout_zones": "Mostra zone vietate",
           "map_nomop_zones": "Mostra zone senza lavaggio",
           "enable_maintenance_list": "Mostra la manutenzione come elenco attività",
-          "region_sensors": "Sensore separato per stanza e zona"
+          "region_sensors": "Sensore separato per stanza e zona",
+          "map_rotation": "Rotazione della mappa",
+          "care_reminders": "Promemoria di pulizia",
+          "pets_in_household": "Animali in casa"
         },
         "data_description": {
           "map_enabled": "Abilita la mappa di pulizia in tempo reale per i robot con rilevamento della posizione (Roomba 900, i, s, j, Braava m).",
@@ -224,7 +228,10 @@
           "map_keepout_zones": "Evidenzia il contorno delle zone vietate sull'immagine della mappa.",
           "map_nomop_zones": "Evidenzia il contorno delle zone senza lavaggio sull'immagine della mappa.",
           "enable_maintenance_list": "Mostra la manutenzione in scadenza come elenco di attività.",
-          "region_sensors": "Crea un sensore separato per ogni stanza e zona."
+          "region_sensors": "Crea un sensore separato per ogni stanza e zona.",
+          "map_rotation": "Ruota ogni immagine della mappa in senso orario. La mappa non ha un nord: in alto è la direzione del robot quando lascia la base, quindi dipende da come è posizionata la base.",
+          "care_reminders": "Ricorda di pulire filtro, spazzole, ruote, sensori anticaduta e contatti di ricarica secondo il calendario di cura di iRobot. Aggiunge un sensore «prossima pulizia» e pulsanti «pulito». I promemoria di sostituzione funzionano anche senza.",
+          "pets_in_household": "Ricorda di pulire il filtro e le spazzole principali due volte a settimana invece di una, come iRobot consiglia per le case con animali. Solo con i promemoria di pulizia attivi."
         }
       },
       "smart_zones_manual": {
@@ -270,7 +277,7 @@
         "data": {
           "selected_zone": "Zone to edit"
         },
-        "description": "Seleziona una zona da rinominare o nascondere. Invia senza zona selezionata per salvare.\n\n{zone_summary}",
+        "description": "{map}\n\nSeleziona una zona da rinominare o nascondere. Invia senza zona selezionata per salvare.\n\n{zone_summary}",
         "data_description": {
           "selected_zone": "La zona da rinominare o nascondere. Invia senza zona per salvare le modifiche."
         }
@@ -1347,6 +1354,9 @@
       },
       "prime_dock_tank_level": {
         "name": "Serbatoio acqua pulita base"
+      },
+      "next_care": {
+        "name": "Manutenzione – Prossima pulizia prevista"
       }
     },
     "binary_sensor": {
@@ -1527,6 +1537,18 @@
       },
       "reset_bin_cleaning": {
         "name": "Contenitore pulito"
+      },
+      "reset_filter_cleaning": {
+        "name": "Filtro pulito"
+      },
+      "reset_brushes_cleaning": {
+        "name": "Spazzole principali pulite"
+      },
+      "reset_side_brush_cleaning": {
+        "name": "Spazzola laterale pulita"
+      },
+      "reset_cliff_sensors_cleaning": {
+        "name": "Sensori anticaduta puliti"
       }
     },
     "switch": {
@@ -2325,6 +2347,32 @@
       "options": {
         "__other__": "Un altro account iRobot",
         "__none__": "Nessuna funzione cloud per questo robot (solo controllo locale)"
+      }
+    },
+    "map_rotation": {
+      "options": {
+        "0": "0°",
+        "90": "90° in senso orario",
+        "180": "180°",
+        "270": "270° in senso orario (90° in senso antiorario)"
+      }
+    },
+    "maintenance_item": {
+      "options": {
+        "replace_filter": "Sostituire il filtro",
+        "replace_main_brushes": "Sostituire le spazzole principali",
+        "replace_mop_pad": "Sostituire il panno lavapavimenti",
+        "replace_side_brush": "Sostituire la spazzola laterale",
+        "replace_clean_base_bag": "Sostituire il sacchetto della Clean Base",
+        "clean_filter": "Pulire il filtro",
+        "clean_brushes": "Pulire le spazzole principali",
+        "clean_side_brush": "Pulire la spazzola laterale",
+        "clean_wheel": "Pulire le ruote",
+        "clean_cliff_sensors": "Pulire i sensori anticaduta",
+        "clean_contact": "Pulire i contatti di ricarica",
+        "every_days": "Ogni {days} giorni, come consiglia iRobot.",
+        "reconfigure_rooms": "Dare un nome alle stanze",
+        "reconfigure_rooms_description": "Alcune stanze non hanno ancora un nome. Apri Configura → Stanze e zone: mostra la mappa del robot con i loro numeri, oppure cosa manca. Questa voce scompare da sola quando ogni stanza ha un nome."
       }
     }
   }

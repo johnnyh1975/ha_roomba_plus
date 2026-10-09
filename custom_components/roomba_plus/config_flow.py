@@ -79,12 +79,17 @@ from .const import (
     CONF_DEMAND_CLEANING_ENABLED,
     CONF_DEMAND_MULTIPLIER,
     CONF_ENABLE_MAINTENANCE_LIST,
+    CONF_CARE_REMINDERS,
+    CONF_PETS,
+    DEFAULT_CARE_REMINDERS,
+    DEFAULT_PETS,
     CONF_ENABLE_SCHEDULE_CALENDAR,
     CONF_FLOOR,
     CONF_IROBOT_PASSWORD,
     CONF_IROBOT_USERNAME,
     CONF_LIVE_POSITION_REQUESTS,
     CONF_MAP_ENABLED,
+    CONF_MAP_ROTATION,
     CONF_MAP_SCALE,
     CONF_MAP_SIZE_PX,
     CONF_PRIME_FAVORITE_BUTTONS,
@@ -109,6 +114,7 @@ from .const import (
     DEFAULT_ENABLE_SCHEDULE_CALENDAR,
     DEFAULT_LIVE_POSITION_REQUESTS,
     DEFAULT_MAP_ENABLED,
+    DEFAULT_MAP_ROTATION,
     DEFAULT_MAP_SCALE,
     DEFAULT_MAP_SIZE_PX,
     DEFAULT_PRIME_FAVORITE_BUTTONS,
@@ -324,6 +330,21 @@ def _is_classic_sku(sku: str | None) -> bool:
     from roombapy_prime.auth import is_classic_sku  # noqa: PLC0415
 
     return bool(is_classic_sku(sku))
+
+
+def _goes_to_prime(sku: str | None) -> bool:
+    """True when a robot takes the Prime path: every SKU not known to be
+    Classic, the unknown ones included.
+
+    Classic is the closed, older generation; every new model is Prime.
+    So an SKU in neither table is far more likely a Prime robot than a
+    missed Classic one, and every routing decision in this flow follows
+    `_is_classic_sku()` -- not `_is_prime_sku()`, which sent an unknown
+    SKU down the Classic path: into the local IP step after an account
+    login, and into the local robot list after discovery. A Classic
+    robot that reports no SKU still has "Add manually".
+    """
+    return not _is_classic_sku(sku)
 
 
 # ── Input validation ──────────────────────────────────────────────────────────
@@ -727,7 +748,7 @@ class RoombaPlusConfigFlow(ConfigFlow, domain=DOMAIN):
         # the question the form would otherwise be asking.
         if self.host and devices:
             matching = next((d for d in devices if d.ip == self.host), None)
-            if matching is not None and _is_prime_sku(matching.sku):
+            if matching is not None and _goes_to_prime(matching.sku):
                 return await self.async_step_prime_account()
 
         # THE ACCOUNT COMES FIRST (4.3). It works for every robot, finds
@@ -749,7 +770,7 @@ class RoombaPlusConfigFlow(ConfigFlow, domain=DOMAIN):
             **{
                 device.ip: f"{device.robot_name} ({device.ip})"
                 for device in devices
-                if device.blid not in already_configured and not _is_prime_sku(device.sku)
+                if device.blid not in already_configured and not _goes_to_prime(device.sku)
             },
             None: "Add manually (I know my robot's local IP)",
         }
@@ -893,14 +914,14 @@ class RoombaPlusConfigFlow(ConfigFlow, domain=DOMAIN):
             info = candidates.get(self._prime_selected_blid)
             if info is None:
                 return self.async_abort(reason="already_configured")
-            if _is_prime_sku(info.get("sku")):
+            if _goes_to_prime(info.get("sku")):
                 return await self._async_create_prime_entry(self._prime_selected_blid, info)
             return await self.async_step_prime_classic_ip()
 
         choices = {
             blid: (
                 f"{info.get('name') or blid} — "
-                f"{'V4/Prime' if _is_prime_sku(info.get('sku')) else 'Classic'} "
+                f"{'V4/Prime' if _goes_to_prime(info.get('sku')) else 'Classic'} "
                 f"({info.get('sku') or '?'})"
             )
             for blid, info in candidates.items()
@@ -1140,7 +1161,7 @@ class RoombaPlusConfigFlow(ConfigFlow, domain=DOMAIN):
         if not isinstance(info, dict):
             return self.async_abort(reason="robot_not_on_account")
         self._prime_selected_blid = self.blid
-        if _is_prime_sku(info.get("sku")):
+        if _goes_to_prime(info.get("sku")):
             return await self._async_create_prime_entry(self.blid, info)
         return await self.async_step_prime_classic_ip()
 
@@ -1707,6 +1728,8 @@ class RoombaPlusOptionsFlow(OptionsFlow):
         instead -- today that's just CONF_ENABLE_SCHEDULE_CALENDAR, the
         only cross-tier preference that exists so far (see that constant's
         own docstring, const.py, for why it defaults to True)."""
+        from homeassistant.helpers import selector
+
         options = self.config_entry.options
 
         if self.config_entry.runtime_data.connection_type == ConnectionType.CLOUD_ONLY:
@@ -1854,6 +1877,19 @@ class RoombaPlusOptionsFlow(OptionsFlow):
                     CONF_MAP_SCALE,
                     default=float(options.get(CONF_MAP_SCALE, DEFAULT_MAP_SCALE)),
                 ): vol.All(vol.Coerce(float), vol.Range(min=5.0, max=30.0)),
+                # THE MAP HAS NO NORTH (4.3.2): its "up" is how the robot
+                # left the dock, so a quarter turn off is no fault but a
+                # choice per robot. Every map picture turns with it.
+                vol.Optional(
+                    CONF_MAP_ROTATION,
+                    default=str(options.get(CONF_MAP_ROTATION, DEFAULT_MAP_ROTATION)),
+                ): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=["0", "90", "180", "270"],
+                        translation_key="map_rotation",
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
+                ),
                 # Room names drawn INTO the map image. Same option
                 # the Prime form offers: this is a preference about
                 # maps, not about robot generations.
@@ -1907,6 +1943,18 @@ class RoombaPlusOptionsFlow(OptionsFlow):
                     default=options.get(
                         CONF_ENABLE_MAINTENANCE_LIST, DEFAULT_ENABLE_MAINTENANCE_LIST
                     ),
+                ): bool,
+                # Care reminders (4.3.2), opt-in; the pets option only
+                # changes them: filter and brushes twice a week instead
+                # of once, as iRobot's care articles say for homes with
+                # pets.
+                vol.Optional(
+                    CONF_CARE_REMINDERS,
+                    default=options.get(CONF_CARE_REMINDERS, DEFAULT_CARE_REMINDERS),
+                ): bool,
+                vol.Optional(
+                    CONF_PETS,
+                    default=options.get(CONF_PETS, DEFAULT_PETS),
                 ): bool,
             }
         )
@@ -2111,14 +2159,21 @@ class RoombaPlusOptionsFlow(OptionsFlow):
             summary_lines.append(opt["label"])
         description_placeholders = {
             "zone_summary": "\n".join(summary_lines[:20]),
+            # THE MAP, WITH THE NAMES (4.3.2). A list of names says nothing
+            # about which area is which; the naming form's picture does.
+            "map": naming_map_markdown(self.hass, self.config_entry) or "",
         }
+        # The blank choice's label in the user's language: a selector
+        # option carrying runtime labels cannot also take a translation
+        # key, so it is looked up. It was English in every language.
+        save_label = await self._save_and_close_label()
 
         return self.async_show_form(
             step_id="map_management",
             data_schema=vol.Schema({
                 vol.Optional("selected_zone", default=""): selector.SelectSelector(
                     selector.SelectSelectorConfig(
-                        options=[{"value": "", "label": "─── Save and close ───"}] + zone_options,
+                        options=[{"value": "", "label": f"─── {save_label} ───"}] + zone_options,
                         mode=selector.SelectSelectorMode.LIST,
                     )
                 ),
@@ -2126,6 +2181,20 @@ class RoombaPlusOptionsFlow(OptionsFlow):
             description_placeholders=description_placeholders,
             last_step=False,
         )
+
+    async def _save_and_close_label(self) -> str:
+        """`common.save_and_close` in Home Assistant's language; English
+        if no text loads. Never raises: a label must not fail the form."""
+        from homeassistant.helpers.translation import async_get_translations
+
+        key = f"component.{DOMAIN}.common.save_and_close"
+        try:
+            table = await async_get_translations(
+                self.hass, self.hass.config.language, "common", {DOMAIN}
+            )
+        except Exception:  # noqa: BLE001
+            table = {}
+        return table.get(key) or "Save and close"
 
     async def async_step_map_management_edit(
         self, user_input: dict[str, Any] | None = None

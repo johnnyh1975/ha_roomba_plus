@@ -1546,3 +1546,107 @@ class TestTheClassicViewIsNotAMirrorImage:
         assert painted and dock
         assert max(painted) < min(dock)
 
+
+
+class TestTheMapTurnsAsTheUserChose:
+    """4.3.2: the map has no north. Its "up" is how the robot left the
+    dock, and the maintainer's own map came out a quarter turn off the
+    way he pictures the flat. A clockwise turn per robot, after the
+    mirror, in the pictures only."""
+
+    @staticmethod
+    def _renderer(turns: int, mirror: bool = True) -> MapRenderer:
+        return MapRenderer(RendererConfig(
+            size_px=600, scale=10.0, auto_fit=False,
+            mirror_x=mirror, quarter_turns=turns,
+        ))
+
+    def test_the_option_reads_as_quarter_turns(self):
+        from custom_components.roomba_plus.map_renderer import quarter_turns
+        assert [quarter_turns(v) for v in ("0", "90", "180", "270")] == [0, 1, 2, 3]
+        assert quarter_turns(None) == 0
+        assert quarter_turns("45") == 0
+
+    def test_a_quarter_turn_is_clockwise(self):
+        """What was above the dock is right of it."""
+        up = self._renderer(0, mirror=False)._mm_to_px(0.0, 1000.0)
+        turned = self._renderer(1, mirror=False)._mm_to_px(0.0, 1000.0)
+        assert up == (300, 200)
+        assert turned == (400, 300)
+
+    def test_the_turn_comes_after_the_mirror(self):
+        """x mirrored first (left of the dock), then turned: up."""
+        assert self._renderer(1)._mm_to_px(1000.0, 0.0) == (300, 200)
+
+    def test_view_and_back_is_the_identity(self):
+        from custom_components.roomba_plus.map_renderer import mm_to_view, view_to_mm
+        for mirror in (False, True):
+            for k in range(4):
+                u, v = mm_to_view(120.0, -340.0, mirror, k)
+                assert view_to_mm(u, v, mirror, k) == pytest.approx((120.0, -340.0))
+
+    def test_points_mm_gives_back_the_maps_frame(self):
+        r = self._renderer(1)
+        for x, y in ((0.0, 0.0), (500.0, 200.0), (800.0, 400.0)):
+            r.add_pose(x, y, 0.0)
+        assert r.points_mm[-1] == pytest.approx((800.0, 400.0), abs=10.0)
+
+    def test_a_path_saved_unturned_is_turned_on_restore(self):
+        old = self._renderer(0)
+        old.add_pose(0.0, 0.0, 0.0)
+        old.add_pose(1000.0, 400.0, 0.0)
+        dump = old.dump_state()
+        assert dump["quarter_turns"] == 0
+
+        new = self._renderer(3)
+        assert new.restore_state(dump)
+        assert new._points[-1] == new._mm_to_px(1000.0, 400.0)
+
+    def test_the_heading_turns_with_the_map(self):
+        """A clockwise quarter turn takes 90 degrees off the drawn heading,
+        mirrored or not -- the arrow keeps pointing along the path."""
+        for mirror in (False, True):
+            plain = self._renderer(0, mirror)
+            turned = self._renderer(1, mirror)
+            plain._theta = turned._theta = 30.0
+            assert turned._heading_view_deg() == plain._heading_view_deg() - 90.0
+        # and the arrow follows the positions: a step along the heading
+        # is a step along the drawn arrow
+        import math
+        r = self._renderer(1, mirror=False)
+        r._theta = 90.0  # firmware frame unmirrored: along +y
+        ax, ay = r._mm_to_px(0.0, 0.0)
+        bx, by = r._mm_to_px(0.0, 1000.0)
+        a = math.radians(r._heading_view_deg())
+        assert (bx - ax, -(by - ay)) == pytest.approx(
+            (100 * math.cos(a), 100 * math.sin(a)), abs=1e-6
+        )
+
+    def test_the_naming_map_turns(self):
+        """A wide area under a quarter turn is drawn tall."""
+        import io
+
+        from PIL import Image
+
+        from custom_components.roomba_plus.map_renderer import (
+            NAMING_AREA_PALETTE, render_area_map,
+        )
+
+        area = frozenset((x, y) for x in range(-10, 10) for y in range(0, 3))
+
+        def painted_box(turns):
+            img = Image.open(io.BytesIO(
+                render_area_map([("1", area)], 150.0, 300, turns)
+            )).convert("RGB")
+            pts = [
+                (x, y) for y in range(img.height) for x in range(img.width)
+                if img.getpixel((x, y)) in NAMING_AREA_PALETTE
+            ]
+            xs = [p[0] for p in pts]
+            ys = [p[1] for p in pts]
+            return max(xs) - min(xs), max(ys) - min(ys)
+
+        w0, h0 = painted_box(0)
+        w1, h1 = painted_box(1)
+        assert w0 > 3 * h0
+        assert h1 > 3 * w1

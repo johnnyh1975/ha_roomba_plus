@@ -5200,3 +5200,31 @@ class TestOneMissionRecordedTwice:
         assert not _same_mission(dict(self._FIRST, ended_at=None), self._SECOND)
         short = dict(self._FIRST, ended_at="2026-09-09T15:37:20+00:00")
         assert not _same_mission(short, dict(short, started_at="2026-09-09T15:36:45+00:00"))
+
+
+class TestLiblitsWholeStore:
+    """@liblit's 980, the whole mission store from his backup of 6 October
+    2026, kept with his permission (tests/fixtures/liblit_980). Sixteen
+    records: five real missions, mission 119 twice, and eleven runs of
+    zero minutes."""
+
+    _RECORDS = __import__("json").loads(
+        __import__("pathlib").Path("tests/fixtures/liblit_980/missions.json").read_text()
+    )["records"]
+
+    def test_only_mission_119_is_folded(self):
+        from custom_components.roomba_plus.mission_store import _without_same_mission_twice
+
+        kept, dropped = _without_same_mission_twice([dict(r) for r in self._RECORDS])
+        assert (len(self._RECORDS), len(kept), dropped) == (16, 15, 1)
+        assert [r.get("nMssn") for r in kept].count(119) == 1
+        # The zero-minute runs are not one mission recorded eleven times.
+        assert sum(1 for r in kept if r["duration_min"] == 0) == 11
+
+    def test_the_mission_that_poisoned_the_grid_did_not_start_on_the_dock(self):
+        """27 August: started in the middle of a room, its frame turned by
+        about 95 degrees. iRobot's own record says so too."""
+        record = next(r for r in self._RECORDS if r.get("nMssn") == 118)
+        assert record["dockedAtStart"] == 0
+        assert all(r["dockedAtStart"] == 1 for r in self._RECORDS
+                   if r.get("nMssn") not in (None, 118))

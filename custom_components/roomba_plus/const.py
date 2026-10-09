@@ -180,6 +180,9 @@ CONF_MAP_ENABLED: Final = "map_enabled"
 CONF_LIVE_POSITION_REQUESTS: Final = "live_position_requests"
 CONF_MAP_SIZE_PX: Final = "map_size_px"
 CONF_MAP_SCALE: Final = "map_scale_mm_per_px"
+#: Turn every map picture clockwise by 0/90/180/270 degrees (4.3.2). The
+#: map has no north: its "up" is how the robot left the dock.
+CONF_MAP_ROTATION: Final = "map_rotation"
 CONF_FILTER_HOURS: Final = "filter_threshold_hours"
 CONF_BRUSH_HOURS: Final = "brush_threshold_hours"
 
@@ -281,13 +284,137 @@ DEFAULT_LIVE_POSITION_REQUESTS: Final = True
 DEFAULT_ENABLE_SCHEDULE_CALENDAR: Final = True
 DEFAULT_MAP_SIZE_PX: Final = 600
 DEFAULT_MAP_SCALE: Final = 10.0  # mm per pixel → 600px = 6 m × 6 m
+DEFAULT_MAP_ROTATION: Final = "0"
 
-DEFAULT_FILTER_HOURS: Final = 60    # iRobot recommendation: every 2 months
-DEFAULT_BRUSH_HOURS: Final = 200    # iRobot recommendation: every 6-12 months
-# Local fallback only, from the i3+ cloud full-life capture (~157h/~29h)
-# in tests/fixtures/irobot_parts_i3plus.json.
-DEFAULT_SIDE_BRUSH_HOURS: Final = 150
-DEFAULT_CLEAN_BASE_BAG_HOURS: Final = 30
+# ── Replacement intervals when the cloud gives none (4.3.2) ─────────────────
+#
+# IROBOT'S OWN BUDGETS, NOT OURS. The cloud's part counters carry the
+# life iRobot gives each part, in minutes of use (count_used +
+# count_remaining). Two series have been read:
+#
+#   i3+ (tests/fixtures/irobot_parts_i3plus.json)
+#       filter 52.4 h, side brush 156.5 h, main brushes 312.4 h, bag 28.7 h
+#   j9+ (@msva17)
+#       main brushes 312.7 h -- the i3+'s figure to the minute; the rest
+#       of his counters were exhausted or freshly reset
+#
+# THE LAST FALLBACK, NOT THE FIRST. A robot's interval comes from, in
+# order: its own cloud counter, its owner's learned replacements, an
+# hour option, its series in ROBOT_PROFILES (maintenance_profile_hours),
+# and only then from these -- for a series without a profile (Combo,
+# unknown SKUs) and for the bag, which no profile carries. The i3+ is
+# the only robot read in full; they replace the earlier round numbers
+# (60, 200, 150, 30). A series' profile is corrected the same way once
+# one of its counters is read: count_used + count_remaining of a part
+# that is neither used up nor just reset.
+#
+# iRobot's published guidance is in months and is shown alongside, not
+# counted: see REPLACEMENT_GUIDANCE_MONTHS.
+DEFAULT_FILTER_HOURS: Final = 52
+DEFAULT_BRUSH_HOURS: Final = 312
+DEFAULT_SIDE_BRUSH_HOURS: Final = 157
+DEFAULT_CLEAN_BASE_BAG_HOURS: Final = 29
+
+#: iRobot's published replacement guidance, in months (min, max), per
+#: series and role (4.3.2). Shown next to the hour count, never counted:
+#: the counters measure use, the months assume it. From iRobot's "care
+#: procedure frequency" articles (i, j, 400-900: 2454, 31042, 11179;
+#: s: 20966). A role a series' article does not name is absent -- the
+#: i and j articles give the side brush a cleaning interval only.
+REPLACEMENT_GUIDANCE_MONTHS: Final[dict[str, dict[str, tuple[int, int]]]] = {
+    "classic": {"filter": (2, 2), "main_brush": (6, 12)},
+    "s": {"filter": (2, 2), "side_brush": (3, 3)},
+}
+
+
+def guidance_series(sku: Any) -> str | None:
+    """The guidance table's series for a SKU: "classic" for 600-900, e,
+    i and j; "s" for the s-series; None otherwise (Braava, Prime -- whose
+    cloud counters answer instead)."""
+    if not isinstance(sku, str) or not sku:
+        return None
+    first = sku[0].lower()
+    if first in ("r", "6", "8", "9", "e", "i", "j"):
+        return "classic"
+    if first == "s":
+        return "s"
+    return None
+
+
+def replacement_guidance_months(sku: Any, role: str) -> tuple[int, int] | None:
+    """iRobot's month guidance for a role on this robot, or None."""
+    series = guidance_series(sku)
+    if series is None:
+        return None
+    return REPLACEMENT_GUIDANCE_MONTHS.get(series, {}).get(role)
+
+
+# ── Care reminders (4.3.2) ───────────────────────────────────────────────────
+#
+# Cleaning, not replacing. iRobot's "care procedure frequency" articles
+# give these in calendar time for every series (2454, 31042, 11179,
+# 20966): filter and main brushes once a week, twice a week in homes
+# with pets; side brush once a month; front caster every two weeks;
+# cliff sensors and charging contacts once a month. The bin is "after
+# each use" and has no reminder -- a reminder after every run is noise.
+#
+# Calendar time is right here and wrong for replacement: hair wraps a
+# brush whether the robot ran three hours or ten, and the articles
+# themselves give these in days.
+
+#: Option: care reminders at all. OFF BY DEFAULT: a reminder sensor and
+#: four buttons per robot are entities nobody asked for, and a weekly
+#: "clean the filter" is advice some households follow and many do not.
+#: Off means no sensor, no "cleaned" buttons and no cleaning items in
+#: the to-do list; the replacement counters are not affected.
+CONF_CARE_REMINDERS: Final = "care_reminders"
+DEFAULT_CARE_REMINDERS: Final = False
+
+#: Option: pets in the household -- filter and brush cleaning twice as
+#: often, as iRobot's articles say. Only read with care reminders on.
+CONF_PETS: Final = "pets_in_household"
+DEFAULT_PETS: Final = False
+
+#: Unique-id suffixes of the entities that exist only with care
+#: reminders on, so switching the option off removes them from the
+#: registry instead of leaving them "unavailable".
+CARE_ENTITY_KEYS: Final[tuple[str, ...]] = (
+    "next_care",
+    "reset_filter_cleaning",
+    "reset_brushes_cleaning",
+    "reset_side_brush_cleaning",
+    "reset_cliff_sensors_cleaning",
+)
+
+
+def care_reminders_enabled(options: Mapping[str, Any]) -> bool:
+    """True when the user switched care reminders on."""
+    return bool(options.get(CONF_CARE_REMINDERS, DEFAULT_CARE_REMINDERS))
+
+
+@dataclass(frozen=True)
+class CareTask:
+    """One calendar cleaning task.
+
+    `slot` names the store's `{slot}_cleaned_at` field. `braava` says
+    whether a Braava has the part -- it has cliff sensors and charging
+    contacts, and no filter, brushes or caster.
+    """
+
+    slot: str
+    days: float
+    days_with_pets: float
+    braava: bool = False
+
+
+CARE_TASKS: Final[tuple[CareTask, ...]] = (
+    CareTask("filter", 7, 3.5),
+    CareTask("brushes", 7, 3.5),
+    CareTask("side_brush", 30, 30),
+    CareTask("wheel", 14, 14),
+    CareTask("cliff_sensors", 30, 30, braava=True),
+    CareTask("contact", 30, 30, braava=True),
+)
 
 # ── Cloud consumable parts (/v1/robots/{blid}/parts) ─────────────────────────
 #
@@ -307,7 +434,7 @@ DEFAULT_CLEAN_BASE_BAG_HOURS: Final = 30
 #     Dock — so 139 is the one Dock-side part, i.e. the Clean Base bag.
 #     It also has the shortest budget, which fits a bag.
 #   * Budget (count_used + count_remaining) for 35 is ~52 h, against
-#     DEFAULT_FILTER_HOURS = 60 above (iRobot's "every 2 months") — the
+#     the earlier filter default of 60 h (iRobot's "every 2 months") — the
 #     closest pairing of any id to any published interval.
 #   * 36 (~157 h) and 37 (~312 h) are then the two brushes, both inside
 #     iRobot's "every 6-12 months" guidance. The longer-lived pair member
@@ -319,6 +446,16 @@ DEFAULT_CLEAN_BASE_BAG_HOURS: Final = 30
 # the id whose counter went to 0 (observed live in the same session). The
 # remaining three keep the reasoning above until someone confirms them the
 # same way.
+#
+# THE j-SERIES NUMBERS ITS PARTS 46/47/48 (4.3.2, @msva17's j9+), in the
+# i3's order shifted by eleven; the bag stays 139. Read off the app
+# against the attributes: 48 was "Dual Multi-Surface Brushes, ~112 HRS
+# LEFT" with 6720 minutes remaining, 46 the filter tile, red and empty,
+# with 0 remaining. 47 and 139 were both freshly reset, so 47 is the
+# side brush by elimination -- the one assignment here not read off a
+# screen. Unmapped, these surfaced as generic part sensors only, with
+# no role: no remaining hours on the maintenance sensors and no reset
+# sent to iRobot.
 #
 # A wrong guess here is visible and cheap to correct: every part sensor
 # carries its raw `part_id` and counters as attributes, so comparing one
@@ -336,6 +473,10 @@ IROBOT_PART_ROLES: Final[dict[str, str]] = {
     "36":  IROBOT_PART_ROLE_SIDE_BRUSH,
     "37":  IROBOT_PART_ROLE_MAIN_BRUSH,
     "139": IROBOT_PART_ROLE_CLEAN_BASE_BAG,
+    # j-series (j9+, @msva17): see above.
+    "46":  IROBOT_PART_ROLE_FILTER,
+    "47":  IROBOT_PART_ROLE_SIDE_BRUSH,
+    "48":  IROBOT_PART_ROLE_MAIN_BRUSH,
 }
 
 #: Everything the four maintenance consumables differ in, in one place.
@@ -787,9 +928,14 @@ class RobotProfile:
     battery_chemistry: str      # "lipo" | "nimh"
     battery_voltage: float      # nominal pack voltage (V)
     battery_cycles_eol: int     # manufacturer rated cycle count at ~80% capacity
-    filter_hours: int           # recommended replacement interval (h)  TODO: per-model
-    main_brush_hours: int       # recommended replacement interval (h)  TODO: per-model
-    side_brush_hours: int       # recommended replacement interval (h)  TODO: per-model
+    # Replacement intervals in hours of use, per series (4.3.2: USED, as
+    # the fallback before the global defaults -- see
+    # maintenance_profile_hours()). Research values; corrected where a
+    # cloud counter of the series was read. 0 = the series has no such
+    # part, and the next fallback answers.
+    filter_hours: int
+    main_brush_hours: int
+    side_brush_hours: int
     typical_coverage_sqft: int | None   # typical per-mission area; None for mops
     map_capability: str         # "none" | "ephemeral" | "smart"
     # estCap BMS scaling factors — confirmed June 2026.
@@ -839,14 +985,21 @@ ROBOT_PROFILES: Final[dict[str, RobotProfile]] = {
         # ~138% for a healthy battery, making the sensor meaningless.
         battery_mah=2488, battery_chemistry="lipo", battery_voltage=14.8,
         battery_cycles_eol=400,
-        filter_hours=60, main_brush_hours=150, side_brush_hours=150,
+        # 4.3.2: CORRECTED from 60/150/150 to the i3+'s own cloud
+        # counters (tests/fixtures/irobot_parts_i3plus.json): 52.4 h,
+        # 312.4 h, 156.5 h. The research value for the main brushes was
+        # half of what iRobot counts.
+        filter_hours=52, main_brush_hours=312, side_brush_hours=157,
         typical_coverage_sqft=1200, map_capability="smart",
     ),
     "j": RobotProfile(
         name="j-series",
         battery_mah=2700, battery_chemistry="lipo", battery_voltage=14.8,
         battery_cycles_eol=300,
-        filter_hours=60, main_brush_hours=150, side_brush_hours=150,
+        # 4.3.2: main brushes CORRECTED from 150 to 312 -- @msva17's j9+
+        # counter, 312.7 h. Its filter counter had run out at 110 h, so
+        # the budget is at most that: 60 stays. Side brush not read.
+        filter_hours=60, main_brush_hours=312, side_brush_hours=150,
         typical_coverage_sqft=1400, map_capability="smart",
     ),
     "s": RobotProfile(
@@ -860,7 +1013,8 @@ ROBOT_PROFILES: Final[dict[str, RobotProfile]] = {
         name="Braava m6",
         battery_mah=2600, battery_chemistry="lipo", battery_voltage=14.8,
         battery_cycles_eol=300,
-        filter_hours=60, main_brush_hours=0, side_brush_hours=0,
+        # 4.3.2: filter CORRECTED from 60 to 0 -- a Braava has no filter.
+        filter_hours=0, main_brush_hours=0, side_brush_hours=0,
         typical_coverage_sqft=None, map_capability="smart",
     ),
 }
@@ -960,6 +1114,33 @@ def get_robot_profile(
             profile = _dc.replace(profile, battery_chemistry=resolved)
 
     return profile
+
+def maintenance_profile_hours(sku: str | None) -> dict[str, int]:
+    """The series' replacement intervals by role, from ROBOT_PROFILES.
+
+    Empty for an SKU without a profile -- the global defaults answer
+    then. A 0 in the profile (no such part on the series) is left out
+    for the same reason.
+
+    "R6" IS THE 600-SERIES HERE. `get_robot_profile()` reads every "R"
+    SKU as a 900, which a 675 (R675020) is not; that mapping stays as it
+    is for the battery figures, where nobody has checked a 600's estCap
+    scale, but the parts of a 600 are the 600's.
+    """
+    if not isinstance(sku, str) or not sku:
+        return {}
+    if sku[:2].lower() == "r6":
+        profile: RobotProfile | None = ROBOT_PROFILES["6"]
+    else:
+        profile = get_robot_profile(sku)
+    if profile is None:
+        return {}
+    hours = {
+        IROBOT_PART_ROLE_FILTER: profile.filter_hours,
+        IROBOT_PART_ROLE_MAIN_BRUSH: profile.main_brush_hours,
+        IROBOT_PART_ROLE_SIDE_BRUSH: profile.side_brush_hours,
+    }
+    return {role: value for role, value in hours.items() if value > 0}
 
 # ── State/Phase mappings ──────────────────────────────────────────────────────
 # Extended phase map (superset of Core's STATE_MAP)

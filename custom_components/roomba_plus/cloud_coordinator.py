@@ -467,6 +467,15 @@ def pmap_version_report(cloud_data: Any) -> list[dict[str, Any]]:
                 )
             },
             "committed_version_used": pmap_committed_version(pmap),
+            # HOW THE APP TURNS THE MAP (4.3.2). The iRobot app shows a
+            # Smart Map turned by the user; the rooms map here is drawn
+            # in the map's own frame and ignores it (@frnchfrgg). Which
+            # of the two angles the app applies, and in which direction,
+            # is what these settle -- read beside the angle the user set.
+            "orientation_rad": {
+                key: (details.get("map_header") or {}).get(key)
+                for key in ("user_orientation_rad", "robot_orientation_rad")
+            } if isinstance(details.get("map_header"), dict) else None,
         })
     return report
 

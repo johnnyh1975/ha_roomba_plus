@@ -342,13 +342,35 @@ class RoomSegStore:
             and missions_seen < MIN_MISSIONS_BEFORE_SEGMENTING
         ):
             return False
-        if self.rooms and (len(cells) - self.last_cell_count) < MIN_NEW_CELLS_TO_RECOMPUTE:
+        if self.rooms and not self._grid_changed(cells):
             return False
         if not cells:
             return False
         self._recompute(cells)
         self.last_cell_count = len(cells)
         return True
+
+    def _grid_changed(self, cells: dict[tuple[int, int], float]) -> bool:
+        """Whether the grid moved far enough from the areas to recompute.
+
+        GROWTH WAS THE ONLY MEASURE, and the grid also shrinks: cells
+        nothing visits again decay and are pruned. A grid that had once
+        been larger never grew past its old count again, and the areas
+        stayed as drawn from it. On the maintainer's own 980 they held
+        5817 cells over a grid of 3056: half the map on screen was floor
+        the grid no longer had, and nothing recomputed for weeks (4.3.2).
+
+        So: the count moved by the threshold either way, or the grid
+        holds that many cells no area has (new floor, or cells that
+        replaced pruned ones at an unchanged count). Right after a
+        recompute both are zero: the areas cover the grid exactly.
+        """
+        if abs(len(cells) - self.last_cell_count) >= MIN_NEW_CELLS_TO_RECOMPUTE:
+            return True
+        held: set[tuple[int, int]] = set()
+        for room in self.rooms.values():
+            held |= room.cells
+        return len(cells.keys() - held) >= MIN_NEW_CELLS_TO_RECOMPUTE
 
     def _recompute(self, cells: dict[tuple[int, int], float]) -> None:
         result = segment_rooms(
@@ -473,7 +495,43 @@ class RoomSegStore:
             )
             del self.rooms[rid]
 
+        self._settle_unmatched(matched_existing | created_this_round)
         return label_to_id
+
+    def _settle_unmatched(self, live_ids: set[str]) -> None:
+        """What happens to an area this round neither matched nor absorbed.
+
+        It is one the grid has largely lost. Until 4.3.2 it was kept
+        whole: its old cells, drawn over the areas that now cover the
+        same floor, and over floor the grid no longer has at all. On the
+        maintainer's 980 a recompute kept all eleven old areas and added
+        four new ones on top.
+
+        - CELLS ANOTHER AREA NOW COVERS are that area's. An area is
+          never drawn twice.
+        - AN UNNAMED AREA GOES. Nothing is lost: if its floor comes back
+          it comes back as an area, as it first did.
+        - A NAMED OR HIDDEN AREA STAYS with what is left: the floor
+          behind a door kept shut for two weeks decays like any other,
+          and the room keeps its name and its place until the robot is
+          back. The user named or hid it; only the user removes it.
+        """
+        claimed: set[tuple[int, int]] = set()
+        for lid in live_ids:
+            room = self.rooms.get(lid)
+            if room is not None:
+                claimed |= room.cells
+        for rid in [r for r in self.rooms if r not in live_ids]:
+            room = self.rooms[rid]
+            room.cells -= claimed
+            kept = room.hidden or (room.confirmed and bool(room.name))
+            if room.cells and kept:
+                continue
+            _LOGGER.debug(
+                "RoomSegStore: removing %s -- the grid no longer has its floor",
+                rid,
+            )
+            del self.rooms[rid]
 
     def _carry_name_on_absorption(self, gone: SegRoom, live_ids: set[str]) -> None:
         """A name the user gave is not deleted with the area that held it.

@@ -85,6 +85,24 @@ class MissionTrajectoryStore:
                 ),
                 maxlen=MAX_MISSIONS,
             )
+            # A MISSION STORED TWICE is cleaned on load (4.3.2): the
+            # maintainer's 980 held 2 October twice, identical to the
+            # point -- one mission end processed a second time from a
+            # leftover checkpoint (see image._checkpoint_already_recorded).
+            seen: set[str] = set()
+            kept: deque[dict[str, Any]] = deque(maxlen=MAX_MISSIONS)
+            for m in self._missions:
+                key = m["mission_key"]
+                if key and key in seen:
+                    continue
+                seen.add(key)
+                kept.append(m)
+            if len(kept) != len(self._missions):
+                _LOGGER.info(
+                    "MissionTrajectoryStore: %d mission(s) stored twice, kept once",
+                    len(self._missions) - len(kept),
+                )
+            self._missions = kept
             _LOGGER.debug(
                 "MissionTrajectoryStore: loaded %d mission(s) for %s",
                 len(self._missions), entry_id,
@@ -111,7 +129,7 @@ class MissionTrajectoryStore:
         points_mm: list[tuple[float, float]],
         ended_at: str = "",
         thetas_deg: list[float] | None = None,
-    ) -> None:
+    ) -> bool:
         """Append one mission's trajectory to the bounded window.
 
         points_mm: dock-relative (x_mm, y_mm) pose points, same
@@ -130,9 +148,18 @@ class MissionTrajectoryStore:
         wall-follow curvature signal — not consumed by anything yet.
         Omitted (None/mismatched length) simply means no theta data for
         that mission, not an error.
+
+        ONCE PER MISSION (4.3.2): a key already held is not stored again.
+        Returns whether the mission was stored.
         """
         if not points_mm:
-            return
+            return False
+        if mission_key and self.has_mission(mission_key):
+            _LOGGER.debug(
+                "MissionTrajectoryStore: %s already recorded; not stored twice",
+                mission_key,
+            )
+            return False
         thetas = list(thetas_deg) if thetas_deg and len(thetas_deg) == len(points_mm) else []
         self._missions.append({
             "mission_key": mission_key,
@@ -140,6 +167,11 @@ class MissionTrajectoryStore:
             "points": [[float(x), float(y)] for x, y in points_mm],
             "thetas": [float(t) for t in thetas],
         })
+        return True
+
+    def has_mission(self, mission_key: str) -> bool:
+        """Whether a mission with this key is in the window."""
+        return any(m.get("mission_key") == mission_key for m in self._missions)
 
     # ── Public API ─────────────────────────────────────────────────────────────
 

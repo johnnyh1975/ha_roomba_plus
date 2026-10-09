@@ -1513,8 +1513,9 @@ class TestRemoveCalendarEntityIfDisabled:
 
         config_entry = MagicMock()
         # Both optional platforms on: the to-do list is opt-in (4.0.0a30)
-        # and cleared like the calendar when it is off.
-        config_entry.options = {"enable_maintenance_list": True}
+        # and cleared like the calendar when it is off. Care reminders on
+        # too (4.3.2), or their entities are swept.
+        config_entry.options = {"enable_maintenance_list": True, "care_reminders": True}
         config_entry.entry_id = "entry1"
 
         fake_er = MagicMock()
@@ -1524,6 +1525,38 @@ class TestRemoveCalendarEntityIfDisabled:
 
         mock_entries.assert_not_called()
         fake_er.async_remove.assert_not_called()
+
+
+class TestCareReminderEntitiesLeaveWithTheOption:
+    """4.3.2: care reminders are opt-in; switched off, their sensor and
+    buttons leave the registry instead of staying "unavailable"."""
+
+    def _run(self, options):
+        from custom_components.roomba_plus import _remove_switched_off_optional_entities
+
+        config_entry = MagicMock()
+        config_entry.options = {"enable_maintenance_list": True, **options}
+        config_entry.entry_id = "entry1"
+        rows = [
+            MagicMock(domain="sensor", entity_id="sensor.r_next", unique_id="roomba_plus_B_next_care"),
+            MagicMock(domain="button", entity_id="button.r_fc", unique_id="roomba_plus_B_reset_filter_cleaning"),
+            MagicMock(domain="button", entity_id="button.r_cs", unique_id="roomba_plus_B_reset_cliff_sensors_cleaning"),
+            MagicMock(domain="button", entity_id="button.r_f", unique_id="roomba_plus_B_reset_filter"),
+            MagicMock(domain="button", entity_id="button.r_w", unique_id="roomba_plus_B_reset_wheel_cleaning"),
+            MagicMock(domain="sensor", entity_id="sensor.r_x", unique_id=None),
+        ]
+        fake_er = MagicMock()
+        with patch("homeassistant.helpers.entity_registry.async_get", return_value=fake_er), \
+             patch("homeassistant.helpers.entity_registry.async_entries_for_config_entry",
+                   return_value=rows):
+            _remove_switched_off_optional_entities(MagicMock(), config_entry)
+        return {c.args[0] for c in fake_er.async_remove.call_args_list}
+
+    def test_off_removes_only_the_care_entities(self):
+        assert self._run({}) == {"sensor.r_next", "button.r_fc", "button.r_cs"}
+
+    def test_on_keeps_them(self):
+        assert self._run({"care_reminders": True}) == set()
 
 
 class TestReloadOnOptionsChangeIncludesCalendar:
@@ -1551,6 +1584,37 @@ class TestReloadOnOptionsChangeIncludesCalendar:
         await _async_reload_on_options_change(hass, config_entry)
 
         hass.config_entries.async_reload.assert_awaited_once_with("entry1")
+
+    @pytest.mark.asyncio
+    async def test_switching_care_reminders_on_reloads(self):
+        from custom_components.roomba_plus import _async_reload_on_options_change
+
+        config_entry = MagicMock()
+        config_entry.data = {}
+        config_entry.options = {"care_reminders": True}
+        config_entry.entry_id = "entry1"
+        hass = MagicMock()
+        hass.config_entries.async_reload = AsyncMock()
+        await _async_reload_on_options_change(hass, config_entry)
+        hass.config_entries.async_reload.assert_awaited_once_with("entry1")
+
+    @pytest.mark.asyncio
+    async def test_without_a_reload_the_sensors_re_render(self):
+        """The pets option is read live; the sensors hear of it now, not
+        at the robot's next message."""
+        import custom_components.roomba_plus as pkg
+
+        config_entry = MagicMock()
+        config_entry.data = {}
+        config_entry.options = {"pets_in_household": True}
+        config_entry.entry_id = "entry1"
+        config_entry.runtime_data.blid = "B1"
+        hass = MagicMock()
+        hass.config_entries.async_reload = AsyncMock()
+        with patch.object(pkg, "async_dispatcher_send") as send:
+            await pkg._async_reload_on_options_change(hass, config_entry)
+        hass.config_entries.async_reload.assert_not_awaited()
+        send.assert_called_once_with(hass, pkg.maintenance_changed_signal("B1"))
 
     @pytest.mark.asyncio
     async def test_saving_the_form_unchanged_does_not_reload(self):
@@ -1743,6 +1807,20 @@ class TestPhaseSpatialDecidesMapCapability:
         ctx = _ctx(hass, _STATE_POSE_ONLY, map_enabled=False)
         await _phase_spatial(ctx)
         assert ctx.map_capability is MapCapability.NONE
+
+
+class TestEveryClassicMapIsDrawnMirroredBack:
+    """The pose frame is a mirror image of the floor: 900-series since
+    4.3.1, Smart Map robots since 4.3.2 (@frnchfrgg, an i-series on lewis
+    firmware answering position requests, saw the same flip)."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("state", [_STATE_POSE_ONLY, _STATE_SMART_MAP_NO_POSE])
+    async def test_path_and_coverage_are_mirrored(self, hass: Any, state) -> None:
+        ctx = _ctx(hass, state)
+        await _phase_spatial(ctx)
+        assert ctx.renderer._cfg.mirror_x is True
+        assert ctx.grid_store.mirror_x is True
 
 
 class TestPhaseSpatialWiresTheStoresItPromises:
@@ -2444,6 +2522,17 @@ class TestPhaseDataSeedsAndWiresManagers:
         assert store.filter_baseline_seeded is True
 
     @pytest.mark.asyncio
+    async def test_the_series_intervals_come_from_the_sku(self, hass: Any) -> None:
+        from custom_components.roomba_plus import _phase_data
+
+        ctx = self._ctx(hass, hours=10)
+        ctx.roomba.master_state["state"]["reported"]["sku"] = "i355640"
+        await _phase_data(ctx)
+        assert ctx.maintenance_store.profile_hours == {
+            "filter": 52, "main_brush": 312, "side_brush": 157,
+        }
+
+    @pytest.mark.asyncio
     async def test_a_brand_new_robot_is_not_seeded(self, hass: Any) -> None:
         """Zero hours means nothing to assume."""
         from custom_components.roomba_plus import _phase_data
@@ -2452,6 +2541,31 @@ class TestPhaseDataSeedsAndWiresManagers:
         await _phase_data(ctx)
 
         assert ctx.maintenance_store.filter_baseline_seeded is False
+
+    @pytest.mark.asyncio
+    async def test_care_reminders_start_at_the_first_setup_and_are_saved(
+        self, hass: Any
+    ) -> None:
+        """Also on a brand-new robot: the reminders are calendar time,
+        not runtime, so they start whether or not it has hours."""
+        from unittest.mock import AsyncMock, patch
+
+        from custom_components.roomba_plus import _phase_data
+        from custom_components.roomba_plus.maintenance_store import MaintenanceStore
+
+        ctx = self._ctx(hass, hours=0, care_reminders=True)
+        with patch.object(MaintenanceStore, "async_save", AsyncMock()) as save:
+            await _phase_data(ctx)
+        assert ctx.maintenance_store.care_since is not None
+        save.assert_awaited()
+
+    @pytest.mark.asyncio
+    async def test_without_the_option_no_reminders_start(self, hass: Any) -> None:
+        from custom_components.roomba_plus import _phase_data
+
+        ctx = self._ctx(hass, hours=0)
+        await _phase_data(ctx)
+        assert ctx.maintenance_store.care_since is None
 
     @pytest.mark.asyncio
     async def test_the_blocking_manager_is_only_built_when_configured(
@@ -2527,6 +2641,25 @@ class TestRobotProfileArrivesLate:
             fn({"state": {"reported": {"sku": "i755840"}}})
 
         assert ctx.config_entry.runtime_data.robot_profile is not None
+
+    @pytest.mark.asyncio
+    async def test_a_late_sku_fills_the_series_intervals(self, hass: Any) -> None:
+        """4.3.2: a 980 may send its SKU only after setup; its series'
+        replacement intervals arrive with it."""
+        from custom_components.roomba_plus import _phase_finalize
+        from custom_components.roomba_plus.maintenance_store import MaintenanceStore
+
+        ctx, registriert = self._callback(hass)
+        store = MaintenanceStore()
+        ctx.config_entry.runtime_data.maintenance_store = store
+        ctx.roomba.master_state = {"state": {"reported": {}}}
+        await _phase_finalize(ctx)
+        for aufruf in ctx.config_entry.async_on_unload.call_args_list:
+            if aufruf.args and callable(aufruf.args[0]):
+                aufruf.args[0]()
+        for fn in registriert:
+            fn({"state": {"reported": {"sku": "R980020"}}})
+        assert store.profile_hours == {"filter": 60, "main_brush": 150, "side_brush": 150}
 
 
 class TestPhaseFinalizeCreatesTheLivePositionStream:

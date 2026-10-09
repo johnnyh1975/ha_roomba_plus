@@ -49,6 +49,7 @@ import homeassistant.helpers.config_validation as cv
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 
 from .callbacks import (
     entry_created_ts,
@@ -62,6 +63,11 @@ from .room_cleaning import region_names_across_maps
 from .prime_room_map import async_restore_prime_room_names
 from .room_times import learn_via, robot_default_mode
 from .const import (
+    CARE_ENTITY_KEYS,
+    CONF_CARE_REMINDERS,
+    DEFAULT_CARE_REMINDERS,
+    care_reminders_enabled,
+    maintenance_changed_signal,
     lifetime_hours,
     ISSUE_TRACKER_URL,
     CONF_BLID,
@@ -76,6 +82,7 @@ from .const import (
     CONF_IROBOT_USERNAME,
     CONF_LIVE_POSITION_REQUESTS,
     CONF_MAP_ENABLED,
+    CONF_MAP_ROTATION,
     CONF_MAP_SCALE,
     CONF_MAP_SIZE_PX,
     CONF_PRESENCE_SCHEDULING_ENABLED,
@@ -88,12 +95,14 @@ from .const import (
     DEFAULT_REGION_SENSORS,
     DEFAULT_LIVE_POSITION_REQUESTS,
     DEFAULT_MAP_ENABLED,
+    DEFAULT_MAP_ROTATION,
     DEFAULT_MAP_SCALE,
     DEFAULT_MAP_SIZE_PX,
     DOMAIN,
     LOCAL_PLATFORMS,
     ROOMBA_SESSION,
     get_robot_profile,
+    maintenance_profile_hours,
     has_pose,
     has_smart_map,
 )
@@ -120,6 +129,7 @@ from .map_renderer import (
     ROBOT_DIAMETER_MM_900_SERIES,
     ROBOT_DIAMETER_MM_ISJ_SERIES,
     ROBOT_DIAMETER_MM_DEFAULT,
+    quarter_turns,
 )
 from .migrations import async_migrate_entry  # noqa: F401 -- re-exported for HA's own lookup
 from .structural_failures import record_failure, record_success
@@ -501,11 +511,18 @@ async def _phase_spatial(ctx: _SetupContext) -> None:
                 size_px=config_entry.options.get(CONF_MAP_SIZE_PX, DEFAULT_MAP_SIZE_PX),
                 scale=config_entry.options.get(CONF_MAP_SCALE, DEFAULT_MAP_SCALE),
                 robot_diameter_mm=_robot_diameter_mm,
-                # A 900-series' positions are in the pose frame, a mirror
-                # image of the floor; the picture turns them back (4.3.1).
-                # Confirmed on two 980s. A Smart Map robot draws as
-                # before until one is checked against its floor.
-                mirror_x=map_capability == MapCapability.EPHEMERAL,
+                # A robot's positions are in the pose frame, a mirror image
+                # of the floor; the picture turns them back. 900-series
+                # since 4.3.1 (two 980s); every Classic robot since 4.3.2,
+                # once an i-series on lewis firmware that answers position
+                # requests showed the same flip (@frnchfrgg). The swap
+                # that makes the mirror is ours (raw_pose_mm_to_map) and
+                # the same for every Classic robot.
+                mirror_x=map_capability in (MapCapability.EPHEMERAL, MapCapability.SMART),
+                # The turn the user chose (4.3.2): the map has no north.
+                quarter_turns=quarter_turns(
+                    config_entry.options.get(CONF_MAP_ROTATION, DEFAULT_MAP_ROTATION)
+                ),
             ),
             geometry_store=geometry_store,
         )
@@ -520,7 +537,12 @@ async def _phase_spatial(ctx: _SetupContext) -> None:
     if map_capability != MapCapability.NONE and map_enabled:
         grid_store = GridStore()
         # Drawn mirrored where the renderer is: see RendererConfig.mirror_x.
-        grid_store.mirror_x = map_capability == MapCapability.EPHEMERAL
+        grid_store.mirror_x = map_capability in (
+            MapCapability.EPHEMERAL, MapCapability.SMART,
+        )
+        grid_store.quarter_turns = quarter_turns(
+            config_entry.options.get(CONF_MAP_ROTATION, DEFAULT_MAP_ROTATION)
+        )
         await grid_store.async_load(hass, config_entry.entry_id)
         _LOGGER.debug(
             "Roomba+ GridStore: loaded %d cell(s) for %s",
@@ -594,6 +616,9 @@ async def _phase_data(ctx: _SetupContext) -> None:
     # F4d — detect bbrun.hr firmware reset
     _state_for_bbrun = roomba_reported_state(ctx.roomba)
     _current_hr = lifetime_hours(_state_for_bbrun)
+    # The series' replacement intervals (4.3.2). A 980 may send its SKU
+    # only later; the late-SKU callback in _phase_finalize sets them then.
+    maintenance_store.profile_hours = maintenance_profile_hours(_state_for_bbrun.get("sku"))
 
     # v3.4.1 MAINTENANCE-COLD-START: field-confirmed (mdarocha, i3+, 412
     # missions / 294h prior runtime, no reset ever recorded in this
@@ -682,6 +707,9 @@ async def _phase_data(ctx: _SetupContext) -> None:
                 "load (no prior reset history, robot already has runtime)",
                 _slot, _current_hr,
             )
+    # Care reminders count from the setup that switched them on (4.3.2).
+    if maintenance_store.seed_care(care_reminders_enabled(config_entry.options)):
+        _seeded_this_load = True
     if _seeded_this_load:
         await maintenance_store.async_save(hass, config_entry.entry_id)
 
@@ -1109,6 +1137,9 @@ async def _phase_finalize(ctx: _SetupContext) -> None:
             reported = json_data.get("state", {}).get("reported", {})
             sku = reported.get("sku")
             if sku:
+                store = config_entry.runtime_data.maintenance_store
+                if store is not None and not store.profile_hours:
+                    store.profile_hours = maintenance_profile_hours(sku)
                 profile = get_robot_profile(sku, reported.get("batteryType"))
                 if profile is not None:
                     config_entry.runtime_data.robot_profile = profile
@@ -1313,11 +1344,20 @@ def _remove_switched_off_optional_entities(hass: HomeAssistant, config_entry: Ro
         switched_off.add("calendar")
     if not config_entry.options.get(CONF_ENABLE_MAINTENANCE_LIST, DEFAULT_ENABLE_MAINTENANCE_LIST):
         switched_off.add("todo")
-    if not switched_off:
+    # Care reminders (4.3.2) are entities on platforms that stay: matched
+    # by unique-id suffix rather than by domain.
+    care_suffixes = (
+        () if care_reminders_enabled(config_entry.options)
+        else tuple(f"_{key}" for key in CARE_ENTITY_KEYS)
+    )
+    if not switched_off and not care_suffixes:
         return
     entity_reg = er.async_get(hass)
     for entry in er.async_entries_for_config_entry(entity_reg, config_entry.entry_id):
-        if entry.domain in switched_off:
+        unique_id = entry.unique_id if isinstance(entry.unique_id, str) else ""
+        if entry.domain in switched_off or (
+            care_suffixes and unique_id.endswith(care_suffixes)
+        ):
             entity_reg.async_remove(entry.entity_id)
 
 
@@ -2209,6 +2249,7 @@ async def _async_reload_on_options_change(
     _RELOAD_TRIGGER_KEYS = {
         CONF_ENABLE_SCHEDULE_CALENDAR,
         CONF_ENABLE_MAINTENANCE_LIST,
+        CONF_CARE_REMINDERS,
         CONF_REGION_SENSORS,
         CONF_BLOCKING_SENSORS,
     }
@@ -2219,6 +2260,7 @@ async def _async_reload_on_options_change(
     _DEFAULTS: dict[str, Any] = {
         CONF_ENABLE_SCHEDULE_CALENDAR: DEFAULT_ENABLE_SCHEDULE_CALENDAR,
         CONF_ENABLE_MAINTENANCE_LIST: DEFAULT_ENABLE_MAINTENANCE_LIST,
+        CONF_CARE_REMINDERS: DEFAULT_CARE_REMINDERS,
         CONF_REGION_SENSORS: DEFAULT_REGION_SENSORS,
     }
 
@@ -2246,6 +2288,13 @@ async def _async_reload_on_options_change(
             data={**config_entry.data, **new_vals},
         )
         await hass.config_entries.async_reload(config_entry.entry_id)
+        return
+    # NO RELOAD, BUT A RE-RENDER. Options read live -- the pets option,
+    # the maintenance thresholds -- change what the sensors show, and
+    # nothing else tells them before the robot's next message.
+    blid = getattr(getattr(config_entry, "runtime_data", None), "blid", None)
+    if isinstance(blid, str):
+        async_dispatcher_send(hass, maintenance_changed_signal(blid))
 
 
 # ── Connection helpers ────────────────────────────────────────────────────────

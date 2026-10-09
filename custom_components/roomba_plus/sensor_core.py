@@ -36,6 +36,9 @@ from homeassistant.util import dt as dt_util
 
 from .parts_catalog import guide_url_for
 from .const import (
+    CONF_PETS,
+    DEFAULT_PETS,
+    replacement_guidance_months,
     BBRUN_SQFT_SCALE,
     ERROR_CATALOGUE,
     CARPET_BOOST_SLUGS,
@@ -193,6 +196,33 @@ def _consumable_threshold(entity: "IRobotEntity") -> int | None:
         return None
     store = entity._config_entry.runtime_data.maintenance_store
     return store.threshold_hours(role, entity._config_entry.options) if store else None
+
+
+def _care_schedule(e: IRobotEntity) -> list[dict[str, Any]]:
+    """The care schedule for this entity's robot, or [] without a store."""
+    store = e._config_entry.runtime_data.maintenance_store
+    if store is None:
+        return []
+    state = getattr(e, "vacuum_state", None) or {}
+    pets = bool(e._config_entry.options.get(CONF_PETS, DEFAULT_PETS))
+    return store.care_schedule(braava=is_braava(state), pets=pets)
+
+
+def _next_care_value(e: IRobotEntity) -> dt_stdlib.datetime | None:
+    """The earliest due date, or None before reminders started."""
+    schedule = _care_schedule(e)
+    return dt_util.parse_datetime(schedule[0]["due"]) if schedule else None
+
+
+def _next_care_attributes(e: IRobotEntity) -> dict[str, Any]:
+    """Which task is next, which are overdue, and the full schedule."""
+    schedule = _care_schedule(e)
+    return {
+        "task": schedule[0]["task"] if schedule else None,
+        "overdue": [row["task"] for row in schedule if row["overdue"]],
+        "pets": bool(e._config_entry.options.get(CONF_PETS, DEFAULT_PETS)),
+        "schedule": schedule,
+    }
 
 
 SENSORS: tuple[RoombaSensorDescription, ...] = (
@@ -1152,6 +1182,18 @@ SENSORS: tuple[RoombaSensorDescription, ...] = (
         ),
         # Same as wheel_last_cleaned above.
     ),
+    # 4.3.2 — when the next cleaning is due, by iRobot's calendar (see
+    # CARE_TASKS). One sensor for all tasks rather than six: the state is
+    # the one date that matters, the attributes say which task and list
+    # the rest. Enabled by default -- it is the reminder.
+    RoombaSensorDescription(
+        key="next_care",
+        translation_key="next_care",
+        name="Maintenance – Next cleaning due",
+        device_class=SensorDeviceClass.TIMESTAMP,
+        value_fn=lambda e: _next_care_value(e),
+        extra_attributes_fn=lambda e: _next_care_attributes(e),
+    ),
 
     # ── v1.8.0 L1 — Mission Log ───────────────────────────────────────────────
 
@@ -2051,6 +2093,19 @@ class RoombaSensor(IRobotEntity, SensorEntity):
                 )
                 if guide:
                     attrs["guide_url"] = guide
+            if role and store is not None:
+                # WHERE THE NUMBER COMES FROM, and what iRobot says in
+                # months (4.3.2): the hours count use, the months assume
+                # it -- shown side by side so neither is mistaken for
+                # the other.
+                attrs["interval_source"] = store.interval_source(
+                    role, self._config_entry.options
+                )
+                months = replacement_guidance_months(
+                    (getattr(self, "vacuum_state", None) or {}).get("sku"), role
+                )
+                if months is not None:
+                    attrs["replace_every_months"] = list(months)
             return attrs
         # v1.8.0 L3: description + action for last_error_code
         # v3.4.1: localised via hass.config.language, falls back to English

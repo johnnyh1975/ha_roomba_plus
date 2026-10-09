@@ -429,6 +429,9 @@
       },
       "prime_dock_tank_level": {
         "default": "mdi:water-pump"
+      },
+      "next_care": {
+        "default": "mdi:broom"
       }
     },
     "button": {
@@ -512,6 +515,18 @@
       },
       "reset_bin_cleaning": {
         "default": "mdi:delete-outline"
+      },
+      "reset_filter_cleaning": {
+        "default": "mdi:air-filter"
+      },
+      "reset_brushes_cleaning": {
+        "default": "mdi:brush"
+      },
+      "reset_side_brush_cleaning": {
+        "default": "mdi:brush-variant"
+      },
+      "reset_cliff_sensors_cleaning": {
+        "default": "mdi:eye-check"
       }
     },
     "select": {

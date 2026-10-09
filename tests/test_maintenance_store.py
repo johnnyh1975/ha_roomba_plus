@@ -12,7 +12,9 @@ from __future__ import annotations
 import pytest
 
 from tests.conftest import robot_mock, hass_mock, entry_mock
+from custom_components.roomba_plus.const import DEFAULT_FILTER_HOURS as _F, DEFAULT_BRUSH_HOURS as _B, DEFAULT_SIDE_BRUSH_HOURS as _S, DEFAULT_CLEAN_BASE_BAG_HOURS as _G
 from custom_components.roomba_plus.maintenance_store import MaintenanceStore
+from custom_components.roomba_plus.const import CARE_TASKS
 import datetime
 from custom_components.roomba_plus.sensor import RoombaSensorDescription
 from custom_components.roomba_plus.sensor import SENSORS
@@ -311,12 +313,12 @@ class TestMaintenanceStoreDueItems:
 
     def test_filter_due_at_threshold(self):
         store = MaintenanceStore()
-        state = {"bbrun": {"hr": 60}}  # DEFAULT_FILTER_HOURS == 60
+        state = {"bbrun": {"hr": _F}}
         assert "filter" in store.due_items(state, {})
 
     def test_brush_key_for_vacuum(self):
         store = MaintenanceStore()
-        state = {"bbrun": {"hr": 200}}  # DEFAULT_BRUSH_HOURS == 200
+        state = {"bbrun": {"hr": _B}}
         due = store.due_items(state, {})
         assert "brush" in due
         assert "pad" not in due
@@ -324,7 +326,7 @@ class TestMaintenanceStoreDueItems:
     def test_pad_key_for_mop(self):
         """is_mop(state) — detectedPad present → 'pad' not 'brush'."""
         store = MaintenanceStore()
-        state = {"bbrun": {"hr": 200}, "detectedPad": "wet"}
+        state = {"bbrun": {"hr": _B}, "detectedPad": "wet"}
         due = store.due_items(state, {})
         assert "pad" in due
         assert "brush" not in due
@@ -340,7 +342,7 @@ class TestMaintenanceStoreDueItems:
         no bag -- so it asserted the false positive @liblit reported on
         his Roomba 980 rather than the behaviour it names."""
         store = MaintenanceStore()
-        state = {"bbrun": {"hr": 300}, "dock": {"fwVer": "1.2.3"}}
+        state = {"bbrun": {"hr": _B}, "dock": {"fwVer": "1.2.3"}}
         due = store.due_items(state, {})
         assert set(due) == {"filter", "brush", "side_brush", "clean_base_bag"}
 
@@ -395,7 +397,7 @@ class TestMaintenanceStoreDueItems:
 
     def test_side_brush_due_at_hardcoded_threshold_without_cloud_data(self):
         store = MaintenanceStore()
-        assert "side_brush" in store.due_items({"bbrun": {"hr": 150}}, {})
+        assert "side_brush" in store.due_items({"bbrun": {"hr": _S}}, {})
 
     def test_clean_base_bag_due_when_cloud_counter_exhausted(self):
         store = MaintenanceStore()
@@ -1689,19 +1691,19 @@ class TestConsumableWearRateAndDaysUntilDueAllFourRoles:
         assert _consumable_max_hours(entity, "side_brush") == 60
         store.cloud_parts = {}
         assert _consumable_wear_rate(entity, "side_brush") is not None
-        assert _consumable_max_hours(entity, "side_brush") == 150
+        assert _consumable_max_hours(entity, "side_brush") == _S
 
 
 class TestMaxHoursPerRole:
     def test_max_hours_uses_local_or_cloud_life_for_every_role(self):
         from custom_components.roomba_plus.sensor_helpers import _consumable_max_hours
         store = MaintenanceStore()
-        assert _consumable_max_hours(_wear_entity(0, store), "filter") == 60
+        assert _consumable_max_hours(_wear_entity(0, store), "filter") == _F
         store.reset_brush(10)
         store.reset_brush(110)
         store.reset_brush(230)
         assert _consumable_max_hours(_wear_entity(230, store), "main_brush") == 110
-        assert _consumable_max_hours(_wear_entity(50, store), "side_brush") == 150
+        assert _consumable_max_hours(_wear_entity(50, store), "side_brush") == _S
         store.hydrate_from_cloud_parts(
             [_cloud_part("139", count_used=1200, count_remaining=2400)], 500,
         )
@@ -1843,7 +1845,8 @@ class TestTheSeedReachesEveryRole:
             DEFAULT_SIDE_BRUSH_HOURS,
         )
 
-        assert DEFAULT_SIDE_BRUSH_HOURS == 150
+        # iRobot's own side-brush budget (4.3.2), read off an i3+'s counter
+        assert DEFAULT_SIDE_BRUSH_HOURS == 157
 
     def test_hydration_overwrites_a_seed(self) -> None:
         """The seed is a local fallback and must yield to cloud truth --
@@ -2134,3 +2137,210 @@ class TestLearnedLifespanIgnoresWhatIsNotALifespan:
             store.reset_filter(hours)
         assert store.learned_filter_hours == 64
 
+
+
+class TestCareReminders:
+    """4.3.2: calendar cleaning reminders from iRobot's care articles."""
+
+    _T0 = datetime_v250_learning(2026, 10, 1, 12, 0, tzinfo=UTC)
+
+    def _store(self, **kw):
+        store = MaintenanceStore(**kw)
+        store.care_since = self._T0.isoformat()
+        return store
+
+    def test_seeding_happens_once(self):
+        store = MaintenanceStore()
+        assert store.seed_care() is True
+        first = store.care_since
+        assert first is not None
+        assert store.seed_care() is False
+        assert store.care_since == first
+
+    def test_seeding_fills_no_cleaning_date(self):
+        """The "last cleaned" sensors must not claim a cleaning nobody did."""
+        store = MaintenanceStore()
+        store.seed_care()
+        for slot in ("filter", "brushes", "side_brush", "wheel", "cliff_sensors", "contact", "bin"):
+            assert getattr(store, f"{slot}_cleaned_at") is None
+
+    def test_nothing_is_scheduled_before_seeding(self):
+        assert MaintenanceStore().care_schedule(braava=False, pets=False) == []
+
+    def test_intervals_without_pets(self):
+        store = self._store()
+        rows = {r["task"]: r for r in store.care_schedule(braava=False, pets=False, now=self._T0)}
+        assert {k: r["interval_days"] for k, r in rows.items()} == {
+            "filter": 7, "brushes": 7, "side_brush": 30, "wheel": 14,
+            "cliff_sensors": 30, "contact": 30,
+        }
+        assert rows["filter"]["due"] == (self._T0 + timedelta(days=7)).isoformat()
+
+    def test_pets_halve_filter_and_brushes_only(self):
+        store = self._store()
+        rows = {r["task"]: r for r in store.care_schedule(braava=False, pets=True, now=self._T0)}
+        assert rows["filter"]["interval_days"] == 3.5
+        assert rows["brushes"]["interval_days"] == 3.5
+        assert rows["side_brush"]["interval_days"] == 30
+        assert rows["wheel"]["interval_days"] == 14
+
+    def test_a_braava_gets_cliff_sensors_and_contacts_only(self):
+        tasks = [r["task"] for r in self._store().care_schedule(braava=True, pets=True, now=self._T0)]
+        assert sorted(tasks) == ["cliff_sensors", "contact"]
+
+    def test_sorted_earliest_first_and_overdue_flag(self):
+        store = self._store(filter_cleaned_at=(self._T0 + timedelta(days=10)).isoformat())
+        rows = store.care_schedule(braava=False, pets=False, now=self._T0 + timedelta(days=15))
+        assert rows[0]["task"] == "brushes" and rows[0]["overdue"] is True
+        assert [r["task"] for r in rows if r["overdue"]] == ["brushes", "wheel"]
+        dues = [r["due"] for r in rows]
+        assert dues == sorted(dues)
+
+    def test_a_cleaning_from_before_the_reminders_does_not_count(self):
+        """The wheels button exists since 2.7: a cleaning recorded in 2024
+        must not make the wheels overdue on the day reminders start."""
+        store = self._store(wheel_cleaned_at="2024-01-01T00:00:00+00:00")
+        rows = {r["task"]: r for r in store.care_schedule(braava=False, pets=False, now=self._T0)}
+        assert rows["wheel"]["overdue"] is False
+        assert rows["wheel"]["due"] == (self._T0 + timedelta(days=14)).isoformat()
+        assert rows["wheel"]["last_done"] == "2024-01-01T00:00:00+00:00"
+
+    def test_switching_off_clears_the_start_and_keeps_the_cleanings(self):
+        store = self._store(filter_cleaned_at=self._T0.isoformat())
+        assert store.seed_care(False) is True
+        assert store.care_since is None and store.filter_cleaned_at == self._T0.isoformat()
+        assert store.seed_care(False) is False
+        assert store.care_schedule(braava=False, pets=False) == []
+        assert store.seed_care(True) is True and store.care_since is not None
+
+    def test_a_recorded_cleaning_counts_from_then(self):
+        store = self._store()
+        later = self._T0 + timedelta(days=5)
+        store.filter_cleaned_at = later.isoformat()
+        rows = {r["task"]: r for r in store.care_schedule(braava=False, pets=False, now=later)}
+        assert rows["filter"]["due"] == (later + timedelta(days=7)).isoformat()
+        assert rows["filter"]["last_done"] == later.isoformat()
+
+    def test_an_unparseable_date_falls_back_to_care_since(self):
+        store = self._store(filter_cleaned_at="garbage")
+        assert MaintenanceStore(filter_cleaned_at="2026-01-01T00:00:00+00:00").care_due(
+            next(t for t in CARE_TASKS if t.slot == "filter"), False) is None
+        rows = {r["task"]: r for r in store.care_schedule(braava=False, pets=False, now=self._T0)}
+        assert rows["filter"]["due"] == (self._T0 + timedelta(days=7)).isoformat()
+
+    def test_a_naive_date_is_read_in_the_local_zone(self):
+        store = MaintenanceStore(care_since="2026-10-01T12:00:00")
+        rows = store.care_schedule(braava=False, pets=False, now=self._T0)
+        assert rows and datetime_v250_learning.fromisoformat(rows[0]["due"]).tzinfo is not None
+
+    @pytest.mark.parametrize(("method", "field"), [
+        ("reset_filter_cleaning", "filter_cleaned_at"),
+        ("reset_brushes_cleaning", "brushes_cleaned_at"),
+        ("reset_side_brush_cleaning", "side_brush_cleaned_at"),
+        ("reset_cliff_sensors_cleaning", "cliff_sensors_cleaned_at"),
+    ])
+    def test_cleaning_resets_set_only_their_date(self, method, field):
+        store = MaintenanceStore(filter_reset_hr=5)
+        getattr(store, method)()
+        assert getattr(store, field) is not None
+        assert store.filter_reset_hr == 5 and store.filter_reset_history == []
+
+    @pytest.mark.parametrize(("method", "field", "at"), [
+        ("reset_filter", "filter_cleaned_at", "filter_reset_at"),
+        ("reset_brush", "brushes_cleaned_at", "brush_reset_at"),
+        ("reset_side_brush", "side_brush_cleaned_at", "side_brush_reset_at"),
+    ])
+    def test_a_new_part_is_a_clean_part(self, method, field, at):
+        store = MaintenanceStore()
+        getattr(store, method)(100)
+        assert getattr(store, field) == getattr(store, at) is not None
+
+    def test_a_pad_reset_records_no_brush_cleaning(self):
+        store = MaintenanceStore()
+        store.reset_pad(100)
+        assert store.brushes_cleaned_at is None
+
+    @pytest.mark.asyncio
+    async def test_round_trip(self):
+        saved = {}
+
+        class _FakeStore:
+            def __init__(self, *_a, **_k):
+                pass
+
+            async def async_save(self, data):
+                saved.update(data)
+
+            async def async_load(self):
+                return dict(saved)
+
+        store = MaintenanceStore()
+        store.seed_care()
+        store.reset_filter_cleaning()
+        store.reset_brushes_cleaning()
+        store.reset_side_brush_cleaning()
+        store.reset_cliff_sensors_cleaning()
+        with patch("custom_components.roomba_plus.maintenance_store.Store", _FakeStore):
+            await store.async_save(MagicMock(), "e")
+            loaded = MaintenanceStore()
+            await loaded.async_load(MagicMock(), "e")
+        for f in ("care_since", "filter_cleaned_at", "brushes_cleaned_at",
+                  "side_brush_cleaned_at", "cliff_sensors_cleaned_at"):
+            assert getattr(loaded, f) == getattr(store, f) is not None
+
+    @pytest.mark.asyncio
+    async def test_an_older_file_loads_without_care_dates(self):
+        class _FakeStore:
+            def __init__(self, *_a, **_k):
+                pass
+
+            async def async_load(self):
+                return {"filter_reset_hr": 3}
+
+        loaded = MaintenanceStore()
+        with patch("custom_components.roomba_plus.maintenance_store.Store", _FakeStore):
+            await loaded.async_load(MagicMock(), "e")
+        assert loaded.care_since is None and loaded.filter_cleaned_at is None
+        assert loaded.seed_care() is True
+
+
+
+class TestSeriesProfileIsTheFallback:
+    """4.3.2: cloud > learned > hour option > series profile > default."""
+
+    def _store(self):
+        store = MaintenanceStore()
+        store.profile_hours = {"filter": 60, "main_brush": 150}
+        return store
+
+    def test_the_profile_beats_the_default(self):
+        store = self._store()
+        assert store.threshold_hours("main_brush", {}) == 150
+        assert store.interval_source("main_brush", {}) == "profile"
+
+    def test_a_role_the_profile_lacks_takes_the_default(self):
+        store = self._store()
+        assert store.threshold_hours("side_brush", {}) == _S
+        assert store.threshold_hours("clean_base_bag", {}) == _G
+        assert store.interval_source("side_brush", {}) == "irobot_budget"
+
+    def test_the_hour_option_beats_the_profile(self):
+        store = self._store()
+        assert store.threshold_hours("filter", {"filter_threshold_hours": 45}) == 45
+        assert store.interval_source("filter", {"filter_threshold_hours": 45}) == "configured"
+
+    def test_a_broken_option_falls_back_to_the_profile(self):
+        assert self._store().threshold_hours("filter", {"filter_threshold_hours": "x"}) == 60
+
+    def test_learned_beats_the_profile(self):
+        store = self._store()
+        store.brush_reset_history = [100, 300, 500]
+        assert store.interval_source("main_brush", {}) == "learned"
+
+    def test_without_a_profile_the_default(self):
+        assert MaintenanceStore().threshold_hours("filter", {}) == _F
+
+    def test_never_persisted(self):
+        import inspect
+
+        assert "profile_hours" not in inspect.getsource(MaintenanceStore.async_save)

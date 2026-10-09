@@ -1778,7 +1778,11 @@ class TestPrimeReadinessSensor:
         sensor, state = self._sensor(13)
         with state:
             assert sensor.native_value == "bin_full"
-            assert sensor.extra_state_attributes == {"code": 13}
+            # above 10 both readings ride along (4.3.2); 13 has no
+            # wire-value label
+            assert sensor.extra_state_attributes == {
+                "code": 13, "as_index": "bin_full", "as_wire": None,
+            }
 
     def test_an_unrecognized_code_still_falls_back(self):
         """@connormxy's error 236 is exactly this case -- a code the
@@ -1787,7 +1791,60 @@ class TestPrimeReadinessSensor:
         sensor, state = self._sensor(236)
         with state:
             assert sensor.native_value == "unrecognized"
-            assert sensor.extra_state_attributes == {"code": 236}
+            assert sensor.extra_state_attributes == {
+                "code": 236, "as_index": None, "as_wire": None,
+            }
+
+    def test_both_readings_of_an_ambiguous_code(self):
+        """4.3.2: wire 15 is "Insufficient charge", index 15 "In cloud
+        upgrade". The sensor still shows the index; the attributes carry
+        both, so a refusal with a known cause says which one Prime sends."""
+        sensor, state = self._sensor(15)
+        with state:
+            assert sensor.native_value == "in_cloud_upgrade"
+            assert sensor.extra_state_attributes == {
+                "code": 15,
+                "as_index": "in_cloud_upgrade",
+                "as_wire": "insufficient_charge",
+            }
+
+    def test_each_change_is_recorded_with_what_the_robot_was_doing(self):
+        from collections import deque
+        from types import SimpleNamespace
+        from unittest.mock import PropertyMock, patch
+
+        from custom_components.roomba_plus.sensor_prime import PrimeReadinessSensor
+
+        sensor = PrimeReadinessSensor.__new__(PrimeReadinessSensor)
+        log: deque = deque(maxlen=20)
+        sensor._config_entry = SimpleNamespace(
+            runtime_data=SimpleNamespace(readiness_observations=log)
+        )
+
+        def state(code):
+            return SimpleNamespace(
+                bat_pct=7,
+                dock=SimpleNamespace(state=0),
+                clean_mission_status=SimpleNamespace(
+                    not_ready=code, cond_not_ready=[234], phase="charge",
+                    cycle="none", error=0,
+                ),
+            )
+
+        for code in (0, 15, 15, 0):
+            with patch.object(
+                PrimeReadinessSensor, "_current_state",
+                new_callable=PropertyMock, return_value=state(code),
+            ):
+                sensor._record()
+
+        assert [o["code"] for o in log] == [0, 15, 0]
+        seen = log[1]
+        assert seen["as_wire"] == "insufficient_charge"
+        assert seen["battery_pct"] == 7
+        assert seen["phase"] == "charge" and seen["dock_state"] == 0
+        assert seen["cond_not_ready"] == [234]
+        assert "x" not in seen and "pose" not in seen  # no positions
 
     def test_no_code_reads_none(self):
         sensor, state = self._sensor(None)

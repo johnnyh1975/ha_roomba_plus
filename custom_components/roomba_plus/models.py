@@ -5,6 +5,7 @@ https://github.com/tonylofgren/aurora-smart-home
 """
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any
@@ -487,6 +488,23 @@ class RoombaData:
     #: Missions since this start that were drawn but not learned from,
     #: because they began away from the dock (image.py). Diagnostics only.
     missions_kept_out_of_grid: int = 0
+    #: EVIDENCE NOBODY HAS YET (4.3.2), collected so the next field case
+    #: answers the question by itself. Diagnostics only; no coordinates.
+    #:
+    #: Prime readiness: whether `notReady` is the wire value or the
+    #: app's index is undecided above 10. Each change of the code is kept
+    #: with both readings and what the robot was doing -- battery, phase,
+    #: dock -- so one capture with a known cause settles it.
+    readiness_observations: deque[dict[str, Any]] = field(
+        default_factory=lambda: deque(maxlen=20)
+    )
+    #: A region start sent while a mission was open (paused): the state
+    #: before and after. Every one recorded so far was refused, and with
+    #: no accepted case there is no success signature to tell the two
+    #: apart (services._async_warn_if_swallowed).
+    region_starts_in_open_cycle: deque[dict[str, Any]] = field(
+        default_factory=lambda: deque(maxlen=10)
+    )
 
     # v3.2.1 — MQTT-watchdog resume grace: wall-clock timestamp of the last
     # observed phase transition INTO "run" from any non-run phase (fresh

@@ -81,6 +81,61 @@ def raw_heading_to_view_deg(theta_deg: float) -> float:
     return theta_deg + 90.0
 
 
+#: The map turns the user may choose (4.3.2), in degrees clockwise.
+MAP_ROTATIONS: tuple[int, ...] = (0, 90, 180, 270)
+
+
+def quarter_turns(rotation_deg: Any) -> int:
+    """A rotation option as clockwise quarter turns, 0-3; anything that
+    is not one of MAP_ROTATIONS is no turn at all."""
+    try:
+        deg = int(rotation_deg)
+    except (TypeError, ValueError):
+        return 0
+    return MAP_ROTATIONS.index(deg) if deg in MAP_ROTATIONS else 0
+
+
+def turn_view(u: float, v: float, turns: int) -> tuple[float, float]:
+    """A point of a picture's frame (y up), turned clockwise by `turns`
+    quarter turns.
+
+    THE MAP HAS NO NORTH (4.3.2). Its "up" is wherever the robot faced
+    when it set off from the dock, so it depends on how the dock stands
+    in the room: the maintainer's own map came out a quarter turn off
+    the way he pictures the flat. Unlike the mirror this is no fault to
+    fix but a choice per robot, made in the options. Turned here, after
+    the mirror and nowhere else; every store keeps its frame.
+    """
+    k = turns % 4
+    if k == 1:
+        return v, -u
+    if k == 2:
+        return -u, -v
+    if k == 3:
+        return -v, u
+    return u, v
+
+
+def mm_to_view(
+    x_mm: float, y_mm: float, mirror_x: bool, turns: int
+) -> tuple[float, float]:
+    """A point of the maps' frame as a picture shows it: mirrored where
+    the frame is a mirror image (map_mm_to_view), then turned."""
+    if mirror_x:
+        x_mm, y_mm = map_mm_to_view(x_mm, y_mm)
+    return turn_view(x_mm, y_mm, turns)
+
+
+def view_to_mm(
+    u: float, v: float, mirror_x: bool, turns: int
+) -> tuple[float, float]:
+    """`mm_to_view` undone."""
+    x_mm, y_mm = turn_view(u, v, -turns)
+    if mirror_x:
+        x_mm, y_mm = map_mm_to_view(x_mm, y_mm)  # its own inverse
+    return x_mm, y_mm
+
+
 def _load_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     """Load the bundled DejaVu Sans font at the given pixel size.
 
@@ -205,6 +260,9 @@ class RendererConfig:
     #: firmware's heading with them. Off for Prime, whose polygons come in
     #: their own frame.
     mirror_x: bool = False
+    #: Clockwise quarter turns the user chose for the picture (4.3.2,
+    #: see turn_view). Applied after the mirror.
+    quarter_turns: int = 0
 
 
 class MapRenderer:
@@ -772,10 +830,7 @@ class MapRenderer:
                  rx + robot_r, ry + robot_r],
                 fill=ROBOT_COLOUR,
             )
-            angle_rad = math.radians(
-                raw_heading_to_view_deg(self._theta)
-                if self._cfg.mirror_x else self._theta
-            )
+            angle_rad = math.radians(self._heading_view_deg())
             ex = rx + int(ARROW_LENGTH * math.cos(angle_rad))
             ey = ry - int(ARROW_LENGTH * math.sin(angle_rad))
             draw.line([rx, ry, ex, ey], fill=ARROW_COLOUR, width=3)
@@ -807,6 +862,7 @@ class MapRenderer:
             # Which way the pixels face. A dump written before the view
             # was mirrored has no key and is converted on restore.
             "mirror_x": self._cfg.mirror_x,
+            "quarter_turns": self._cfg.quarter_turns,
             # v3.2.1 LANDMARK-LOG — additive field, no _STATE_VERSION
             # bump needed (same precedent as GridStore's FURNITURE/
             # DUAL-GRID fields): a state dump saved before this existed
@@ -840,12 +896,28 @@ class MapRenderer:
             # A PATH SAVED THE OTHER WAY ROUND, before 4.3.1 mirrored the
             # view: the pixels are about the canvas centre, so mirroring
             # them is 2*cx - x.
-            if bool(state.get("mirror_x", False)) != self._cfg.mirror_x:
-                twice_cx = 2 * (self._cfg.size_px // 2)
-                self._points = [(twice_cx - x, y) for x, y in self._points]
-                self._stuck_px = [(twice_cx - x, y) for x, y in self._stuck_px]
+            # ...or turned another way (4.3.2): undone and redone about
+            # the canvas centre, where the fixed-scale pixels are anchored.
+            was_mirrored = bool(state.get("mirror_x", False))
+            was_turns = int(state.get("quarter_turns", 0) or 0)
+            if (was_mirrored, was_turns % 4) != (
+                self._cfg.mirror_x, self._cfg.quarter_turns % 4
+            ):
+                c = self._cfg.size_px // 2
+
+                def _redo(p: Any) -> tuple[int, int]:
+                    x_mm, y_mm = view_to_mm(
+                        p[0] - c, c - p[1], was_mirrored, was_turns
+                    )
+                    u, v = mm_to_view(
+                        x_mm, y_mm, self._cfg.mirror_x, self._cfg.quarter_turns
+                    )
+                    return (int(round(c + u)), int(round(c - v)))
+
+                self._points = [_redo(p) for p in self._points]
+                self._stuck_px = [_redo(p) for p in self._stuck_px]
                 if self._robot_px:
-                    self._robot_px = (twice_cx - self._robot_px[0], self._robot_px[1])
+                    self._robot_px = _redo(self._robot_px)
             self._theta = float(state.get("theta", 0.0))
             self._last_png = None  # will be re-rendered on demand
             # v3.2.1 LANDMARK-LOG — .get() with [] default: old dumps
@@ -1019,10 +1091,12 @@ class MapRenderer:
         last_mission_trajectory_mm)."""
         cx = cy = self._cfg.size_px // 2
         scale = self._cfg.scale
-        # Back into the maps' frame: the view's mirror undone.
-        sign = -1 if self._cfg.mirror_x else 1
+        # Back into the maps' frame: the view's mirror and turn undone.
         return [
-            (sign * (px - cx) * scale, (cy - py) * scale)
+            view_to_mm(
+                (px - cx) * scale, (cy - py) * scale,
+                self._cfg.mirror_x, self._cfg.quarter_turns,
+            )
             for px, py in self._points
         ]
 
@@ -1130,7 +1204,7 @@ class MapRenderer:
             # The door's angle is in the maps' frame; mirrored with it.
             door_theta = (
                 180.0 - door.theta_deg if self._cfg.mirror_x else door.theta_deg
-            )
+            ) - 90.0 * self._cfg.quarter_turns
             theta_rad = math.radians(door_theta)
             # Gap line (dashed) along door orientation
             dx = int(half_w_px * math.cos(theta_rad))
@@ -1263,6 +1337,16 @@ class MapRenderer:
 
     # ── Private helpers ───────────────────────────────────────────────────────
 
+    def _heading_view_deg(self) -> float:
+        """The robot's heading as the picture shows it, counter-clockwise
+        from the picture's right: mirrored with the positions, and turned
+        clockwise with them (4.3.2)."""
+        base = (
+            raw_heading_to_view_deg(self._theta)
+            if self._cfg.mirror_x else self._theta
+        )
+        return base - 90.0 * self._cfg.quarter_turns
+
     def _mm_to_px(self, x_mm: float, y_mm: float) -> tuple[int, int]:
         """Convert mm dock-relative coordinates to INITIAL canvas pixel space.
 
@@ -1277,8 +1361,9 @@ class MapRenderer:
         with the auto-zoomed content.
         """
         cx = cy = self._cfg.size_px // 2
-        if self._cfg.mirror_x:
-            x_mm, y_mm = map_mm_to_view(x_mm, y_mm)
+        x_mm, y_mm = mm_to_view(
+            x_mm, y_mm, self._cfg.mirror_x, self._cfg.quarter_turns
+        )
         return (
             int(cx + x_mm / self._cfg.scale),
             int(cy - y_mm / self._cfg.scale),
@@ -1292,8 +1377,9 @@ class MapRenderer:
         obstacles, door markers) so they stay spatially aligned with the
         auto-zoomed cleaning path.
         """
-        if self._cfg.mirror_x:
-            x_mm, y_mm = map_mm_to_view(x_mm, y_mm)
+        x_mm, y_mm = mm_to_view(
+            x_mm, y_mm, self._cfg.mirror_x, self._cfg.quarter_turns
+        )
         return (
             int(self._fit_cx + x_mm / self._fit_scale),
             int(self._fit_cy - y_mm / self._fit_scale),
@@ -1485,6 +1571,7 @@ def render_area_map(
     areas: list[tuple[str, frozenset[tuple[int, int]]]],
     cell_mm: float,
     size_px: int = 600,
+    quarter_turns: int = 0,
 ) -> bytes:
     """The detected areas as coloured patches with their labels, and the dock.
 
@@ -1498,7 +1585,8 @@ def render_area_map(
     known point to turn the picture by.
 
     Drawn as the cleaning path map is: through map_mm_to_view, y up, the
-    dock at (0, 0). `cell_mm` is the grid the cells index.
+    dock at (0, 0), turned by the user's `quarter_turns` (4.3.2). `cell_mm`
+    is the grid the cells index.
     """
     img = Image.new("RGBA", (size_px, size_px), BG_COLOUR)
     draw = ImageDraw.Draw(img)
@@ -1514,16 +1602,24 @@ def render_area_map(
     # The dock is cell (0, 0)'s corner; keep it in the picture.
     x_min, x_max = min(min(xs), 0) * cell_mm, (max(max(xs), 0) + 1) * cell_mm
     y_min, y_max = min(min(ys), 0) * cell_mm, (max(max(ys), 0) + 1) * cell_mm
+    # The frame's corners as the picture shows them: mirrored, as every
+    # Classic picture is, and turned as the user chose.
+    corners = [
+        mm_to_view(x, y, True, quarter_turns)
+        for x in (x_min, x_max) for y in (y_min, y_max)
+    ]
+    u_min = min(u for u, _ in corners)
+    u_max = max(u for u, _ in corners)
+    v_min = min(v for _, v in corners)
+    v_max = max(v for _, v in corners)
     margin = 0.06 * size_px
-    scale = max(x_max - x_min, y_max - y_min) / (size_px - 2 * margin)
-    off_x = (size_px - (x_max - x_min) / scale) / 2
-    off_y = (size_px - (y_max - y_min) / scale) / 2
+    scale = max(u_max - u_min, v_max - v_min) / (size_px - 2 * margin)
+    off_x = (size_px - (u_max - u_min) / scale) / 2
+    off_y = (size_px - (v_max - v_min) / scale) / 2
 
     def to_px(x_mm: float, y_mm: float) -> tuple[float, float]:
-        # Mirrored, as every Classic picture is: the right edge of the
-        # view is the smallest x of the maps' frame.
-        vx, _ = map_mm_to_view(x_mm, y_mm)
-        return (off_x + (vx + x_max) / scale, off_y + (y_max - y_mm) / scale)
+        u, v = mm_to_view(x_mm, y_mm, True, quarter_turns)
+        return (off_x + (u - u_min) / scale, off_y + (v_max - v) / scale)
 
     colours = _area_colours(cell_sets)
     owner = {c: i for i, cells in enumerate(cell_sets) for c in cells}

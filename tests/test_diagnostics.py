@@ -2505,3 +2505,34 @@ class TestCleanZoneIdsInDiagnostics:
 
         assert "geometry" not in repr(out)
         assert "Elsewhere" not in repr(out)
+
+
+class TestFieldEvidence:
+    """4.3.2: readings for two open questions, same shape on both
+    generations."""
+
+    def test_both_lists_are_there_and_copied(self):
+        from collections import deque
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.diagnostics import _field_evidence
+
+        data = SimpleNamespace(
+            readiness_observations=deque([{"code": 15}]),
+            region_starts_in_open_cycle=deque([{"what": "clean_room"}]),
+        )
+        out = _field_evidence(data)
+        assert out == {
+            "readiness_observations": [{"code": 15}],
+            "region_starts_in_open_cycle": [{"what": "clean_room"}],
+        }
+        assert isinstance(out["readiness_observations"], list)
+
+    def test_missing_on_old_runtime_data_is_empty(self):
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.diagnostics import _field_evidence
+
+        assert _field_evidence(SimpleNamespace()) == {
+            "readiness_observations": [], "region_starts_in_open_cycle": [],
+        }

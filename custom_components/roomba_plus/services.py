@@ -185,8 +185,41 @@ def _modes_for_backend(backend: Any) -> dict[str, int]:
     )
 
 
+#: What a region start into an open mission is recorded with (4.3.2):
+#: mission state and the robot's own record of the command. No position.
+_OPEN_CYCLE_STATUS_KEYS = (
+    "cycle", "phase", "nMssn", "notReady", "error", "mssnM", "sqft",
+    "rechrgM", "initiator",
+)
+
+
+def _mission_snapshot(entry: Any) -> dict[str, Any] | None:
+    """The Classic robot's mission state and last command, or None."""
+    try:
+        from . import roomba_reported_state  # noqa: PLC0415
+
+        reported = roomba_reported_state(entry.runtime_data.roomba)
+    except Exception:  # noqa: BLE001
+        return None
+    status = reported.get("cleanMissionStatus") or {}
+    last = reported.get("lastCommand") or {}
+    return {
+        **{k: status.get(k) for k in _OPEN_CYCLE_STATUS_KEYS},
+        "lastCommand": {
+            k: last.get(k) for k in ("command", "initiator", "time")
+        },
+    }
+
+
+def _in_open_cycle(snapshot: dict[str, Any] | None) -> bool:
+    if not snapshot:
+        return False
+    return (snapshot.get("cycle") or "none") != "none"
+
+
 async def _async_warn_if_swallowed(
-    hass: HomeAssistant, entry: Any, what: str
+    hass: HomeAssistant, entry: Any, what: str,
+    before: dict[str, Any] | None = None,
 ) -> None:
     """Log when a command was accepted and nothing happened.
 
@@ -226,6 +259,8 @@ async def _async_warn_if_swallowed(
         return
 
     if (status.get("cycle") or "none") != "none":
+        if _in_open_cycle(before):
+            _record_open_cycle_start(entry, what, before)
         return
 
     # BLIND SPOT, MEASURED AND NOT FIXED: a robot that was ALREADY in an
@@ -292,6 +327,34 @@ async def _async_warn_if_swallowed(
         not_ready,
         err,
         _detail,
+    )
+
+
+def _record_open_cycle_start(
+    entry: Any, what: str, before: dict[str, Any] | None
+) -> None:
+    """Keep a region start sent into an open mission, before and after
+    (4.3.2). The blind spot above cannot be closed without one ACCEPTED
+    case to compare against; this makes the next one land in the
+    diagnostics instead of being lost."""
+    after = _mission_snapshot(entry)
+    log = getattr(getattr(entry, "runtime_data", None), "region_starts_in_open_cycle", None)
+    record = {
+        "at": dt_util.utcnow().isoformat(timespec="seconds"),
+        "what": what,
+        "grace_sec": _SWALLOWED_COMMAND_GRACE_SEC,
+        "before": before,
+        "after": after,
+    }
+    if log is not None:
+        log.append(record)
+    _LOGGER.info(
+        "%s was sent while a mission was open (phase %r -> %r). Whether "
+        "the robot took it cannot be told from the state yet; recorded "
+        "in the diagnostics under region_starts_in_open_cycle.",
+        what,
+        (before or {}).get("phase"),
+        (after or {}).get("phase"),
     )
 
 
@@ -526,6 +589,12 @@ async def _async_clean_rooms_via_backend(
     _wetness_raw = call.data.get(ATTR_RUN_PAD_WETNESS)
     _wetness = int(_wetness_raw) if _wetness_raw not in (None, "") else None
 
+    _entry = getattr(backend, "_config_entry", None) or getattr(
+        backend, "_data", None
+    )
+    # THE STATE BEFORE, for a start into an open mission (4.3.2).
+    _before = _mission_snapshot(_entry) if _entry is not None else None
+
     await backend.clean_rooms(
         room_ids, ordered=ordered, two_pass=two_pass,
         # A single value applied to every room -- _per_room() spreads a
@@ -537,13 +606,10 @@ async def _async_clean_rooms_via_backend(
 
     # Fire and forget: the service returns now, and this reports later
     # if nothing actually started.
-    _entry = getattr(backend, "_config_entry", None) or getattr(
-        backend, "_data", None
-    )
     if _entry is not None and hasattr(_entry, "async_create_background_task"):
         _entry.async_create_background_task(
             call.hass,
-            _async_warn_if_swallowed(call.hass, _entry, "clean_room"),
+            _async_warn_if_swallowed(call.hass, _entry, "clean_room", _before),
             name=f"roomba_plus_swallow_watch_{_entry.entry_id}",
         )
 

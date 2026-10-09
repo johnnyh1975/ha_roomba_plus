@@ -1806,3 +1806,61 @@ class TestTheCoverageMapMirrorsOnA900Series:
         extent = plain.render_extent_mm(400)
         assert extent["x_min"] == _cell_to_mm(0, 0)[0]
 
+
+
+class TestTheCoverageMapTurnsAsTheUserChose:
+    """4.3.2: turned with every other map picture; the extent says how."""
+
+    @staticmethod
+    def _store(turns: int):
+        gs = GridStore()
+        gs.mirror_x = True
+        gs.quarter_turns = turns
+        gs._cells = {(x, 0): 1.0 for x in range(0, 20)}  # a wide strip
+        return gs
+
+    @staticmethod
+    def _painted(png):
+        import io
+
+        from PIL import Image
+
+        img = Image.open(io.BytesIO(png)).convert("RGBA")
+        return [(x, y) for y in range(img.height) for x in range(img.width) if img.getpixel((x, y))[3]]
+
+    def test_the_extent_publishes_the_turn(self):
+        extent = self._store(3).render_extent_mm(400)
+        assert extent["quarter_turns"] == 3
+        assert extent["mirror_x"] is True
+
+    def test_a_wide_strip_turned_a_quarter_is_tall_and_whole(self):
+        flat = self._painted(self._store(0).render_heatmap(400))
+        tall = self._painted(self._store(1).render_heatmap(400))
+        w = max(x for x, _ in tall) - min(x for x, _ in tall)
+        h = max(y for _, y in tall) - min(y for _, y in tall)
+        assert h > 5 * w
+        # every cell still on the canvas: as many pixels as unturned
+        assert len(tall) == len(flat)
+
+    def test_the_published_rule_places_a_point(self):
+        """Each clockwise quarter turn takes (p, q) to (1 - q, p)."""
+        gs = self._store(1)
+        gs._stuck = {(19, 0): {"count": STUCK_HOTSPOT_THRESHOLD}}
+        extent = gs.render_extent_mm(400)
+        side = extent["x_max"] - extent["x_min"]
+        x_mm, y_mm = _cell_to_mm(19, 0)
+        p, q = (extent["x_max"] - x_mm) / side, (extent["y_max"] - y_mm) / side
+        p, q = 1 - q, p
+
+        import io
+
+        from PIL import Image
+
+        img = Image.open(io.BytesIO(gs.render_heatmap(400))).convert("RGBA")
+        red = [
+            (x, y) for y in range(img.height) for x in range(img.width)
+            if img.getpixel((x, y))[:3] == (220, 50, 50)
+        ]
+        cell_px = int(CELL_SIZE_MM * 400 / side)
+        assert red
+        assert all(abs(x - p * 400) <= cell_px + 1 and abs(y - q * 400) <= cell_px + 1 for x, y in red)

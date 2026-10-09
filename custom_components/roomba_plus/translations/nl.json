@@ -6,7 +6,8 @@
     "weekday_3": "Wo",
     "weekday_4": "Do",
     "weekday_5": "Vr",
-    "weekday_6": "Za"
+    "weekday_6": "Za",
+    "save_and_close": "Opslaan en sluiten"
   },
   "config": {
     "step": {
@@ -208,7 +209,10 @@
           "map_keepout_zones": "Verboden zones tonen",
           "map_nomop_zones": "Zones zonder dweilen tonen",
           "enable_maintenance_list": "Onderhoud als takenlijst tonen",
-          "region_sensors": "Aparte sensor per kamer en zone"
+          "region_sensors": "Aparte sensor per kamer en zone",
+          "map_rotation": "Kaartrotatie",
+          "care_reminders": "Reinigingsherinneringen",
+          "pets_in_household": "Huisdieren in huis"
         },
         "data_description": {
           "map_enabled": "De live reinigingskaart inschakelen voor robots met positiebepaling (Roomba 900, i, s, j, Braava m).",
@@ -224,7 +228,10 @@
           "map_keepout_zones": "Tekent de verboden zones op de kaartafbeelding.",
           "map_nomop_zones": "Tekent de zones zonder dweilen op de kaartafbeelding.",
           "enable_maintenance_list": "Toont onderhoud dat eraan komt als takenlijst.",
-          "region_sensors": "Maakt een aparte sensor voor elke kamer en zone."
+          "region_sensors": "Maakt een aparte sensor voor elke kamer en zone.",
+          "map_rotation": "Draait elke kaartafbeelding met de klok mee. De kaart heeft geen noorden: boven is de richting waarin de robot keek toen hij het dock verliet, dus het hangt af van hoe het dock staat.",
+          "care_reminders": "Herinnert je volgens het onderhoudsschema van iRobot aan het reinigen van filter, borstels, wielen, valsensoren en laadcontacten. Voegt een sensor „volgende reiniging“ en „gereinigd“-knoppen toe. Vervangingsherinneringen werken ook zonder.",
+          "pets_in_household": "Herinnert je twee keer per week in plaats van één keer aan het reinigen van het filter en de hoofdborstels, zoals iRobot aanraadt voor huishoudens met huisdieren. Alleen met reinigingsherinneringen aan."
         }
       },
       "smart_zones_manual": {
@@ -270,7 +277,7 @@
         "data": {
           "selected_zone": "Zone to edit"
         },
-        "description": "Selecteer een zone om te hernoemen of te verbergen. Verzend zonder zone om wijzigingen op te slaan.\n\n{zone_summary}",
+        "description": "{map}\n\nSelecteer een zone om te hernoemen of te verbergen. Verzend zonder zone om wijzigingen op te slaan.\n\n{zone_summary}",
         "data_description": {
           "selected_zone": "De zone die je wilt hernoemen of verbergen. Verstuur zonder zone om je wijzigingen op te slaan."
         }
@@ -1347,6 +1354,9 @@
       },
       "prime_dock_tank_level": {
         "name": "Schoonwatertank basisstation"
+      },
+      "next_care": {
+        "name": "Onderhoud – Volgende reiniging gepland"
       }
     },
     "binary_sensor": {
@@ -1527,6 +1537,18 @@
       },
       "reset_bin_cleaning": {
         "name": "Stofbak gereinigd"
+      },
+      "reset_filter_cleaning": {
+        "name": "Filter gereinigd"
+      },
+      "reset_brushes_cleaning": {
+        "name": "Hoofdborstels gereinigd"
+      },
+      "reset_side_brush_cleaning": {
+        "name": "Zijborstel gereinigd"
+      },
+      "reset_cliff_sensors_cleaning": {
+        "name": "Valsensoren gereinigd"
       }
     },
     "switch": {
@@ -2325,6 +2347,32 @@
       "options": {
         "__other__": "Een ander iRobot-account",
         "__none__": "Geen cloudfuncties voor deze robot (alleen lokale bediening)"
+      }
+    },
+    "map_rotation": {
+      "options": {
+        "0": "0°",
+        "90": "90° met de klok mee",
+        "180": "180°",
+        "270": "270° met de klok mee (90° tegen de klok in)"
+      }
+    },
+    "maintenance_item": {
+      "options": {
+        "replace_filter": "Filter vervangen",
+        "replace_main_brushes": "Hoofdborstels vervangen",
+        "replace_mop_pad": "Dweilpad vervangen",
+        "replace_side_brush": "Zijborstel vervangen",
+        "replace_clean_base_bag": "Clean Base-zak vervangen",
+        "clean_filter": "Filter reinigen",
+        "clean_brushes": "Hoofdborstels reinigen",
+        "clean_side_brush": "Zijborstel reinigen",
+        "clean_wheel": "Wielen reinigen",
+        "clean_cliff_sensors": "Valsensoren reinigen",
+        "clean_contact": "Laadcontacten reinigen",
+        "every_days": "Elke {days} dagen, zoals iRobot aanraadt.",
+        "reconfigure_rooms": "Kamers een naam geven",
+        "reconfigure_rooms_description": "Sommige kamers hebben nog geen naam. Open Configureren → Kamers en zones: daar zie je de kaart van de robot met hun nummers, of wat er ontbreekt. Dit item verdwijnt vanzelf zodra elke kamer een naam heeft."
       }
     }
   }

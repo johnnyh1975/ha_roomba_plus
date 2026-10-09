@@ -62,7 +62,9 @@ from .entity_cleanup import async_remove_stale_entities
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 
 from .const import (
+    CARE_ENTITY_KEYS,
     CONF_CORRELATION_ENTITIES,
+    care_reminders_enabled,
     CONF_REGION_SENSORS,
     DEFAULT_REGION_SENSORS,
 )
@@ -526,10 +528,14 @@ async def async_setup_entry(
     blid = config_entry.runtime_data.blid
     state = roomba_reported_state(roomba)
 
+    # Care reminders are opt-in (4.3.2): their sensor exists only when
+    # the option is on.
+    care_off = not care_reminders_enabled(config_entry.options)
     entities = [
         RoombaSensor(roomba, blid, description, config_entry)
         for description in SENSORS
         if description.filter_fn(state)
+        and not (care_off and description.key in CARE_ENTITY_KEYS)
     ]
 
     # Cloud history sensors: lifetime stats from /missionhistory.

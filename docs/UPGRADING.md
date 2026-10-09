@@ -9,6 +9,56 @@ note are listed — most releases need zero action beyond updating.
 
 ---
 
+## v4.3.2 — from v4.3.1
+
+**900-series areas recompute once after the update** if they had frozen:
+until now they only recomputed when the coverage map grew, so on a robot
+whose coverage map had shrunk they stayed as first drawn. Areas without
+a name that the coverage map no longer has disappear then; named and
+hidden areas stay. Nothing to do. To start the areas over completely,
+disable the integration, delete `roomba_plus_roomseg_<entry_id>`,
+`roomba_plus_grid_<entry_id>` and `roomba_plus_outline_<entry_id>` under
+`/config/.storage/`, and enable it again; areas reappear after three
+missions started on the dock.
+
+**Smart Map robots' cleaning path and coverage map are mirrored back**,
+as the 900-series' were in 4.3.1: they were drawn flipped left to right.
+A card placing points with `render_extent_mm` reads x from `x_max` when
+`mirror_x` is true, now on these robots too.
+
+**Map rotation** is a new option (Configure → Settings). The default, 0°,
+draws as before. A card that places points on the coverage map with
+`render_extent_mm` should apply its new `quarter_turns` (see FEATURES).
+
+**Adding a robot of a model Roomba+ does not know** now sets it up as
+Prime from the iRobot account, instead of asking for a local IP. Robots
+already set up are not touched.
+
+**j-series parts:** the filter, side brush and main brushes now get
+iRobot's remaining hours and their reset is sent to iRobot.
+
+**Maintenance intervals follow the robot's series** where none was set
+or learned and iRobot's counter gives none (FEATURES has the table).
+Until now every robot used 60 h filter, 200 h main brushes, 150 h side
+brush, 30 h bag. Remaining hours move accordingly — on a 900 the main
+brushes drop to 150 h, on an i or j they rise to 312 h. An interval you
+set, one learned from your own replacements, and iRobot's own counter
+are unchanged.
+
+**Cleaning reminders are new and off.** Configure → Settings →
+*Cleaning reminders* adds a sensor *Next cleaning due*, "cleaned"
+buttons and cleaning items in the to-do list. They count from the moment
+you switch them on, so the first ones fall due a week later. For homes
+with pets: *Pets in the household* in the same form.
+
+**The Classic maintenance list is rebuilt** (if you switched it on):
+an item per part, cleaning items with the reminders on, translated, and items not due appear as done with their
+date. An automation keyed on `filter_maintenance` or
+`brush_maintenance` still finds them; `brush_maintenance` reads
+"Replace the main brushes" now, which is what ticking it always did.
+
+---
+
 ## v4.3.1 — from v4.3.0
 
 **A 900-series' maps turn the right way round.** The cleaning path, the

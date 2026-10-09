@@ -269,7 +269,7 @@ nobody can match to a room.
 
 Configure: Settings → Devices & Services → Roomba+ → Configure → **Zone management**
 
-- Browse all zones in a structured index
+- Browse all zones in a structured index, with the area map above it on a 900-series: each area in its colour with its name or number (since 4.3.2)
 - Rename any zone; Smart Map robots use the alias alongside the cloud name. `clean_room` takes the new name as well as the original (since 4.2.19)
 - Hide zones — removed from selectors, `clean_room`, and repair issues
 - **900-series areas:** hide an area that is not a real space (for example one left by a mission that started away from the dock): it is no longer drawn as an area, leaves the area select, and since 4.3.1 is no longer recorded as cleaned. Give several areas the same name to make one room of them: the select and the mission's cleaned rooms list that name once (since 4.3.1). The areas themselves stay separate on the map, and an area cannot be split
@@ -437,8 +437,28 @@ drawn mirrored back in x — the cleaning path, the coverage map and the
 areas in *Rooms & zones* — and now shows the floor the right way round
 (@liblit, and a second 980). The millimetres are unchanged: `map_x_mm`,
 `rooms`, the hazards and everything stored keep the frame they had; only
-the step to pixels mirrors. Smart Map robots are drawn as before until one
-is checked against its floor.
+the step to pixels mirrors. Since 4.3.2 the same holds for Smart Map
+robots: an i-series on lewis firmware showed the same flip (@frnchfrgg).
+Pictures from the iRobot cloud — the rooms map and the coverage of the
+last mission — were never flipped and are not mirrored.
+
+**Turn the map to suit you** *(4.3.2)*: the map has no north. Its top is
+the way the robot faced as it left the dock, so it depends on how the
+dock stands. Configure → Settings → *Map rotation* turns every picture
+clockwise by 90, 180 or 270 degrees — the cleaning path with the robot's
+heading, doors and overlays, the area map, the coverage map and, on a
+Smart Map robot, the cloud coverage the map shows when it has no path.
+Nothing stored moves. Not turned yet: the rooms map of a Smart Map robot,
+which keeps the map's own orientation — the one it had right after
+mapping, not the turn set in the iRobot app. Prime maps keep the app's
+orientation.
+
+**Areas follow the coverage** *(4.3.2)*: the areas are recomputed when
+the coverage map has grown or shrunk by 30 cells, or holds 30 cells no
+area has. Until 4.3.2 only growth counted, and a coverage map that had
+once been larger froze the areas as they were. An area the coverage no
+longer has goes at the next recompute, unless you named or hid it: a
+named room behind a door kept shut keeps its name and place.
 
 ### What the colours on the map mean
 
@@ -490,8 +510,13 @@ visited cells; the attribute `render_extent_mm` (`x_min`, `x_max`,
 `y_min`, `y_max`, `size_px`) is the frame the picture is actually drawn
 in. A point at (x, y) mm sits at pixel
 `((x − x_min) · s, (y_max − y) · s)` with `s = size_px / (x_max − x_min)`;
-on a 900-series since 4.3.1 at `((x_max − x) · s, (y_max − y) · s)`, the
-picture being mirrored in x (see *Robot position in the maps' frame*).
+on a 900-series since 4.3.1, and on every Classic robot since 4.3.2, at
+`((x_max − x) · s, (y_max − y) · s)`, the picture being mirrored in x
+(see *Robot position in the maps' frame*).
+Since 4.3.2 the attribute also carries `mirror_x` and `quarter_turns`, the
+map rotation chosen in the options: with `p` and `q` the pixel position
+above divided by `size_px`, each clockwise quarter turn takes `(p, q)` to
+`(1 − q, p)`.
 
 ---
 
@@ -539,6 +564,20 @@ data:
 | Cleaning pad remaining hours | Braava only |
 | Battery capacity retention (%) | Degradation relative to design capacity (profile-corrected, v2.5+) |
 | Estimated battery end of life (days) | Projected days until battery replacement — self-calibrated against this robot's own measurement noise floor (v3.1.0), so a near-new battery with normal estCap jitter no longer produces a meaningless multi-decade projection |
+
+**Where the replacement interval comes from (4.3.2)**, best first: iRobot's own counter for this robot (`cloud`), the interval learned from your own replacements (`learned`), an hour option (`configured`), the robot's series (`profile`), and a last fallback (`irobot_budget`). The part sensor's `interval_source` says which. Series values, in hours of use:
+
+| Series | Filter | Main brushes | Side brush | Clean Base bag |
+|---|---|---|---|---|
+| 600 | 60 | 120 | 120 | 29 |
+| e | 60 | 150 | 150 | 29 |
+| 900 (and other `R…` SKUs) | 60 | 150 | 150 | 29 |
+| i | 52 | 312 | 157 | 29 |
+| j | 60 | 312 | 150 | 29 |
+| s | 60 | 200 | 200 | 29 |
+| Braava, Combo, unknown models | 52 | 312 | 157 | 29 |
+
+The series values are research figures; the i-series is corrected to an i3+'s cloud counters and the j-series' main brushes to a j9+'s. The last row is the fallback: the i3+'s budgets, iRobot's own figures for one robot. Where iRobot publishes a month figure for the part, `replace_every_months` carries it as `[min, max]` — for information; the count itself is in hours of use.
 
 **Self-calibrating thresholds (v2.5+):** After two or more replacements of a part, Roomba+ learns your personal replacement interval from the actual hours between resets. The learned value is visible in diagnostics under `learned_maintenance`. Since 4.3.1 an interval that starts at a reset recorded at 0 hours is not counted: before 4.3.0 the reset buttons recorded 0 on robots that keep their hours in `runtimeStats` (j-series).
 
@@ -633,10 +672,22 @@ Two states are worth knowing about:
 | `wheel_last_cleaned` | Wheels cleaned | All (v2.7+) |
 | `contact_last_cleaned` | Charging contacts cleaned | All (v2.7+) |
 | `bin_last_cleaned` | Bin cleaned | All (v2.7+) |
+| — | Filter cleaned | Vacuums, with care reminders on (4.3.2) |
+| — | Main brushes cleaned | Vacuums, with care reminders on (4.3.2) |
+| — | Side brush cleaned | Vacuums, with care reminders on (4.3.2) |
+| — | Cliff sensors cleaned | All, with care reminders on (4.3.2) |
 
 **Calendar-based inspect tracking (v2.7+):** wheel module, charging contacts, and bin are cleaned on a calendar cadence rather than hours-of-use. Three new timestamp sensors and services track when each was last cleaned so you can build reminders from them.
 
 **Reset learned profile:** `roomba_plus.reset_robot_profile` wipes the self-calibrated baselines in the robot profile (dirt thresholds and room dirt index, coverage and relocalisation baselines, mission duration and area statistics, battery noise floor, dock heading) so the robot starts learning fresh after a move or major layout change. Mission history is unaffected, and so are the maintenance counters: a part's replacement interval is learned from its own reset history, which only a part reset changes.
+
+#### Care reminders *(4.3.2, opt-in)*
+
+**Off by default.** Configure → Settings → *Cleaning reminders* switches them on; off, there is no reminder sensor, no "cleaned" buttons above and no cleaning items in the to-do list. Replacement reminders do not depend on it.
+
+`sensor.{name}_maintenance_next_cleaning_due` — when the next cleaning is due, by iRobot's care calendar: filter and main brushes once a week (twice a week with *Pets in the household* on, Configure → Settings), side brush once a month, wheels every two weeks, cliff sensors and charging contacts once a month. A Braava has the last two only. The state is the earliest date; attributes: `task` (which one), `overdue` (the tasks past due), `pets`, and `schedule` (each task with `last_done`, `due`, `interval_days`, `overdue`).
+
+Each task counts from its last "cleaned" button press or from the moment the option was switched on, whichever is later — so switching it on does not open with every task overdue, also not after a wheels cleaning recorded years ago. Switched off and on again, they start afresh. Replacing a filter, the main brushes or the side brush counts as cleaning it. A cleaning moves no replacement counter.
 
 Every reset above (button or service) writes a searchable Logbook entry and fires `roomba_plus_maintenance_reset` — see [Events & device triggers](#events--device-triggers).
 
@@ -646,7 +697,14 @@ Every reset above (button or service) writes a searchable Logbook entry and fire
 
 #### Maintenance to-do list (v3.4.0)
 
-`todo.{name}_maintenance` — filter replacement and brush/pad cleaning as real Home Assistant to-do items. **Opt-in** on both generations (since 4.0): Configure → Connection settings → *Show maintenance as a to-do list*. Classic robots got that switch only in 4.2.17 / 4.3.0b5. Due date comes from the same self-calibrated wear-rate estimate as the `*_days_until_due` sensors (absent until a wear rate is established — early in a robot's life, or right after a reset). Marking an item done fires the same reset as the corresponding button (`reset_filter` / `reset_brush` or `reset_pad` on Braava) — same Logbook entry and `roomba_plus_maintenance_reset` event either way.
+`todo.{name}_maintenance` — maintenance as Home Assistant to-do items, in Home Assistant's language. **Opt-in** on both generations (since 4.0): Configure → Connection settings → *Show maintenance as a to-do list*. Classic robots got that switch only in 4.2.17 / 4.3.0b5.
+
+On a Classic robot (rebuilt in 4.3.2):
+
+- **Replace** — one item per part the robot has: filter, main brushes, side brush, Clean Base bag (with a Clean Base); the mop pad on a Braava. Open when `maintenance_due` says the part is due; the due date is the wear-rate estimate of the `*_days_until_due` sensors (absent until a wear rate is established). Ticking it off does what the reset button does: counter, Logbook entry, `roomba_plus_maintenance_reset`, and iRobot's counter where the account has one.
+- **Clean** — with care reminders on, one item per care task above, due by the calendar. Ticking it off records the cleaning and moves no replacement counter.
+
+An item not due is listed as done, with its due date, and comes back on that date. Before 4.3.2 the brush item read "Clean brush roll" but reset the main-brush replacement counter.
 
 SMART-tier robots (i/s/j-series, Braava) also get a **Reconfigure rooms** item whenever a room still needs a name — with the iRobot account added, only a room on the map without a name anywhere counts (since 4.2.19; before, rooms named in the account kept it open). This item isn't manually completable: it disappears on its own once every room has a name via Configure → *Rooms & zones*; marking it done by hand has no effect and it simply reappears on the next update if unnamed rooms remain.
 
@@ -1257,6 +1315,7 @@ what a robot does out of the box.
 | Enable the live cleaning map | on | Robots with position sensing only (900, i, s, j, Braava m) |
 | Map canvas size in pixels | 600 | 400–1200 |
 | Millimetres per pixel | 10 | 5–30. At 600 px, 10 gives you a 6 m × 6 m room |
+| Map rotation | 0° | Turns every map picture clockwise (4.3.2). The map's top is the way the robot left the dock; turn it until it matches how you picture the floor |
 | Draw room names | off | The [xiaomi-vacuum-map-card](xiaomi-vacuum-map-card.md) draws its own names, so drawing them into the image as well would show each one twice. Switch it on for a plain picture card. A room without a name shows its number, as in the naming notice |
 | Draw clean zones | off | |
 | Draw keep-out zones | off | |
@@ -1272,6 +1331,8 @@ box and reloading showed nothing.
 |---|---|---|
 | Show cleaning schedules as a calendar | **on** | |
 | Show maintenance as a to-do list | **off** | |
+| Cleaning reminders | **off** | Reminds you of iRobot's cleaning calendar: a sensor, four "cleaned" buttons and cleaning items in the to-do list (4.3.2) |
+| Pets in the household | off | With cleaning reminders on: filter and main brushes twice a week instead of once (4.3.2) |
 | Create a button for each saved favorite | off | Prime robots. One button per favourite, which is a lot of buttons on a busy account |
 
 The calendar and the to-do list are the same kind of thing and default differently, which is

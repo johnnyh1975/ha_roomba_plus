@@ -1339,6 +1339,67 @@ class TestMissionCheckpointV282:
         assert entity._had_cleaning_phase is True
         entity._handle_mission_end.assert_not_called()  # resumed, not salvaged
 
+    def test_a_checkpoint_of_a_recorded_mission_is_discarded(self):
+        """4.3.2: a checkpoint can outlive the end of its mission. Resumed
+        or salvaged, the end was processed twice -- 2 October on the
+        maintainer's 980, stored twice and fed to the grid twice. A
+        mission the trajectory store holds is done."""
+        from custom_components.roomba_plus.mission_trajectory_store import (
+            MissionTrajectoryStore,
+        )
+
+        store = MissionTrajectoryStore()
+        store.record_mission("2026-10-02T08:59:58+02:00", [(0.0, -20.0)])
+        entity = _make_map_entity()
+        entity._config_entry.runtime_data.trajectory_store = store
+        entity.vacuum_state = {"cleanMissionStatus": {"mssnStrtTm": 12345}}
+        entity._pending_checkpoint = {
+            "mssn_strt_tm": 12345,
+            "mission_points": [(0.0, -20.0), (-5240.0, 840.0)],
+            "mission_start_ts": "2026-10-02T08:59:58+02:00",
+        }
+        entity._consume_pending_checkpoint()
+
+        assert entity._mission_points == []  # not resumed
+        assert entity._had_cleaning_phase is not True
+        entity._handle_mission_end.assert_not_called()  # not salvaged
+        entity._config_entry.async_create_task.assert_called_once()  # deleted
+
+    def test_a_checkpoint_of_an_unrecorded_mission_still_resumes(self):
+        from custom_components.roomba_plus.mission_trajectory_store import (
+            MissionTrajectoryStore,
+        )
+
+        entity = _make_map_entity()
+        entity._config_entry.runtime_data.trajectory_store = MissionTrajectoryStore()
+        entity.vacuum_state = {"cleanMissionStatus": {"mssnStrtTm": 12345}}
+        entity._pending_checkpoint = {
+            "mssn_strt_tm": 12345,
+            "mission_points": [(10.0, 20.0)],
+            "mission_start_ts": "2026-10-08T09:00:00+02:00",
+        }
+        entity._consume_pending_checkpoint()
+        assert entity._mission_points == [(10.0, 20.0)]
+
+    @pytest.mark.asyncio
+    async def test_no_checkpoint_is_written_for_a_mission_that_ended_meanwhile(self):
+        """The save starts eagerly inside the message that confirmed dock
+        contact; the same message can end the mission. It now reads the
+        state only after the message, and an ended mission writes nothing."""
+        entity = _make_map_entity()
+        entity.hass = MagicMock()
+        entity._mission_start_ts = "2026-10-02T08:59:58+02:00"
+        entity._mission_points = [(0.0, 0.0)]
+        saved = AsyncMock()
+        with patch("custom_components.roomba_plus.image.Store") as store_cls:
+            store_cls.return_value.async_save = saved
+            task = asyncio.ensure_future(entity._async_save_mission_checkpoint())
+            # the same message ends the mission before the save resumes
+            entity._mission_start_ts = None
+            entity._mission_points = []
+            await task
+        saved.assert_not_called()
+
     # ── _salvage_orphaned_checkpoint() ───────────────────────────────────
 
     def test_salvage_loads_points_before_calling_mission_end(self):
@@ -3544,8 +3605,10 @@ class TestCleaningPathNamingImage:
         m._renderer._cfg.size_px = 321
         seen = {}
 
-        def fake_render(areas, cell_mm, size):
-            seen.update(areas=areas, cell_mm=cell_mm, size=size)
+        m._renderer._cfg.quarter_turns = 3
+
+        def fake_render(areas, cell_mm, size, turns):
+            seen.update(areas=areas, cell_mm=cell_mm, size=size, turns=turns)
             return b"PNG"
 
         monkeypatch.setattr(img, "render_area_map", fake_render)
@@ -3553,6 +3616,8 @@ class TestCleaningPathNamingImage:
         assert await m.async_naming_image() == b"PNG"
         assert sorted(label for label, _c in seen["areas"]) == ["1", "Hall"]
         assert seen["cell_mm"] == 150.0 and seen["size"] == 321
+        # turned as the user chose, with the cleaning path (4.3.2)
+        assert seen["turns"] == 3
 
     @pytest.mark.asyncio
     async def test_without_areas_the_live_map_is_shown(self):
@@ -4809,9 +4874,31 @@ class TestCloudCoverageCaching:
         assert first == second
         data.cloud_coordinator.api.get_pmap_umf.assert_awaited_once()
         assert entity._cloud_coverage_png_for == (
-            f"c_{int(_NEWEST_RECORD['startTime'])}"
+            f"c_{int(_NEWEST_RECORD['startTime'])}@0"
         )
         assert entity._cloud_coverage_png == first
+
+    @pytest.mark.asyncio
+    async def test_the_map_rotation_turns_the_cloud_coverage_too(self):
+        """4.3.2: the map rotation turned the cleaning path but not the
+        cloud coverage the same picture falls back to (@frnchfrgg's
+        lewis robot shows that whenever no positions were requested)."""
+        entity, data = _make_entity_m(
+            vacuum_state=_pose_less_state(),
+            has_data=False,
+            raw_records=[_NEWEST_RECORD],
+        )
+        entity._renderer._cfg.quarter_turns = 1
+        calls = []
+
+        def _fake(coverage, points, rooms, rotate):
+            calls.append(rotate)
+            return b"png"
+
+        with patch("custom_components.roomba_plus.image.render_mission_map_png", _fake):
+            await entity.async_image()
+        assert calls == [90]
+        assert entity._cloud_coverage_png_for.endswith("@1")
 
     @pytest.mark.asyncio
     async def test_new_newest_record_invalidates_cache_and_rerenders(self):
@@ -4830,7 +4917,7 @@ class TestCloudCoverageCaching:
         second = await entity.async_image()
 
         assert data.cloud_coordinator.api.get_pmap_umf.await_count == 2
-        assert entity._cloud_coverage_png_for == f"c_{int(newer_record['startTime'])}"
+        assert entity._cloud_coverage_png_for == f"c_{int(newer_record['startTime'])}@0"
         assert second == first  # same UMF fixture -> identical render, different cache key
 
 
