@@ -1262,7 +1262,8 @@ def _total_energy_consumed_kwh(entity: "IRobotEntity") -> StateType:
 
     Clamped to a persisted high-water mark: estCap/cycle-count can shift
     downward between polls, which would otherwise violate this sensor's
-    declared TOTAL_INCREASING state_class.
+    declared TOTAL_INCREASING state_class. The mark is advanced (and saved)
+    here whenever the raw value rises, not only at mission end.
     """
     actual_mah = _estcap_to_mah(entity)
     if actual_mah is None:
@@ -1281,12 +1282,21 @@ def _total_energy_consumed_kwh(entity: "IRobotEntity") -> StateType:
     rps = getattr(entity._config_entry.runtime_data, "robot_profile_store", None)
     if rps is None:
         return raw_kwh
-    # value_fn stays side-effect-free: the high-water mark is advanced at
-    # mission end (callbacks._async_update_robot_profile_store), never on
-    # a sensor read. Reading the stored floor keeps the TOTAL_INCREASING
-    # contract across HA restarts.
     stored_floor = cast(float, rps.lifetime_energy_kwh_high_water)
-    return max(raw_kwh, stored_floor)
+    if raw_kwh <= stored_floor:
+        return stored_floor
+    # Cycle count and estCap also change while charging after a mission, so
+    # the mission-end advance alone leaves a window where a later, lower
+    # re-settled value is still above the stored floor. Advance and persist
+    # the floor on every rise (about once per charge cycle).
+    rps.update_energy_high_water(raw_kwh)
+    hass = getattr(entity, "hass", None)
+    if hass is not None:
+        hass.async_create_task(
+            rps.async_save(hass, entity._config_entry.entry_id),
+            name="roomba_plus_energy_high_water_save",
+        )
+    return raw_kwh
 
 
 def _estimated_battery_eol(entity: "IRobotEntity") -> StateType:
