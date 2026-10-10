@@ -27,6 +27,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_send
 
 from .const import (
     lifetime_hours,
+    IN_MISSION_COMMANDS,
     mission_command_regions,
     mission_scope,
     ROOM_EVENT_CLOSED_AT_END_STATUSES,
@@ -537,7 +538,8 @@ def _capture_zone_names(
         region_ids = [
             r.get("region_id")
             for r in mission_command_regions(
-                _merged_top_level(entry, reported, "cleanMissionStatus"), last_cmd
+                _merged_top_level(entry, reported, "cleanMissionStatus"), last_cmd,
+                getattr(data, "mission_command", None),
             )
             if isinstance(r, dict) and r.get("region_id")
         ]
@@ -604,6 +606,20 @@ def _note_mission_start_command(
     })
 
 
+def _hold_mission_command(entry: RoombaConfigEntry, command: Any) -> None:
+    """Keep the last command that was not given inside a mission (4.3.5).
+
+    See RoombaData.mission_command and const.mission_command().
+    """
+    data = getattr(entry, "runtime_data", None)
+    if (
+        data is not None
+        and isinstance(command, dict)
+        and command.get("command") not in IN_MISSION_COMMANDS
+    ):
+        data.mission_command = dict(command)
+
+
 def _note_next_command(entry: RoombaConfigEntry, command: Any) -> None:
     """The first command the robot reports after a mission's start, once."""
     log = getattr(getattr(entry, "runtime_data", None), "mission_start_commands", None)
@@ -631,6 +647,7 @@ def _capture_scope(entry: RoombaConfigEntry, reported: dict[str, Any]) -> str:
         data.map_capability == MapCapability.SMART,
         _merged_top_level(entry, reported, "cleanMissionStatus"),
         _merged_top_level(entry, reported, "lastCommand"),
+        getattr(data, "mission_command", None),
     )
 
 
@@ -1484,7 +1501,8 @@ def _update_room_progress(
                 )
                 _rep = (_master.get("state") or {}).get("reported") or {}
                 _regions = mission_command_regions(
-                    _rep.get("cleanMissionStatus"), _rep.get("lastCommand")
+                    _rep.get("cleanMissionStatus"), _rep.get("lastCommand"),
+                    getattr(entry.runtime_data, "mission_command", None),
                 )
                 _zone = entry.options.get(CONF_SMART_ZONE_DATA, {})
                 # v2.9.0 (D) — use MissionStore.extract_rid() instead of
@@ -2239,7 +2257,8 @@ def _has_unvisited_planned_rooms(
     _master = getattr(entry.runtime_data.roomba, "master_state", None) or {}
     _reported = (_master.get("state") or {}).get("reported") or {}
     _planned_regions = mission_command_regions(
-        _reported.get("cleanMissionStatus"), _reported.get("lastCommand")
+        _reported.get("cleanMissionStatus"), _reported.get("lastCommand"),
+        getattr(entry.runtime_data, "mission_command", None),
     )
     from .mission_store import MissionStore as _MS2
     _planned_rids = [
@@ -2271,6 +2290,7 @@ def make_mission_callback(
         reported = json_data.get("state", {}).get("reported", {})
         if "lastCommand" in reported:
             _note_next_command(entry, reported["lastCommand"])
+            _hold_mission_command(entry, reported["lastCommand"])
         if "cleanMissionStatus" not in reported:
             return
 

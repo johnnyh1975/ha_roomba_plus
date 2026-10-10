@@ -814,11 +814,25 @@ def _reload_once_the_cloud_answers(
     asked to name seven zones the account had long named -- the
     notice from a start whose first fetch had failed. One reload, on the
     first refresh that succeeds, sets the entry up as it would have been.
+
+    THE LISTENER IS REMOVED ONCE, NOT TWICE (4.3.5). It removed itself
+    when the cloud answered, and the reload's unload removed it again:
+    the coordinator's removal is not idempotent, so the unload failed
+    with `KeyError` and the entry was left half unloaded instead of set
+    up again (the maintainer's 980, after discovery had answered 429).
     """
+    removed = False
+
+    def _remove_once() -> None:
+        nonlocal removed
+        if not removed:
+            removed = True
+            remove_listener()
+
     def _on_refresh() -> None:
         if not cloud_coordinator.last_update_success or cloud_coordinator.data is None:
             return
-        unsubscribe()
+        _remove_once()
         _LOGGER.info(
             "Roomba+ cloud: reached for %s after a failed start; reloading the "
             "entry so rooms and zones come from the account",
@@ -826,8 +840,8 @@ def _reload_once_the_cloud_answers(
         )
         hass.config_entries.async_schedule_reload(config_entry.entry_id)
 
-    unsubscribe = cloud_coordinator.async_add_listener(_on_refresh)
-    config_entry.async_on_unload(unsubscribe)
+    remove_listener = cloud_coordinator.async_add_listener(_on_refresh)
+    config_entry.async_on_unload(_remove_once)
 
 
 async def _phase_cloud(ctx: _SetupContext) -> None:
@@ -944,9 +958,8 @@ async def _phase_cloud(ctx: _SetupContext) -> None:
             _LOGGER.warning(
                 "Roomba+ cloud: initial fetch failed for %s: %s: %s — "
                 "local operation continues, but room and zone features "
-                "need this data and will not work until the next cloud "
-                "poll (up to 24h) or a reload of this entry. Reload it "
-                "from Settings > Devices & Services if you need rooms now",
+                "need this data. The login is retried every 10 minutes, "
+                "and the entry is set up again once the cloud answers",
                 config_entry.data[CONF_BLID],
                 type(exc).__name__,
                 exc,

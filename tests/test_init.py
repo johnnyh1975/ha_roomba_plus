@@ -488,6 +488,29 @@ class TestPhaseCloudWithCoordinator:
         reload.assert_called_once_with(ctx.config_entry.entry_id)
 
     @pytest.mark.asyncio
+    async def test_the_reload_can_unload_the_entry(self, hass, monkeypatch):
+        """4.3.5, the maintainer's 980: the listener removed itself when the
+        cloud answered, the reload's unload removed it again, and Home
+        Assistant logged "Error unloading entry" with KeyError: 1 -- the
+        reload never happened."""
+        from custom_components.roomba_plus import _phase_cloud, _phase_spatial
+
+        monkeypatch.setattr(hass.config_entries, "async_schedule_reload", MagicMock())
+        ctx = _cloud_ctx(hass, monkeypatch, fail=OSError("dns"))
+        await _phase_spatial(ctx)
+        await _phase_cloud(ctx)
+        cc = ctx.cloud_coordinator
+        cc.data = {"pmaps": []}
+        cc.last_update_success = True
+        cc.async_update_listeners()
+
+        for call in ctx.config_entry.async_on_unload.call_args_list:
+            # What Home Assistant runs at unload: must not raise.
+            result = call.args[0]()
+            if hasattr(result, "close"):
+                result.close()  # a coroutine (the coordinator's shutdown)
+
+    @pytest.mark.asyncio
     async def test_a_start_that_reached_the_cloud_is_not_reloaded(self, hass, monkeypatch):
         from custom_components.roomba_plus import _phase_cloud, _phase_spatial
 

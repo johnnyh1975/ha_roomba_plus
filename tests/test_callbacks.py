@@ -6244,6 +6244,53 @@ class TestTheRecordSaysWhatTheMissionWasAskedToClean:
         assert store.latest()["scope"] == "whole_home"
 
 
+class TestTheMissionsOwnCommandIsHeld:
+    """4.3.5: an S9+ reported `skip` as its last command mid-mission, and
+    the mission's rooms were read from it: none. The last command that
+    was not a pause, resume or skip is kept beside it."""
+
+    _START = {"command": "start", "initiator": "localApp",
+              "regions": [{"region_id": "21", "type": "rid"}]}
+
+    def test_a_start_is_held_and_a_skip_is_not(self):
+        from custom_components.roomba_plus.callbacks import _hold_mission_command
+
+        entry = entry_mock()
+        entry.runtime_data.mission_command = None
+        _hold_mission_command(entry, self._START)
+        for command in ("skip", "pause", "resume"):
+            _hold_mission_command(entry, {"command": command, "initiator": "localApp"})
+        assert entry.runtime_data.mission_command == self._START
+        assert entry.runtime_data.mission_command is not self._START, "a copy"
+
+        _hold_mission_command(entry, {"command": "start", "initiator": "schedule"})
+        assert entry.runtime_data.mission_command == {
+            "command": "start", "initiator": "schedule"}
+
+    def test_the_mission_callback_holds_it(self):
+        from custom_components.roomba_plus.callbacks import make_mission_callback
+
+        hass, entry, _recorded, _store = _make_callback_env()
+        entry.runtime_data.mission_command = None
+        cb = make_mission_callback(hass, entry)
+        cb({"state": {"reported": {"lastCommand": self._START}}})
+        cb({"state": {"reported": {"lastCommand": {"command": "skip"}}}})
+        assert entry.runtime_data.mission_command == self._START
+
+    def test_the_rooms_named_at_the_end_survive_a_skip(self):
+        from custom_components.roomba_plus.callbacks import _capture_zone_names
+        from custom_components.roomba_plus.models import MapCapability
+
+        entry = entry_mock()
+        entry.runtime_data.room_seg_store = None
+        entry.runtime_data.map_capability = MapCapability.SMART
+        entry.runtime_data.cloud_coordinator.regions = [{"id": "21", "name": "Foyer"}]
+        entry.runtime_data.mission_command = dict(self._START)
+        _set_master_state(entry, lastCommand={"command": "skip", "initiator": "localApp"})
+        reported = {"cleanMissionStatus": {"phase": "run", "initiator": "localApp"}}
+        assert _capture_zone_names(entry, reported) == ["Foyer"]
+
+
 class TestWhichCommandAStartingMissionFound:
     """4.3.4: whether a robot reports the running mission before its new
     last command is unknown; each start keeps what it found, and the

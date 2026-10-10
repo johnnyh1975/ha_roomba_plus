@@ -2740,8 +2740,29 @@ def has_pose(state: dict[str, Any]) -> bool:
 ROBOT_SIDE_INITIATORS: Final[frozenset[str]] = frozenset({"manual", "dockBtn"})
 
 
+#: Commands given inside a running mission (4.3.5). The robot reports
+#: each as its `lastCommand`, which then names none of the mission's
+#: rooms: an S9+ sent `skip` during a two-room mission showed no planned
+#: rooms and no destination for the rest of it. The command that started
+#: the mission still describes it (RoombaData.mission_command). `stop`
+#: and `dock` are not here: a dock from idle is a mission of its own.
+IN_MISSION_COMMANDS: Final[frozenset[str]] = frozenset({"pause", "resume", "skip"})
+
+
+def mission_command(last_command: Any, held: Any = None) -> Any:
+    """The command behind the running mission: `lastCommand`, or, when
+    that is one given inside the mission (IN_MISSION_COMMANDS), the
+    command before it, `held`. Without `held` (Home Assistant restarted
+    since the start), `lastCommand` as it is.
+    """
+    command = last_command if isinstance(last_command, dict) else {}
+    if command.get("command") in IN_MISSION_COMMANDS and isinstance(held, dict):
+        return held
+    return last_command
+
+
 def mission_command_regions(
-    mission: Any, last_command: Any
+    mission: Any, last_command: Any, held: Any = None
 ) -> list[Any]:
     """The regions of the command behind the running mission, as far as
     `lastCommand` can say -- empty for a start from the robot's buttons.
@@ -2759,11 +2780,15 @@ def mission_command_regions(
     robot's own buttons (Roomba+ reports `localApp` on the same
     firmware, the app `rmtApp`). Such a mission takes no regions from
     `lastCommand`. Every other start is read as before.
+
+    A pause, resume or skip since the start is passed over for the
+    command before it, `held` (mission_command, 4.3.5).
     """
     mission = mission if isinstance(mission, dict) else {}
     if mission.get("initiator") in ROBOT_SIDE_INITIATORS:
         return []
-    command = last_command if isinstance(last_command, dict) else {}
+    command = mission_command(last_command, held)
+    command = command if isinstance(command, dict) else {}
     regions = command.get("regions")
     return list(regions) if isinstance(regions, list) else []
 
@@ -2776,7 +2801,7 @@ MISSION_SCOPE_WHOLE_HOME: Final = "whole_home"
 
 
 def mission_scope(
-    can_target_rooms: bool, mission: Any, last_command: Any
+    can_target_rooms: bool, mission: Any, last_command: Any, held: Any = None
 ) -> str:
     """`rooms` when the running mission was sent to rooms or zones,
     `whole_home` otherwise.
@@ -2790,7 +2815,7 @@ def mission_scope(
         return MISSION_SCOPE_WHOLE_HOME
     mission = mission if isinstance(mission, dict) else {}
     own = (mission.get("cmd") or {}) if isinstance(mission.get("cmd"), dict) else {}
-    if own.get("regions") or mission_command_regions(mission, last_command):
+    if own.get("regions") or mission_command_regions(mission, last_command, held):
         return MISSION_SCOPE_ROOMS
     return MISSION_SCOPE_WHOLE_HOME
 

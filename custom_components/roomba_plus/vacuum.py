@@ -708,6 +708,7 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
                 getattr(_rt, "map_capability", None) == MapCapability.SMART,
                 mission,
                 state.get("lastCommand"),
+                getattr(_rt, "mission_command", None),
             )
             if cycle not in ("none", "") else None
         )
@@ -741,6 +742,7 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
             ) or mission_command_regions(
                 self.vacuum_state.get("cleanMissionStatus"),
                 self.vacuum_state.get("lastCommand"),
+                getattr(_live, "mission_command", None),
             )
             if _cmd_regions and _live_region_map:
                 from .mission_store import MissionStore as _MS

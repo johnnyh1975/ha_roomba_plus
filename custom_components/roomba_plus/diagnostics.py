@@ -479,7 +479,14 @@ async def _favourites_diagnostics(data: Any, config_entry: Any) -> dict[str, Any
     coordinator = getattr(data, "cloud_coordinator", None)
     coordinator_data = getattr(coordinator, "data", None)
     if not isinstance(coordinator_data, dict):
-        result["source"] = "none -- no prime robot and no cloud coordinator"
+        # A coordinator whose first fetch failed has no data either, and
+        # "no cloud coordinator" sent the reader looking for a missing
+        # account (the maintainer's 980, discovery answered HTTP 429).
+        result["source"] = (
+            "none -- no prime robot and no cloud coordinator"
+            if coordinator is None
+            else "none -- the cloud has not answered yet (see cloud.last_exception)"
+        )
         result["count"] = 0
         return result
 
@@ -818,11 +825,13 @@ def _position_chain(data: Any) -> dict[str, Any]:
         ),
         # HOW FAR THE IROBOT APP TURNED THE MAP (4.3.4, @frnchfrgg):
         # requested positions are turned back by this before they are
-        # drawn. 0.0 for a map left as mapped.
+        # drawn. 0.0 for a map left as mapped; None where no cloud map
+        # names the angles (a 900-series, or the cloud not fetched yet).
         "requested_path_turn_deg": (
-            round(math.degrees(umf_user_turn_rad(cc.umf_data)), 1)
+            round(math.degrees(umf_user_turn_rad(umf)), 1)
             if (cc := getattr(data, "cloud_coordinator", None)) is not None
-            and isinstance(getattr(cc, "umf_data", None), dict)
+            and isinstance(umf := getattr(cc, "umf_data", None), dict)
+            and isinstance((umf.get("poses") or {}).get("orientation_rad"), dict)
             else None
         ),
         "aligner_present": aligner is not None,
@@ -1563,6 +1572,24 @@ def _field_evidence(data: Any) -> dict[str, Any]:
         ),
         # 4.3.4 (#178): `skip` sent with vacuum.send_command.
         "skip_attempts": list(getattr(data, "skip_attempts", None) or []),
+        # 4.3.5: the command the rooms are read from after a pause,
+        # resume or skip. Command, initiator, time and a region count.
+        "mission_command": _held_command_summary(
+            getattr(data, "mission_command", None)
+        ),
+    }
+
+
+def _held_command_summary(command: Any) -> dict[str, Any] | None:
+    """RoombaData.mission_command without its region ids."""
+    if not isinstance(command, dict):
+        return None
+    regions = command.get("regions")
+    return {
+        "command": command.get("command"),
+        "initiator": command.get("initiator"),
+        "time": command.get("time"),
+        "regions": len(regions) if isinstance(regions, list) else 0,
     }
 
 

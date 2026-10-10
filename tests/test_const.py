@@ -1982,3 +1982,76 @@ class TestMissionScope:
         assert mission_scope(True, {"initiator": "localApp"}, {"regions": []}) == "whole_home"
         assert mission_scope(True, {"initiator": "manual"}, {"regions": [{"rid": "1"}]}) == "whole_home"
         assert mission_scope(True, None, None) == "whole_home"
+
+
+class TestAPauseResumeOrSkipKeepsTheMissionsRooms:
+    """4.3.5: an S9+ sent `skip` during a two-room mission. The robot
+    reported `skip` as its last command, which names no rooms, and the
+    planned rooms and destination were gone for the rest of the mission.
+    The command that started the mission still describes it."""
+
+    _START = {"command": "start", "initiator": "localApp",
+              "regions": [{"region_id": "3", "type": "rid"},
+                          {"region_id": "7", "type": "rid"}]}
+
+    def test_after_a_skip_pause_or_resume_the_start_is_read(self):
+        from custom_components.roomba_plus.const import mission_command_regions
+
+        for command in ("skip", "pause", "resume"):
+            last = {"command": command, "initiator": "localApp"}
+            assert mission_command_regions(
+                {"initiator": "localApp"}, last, self._START
+            ) == self._START["regions"], command
+
+    def test_without_the_start_the_last_command_is_read_as_it_is(self):
+        """Home Assistant restarted since the start: nothing to fall back on."""
+        from custom_components.roomba_plus.const import mission_command_regions
+
+        assert mission_command_regions(
+            {"initiator": "localApp"}, {"command": "skip"}, None
+        ) == []
+
+    def test_a_new_start_is_never_replaced_by_the_one_before(self):
+        """A whole-home start after a room mission takes no rooms: only
+        commands given inside a mission are passed over."""
+        from custom_components.roomba_plus.const import mission_command_regions
+
+        for command in ("start", "clean", "dock", "stop", None):
+            assert mission_command_regions(
+                {"initiator": "schedule"}, {"command": command}, self._START
+            ) == [], command
+
+    def test_a_button_start_still_takes_no_rooms(self):
+        from custom_components.roomba_plus.const import mission_command_regions
+
+        assert mission_command_regions(
+            {"initiator": "manual"}, {"command": "skip"}, self._START
+        ) == []
+
+    def test_the_scope_stays_rooms(self):
+        from custom_components.roomba_plus.const import mission_scope
+
+        assert mission_scope(
+            True, {"initiator": "localApp"}, {"command": "skip"}, self._START
+        ) == "rooms"
+
+    def test_every_caller_passes_the_held_command(self):
+        """One caller without it is one place where a skip loses the
+        rooms again."""
+        import ast
+        from pathlib import Path
+
+        import custom_components.roomba_plus as pkg
+
+        wanted = {"mission_command_regions": 3, "mission_scope": 4}
+        short: list[str] = []
+        for path in sorted(Path(pkg.__file__).parent.glob("*.py")):
+            if path.name == "const.py":
+                continue
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                if not isinstance(node, ast.Call):
+                    continue
+                name = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
+                if name in wanted and len(node.args) + len(node.keywords) < wanted[name]:
+                    short.append(f"{path.name}:{node.lineno} {name}")
+        assert short == []

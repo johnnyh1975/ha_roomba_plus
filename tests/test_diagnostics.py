@@ -1118,6 +1118,24 @@ class TestFavouritesReportTheTierInUse:
         assert result["filtered_out_for_other_robots"] == 1
 
     @pytest.mark.asyncio
+    async def test_a_cloud_that_has_not_answered_is_not_a_missing_one(self):
+        """The maintainer's 980 (4.3.5): discovery answered HTTP 429, the
+        coordinator had no data, and the block said there was no cloud
+        coordinator at all."""
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.diagnostics import _favourites_diagnostics
+
+        data = SimpleNamespace(
+            prime_robot=None, blid="B", cloud_coordinator=SimpleNamespace(data=None)
+        )
+
+        result = await _favourites_diagnostics(data, SimpleNamespace(options={}))
+
+        assert "has not answered" in result["source"]
+        assert result["count"] == 0
+
+    @pytest.mark.asyncio
     async def test_prime_reports_the_prime_list(self):
         from types import SimpleNamespace
         from unittest.mock import AsyncMock
@@ -2159,6 +2177,10 @@ class TestTheDiagnosticsSayHowFarTheAppTurnedTheMap:
 
         assert out["requested_path_turn_deg"] == -90.0
 
+    def test_a_robot_without_a_cloud_map_says_nothing(self) -> None:
+        """The maintainer's 980 showed 0.0: no UMF, so no turn to name."""
+        assert self._chain({})["requested_path_turn_deg"] is None
+
     def test_no_account_says_nothing(self) -> None:
         from types import SimpleNamespace
 
@@ -2582,6 +2604,7 @@ class TestFieldEvidence:
             "region_starts_in_open_cycle": [{"what": "clean_room"}],
             "mission_start_commands": [],
             "skip_attempts": [],
+            "mission_command": None,
         }
         assert isinstance(out["readiness_observations"], list)
 
@@ -2593,4 +2616,22 @@ class TestFieldEvidence:
         assert _field_evidence(SimpleNamespace()) == {
             "readiness_observations": [], "region_starts_in_open_cycle": [],
             "mission_start_commands": [], "skip_attempts": [],
+            "mission_command": None,
+        }
+
+    def test_the_held_command_is_there_without_its_rooms(self):
+        """4.3.5: which command the rooms are read from after a skip."""
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.diagnostics import _field_evidence
+
+        data = SimpleNamespace(mission_command={
+            "command": "start", "initiator": "localApp", "time": 1791645031,
+            "regions": [{"region_id": "7", "type": "rid"},
+                        {"region_id": "3", "type": "rid"}],
+            "pmap_id": "abc",
+        })
+        assert _field_evidence(data)["mission_command"] == {
+            "command": "start", "initiator": "localApp",
+            "time": 1791645031, "regions": 2,
         }

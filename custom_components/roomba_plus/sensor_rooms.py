@@ -148,7 +148,10 @@ def _get_planned_room_order(data: Any) -> list[str]:
     # Not from a start at the robot's buttons (mission_command_regions).
     region_ids = [
         _MS.extract_rid(r)
-        for r in mission_command_regions(reported.get("cleanMissionStatus"), last_cmd)
+        for r in mission_command_regions(
+            reported.get("cleanMissionStatus"), last_cmd,
+            getattr(data, "mission_command", None),
+        )
         if _MS.extract_rid(r)
     ]
     mts = getattr(data, "mission_timer_store", None)
@@ -479,7 +482,8 @@ def why_no_room_estimates(config_entry: Any) -> str:
         )
         last_regions = [
             r for r in mission_command_regions(
-                reported.get("cleanMissionStatus"), reported.get("lastCommand")
+                reported.get("cleanMissionStatus"), reported.get("lastCommand"),
+                getattr(data, "mission_command", None),
             )
             if isinstance(r, dict) and r.get("params")
         ]

@@ -3390,6 +3390,32 @@ class TestTheVacuumSaysWhatTheMissionCleans:
         assert attrs["mission_scope"] is None
 
 
+class TestASkipKeepsThePlan:
+    """4.3.5: on an S9+, `skip` became the robot's last command and the
+    vacuum's planned rooms and destination went to null for the rest of
+    a two-room mission, while the robot kept cleaning."""
+
+    def _attrs(self, held):
+        from custom_components.roomba_plus.models import MapCapability
+
+        data = _make_smart_data(regions=[{"id": "3", "name": "Foyer"},
+                                         {"id": "7", "name": "Bathroom"}])
+        data.map_capability = MapCapability.SMART
+        data.mission_command = held
+        state = {
+            "cleanMissionStatus": {"cycle": "clean", "phase": "run", "initiator": "localApp"},
+            "lastCommand": {"command": "skip", "initiator": "localApp"},
+        }
+        return _make_vacuum_entity(state, runtime_data=data).extra_state_attributes
+
+    def test_the_plan_and_scope_come_from_the_start(self):
+        attrs = self._attrs({"command": "start", "initiator": "localApp", "regions": [
+            {"region_id": "3", "type": "rid"}, {"region_id": "7", "type": "rid"}]})
+        assert attrs.get("planned_room_order") == ["Foyer", "Bathroom"]
+        assert attrs.get("mission_destination") == "Bathroom"
+        assert attrs["mission_scope"] == "rooms"
+
+
 class TestSkipTheCurrentRoom:
     """4.3.4, #178: `skip` through vacuum.send_command, on both
     generations, recorded with the mission's state now and a minute

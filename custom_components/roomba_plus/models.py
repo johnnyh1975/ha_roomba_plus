@@ -519,6 +519,11 @@ class RoombaData:
     skip_attempts: deque[dict[str, Any]] = field(
         default_factory=lambda: deque(maxlen=10)
     )
+    #: The robot's last `lastCommand` that was not given inside a
+    #: mission (const.IN_MISSION_COMMANDS), 4.3.5. A pause, resume or
+    #: skip replaces `lastCommand` with a command that names no rooms;
+    #: this still holds the mission's own. Not kept across restarts.
+    mission_command: dict[str, Any] | None = None
 
     # v3.2.1 — MQTT-watchdog resume grace: wall-clock timestamp of the last
     # observed phase transition INTO "run" from any non-run phase (fresh
