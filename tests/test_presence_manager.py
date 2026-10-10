@@ -1449,3 +1449,47 @@ class TestPresenceManagerFlow:
         pm._cancel_listeners = [MagicMock(side_effect=RuntimeError("gone")), MagicMock()]
         pm.cancel()
         assert pm._cancel_listeners == []
+
+
+class TestRobotUnreachable:
+    """A write to an unreachable robot must not escape the presence tasks."""
+
+    @staticmethod
+    def _fail_writes(manager):
+        from roombapy import RoombaConnectionError
+
+        manager._entry.runtime_data.roomba.set_preference = AsyncMock(
+            side_effect=RoombaConnectionError("not connected")
+        )
+
+    @pytest.mark.asyncio
+    async def test_away_delay_logs_and_keeps_flags(self, caplog):
+        manager, _hass = _make_manager({"person.alice": "not_home"}, sched_hold=True)
+        self._fail_writes(manager)
+        manager._away_task = object()
+
+        await manager._away_delay(0)
+
+        assert "robot unreachable" in caplog.text
+        assert manager._away_task is None
+        assert manager._did_unfreeze is False
+        assert manager._managed_hold is False
+
+        # The next attempt retries and succeeds once the robot is back.
+        roomba = manager._entry.runtime_data.roomba
+        roomba.set_preference = _FakeRoomba.set_preference.__get__(roomba)
+        await manager._away_delay(0)
+        assert roomba.preference_calls == [("schedHold", False)]
+        assert manager._did_unfreeze is True
+
+    @pytest.mark.asyncio
+    async def test_arrival_logs_and_keeps_flags(self, caplog):
+        manager, _hass = _make_manager({"person.alice": "home"})
+        self._fail_writes(manager)
+        manager._did_unfreeze = True
+
+        await manager._evaluate_presence()
+
+        assert "robot unreachable" in caplog.text
+        assert manager._did_unfreeze is True
+        assert manager._managed_hold is False
