@@ -165,11 +165,19 @@ PAD_WASH_HEAT_LEVELS: dict[int, str] = {
 #: key at all and why this control will not appear for him. Key presence
 #: catches that case; this table catches the one key presence cannot --
 #: a dock that HAS the key but not every level.
+#:
+#: LEVEL 4 SINCE APP 3.2.0, `deepHotWaterWashSupported`, and the gate is
+#: read now rather than inferred. `WashHeatViewModel.initData` offers
+#: noHeat/defaultHeat/highHeat from `pw` 3 up, noHeat/defaultHeat at 2,
+#: and nothing below -- so 4 offers what 3 does. The new
+#: `HeatType.deepHeat` (3) is not offered on any dock; the app uses its
+#: title to name highHeat "deep heat" on R10 and X10 models.
 _PAD_WASH_HEAT_LEVELS_BY_CAP: dict[int, tuple[int, ...]] = {
     0: (),
     1: (),
     2: (0, 1),
     3: (0, 1, 2),
+    4: (0, 1, 2),
 }
 
 
@@ -635,6 +643,31 @@ VENDOR_ENUM_SOURCES: dict[str, str | None] = {
     # permits. Checked against the cap enum's own value set.
     "_AUTOEVAC_LEVELS": "CapAutoEvac",
     "_PAD_WASH_HEAT_LEVELS_BY_CAP": "DockPadWashingType",
+}
+
+
+#: VENDOR VALUES LEFT OUT OF A PICKER ON PURPOSE (4.3.4), each with its
+#: reason. App 3.2.0 added one value to each of these enums and offers
+#: neither on any screen. scripts/check_vendor_value_tables.py and the
+#: tests read this; a value listed here that the table has, or the enum
+#: lacks, fails them as stale.
+VENDOR_VALUES_NOT_OFFERED: dict[str, dict[int, str]] = {
+    "PAD_WASH_HEAT_LEVELS": {
+        3: (
+            "HeatType.deepHeat: WashHeatViewModel.initData offers noHeat, "
+            "defaultHeat and highHeat from dock.cap.pw 3 up, level 4 "
+            "included. deepHeat's title only renames highHeat on R10/X10."
+        ),
+    },
+    "PAD_WASH_RETURN_MODES": {
+        103: (
+            "ReturnByMode.smartMode: no title, no subtitle and no screen "
+            "offering it; the wash-frequency view model names the other "
+            "six. What a robot does with 103 is unknown, and a value no "
+            "robot has reported and the app does not send is not written "
+            "from Home Assistant."
+        ),
+    },
 }
 
 

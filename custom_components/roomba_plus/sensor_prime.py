@@ -1436,8 +1436,9 @@ class PrimeErrorSensor(_PrimeCurrentStateSensorBase):
         # THE VENDOR'S OWN TEXT, AS ATTRIBUTES.
         #
         # The state stays a raw code by this sensor's own argument
-        # above -- but that argument predates `vendor_errors.py`, whose
-        # catalogue was extracted from the **Prime** app's locale files.
+        # above -- but that argument predates the vendor catalogue
+        # (roombapy_prime.vendor_errors), extracted from the **Prime**
+        # app's locale files.
         # "No text of ours would be sourced" stopped being true the
         # moment iRobot's arrived.
         #

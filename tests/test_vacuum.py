@@ -3359,3 +3359,125 @@ class TestTheCleanAreaWarningIsForRobotsThatCould:
 
     def test_without_a_capability_block_it_still_warns(self, caplog):
         assert [r.levelname for r in self._explain(caplog, None)] == ["WARNING"]
+
+
+class TestTheVacuumSaysWhatTheMissionCleans:
+    """4.3.4: `mission_scope` while a mission runs, None between missions."""
+
+    def _attrs(self, state):
+        from custom_components.roomba_plus.models import MapCapability
+
+        data = _make_smart_data()
+        data.map_capability = MapCapability.SMART
+        return _make_vacuum_entity(state, runtime_data=data).extra_state_attributes
+
+    def test_a_button_start_is_the_whole_home(self):
+        attrs = self._attrs({
+            "cleanMissionStatus": {"cycle": "clean", "phase": "run", "initiator": "manual"},
+            "lastCommand": {"regions": [{"region_id": "21"}]},
+        })
+        assert attrs["mission_scope"] == "whole_home"
+
+    def test_a_room_mission_is_rooms(self):
+        attrs = self._attrs({
+            "cleanMissionStatus": {"cycle": "clean", "phase": "run", "initiator": "localApp"},
+            "lastCommand": {"regions": [{"region_id": "21"}]},
+        })
+        assert attrs["mission_scope"] == "rooms"
+
+    def test_none_between_missions(self):
+        attrs = self._attrs({"cleanMissionStatus": {"cycle": "none", "phase": "charge"}})
+        assert attrs["mission_scope"] is None
+
+
+class TestSkipTheCurrentRoom:
+    """4.3.4, #178: `skip` through vacuum.send_command, on both
+    generations, recorded with the mission's state now and a minute
+    later, since no robot has been seen to take it yet."""
+
+    _RUNNING = {
+        "cleanMissionStatus": {"cycle": "clean", "phase": "run", "nMssn": 7,
+                               "initiator": "localApp"},
+        "lastCommand": {"command": "start", "initiator": "localApp", "time": 5,
+                        "regions": [{"region_id": "21"}]},
+    }
+
+    def _vacuum(self, state=None):
+        from collections import deque
+
+        data = _make_smart_data()
+        data.skip_attempts = deque(maxlen=10)
+        data.sent_commands = deque(maxlen=20)
+        data.mission_timer_store.planned_rooms = ["A", "B", "C"]
+        data.mission_timer_store.current_room_idx = 0
+        v = _make_vacuum_entity(state or self._RUNNING, runtime_data=data)
+        v.hass = MagicMock()
+        return v, data
+
+    @pytest.mark.asyncio
+    async def test_classic_sends_it_and_keeps_the_state(self, monkeypatch):
+        from custom_components.roomba_plus import vacuum as vac
+
+        later = {}
+
+        def _call_later(hass, delay, cb):
+            later["cb"], later["delay"] = cb, delay
+            return lambda: None
+
+        monkeypatch.setattr(vac, "async_call_later", _call_later)
+        v, data = self._vacuum()
+
+        await v.async_send_command("skip")
+
+        v.vacuum.send_command.assert_awaited_once_with("skip", {})
+        (attempt,) = data.skip_attempts
+        assert attempt["generation"] == "classic"
+        assert attempt["before"]["phase"] == "run"
+        assert (attempt["before"]["room_index"], attempt["before"]["rooms_planned"]) == (0, 3)
+        assert attempt["before"]["last_command"] == {"command": "start", "initiator": "localApp", "time": 5}
+        assert attempt["after_60s"] is None
+        assert data.sent_commands[-1]["verb"] == "skip (send_command)"
+
+        v.vacuum_state = {"cleanMissionStatus": {"cycle": "clean", "phase": "run"}}
+        data.mission_timer_store.current_room_idx = 1
+        assert later["delay"] == 60
+        later["cb"](None)
+        assert attempt["after_60s"]["room_index"] == 1
+
+    @pytest.mark.asyncio
+    async def test_prime_sends_it_as_a_simple_command(self, monkeypatch):
+        from unittest.mock import AsyncMock
+
+        from custom_components.roomba_plus import vacuum as vac
+
+        monkeypatch.setattr(vac, "async_call_later", lambda hass, delay, cb: (lambda: None))
+        v, data = self._vacuum()
+        v._connection_type = ConnectionType.CLOUD_ONLY
+        v._prime_robot = MagicMock()
+        v._prime_robot.send_simple_command = AsyncMock(return_value=True)
+        data.prime_status_coordinator.data = {"ro-currentstate": {
+            "cleanMissionStatus": {"cycle": "clean", "phase": "run"}}}
+
+        await v.async_send_command("skip")
+
+        v._prime_robot.send_simple_command.assert_awaited_once_with("skip")
+        (attempt,) = data.skip_attempts
+        assert (attempt["generation"], attempt["accepted_by_broker"]) == ("prime", True)
+        assert attempt["before"]["phase"] == "run"
+
+    @pytest.mark.asyncio
+    async def test_prime_still_refuses_other_raw_commands(self):
+        from homeassistant.exceptions import ServiceValidationError
+
+        v, _data = self._vacuum()
+        v._connection_type = ConnectionType.CLOUD_ONLY
+        with pytest.raises(ServiceValidationError):
+            await v.async_send_command("evac")
+
+    @pytest.mark.asyncio
+    async def test_any_raw_command_is_in_the_sent_commands(self):
+        v, data = self._vacuum()
+
+        await v.async_send_command("evac")
+
+        assert data.sent_commands[-1]["verb"] == "evac (send_command)"

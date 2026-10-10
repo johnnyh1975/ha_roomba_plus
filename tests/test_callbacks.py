@@ -6147,3 +6147,166 @@ class TestAHalfMinuteOfNothingIsNotAMission:
 
     def test_an_unknown_start_is_kept(self):
         assert len(self._record(10, start_known=False).records) == 1
+
+
+class TestAButtonStartNamesNoZones:
+    """4.3.4, @Hardy-196: a 44-minute run from the robot's CLEAN button was
+    recorded with zones ["Couch"], the zone command Roomba+ had sent before.
+    The mission said who started it: initiator "manual"."""
+
+    def _entry(self):
+        from custom_components.roomba_plus.models import MapCapability
+
+        entry = entry_mock()
+        entry.runtime_data.room_seg_store = None
+        entry.runtime_data.map_capability = MapCapability.SMART
+        entry.runtime_data.cloud_coordinator.regions = [{"id": "21", "name": "Couch"}]
+        _set_master_state(
+            entry,
+            lastCommand={"command": "start", "initiator": "localApp",
+                         "regions": [{"region_id": "21", "type": "zid"}]},
+        )
+        return entry
+
+    def test_a_button_start_takes_no_names(self):
+        from custom_components.roomba_plus.callbacks import _capture_zone_names
+
+        reported = {"cleanMissionStatus": {"phase": "run", "initiator": "manual"}}
+        assert _capture_zone_names(self._entry(), reported) == []
+
+    def test_a_start_from_home_assistant_still_does(self):
+        from custom_components.roomba_plus.callbacks import _capture_zone_names
+
+        reported = {"cleanMissionStatus": {"phase": "run", "initiator": "localApp"}}
+        assert _capture_zone_names(self._entry(), reported) == ["Couch"]
+
+    def test_the_initiator_from_the_cached_state_counts_too(self):
+        """A delta without cleanMissionStatus.initiator reads the cached one."""
+        from custom_components.roomba_plus.callbacks import _capture_zone_names
+
+        entry = self._entry()
+        state = entry.runtime_data.roomba.master_state["state"]["reported"]
+        state["cleanMissionStatus"] = {"phase": "run", "initiator": "manual"}
+        assert _capture_zone_names(entry, {"lastCommand": state["lastCommand"]}) == []
+
+
+class TestTheRecordSaysWhatTheMissionWasAskedToClean:
+    """4.3.4: `scope` is `rooms` or `whole_home`; empty zones alone read
+    as missing data."""
+
+    def _entry(self, initiator, regions):
+        from custom_components.roomba_plus.models import MapCapability
+
+        entry = entry_mock()
+        entry.runtime_data.room_seg_store = None
+        entry.runtime_data.map_capability = MapCapability.SMART
+        _set_master_state(
+            entry,
+            cleanMissionStatus={"phase": "run", "initiator": initiator},
+            lastCommand={"regions": regions},
+        )
+        return entry
+
+    def test_a_room_mission(self):
+        from custom_components.roomba_plus.callbacks import _capture_scope
+
+        assert _capture_scope(self._entry("localApp", [{"region_id": "1"}]), {}) == "rooms"
+
+    def test_a_button_start(self):
+        from custom_components.roomba_plus.callbacks import _capture_scope
+
+        assert _capture_scope(self._entry("manual", [{"region_id": "1"}]), {}) == "whole_home"
+
+    def test_a_900_series_always_cleans_the_whole_home(self):
+        from custom_components.roomba_plus.callbacks import _capture_scope
+        from custom_components.roomba_plus.models import MapCapability
+
+        entry = self._entry("localApp", [{"region_id": "1"}])
+        entry.runtime_data.map_capability = MapCapability.EPHEMERAL
+        assert _capture_scope(entry, {}) == "whole_home"
+
+    def test_the_record_carries_it(self):
+        from custom_components.roomba_plus.callbacks import async_record_mission
+
+        store = _make_store()
+        loop = asyncio.new_event_loop()
+        entry = _make_entry(store)
+        hass = _make_hass(loop)
+        try:
+            loop.run_until_complete(
+                async_record_mission(
+                    hass, entry, {"phase": "charge", "error": 0}, {}, [],
+                    int(loop.time()) - 600, 0, scope="whole_home",
+                )
+            )
+        finally:
+            loop.close()
+        assert store.latest()["scope"] == "whole_home"
+
+
+class TestWhichCommandAStartingMissionFound:
+    """4.3.4: whether a robot reports the running mission before its new
+    last command is unknown; each start keeps what it found, and the
+    next command reported after it."""
+
+    def _entry(self):
+        from collections import deque
+
+        entry = entry_mock()
+        entry.runtime_data.mission_start_commands = deque(maxlen=10)
+        _set_master_state(
+            entry,
+            cleanMissionStatus={"phase": "run", "cycle": "clean", "initiator": "manual",
+                                "mssnStrtTm": 1_000_300, "nMssn": 963},
+            lastCommand={"command": "start", "initiator": "localApp", "time": 1_000_000,
+                         "regions": [{"region_id": "21", "type": "zid"}]},
+        )
+        return entry
+
+    def test_the_start_keeps_what_it_found(self):
+        from custom_components.roomba_plus.callbacks import _note_mission_start_command
+
+        entry = self._entry()
+        # The robot sends cleanMissionStatus whole; lastCommand stays cached.
+        full = entry.runtime_data.roomba.master_state["state"]["reported"]["cleanMissionStatus"]
+        _note_mission_start_command(entry, {"cleanMissionStatus": dict(full)}, "whole_home")
+        (entry_,) = entry.runtime_data.mission_start_commands
+        assert entry_["mission"]["initiator"] == "manual"
+        assert entry_["last_command"] == {
+            "command": "start", "initiator": "localApp", "time": 1_000_000,
+            "regions": 1, "region_types": ["zid"],
+        }
+        assert entry_["command_age_sec"] == 300
+        assert entry_["in_this_message"] is False
+        assert entry_["scope"] == "whole_home"
+        assert "21" not in str(entry_), "counts, not region ids"
+
+    def test_the_next_command_is_kept_once(self):
+        from custom_components.roomba_plus.callbacks import (
+            _note_mission_start_command,
+            _note_next_command,
+        )
+
+        entry = self._entry()
+        _note_mission_start_command(entry, {}, "whole_home")
+        same = {"command": "start", "initiator": "localApp", "time": 1_000_000,
+                "regions": [{"region_id": "21", "type": "zid"}]}
+        _note_next_command(entry, same)
+        assert entry.runtime_data.mission_start_commands[-1]["next_command"] is None
+
+        _note_next_command(entry, {"command": "clean", "initiator": "manual", "time": 1_000_301})
+        _note_next_command(entry, {"command": "dock", "initiator": "manual", "time": 1_002_000})
+        nxt = entry.runtime_data.mission_start_commands[-1]["next_command"]
+        assert (nxt["command"], nxt["initiator"], nxt["regions"]) == ("clean", "manual", 0)
+        assert isinstance(nxt["seconds_after_start"], int)
+
+    def test_nothing_is_kept_without_the_store(self):
+        from custom_components.roomba_plus.callbacks import (
+            _note_mission_start_command,
+            _note_next_command,
+        )
+
+        entry = entry_mock()
+        entry.runtime_data.mission_start_commands = None
+        _note_mission_start_command(entry, {}, "rooms")
+        _note_next_command(entry, {"command": "clean"})

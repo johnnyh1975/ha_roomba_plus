@@ -22,7 +22,8 @@ from homeassistant.components.vacuum import (
 # On HA < 2026.3, VacuumEntityFeature.CLEAN_AREA is absent, so supported_features
 # never sets the flag and HA never calls async_get_segments(). The try/except
 # ImportError below is defensive depth only; the hasattr guard is the primary gate.
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.event import async_call_later
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
@@ -33,6 +34,8 @@ from .prime_commands import _send_confirmed
 from .button_prime import _raw_favorite_is_for
 from .const import (
     DOMAIN,
+    mission_command_regions,
+    mission_scope,
     ATTR_BIN_FULL,
     has_carpet_boost,
     is_braava,
@@ -66,7 +69,8 @@ from .const import (
     SQFT_TO_M2,
 )
 from .entity import IRobotEntity
-from .models import ConnectionType, RoombaConfigEntry
+from .models import ConnectionType, MapCapability, RoombaConfigEntry
+from .command_record import record_command
 from .room_cleaning import region_names_across_maps
 
 _LOGGER = logging.getLogger(__name__)
@@ -694,6 +698,19 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         expire_m = mission.get("expireM", 0)
         attrs["expire_minutes_remaining"] = expire_m if expire_m else None
         attrs["mission_id"] = mission.get("missionId") or None
+        # WHAT THIS MISSION WAS ASKED TO CLEAN (4.3.4): `rooms` or
+        # `whole_home` while one runs, None between missions. Without it
+        # a whole-home run showed as no planned rooms, which reads as
+        # missing data.
+        _rt = getattr(self._config_entry, "runtime_data", None)
+        attrs["mission_scope"] = (
+            mission_scope(
+                getattr(_rt, "map_capability", None) == MapCapability.SMART,
+                mission,
+                state.get("lastCommand"),
+            )
+            if cycle not in ("none", "") else None
+        )
 
         # v2.3.0 Step 11 — Live source for planned_room_order / mission_destination
         # during active mission. Two sources tried in order:
@@ -721,9 +738,9 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
                     (self.vacuum_state.get("cleanMissionStatus") or {})
                     .get("cmd") or {}
                 ).get("regions", [])
-            ) or (
-                (self.vacuum_state.get("lastCommand") or {})
-                .get("regions", [])
+            ) or mission_command_regions(
+                self.vacuum_state.get("cleanMissionStatus"),
+                self.vacuum_state.get("lastCommand"),
             )
             if _cmd_regions and _live_region_map:
                 from .mission_store import MissionStore as _MS
@@ -1342,6 +1359,11 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         command has no confirmed-safe generic path the way
         send_simple_command()'s narrow, tested verb set does.
         """
+        if command == "skip":
+            # SKIP THE CURRENT ROOM (4.3.4, #178), on both generations,
+            # and recorded for the test it still needs.
+            await self._async_send_skip()
+            return
         if self._connection_type is ConnectionType.CLOUD_ONLY:
             raise ServiceValidationError(
                 "send_command is not yet supported for V4/Prime robots -- "
@@ -1353,8 +1375,84 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         if command == "start" and isinstance(params, dict) and "regions" in params:
             region_cmd = self._build_region_command(params)
             await self.vacuum.send_command("start", region_cmd)
+            record_command(self._config_entry, "start (send_command)", region_cmd)
         else:
             await self.vacuum.send_command(command, params or {})
+            # IN THE SENT COMMANDS TOO (4.3.4). A command sent by hand
+            # left no trace in the diagnostics, so a test of one could
+            # not show what went out.
+            record_command(self._config_entry, f"{command} (send_command)", params or None)
+
+    def _skip_snapshot(self) -> dict[str, Any]:
+        """The mission as a skip finds it: state, plan position, last command.
+
+        Counts and positions in the plan, no room names and no coordinates.
+        """
+        if self._connection_type is ConnectionType.CLOUD_ONLY:
+            coordinator = getattr(
+                getattr(self._config_entry, "runtime_data", None),
+                "prime_status_coordinator", None,
+            )
+            current = ((getattr(coordinator, "data", None) or {}).get("ro-currentstate")) or {}
+            status = current.get("cleanMissionStatus") or {}
+            last: dict[str, Any] = {}
+        else:
+            status = self.vacuum_state.get("cleanMissionStatus") or {}
+            last = self.vacuum_state.get("lastCommand") or {}
+        mts = getattr(getattr(self._config_entry, "runtime_data", None), "mission_timer_store", None)
+        planned = getattr(mts, "planned_rooms", None)
+        return {
+            **{k: status.get(k) for k in ("cycle", "phase", "nMssn", "error", "notReady", "initiator")},
+            "room_index": getattr(mts, "current_room_idx", None),
+            "rooms_planned": len(planned) if isinstance(planned, list) else None,
+            "last_command": {k: last.get(k) for k in ("command", "initiator", "time")},
+        }
+
+    async def _async_send_skip(self) -> None:
+        """Send `skip` and keep the mission's state now and a minute later.
+
+        UNCONFIRMED ON EVERY ROBOT. `skip` is in the firmware's own command
+        list and a skipped room comes back as a room event, but no robot
+        has been seen to take it -- nor whether a Classic one does over
+        the local connection, nor what it does outside a room mission.
+        The record (diagnostics: field_evidence.skip_attempts) is what
+        the test in #178 reads.
+        """
+        record: dict[str, Any] = {
+            "at": dt_util.utcnow().isoformat(timespec="seconds"),
+            "generation": (
+                "prime" if self._connection_type is ConnectionType.CLOUD_ONLY
+                else "classic"
+            ),
+            "before": self._skip_snapshot(),
+            "after_60s": None,
+        }
+        if self._connection_type is ConnectionType.CLOUD_ONLY:
+            if self._prime_robot is None:
+                raise ServiceValidationError(
+                    "send_command is not yet supported for V4/Prime robots -- "
+                    "use the standard vacuum actions (start/pause/stop/"
+                    "return_to_base/locate) instead.", translation_domain=DOMAIN,
+                    translation_key="send_command_prime_unsupported",
+                )
+            record["accepted_by_broker"] = await self._prime_robot.send_simple_command("skip")
+        else:
+            await self.vacuum.send_command("skip", {})
+        record_command(self._config_entry, "skip (send_command)", None)
+        log = getattr(getattr(self._config_entry, "runtime_data", None), "skip_attempts", None)
+        if log is not None:
+            log.append(record)
+        _LOGGER.info(
+            "Roomba+: skip sent (phase %s); what the robot does is recorded "
+            "in the diagnostics under field_evidence.skip_attempts",
+            record["before"].get("phase"),
+        )
+
+        @callback
+        def _after(_now: Any) -> None:
+            record["after_60s"] = self._skip_snapshot()
+
+        self._config_entry.async_on_unload(async_call_later(self.hass, 60, _after))
 
     def _build_region_command(self, params: dict[str, Any]) -> dict[str, Any]:
         """Build the region-cleaning payload for send_command.

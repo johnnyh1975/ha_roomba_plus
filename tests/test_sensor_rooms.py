@@ -1899,3 +1899,13 @@ class TestEdgeCoverageAndRelocalisation:
     def test_without_a_profile_the_attributes_are_empty_but_present(self):
         attrs = self._reloc(None).extra_state_attributes
         assert attrs["baseline"] is None and attrs["recent_window"] == []
+
+
+class TestTheSummarySaysTheScope:
+    def test_scope_is_passed_through(self):
+        sensor = _make_last_mission_summary_sensor(mission_store=_store_with({
+            "id": "m_1", "started_at": "2026-10-10T07:00:00+00:00",
+            "ended_at": "2026-10-10T07:44:00+00:00", "result": "completed",
+            "initiator": "manual", "zones": [], "scope": "whole_home",
+        }))
+        assert sensor.extra_state_attributes["scope"] == "whole_home"

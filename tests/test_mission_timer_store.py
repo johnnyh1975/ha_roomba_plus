@@ -1634,8 +1634,6 @@ class TestAutoAdvanceRoomIntegration:
         """With a real time estimate wired in, the room advances on the
         transient phase once the time-in-room confidence check passes."""
         mts = MissionTimerStore()
-        mts.planned_rooms = ["Kitchen", "Hall", "Bedroom"]
-        mts.total_estimated_sec = 900.0  # 300s/room average
         entry = _make_entry(mts)
         hass = MagicMock()
         def _close_coro(*args, **kwargs):
@@ -1651,6 +1649,12 @@ class TestAutoAdvanceRoomIntegration:
         ):
             cb = make_mission_callback(hass, entry)
             cb(_msg("run", cycle="clean"))
+            # The plan as the mission start sets it. Set before the first
+            # "run", it was the previous mission's, which a new mission
+            # replaces since 4.3.4 -- with no rooms in this message, by
+            # none.
+            mts.planned_rooms = ["Kitchen", "Hall", "Bedroom"]
+            mts.total_estimated_sec = 900.0  # 300s/room average
             mts.run_sec = 250.0  # >= 300*0.5=150 → confidence check passes
             idx_before = mts.current_room_idx
             cb(_msg("charge", cycle="clean"))
@@ -3471,3 +3475,63 @@ class TestMissionTimerStoreEdges:
         s.planned_rooms = ["Kitchen"]
         s.total_estimated_sec = "nonsense"
         assert s.expected_room_sec is None
+
+
+class TestAButtonStartHasNoPlannedRooms:
+    """4.3.4, @Hardy-196: the planned order of a run from the robot's
+    button came from the zone command sent before it."""
+
+    def _data(self, initiator, mts_rooms):
+        data = MagicMock()
+        data.roomba.master_state = {"state": {"reported": {
+            "cleanMissionStatus": {"phase": "run", "initiator": initiator},
+            "lastCommand": {"regions": [{"region_id": "21"}]},
+        }}}
+        data.cloud_coordinator.regions = [{"id": "21", "name": "Couch"}]
+        data.cloud_coordinator.zones = []
+        data.cloud_coordinator.regions_by_pmap = {}
+        data.mission_timer_store.planned_rooms = mts_rooms
+        return data
+
+    def test_a_button_start_plans_nothing(self):
+        from custom_components.roomba_plus.sensor import _get_planned_room_order
+
+        assert _get_planned_room_order(self._data("manual", [])) == []
+
+    def test_a_home_assistant_start_plans_its_rooms(self):
+        from custom_components.roomba_plus.sensor import _get_planned_room_order
+
+        assert _get_planned_room_order(self._data("localApp", [])) == ["Couch"]
+
+
+class TestAMissionWithoutRoomsReplacesTheLastPlan:
+    """4.3.4: a whole-home mission set no plan, so the previous mission's
+    rooms stayed the plan whenever its end had been missed -- and the
+    planned order falls back to them."""
+
+    @pytest.mark.asyncio
+    async def test_the_old_rooms_go(self):
+        mts = MissionTimerStore()
+        mts.mission_id = "ABC123_1600000000"
+        mts.planned_rooms = ["Couch"]
+        mts.total_estimated_sec = 600.0
+        entry = _make_entry(mts)
+        hass = MagicMock()
+
+        def _close_coro(*args, **kwargs):
+            import asyncio as _asyncio
+            for a in args:
+                if _asyncio.iscoroutine(a):
+                    a.close()
+        hass.async_create_task = _close_coro
+
+        with patch(
+            "asyncio.run_coroutine_threadsafe",
+            side_effect=lambda coro, loop: coro.close(),
+        ):
+            cb = make_mission_callback(hass, entry)
+            cb(_msg("run", cycle="clean"))
+
+        assert mts.mission_id == "ABC123_1700000000"
+        assert mts.planned_rooms == []
+        assert mts.total_estimated_sec is None

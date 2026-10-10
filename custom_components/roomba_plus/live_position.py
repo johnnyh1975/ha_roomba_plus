@@ -36,6 +36,23 @@ of 100 answered) on an i7+, for fifty seconds -- never across a whole
 mission. That is why giving up is built in: on a robot that never
 answers (`RrtpUnsupportedError`), and on one that answers without ever
 having a fix (a Braava jet m6 did that for a whole run).
+
+A ROBOT THAT HAS ANSWERED IS NOT ONE THAT CANNOT (4.3.4, @pk-1966). An
+i7+ answered for eight minutes of a mission, then left three requests
+unanswered for a minute and answered all three at once, 61 to 69 s
+late. roombapy reads three silent requests as "does not implement
+rrtp" and raises RrtpUnsupportedError, and this module gave up for the
+rest of the mission. It now tells the two apart: from a robot that has
+answered before, the same error is a stall, and the stream is opened
+again after a pause (30 s, then 60, then every 120 s; at most
+`MAX_STALLS_PER_MISSION` times). Only a robot that has never answered
+is given up on.
+
+roombapy also keeps its verdict for the rest of the CONNECTION, and
+refuses every later stream with the same error without asking -- the
+next mission's included, although this module meant to ask again then.
+The verdict is cleared before each stream this module opens: when to
+ask is decided here, per mission.
 """
 
 from __future__ import annotations
@@ -46,6 +63,7 @@ import logging
 from typing import TYPE_CHECKING, Any, Final
 
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.event import async_call_later
 
 from .const import reports_local_pose
 
@@ -84,12 +102,26 @@ NO_FIX_GIVE_UP_S: Final = 120.0
 #: starts it again, which is right once or twice and a loop beyond that.
 MAX_RESTARTS_PER_MISSION: Final = 5
 
+#: Pauses before asking again after a robot that has answered falls
+#: silent. The last one repeats. The stall that prompted this lasted a
+#: little over a minute; asking every second through it would only queue
+#: requests the robot answers late, all at once.
+STALL_RETRY_DELAYS_S: Final[tuple[float, ...]] = (30.0, 60.0, 120.0)
+
+#: How many stalls one mission may have before this module stops asking.
+#: At the 120 s pause a robot that stays silent costs three requests
+#: every two minutes until then.
+MAX_STALLS_PER_MISSION: Final = 10
+
 #: `status` values, for diagnostics.
 STATUS_OFF: Final = "off"
 STATUS_IDLE: Final = "idle"
 STATUS_STREAMING: Final = "streaming"
 STATUS_POSE_IN_SHADOW: Final = "pose_in_shadow"
 STATUS_UNSUPPORTED: Final = "unsupported"
+#: A robot that has answered before stopped answering; asking again
+#: after a pause.
+STATUS_STALLED: Final = "stalled"
 STATUS_NO_FIX: Final = "no_fix"
 STATUS_ERROR: Final = "error"
 
@@ -119,6 +151,12 @@ class LivePositionStream:
         #: cleared when the robot reports no mission.
         self._given_up = False
         self._restarts = 0
+        #: Whether the robot has ever answered a request. Once it has, it
+        #: implements them, and silence is a stall rather than a verdict.
+        self._has_answered = False
+        #: Stalls in this mission, and the pending "ask again" timer.
+        self._stalls = 0
+        self._retry_cancel: Callable[[], None] | None = None
         self.status: str = STATUS_IDLE
         #: The newest requested position. Kept after the mission so the
         #: tracker can say where the robot stopped; never a shadow pose.
@@ -148,6 +186,7 @@ class LivePositionStream:
         if self._unsub_message is not None:
             self._unsub_message()
             self._unsub_message = None
+        self._cancel_retry()
         self._cancel_soon()
 
     @callback
@@ -183,6 +222,7 @@ class LivePositionStream:
             # The tracker reads `latest`; switched off means no position
             # from here, not the last one held indefinitely.
             self.latest = None
+            self._cancel_retry()
             self._cancel_soon()
             return
         state = self._state()
@@ -196,6 +236,10 @@ class LivePositionStream:
             # updated, and asking costs three requests.
             self._given_up = False
             self._restarts = 0
+            self._stalls = 0
+            self._cancel_retry()
+            if self.status == STATUS_STALLED:
+                self.status = STATUS_IDLE
 
         if reports_local_pose(state):
             # The robot publishes after all. Its own pose is free and
@@ -205,7 +249,11 @@ class LivePositionStream:
             self._cancel_soon()
             return
 
-        wanted = phase in MOVING_PHASES and not self._given_up
+        wanted = (
+            phase in MOVING_PHASES
+            and not self._given_up
+            and self._retry_cancel is None
+        )
         # A TASK BEING CANCELLED IS NOT RUNNING. lewis sends brief
         # `charge` bursts between rooms; two messages in one loop turn
         # cancel the stream and want it back before the cancellation has
@@ -222,7 +270,9 @@ class LivePositionStream:
             )
         elif not wanted and running:
             self._cancel_soon()
-        if not wanted and self.status in (STATUS_STREAMING, STATUS_OFF):
+        if not wanted and self.status in (STATUS_STREAMING, STATUS_OFF) and (
+            self._retry_cancel is None
+        ):
             self.status = STATUS_IDLE
 
     # ── Stream ───────────────────────────────────────────────────────────
@@ -237,6 +287,7 @@ class LivePositionStream:
         # counted like any other, not leave the status at "streaming"
         # while every later message starts another failing task.
         try:
+            self._forget_library_verdict()
             stream = self._roomba.watch_position()
             while True:
                 # A DEADLINE FOR THE FIRST POSITION ONLY. Once one has
@@ -260,6 +311,13 @@ class LivePositionStream:
                     return
                 received_this_stream += 1
                 self.positions_received += 1
+                if self._stalls and received_this_stream == 1:
+                    _LOGGER.info(
+                        "Roomba+ live position: the robot answers again "
+                        "(after %d stall(s) this mission)",
+                        self._stalls,
+                    )
+                self._has_answered = True
                 # The budget is for streams that fail, not for a stream
                 # that worked and then lost the connection: a long
                 # mission on flaky Wi-Fi would otherwise use it up.
@@ -278,11 +336,14 @@ class LivePositionStream:
                 NO_FIX_GIVE_UP_S,
             )
         except RrtpUnsupportedError:
-            self._give_up(STATUS_UNSUPPORTED)
-            _LOGGER.info(
-                "Roomba+ live position: the robot does not answer position "
-                "requests; not asking again until the next mission"
-            )
+            if self._has_answered:
+                self._stalled()
+            else:
+                self._give_up(STATUS_UNSUPPORTED)
+                _LOGGER.info(
+                    "Roomba+ live position: the robot does not answer position "
+                    "requests; not asking again until the next mission"
+                )
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - a dropped connection lands here
@@ -310,6 +371,58 @@ class LivePositionStream:
         self._given_up = True
         self.status = status
 
+    def _stalled(self) -> None:
+        """A robot that has answered before fell silent: pause, ask again."""
+        self._stalls += 1
+        if self._stalls > MAX_STALLS_PER_MISSION:
+            self._give_up(STATUS_STALLED)
+            _LOGGER.warning(
+                "Roomba+ live position: the robot stopped answering position "
+                "requests %d times this mission; not asking again until the "
+                "next mission",
+                MAX_STALLS_PER_MISSION,
+            )
+            return
+        delay = STALL_RETRY_DELAYS_S[
+            min(self._stalls, len(STALL_RETRY_DELAYS_S)) - 1
+        ]
+        self.status = STATUS_STALLED
+        _LOGGER.info(
+            "Roomba+ live position: the robot stopped answering position "
+            "requests; asking again in %.0f s",
+            delay,
+        )
+        self._cancel_retry()
+        self._retry_cancel = async_call_later(self._hass, delay, self._retry)
+
+    @callback
+    def _retry(self, _now: Any) -> None:
+        self._retry_cancel = None
+        # Idle until a stream starts: the robot may be docked mid-mission
+        # to recharge, and "stalled" would then describe nothing.
+        if self.status == STATUS_STALLED:
+            self.status = STATUS_IDLE
+        self._evaluate()
+
+    @callback
+    def _cancel_retry(self) -> None:
+        if self._retry_cancel is not None:
+            self._retry_cancel()
+            self._retry_cancel = None
+
+    def _forget_library_verdict(self) -> None:
+        """Clear roombapy's "does not answer" verdict before asking.
+
+        roombapy 2.0.2 keeps it for the whole connection (cleared only
+        on a reconnect) and then refuses every stream without sending a
+        request. This module decides per mission and per stall, so the
+        verdict must not outlast the stream that produced it. A private
+        attribute of the pinned version; absent, there is nothing to
+        clear.
+        """
+        if getattr(self._roomba, "_position_unsupported", False):
+            self._roomba._position_unsupported = False  # noqa: SLF001
+
     @callback
     def _cancel_soon(self) -> None:
         if self._task is not None and not self._task.done():
@@ -325,6 +438,9 @@ class LivePositionStream:
             "streams_started": self.streams_started,
             "positions_received": self.positions_received,
             "given_up_this_mission": self._given_up,
+            "has_answered": self._has_answered,
+            "stalls_this_mission": self._stalls,
+            "waiting_to_ask_again": self._retry_cancel is not None,
             "last_error": self.last_error,
             "has_map_id": bool(self.latest is not None and self.latest.pmap_id),
         }

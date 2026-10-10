@@ -26,7 +26,7 @@ from homeassistant.helpers.typing import StateType
 
 from homeassistant.util import dt as dt_util
 
-from .const import CONF_ROOM_SCHEDULE
+from .const import CONF_ROOM_SCHEDULE, mission_command_regions
 from .entity import IRobotEntity
 from .prime_room_map import SIGNAL_PRIME_ROOM_NAMES
 from .models import RoombaConfigEntry
@@ -145,9 +145,10 @@ def _get_planned_room_order(data: Any) -> list[str]:
     last_cmd = reported.get("lastCommand", {})
 
     from .mission_store import MissionStore as _MS
+    # Not from a start at the robot's buttons (mission_command_regions).
     region_ids = [
         _MS.extract_rid(r)
-        for r in (last_cmd.get("regions") or [])
+        for r in mission_command_regions(reported.get("cleanMissionStatus"), last_cmd)
         if _MS.extract_rid(r)
     ]
     mts = getattr(data, "mission_timer_store", None)
@@ -477,7 +478,9 @@ def why_no_room_estimates(config_entry: Any) -> str:
             if getattr(data, "roomba", None) is not None else {}
         )
         last_regions = [
-            r for r in ((reported.get("lastCommand") or {}).get("regions") or [])
+            r for r in mission_command_regions(
+                reported.get("cleanMissionStatus"), reported.get("lastCommand")
+            )
             if isinstance(r, dict) and r.get("params")
         ]
         if last_regions:
@@ -1709,6 +1712,8 @@ class RoombaLastMissionSummarySensor(IRobotEntity, SensorEntity):
             "evacuations": rec.get("evacuations"),
             "error_code": rec.get("error_code"),
             "initiator": rec.get("initiator"),
+            # `rooms` or `whole_home` (4.3.4); None for older records.
+            "scope": rec.get("scope"),
             "started_at": rec.get("started_at"),
             "ended_at": rec.get("ended_at"),
         }

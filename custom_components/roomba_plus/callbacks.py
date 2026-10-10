@@ -27,6 +27,8 @@ from homeassistant.helpers.dispatcher import async_dispatcher_send
 
 from .const import (
     lifetime_hours,
+    mission_command_regions,
+    mission_scope,
     ROOM_EVENT_CLOSED_AT_END_STATUSES,
     ROOM_EVENT_DONE_STATUSES,
     ROOM_EVENT_PASS_DONE_STATUSES,
@@ -531,10 +533,13 @@ def _capture_zone_names(
         ))
     if data.map_capability == MapCapability.SMART:
         last_cmd = _merged_top_level(entry, reported, "lastCommand")
+        # Not from a start at the robot's buttons (mission_command_regions).
         region_ids = [
             r.get("region_id")
-            for r in (last_cmd.get("regions") or [])
-            if r.get("region_id")
+            for r in mission_command_regions(
+                _merged_top_level(entry, reported, "cleanMissionStatus"), last_cmd
+            )
+            if isinstance(r, dict) and r.get("region_id")
         ]
         if region_ids and data.cloud_coordinator:
             # Across every map: a mission can target a room on a map
@@ -543,6 +548,90 @@ def _capture_zone_names(
             id_to_name = region_names_across_maps(data.cloud_coordinator)
             return [id_to_name[rid] for rid in region_ids if rid in id_to_name]
     return []  # NONE (600-series) or SMART without cloud
+
+
+def _command_summary(command: Any) -> dict[str, Any]:
+    """A command as evidence: what, who, when, how many regions."""
+    command = command if isinstance(command, dict) else {}
+    regions = command.get("regions")
+    regions = regions if isinstance(regions, list) else []
+    return {
+        "command": command.get("command"),
+        "initiator": command.get("initiator"),
+        "time": command.get("time"),
+        "regions": len(regions),
+        "region_types": sorted({
+            str(r.get("type")) for r in regions
+            if isinstance(r, dict) and r.get("type")
+        }),
+    }
+
+
+def _note_mission_start_command(
+    entry: RoombaConfigEntry, reported: dict[str, Any], scope: str
+) -> None:
+    """Keep which command a starting mission found (4.3.4).
+
+    See RoombaData.mission_start_commands. `command_age_sec` is how long
+    before the mission's start the command was sent; `in_this_message`
+    whether the start message carried it or it came from earlier state.
+    """
+    log = getattr(entry.runtime_data, "mission_start_commands", None)
+    if log is None:
+        return
+    mission = _merged_top_level(entry, reported, "cleanMissionStatus")
+    command = _merged_top_level(entry, reported, "lastCommand")
+    started = mission.get("mssnStrtTm")
+    sent = command.get("time")
+    log.append({
+        "at": dt_util.utcnow().isoformat(timespec="seconds"),
+        "mission": {
+            "initiator": mission.get("initiator"),
+            "cycle": mission.get("cycle"),
+            "phase": mission.get("phase"),
+            "nMssn": mission.get("nMssn"),
+        },
+        "last_command": _command_summary(command),
+        "in_this_message": "lastCommand" in reported,
+        "command_age_sec": (
+            int(started) - int(sent)
+            if isinstance(started, (int, float)) and isinstance(sent, (int, float))
+            and started and sent
+            else None
+        ),
+        "scope": scope,
+        "next_command": None,
+    })
+
+
+def _note_next_command(entry: RoombaConfigEntry, command: Any) -> None:
+    """The first command the robot reports after a mission's start, once."""
+    log = getattr(getattr(entry, "runtime_data", None), "mission_start_commands", None)
+    if not log:
+        return
+    last = log[-1]
+    if last.get("next_command") is not None:
+        return
+    summary = _command_summary(command)
+    if summary == last.get("last_command"):
+        return
+    started = dt_util.parse_datetime(str(last.get("at") or ""))
+    summary["seconds_after_start"] = (
+        int((dt_util.utcnow() - started).total_seconds()) if started else None
+    )
+    last["next_command"] = summary
+
+
+def _capture_scope(entry: RoombaConfigEntry, reported: dict[str, Any]) -> str:
+    """`rooms` or `whole_home` for the mission starting now (4.3.4)."""
+    from .models import MapCapability
+
+    data: RoombaData = entry.runtime_data
+    return mission_scope(
+        data.map_capability == MapCapability.SMART,
+        _merged_top_level(entry, reported, "cleanMissionStatus"),
+        _merged_top_level(entry, reported, "lastCommand"),
+    )
 
 
 def _mission_already_terminal(entry: RoombaConfigEntry, mssn_strt_tm: int) -> bool:
@@ -592,6 +681,7 @@ async def async_record_mission(
     recharge_min: int = 0,
     result_override: str | None = None,
     npicks_delta: int = 0,
+    scope: str | None = None,
 ) -> None:
     """Build and append a mission record to MissionStore.
 
@@ -735,6 +825,10 @@ async def async_record_mission(
         "result": result,
         "initiator": mission.get("initiator", "none"),
         "zones": zones,
+        # WHAT IT WAS ASKED TO CLEAN (4.3.4): `rooms` or `whole_home`.
+        # Empty `zones` alone read as missing data; None before 4.3.4 and
+        # for a mission whose start was not seen.
+        "scope": scope,
         # WHAT WAS ACTUALLY CLEANED, alongside what was asked for.
         #
         # `zones` is resolved at mission START -- the request. A room
@@ -1098,6 +1192,8 @@ class _MissionState:
     ran_in_room: bool = False
     travel_started_at: float | None = None
     current_mission_zones: list[str] = dataclasses.field(default_factory=list)
+    #: `rooms` or `whole_home`, captured with the zones (4.3.4).
+    current_mission_scope: str | None = None
     mission_start_ts: int = 0
     nstuck_at_start: int = 0
     # v3.2.0 ANOMALY-EXPLAIN — npicks (bbrun.nPicks) at mission start,
@@ -1255,6 +1351,8 @@ def _handle_mission_start(
     ):
         ms.had_cleaning_phase = True
         ms.current_mission_zones = _capture_zone_names(entry, reported)
+        ms.current_mission_scope = _capture_scope(entry, reported)
+        _note_mission_start_command(entry, reported, ms.current_mission_scope)
         ms.mission_start_ts = candidate_mission_start_ts
         ms.ran_in_room = False
         ms.saw_travelling = False
@@ -1385,7 +1483,9 @@ def _update_room_progress(
                     getattr(entry.runtime_data.roomba, "master_state", None) or {}
                 )
                 _rep = (_master.get("state") or {}).get("reported") or {}
-                _regions = (_rep.get("lastCommand") or {}).get("regions") or []
+                _regions = mission_command_regions(
+                    _rep.get("cleanMissionStatus"), _rep.get("lastCommand")
+                )
                 _zone = entry.options.get(CONF_SMART_ZONE_DATA, {})
                 # v2.9.0 (D) — use MissionStore.extract_rid() instead of
                 # only checking region_id/region_name. The iRobot app
@@ -1606,6 +1706,14 @@ def _update_room_progress(
                         entry.entry_id,
                         room_estimates_sec=_room_secs,
                     )
+                else:
+                    # NO ROOMS IS A PLAN TOO (4.3.4): the whole home. The
+                    # last mission's rooms stayed the plan otherwise
+                    # whenever its end was missed, and the planned order
+                    # falls back to them.
+                    mts_upd.set_mission_plan(
+                        _mission_id, [], None, hass, entry.entry_id,
+                    )
         else:
             # v2.7.5: pass hass/entry_id so on_phase_other can save
             # the flushed delta without waiting for next on_phase_run.
@@ -1761,7 +1869,7 @@ def _confirm_mission_end(
                 result_override = "stuck_and_abandoned"
 
         entry.async_create_task(
-            hass, async_record_mission(hass, entry, mission, reported, list(ms.current_mission_zones), observed_rooms=_observed_rooms(entry, last_room_worked=ms.ran_in_room), rooms_are_guesses=_rooms_are_guesses(entry, saw_travelling=ms.saw_travelling), start_ts=ms.mission_start_ts, nstuck_delta=nstuck_delta, mission_error_code=ms.mission_error_code, recharge_min=ms.recharge_min_accumulator + ms.current_leg_rechrgM, result_override=result_override, npicks_delta=npicks_delta)
+            hass, async_record_mission(hass, entry, mission, reported, list(ms.current_mission_zones), observed_rooms=_observed_rooms(entry, last_room_worked=ms.ran_in_room), rooms_are_guesses=_rooms_are_guesses(entry, saw_travelling=ms.saw_travelling), start_ts=ms.mission_start_ts, nstuck_delta=nstuck_delta, mission_error_code=ms.mission_error_code, recharge_min=ms.recharge_min_accumulator + ms.current_leg_rechrgM, result_override=result_override, npicks_delta=npicks_delta, scope=ms.current_mission_scope)
         )
         # MP1 (v2.6.0): clear mission timer at end
         _mts = getattr(entry.runtime_data, "mission_timer_store", None)
@@ -1769,6 +1877,7 @@ def _confirm_mission_end(
             _mts.clear(hass, entry.entry_id)
 
         ms.current_mission_zones = []
+        ms.current_mission_scope = None
         ms.mission_start_ts = 0
         ms.ran_in_room = False
         ms.nstuck_at_start = 0
@@ -2129,7 +2238,9 @@ def _has_unvisited_planned_rooms(
     # committing to the full wait.
     _master = getattr(entry.runtime_data.roomba, "master_state", None) or {}
     _reported = (_master.get("state") or {}).get("reported") or {}
-    _planned_regions = (_reported.get("lastCommand") or {}).get("regions") or []
+    _planned_regions = mission_command_regions(
+        _reported.get("cleanMissionStatus"), _reported.get("lastCommand")
+    )
     from .mission_store import MissionStore as _MS2
     _planned_rids = [
         rid for rid in (_MS2.extract_rid(r) for r in _planned_regions) if rid
@@ -2158,6 +2269,8 @@ def make_mission_callback(
     def _on_mission_message(json_data: dict[str, Any], _synthetic: bool = False) -> None:
 
         reported = json_data.get("state", {}).get("reported", {})
+        if "lastCommand" in reported:
+            _note_next_command(entry, reported["lastCommand"])
         if "cleanMissionStatus" not in reported:
             return
 

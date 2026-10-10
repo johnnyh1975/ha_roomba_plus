@@ -26,16 +26,26 @@ class _Robot:
         self.queue: asyncio.Queue[Any] = asyncio.Queue()
         self.streams_opened = 0
         self.streams_closed = 0
+        #: roombapy 2.0.2's per-connection verdict: set when a stream
+        #: ends in RrtpUnsupportedError, after which every stream is
+        #: refused without asking until a reconnect clears it.
+        self._position_unsupported = False
+        self.refused = 0
 
     def register_on_message_callback(self, cb: Any) -> Any:
         self.callbacks.append(cb)
         return lambda: self.callbacks.remove(cb)
 
     async def watch_position(self) -> Any:
+        if getattr(self, "_position_unsupported", False):
+            self.refused += 1
+            raise RrtpUnsupportedError("did not answer earlier in this connection")
         self.streams_opened += 1
         try:
             while True:
                 item = await self.queue.get()
+                if isinstance(item, RrtpUnsupportedError):
+                    self._position_unsupported = True
                 if isinstance(item, BaseException):
                     raise item
                 yield item
@@ -274,6 +284,218 @@ class TestWhenItGivesUp:
         robot.queue.put_nowait(_pos(3.0))
         await _settle()
         assert [p.x for p in seen] == [1.0, 3.0]
+        stream.stop()
+        await _settle()
+
+
+class TestARobotThatHasAnsweredStalls:
+    """4.3.4, @pk-1966: an i7+ answered for eight minutes, then left three
+    requests unanswered for a minute and answered them all at once. The
+    library's "does not implement rrtp" is a stall for a robot that has
+    answered before."""
+
+    @pytest.fixture(autouse=True)
+    def _short_pauses(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(lp, "STALL_RETRY_DELAYS_S", (0.02, 0.04))
+
+    async def _stall(self, robot: _Robot) -> None:
+        robot.queue.put_nowait(RrtpUnsupportedError("silent"))
+        await _settle()
+
+    @pytest.mark.asyncio
+    async def test_it_asks_again_after_a_pause(self, hass: Any) -> None:
+        robot = _Robot()
+        stream = _stream(hass, robot)
+        seen: list[RobotPosition] = []
+        stream.add_listener(seen.append)
+        robot.report(phase="run")
+        await _settle()
+        robot.queue.put_nowait(_pos(1.0))
+        await _settle()
+        await self._stall(robot)
+
+        assert stream.status == lp.STATUS_STALLED
+        assert stream.diagnostics()["given_up_this_mission"] is False
+        # Not during the pause, however often the robot reports.
+        robot.report(phase="run")
+        await _settle()
+        assert robot.streams_opened == 1
+
+        await asyncio.sleep(0.05)
+        await _settle()
+        assert robot.streams_opened == 2
+        assert robot.refused == 0
+        robot.queue.put_nowait(_pos(5.0))
+        await _settle()
+        assert [p.x for p in seen] == [1.0, 5.0]
+        assert stream.status == lp.STATUS_STREAMING
+        stream.stop()
+        await _settle()
+
+    @pytest.mark.asyncio
+    async def test_a_robot_that_never_answered_is_still_given_up_on(
+        self, hass: Any
+    ) -> None:
+        """An i3 on daredevil: 2,875 requests, no reply."""
+        robot = _Robot()
+        stream = _stream(hass, robot)
+        robot.report(phase="run")
+        await _settle()
+        await self._stall(robot)
+        await asyncio.sleep(0.05)
+        robot.report(phase="run")
+        await _settle()
+        assert stream.status == lp.STATUS_UNSUPPORTED
+        assert robot.streams_opened == 1
+        stream.stop()
+
+    @pytest.mark.asyncio
+    async def test_the_pauses_grow_and_the_stalls_are_bounded(
+        self, hass: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(lp, "MAX_STALLS_PER_MISSION", 2)
+        robot = _Robot()
+        stream = _stream(hass, robot)
+        robot.report(phase="run")
+        await _settle()
+        robot.queue.put_nowait(_pos())
+        await _settle()
+
+        await self._stall(robot)
+        await asyncio.sleep(0.03)
+        await _settle()
+        assert robot.streams_opened == 2
+        await self._stall(robot)
+        # The second pause is the longer one.
+        await asyncio.sleep(0.03)
+        await _settle()
+        assert robot.streams_opened == 2
+        await asyncio.sleep(0.03)
+        await _settle()
+        assert robot.streams_opened == 3
+
+        await self._stall(robot)
+        assert stream.status == lp.STATUS_STALLED
+        assert stream.diagnostics()["given_up_this_mission"] is True
+        await asyncio.sleep(0.1)
+        robot.report(phase="run")
+        await _settle()
+        assert robot.streams_opened == 3
+        stream.stop()
+
+    @pytest.mark.asyncio
+    async def test_the_end_of_the_mission_cancels_the_pause(self, hass: Any) -> None:
+        robot = _Robot()
+        stream = _stream(hass, robot)
+        robot.report(phase="run")
+        await _settle()
+        robot.queue.put_nowait(_pos())
+        await _settle()
+        await self._stall(robot)
+        robot.report(phase="charge", cycle="none")
+        await _settle()
+        assert stream.status == lp.STATUS_IDLE
+        assert stream.diagnostics()["stalls_this_mission"] == 0
+        await asyncio.sleep(0.05)
+        await _settle()
+        assert robot.streams_opened == 1
+        stream.stop()
+
+    @pytest.mark.asyncio
+    async def test_a_pause_ending_at_a_recharge_leaves_it_idle(
+        self, hass: Any
+    ) -> None:
+        """Back in the dock mid-mission when the pause ends: nothing is
+        asked, and nothing is stalled either."""
+        robot = _Robot()
+        stream = _stream(hass, robot)
+        robot.report(phase="run")
+        await _settle()
+        robot.queue.put_nowait(_pos())
+        await _settle()
+        await self._stall(robot)
+        robot.report(phase="charge", cycle="clean")
+        await asyncio.sleep(0.05)
+        await _settle()
+        assert stream.status == lp.STATUS_IDLE
+        assert robot.streams_opened == 1
+        robot.report(phase="run")
+        await _settle()
+        assert robot.streams_opened == 2
+        stream.stop()
+        await _settle()
+
+    @pytest.mark.asyncio
+    async def test_stop_cancels_the_pause(self, hass: Any) -> None:
+        robot = _Robot()
+        stream = _stream(hass, robot)
+        robot.report(phase="run")
+        await _settle()
+        robot.queue.put_nowait(_pos())
+        await _settle()
+        await self._stall(robot)
+        stream.stop()
+        await asyncio.sleep(0.05)
+        await _settle()
+        assert robot.streams_opened == 1
+        assert stream.diagnostics()["waiting_to_ask_again"] is False
+
+    @pytest.mark.asyncio
+    async def test_switching_it_off_cancels_the_pause(self, hass: Any) -> None:
+        robot = _Robot()
+        flag = [True]
+        stream = _stream(hass, robot, flag)
+        robot.report(phase="run")
+        await _settle()
+        robot.queue.put_nowait(_pos())
+        await _settle()
+        await self._stall(robot)
+        flag[0] = False
+        robot.report(phase="run")
+        await _settle()
+        assert stream.diagnostics()["waiting_to_ask_again"] is False
+        assert stream.status == lp.STATUS_OFF
+        stream.stop()
+
+
+class TestTheLibrarysVerdictDoesNotOutliveTheMission:
+    """roombapy keeps "does not answer" until the connection drops and
+    refuses every stream without asking. The next mission meant to ask
+    again, and got the refusal."""
+
+    @pytest.mark.asyncio
+    async def test_the_next_mission_asks_the_robot(self, hass: Any) -> None:
+        robot = _Robot()
+        stream = _stream(hass, robot)
+        robot.report(phase="run")
+        await _settle()
+        robot.queue.put_nowait(RrtpUnsupportedError("silent"))
+        await _settle()
+        assert robot._position_unsupported is True
+
+        robot.report(phase="charge", cycle="none")
+        robot.report(phase="run")
+        await _settle()
+        assert robot.refused == 0
+        assert robot.streams_opened == 2
+        robot.queue.put_nowait(_pos())
+        await _settle()
+        assert stream.status == lp.STATUS_STREAMING
+        stream.stop()
+        await _settle()
+
+    @pytest.mark.asyncio
+    async def test_a_client_without_the_attribute_is_left_alone(
+        self, hass: Any
+    ) -> None:
+        robot = _Robot()
+        del robot._position_unsupported
+        stream = _stream(hass, robot)
+        robot.report(phase="run")
+        await _settle()
+        assert not hasattr(robot, "_position_unsupported")
+        assert robot.streams_opened == 1
+        assert stream.last_error is None
         stream.stop()
         await _settle()
 

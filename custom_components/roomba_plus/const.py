@@ -9,7 +9,13 @@ from typing import Any, Final
 from homeassistant.components.vacuum import VacuumActivity
 from homeassistant.const import Platform
 
-from .vendor_errors import vendor_error
+# iRobot's own error texts come from roombapy-prime since 4.3.4. This
+# integration carried a copy of the same table (app 3.0.0) beside the
+# library's, already a release behind it: the library had moved to app
+# 3.2.0's texts and corrected the ones 3.2.0 made worse. The library is
+# a hard requirement and imported at the top of __init__.py, so the copy
+# guarded against nothing and could only fall behind.
+from roombapy_prime.vendor_errors import vendor_error
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -1947,7 +1953,7 @@ MAINTENANCE_DUE_GRACE_DAYS: Final[int] = 3
 #     46  "Low battery"            @AlakazipLabs' i3 at 6% (daredevil)
 #
 # iRobot's own app also ships ONE code-to-text catalogue with no platform
-# dimension (see vendor_errors.py). If the wire code were the internal enum
+# dimension (see roombapy_prime.vendor_errors). If the wire code were the internal enum
 # index, the vendor's own client would be showing wrong text too.
 #
 # WHAT WOULD CHANGE THIS: a j-series robot reporting a code whose text here
@@ -2178,8 +2184,9 @@ def get_localized_error_entry(code: int, language: str | None) -> dict[str, str]
     # The second tells somebody what to do; the first tells them
     # something is wrong, which the stopped robot already said.
     #
-    # Taken from app 3.0.0, where the catalogue ships as plain locale
-    # JSON. 112 codes in 25 languages, eight of them extracted.
+    # From the Prime app's locale files (roombapy-prime 0.6.0: app 3.2.0,
+    # 112 codes, eight languages), with the library's own text where
+    # 3.2.0 made one worse.
     #
     # Ours still answers for the 75 codes iRobot does not document --
     # @connormxy's 236 is in neither, so a robot can report a code its
@@ -2469,6 +2476,11 @@ JOB_INITIATOR_LABELS: Final[dict[str, str]] = {
     "dockBtn": "Dock button",
     "alexa": "Alexa",
     "siri": "Siri",
+    # GOOGLE SINCE 4.3.4. App 3.0.0's `Initiator` carried this member's
+    # value as an unresolved constant, so roombapy-prime left it out
+    # until 0.6.0 resolved it from app 3.2.0 -- and this table, checked
+    # against the library's enum, followed.
+    "google": "Google",
     "ifttt": "IFTTT",
     "iftttc": "IFTTT",
     "homey": "Homey",
@@ -2721,6 +2733,66 @@ def has_pose(state: dict[str, Any]) -> bool:
     For "does a position actually exist", use `reports_local_pose()`.
     """
     return bool((state.get("cap") or {}).get("pose", 0) >= 1)
+
+
+#: Mission initiators that mean the robot was started from its own
+#: buttons. Such a start names no rooms: the buttons cannot pick any.
+ROBOT_SIDE_INITIATORS: Final[frozenset[str]] = frozenset({"manual", "dockBtn"})
+
+
+def mission_command_regions(
+    mission: Any, last_command: Any
+) -> list[Any]:
+    """The regions of the command behind the running mission, as far as
+    `lastCommand` can say -- empty for a start from the robot's buttons.
+
+    `lastCommand` IS THE ROBOT'S LAST COMMAND, NOT THE MISSION'S. A
+    mission started with the robot's CLEAN button names no rooms, yet
+    `lastCommand` can still hold the room or zone command that came
+    before it, either because the robot reports the running mission
+    before its new last command or because a button start is not a
+    command at all. @Hardy-196's 44-minute run from the button was
+    recorded as his zone "Couch", the zone command Roomba+ had sent
+    earlier (4.3.4).
+
+    The mission says who started it: `manual` and `dockBtn` are the
+    robot's own buttons (Roomba+ reports `localApp` on the same
+    firmware, the app `rmtApp`). Such a mission takes no regions from
+    `lastCommand`. Every other start is read as before.
+    """
+    mission = mission if isinstance(mission, dict) else {}
+    if mission.get("initiator") in ROBOT_SIDE_INITIATORS:
+        return []
+    command = last_command if isinstance(last_command, dict) else {}
+    regions = command.get("regions")
+    return list(regions) if isinstance(regions, list) else []
+
+
+#: What a mission was asked to clean (4.3.4): named rooms or zones, or
+#: everything. Recorded with each mission and shown on the vacuum, so a
+#: mission without rooms reads as the whole home rather than as a blank.
+MISSION_SCOPE_ROOMS: Final = "rooms"
+MISSION_SCOPE_WHOLE_HOME: Final = "whole_home"
+
+
+def mission_scope(
+    can_target_rooms: bool, mission: Any, last_command: Any
+) -> str:
+    """`rooms` when the running mission was sent to rooms or zones,
+    `whole_home` otherwise.
+
+    A robot that cannot target rooms (900- and 600-series) always cleans
+    the whole home. A Smart Map robot's mission is a room mission when its
+    own `cmd` names regions, or `lastCommand` does and may belong to it
+    (mission_command_regions).
+    """
+    if not can_target_rooms:
+        return MISSION_SCOPE_WHOLE_HOME
+    mission = mission if isinstance(mission, dict) else {}
+    own = (mission.get("cmd") or {}) if isinstance(mission.get("cmd"), dict) else {}
+    if own.get("regions") or mission_command_regions(mission, last_command):
+        return MISSION_SCOPE_ROOMS
+    return MISSION_SCOPE_WHOLE_HOME
 
 
 def reports_local_pose(state: dict[str, Any]) -> bool:

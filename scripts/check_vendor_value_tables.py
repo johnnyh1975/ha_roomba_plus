@@ -252,6 +252,16 @@ def main() -> int:
 
     tables = _tables()
     problems: list[str] = []
+    # VENDOR VALUES LEFT OUT ON PURPOSE, each with its reason. Declared
+    # beside the tables (select_prime.VENDOR_VALUES_NOT_OFFERED) so the
+    # tests read the same list. A value listed there must be in the
+    # vendor enum and absent from the table, or the entry is stale.
+    from custom_components.roomba_plus import select_prime  # noqa: PLC0415
+
+    not_offered = {
+        f"select_prime.{table}": values
+        for table, values in select_prime.VENDOR_VALUES_NOT_OFFERED.items()
+    }
 
     for name, vendor_name in CHECKED.items():
         if name not in tables:
@@ -262,6 +272,13 @@ def main() -> int:
             continue
         ours = {str(k) for k in tables[name]}
         theirs = {str(v) for v in wire_values(vendor_name)}
+        left_out = {str(v) for v in not_offered.get(name, {})}
+        for value in sorted(left_out - (theirs - ours)):
+            problems.append(
+                f"{name}: NOT_OFFERED lists {value}, which is not a "
+                f"{vendor_name} value missing from the table -- stale"
+            )
+        theirs -= left_out
         if ours != theirs:
             problems.append(
                 f"{name} disagrees with {vendor_name}\n"
@@ -312,6 +329,9 @@ def main() -> int:
                 f"      covered: {sorted(ours)}\n"
                 f"      vendor:  {sorted(theirs)}"
             )
+
+    for name in sorted(set(not_offered) - set(CHECKED)):
+        problems.append(f"{name}: in NOT_OFFERED but not a CHECKED table")
 
     declared = set(CHECKED) | set(CHECKED_LEVELS) | set(NO_VENDOR_ENUM)
     for name in sorted(set(tables) - declared):

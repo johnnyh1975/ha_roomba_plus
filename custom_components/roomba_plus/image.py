@@ -82,6 +82,7 @@ from .const import (
 )
 from .entity import IRobotEntity
 from .geometry_utils import pose_point_to_map_mm
+from .cloud_coordinator import umf_user_turn_rad
 from .live_position import LivePositionStream
 from .room_cleaning import region_names_across_maps
 from .segment_anchoring import anchor_segment
@@ -1246,6 +1247,10 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         self._cloud_coverage_png_for: str | None = None
         #: POSITION_SOURCE_POSE or _REQUEST once a path exists, else None.
         self._position_source: str | None = None
+        #: How far the iRobot app's map is turned, read once per mission
+        #: at the first requested position (umf_user_turn_rad); None
+        #: until then.
+        self._live_position_turn_rad: float | None = None
 
         # Mission tracking
         self._last_phase: str = ""
@@ -1864,6 +1869,9 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                     self._renderer.reset()
                     # Decided again by whichever position arrives first.
                     self._position_source = None
+                    # The app's turn is the one the robot loaded for
+                    # this mission, read at its first position.
+                    self._live_position_turn_rad = None
                     self._mission_points = []
                     self._mission_thetas = []
                     self._stuck_mission_points = []
@@ -2247,6 +2255,13 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
             return
         x, y = position.x * 1000.0, position.y * 1000.0
         heading = math.degrees(position.theta)
+        turn = self._live_position_turn()
+        if turn:
+            # TURNED BACK INTO THE MAP'S OWN FRAME (4.3.4, @frnchfrgg):
+            # the robot answers in the map as the iRobot app turned it.
+            cos_t, sin_t = math.cos(turn), math.sin(turn)
+            x, y = x * cos_t - y * sin_t, x * sin_t + y * cos_t
+            heading += math.degrees(turn)
         if getattr(getattr(self._renderer, "_cfg", None), "mirror_x", False) is True:
             # map_mm_to_view is its own inverse, and the renderer adds a
             # quarter to the heading of a mirrored frame (see
@@ -2257,6 +2272,27 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         self._position_source = POSITION_SOURCE_REQUEST
         self._attr_image_last_updated = dt_util.now(datetime.timezone.utc)
         self.async_write_ha_state()
+
+    def _live_position_turn(self) -> float:
+        """The app's turn of the map for this mission, in radians.
+
+        Read once, at the mission's first requested position, from the
+        cloud map the coordinator holds: a map turned in the app during
+        a mission reaches the robot at its next one, and the path drawn
+        so far must not turn with it. Nothing persistent is drawn from
+        requested positions (see _handle_live_position), so a mission
+        drawn under an older turn leaves nothing behind.
+        """
+        if self._live_position_turn_rad is None:
+            entry = self._config_entry
+            coordinator = (
+                getattr(getattr(entry, "runtime_data", None), "cloud_coordinator", None)
+                if entry is not None
+                else None
+            )
+            umf = getattr(coordinator, "umf_data", None) if coordinator is not None else None
+            self._live_position_turn_rad = umf_user_turn_rad(umf)
+        return self._live_position_turn_rad
 
     def _handle_dock_contact_confirmed(self) -> None:
         """v3.2.1 DOCK-ANCHOR — fires once per confirmed dock contact

@@ -458,6 +458,7 @@
           "dock_button": "Botón de la base",
           "alexa": "Alexa",
           "siri": "Siri",
+          "google": "Google",
           "ifttt": "IFTTT",
           "homey": "Homey",
           "openhab": "openHAB",

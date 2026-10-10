@@ -9,6 +9,36 @@ note are listed — most releases need zero action beyond updating.
 
 ---
 
+## v4.3.4 — from v4.3.3
+
+**A mission started with the robot's own button no longer carries the
+rooms of the command before it.** An automation that read
+`planned_room_order` or `mission_destination` during such a run got the
+previous command's rooms; it now gets none, and `mission_scope` says
+`whole_home`. Starts from Home Assistant, the iRobot app and schedules
+are unchanged.
+
+**A Classic robot that stops answering position requests mid-mission is
+asked again** after a pause, if it has answered before. The live path
+picks up again instead of stopping for the rest of the mission. Nothing
+to do.
+
+**A Smart Map turned in the iRobot app no longer turns the live path
+with it.** If you set *Map rotation* to match a turn saved in the app,
+the path now comes out turned once, like the rooms map; set the option
+to how you want all three pictures to stand.
+
+**Error texts come from roombapy-prime 0.6.0**, iRobot's current app
+texts, with the library's own where the current app made one worse. An
+automation that compares an error's description word for word may need
+the new text.
+
+**Delete `custom_components/roomba_plus/vendor_errors.py`** if you update
+by copying files rather than through HACS: 4.3.4 no longer has it, and
+nothing reads it.
+
+---
+
 ## v4.3.3 — from v4.3.2
 
 **`clean_room` sends a room on another map to that map.** Room names

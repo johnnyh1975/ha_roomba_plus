@@ -252,6 +252,17 @@ class TestHeatOptionsFollowTheDockCapability:
     def test_a_high_heat_dock_offers_three(self):
         assert set(self._options(3)) == {0, 1, 2}
 
+    def test_a_deep_hot_water_dock_offers_what_level_3_does(self):
+        """App 3.2.0's level 4: the heat screen lists the same three from
+        level 3 up. Named rather than left to the unknown-level default,
+        which gives the same set today by coincidence."""
+        from custom_components.roomba_plus.select_prime import (
+            _PAD_WASH_HEAT_LEVELS_BY_CAP,
+        )
+
+        assert _PAD_WASH_HEAT_LEVELS_BY_CAP[4] == (0, 1, 2)
+        assert set(self._options(4)) == {0, 1, 2}
+
     def test_an_unheated_dock_offers_nothing(self):
         """Levels 0 and 1 have no heat to control. No options means no
         entity, handled by the caller."""
@@ -298,20 +309,25 @@ class TestValueSetsAgreeWithTheVendorReference:
     def test_every_declared_source_matches_the_extract(self):
         from roombapy_prime.vendor_reference import wire_values
 
-        from custom_components.roomba_plus.select_prime import VENDOR_ENUM_SOURCES
+        from custom_components.roomba_plus.select_prime import (
+            VENDOR_ENUM_SOURCES,
+            VENDOR_VALUES_NOT_OFFERED,
+        )
 
         mismatches = []
         for table_name, enum_name in VENDOR_ENUM_SOURCES.items():
             if enum_name is None:
                 continue
             ours = set(self._table(table_name))
-            theirs = wire_values(enum_name)
+            theirs = wire_values(enum_name) - set(
+                VENDOR_VALUES_NOT_OFFERED.get(table_name, {})
+            )
             if ours != theirs:
                 mismatches.append(
                     f"{table_name} has {sorted(ours)}, {enum_name} has {sorted(theirs)}"
                 )
 
-        assert not mismatches, "value sets disagree with app 3.0.0: " + "; ".join(mismatches)
+        assert not mismatches, "value sets disagree with the vendor's: " + "; ".join(mismatches)
 
     def test_every_value_table_declares_a_source(self):
         """A table added without an entry here would not be checked, and

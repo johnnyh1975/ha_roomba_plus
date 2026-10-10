@@ -3025,3 +3025,45 @@ class TestARobotMadeVersionIsNotSent:
         record = _field_pmap("p", active="260918T205534", creator="robot",
                              user=None, last_user=None)
         assert pmap_committed_version(record) == "260918T205534"
+
+
+class TestHowFarTheAppTurnedTheMap:
+    """4.3.4, @frnchfrgg: a map turned in the iRobot app turns the
+    positions the robot answers. The header's two angles say by how much."""
+
+    @staticmethod
+    def _umf(user, robot):
+        return {"poses": {"orientation_rad": {
+            "user_orientation_rad": user, "robot_orientation_rad": robot,
+        }}}
+
+    def test_his_quarter_turn_counter_clockwise_in_the_app(self):
+        """4.7163 as mapped, 3.1454 after a quarter counter-clockwise."""
+        import math
+
+        from custom_components.roomba_plus.cloud_coordinator import umf_user_turn_rad
+
+        assert umf_user_turn_rad(self._umf(3.1454, 4.7163)) == pytest.approx(
+            -math.pi / 2, abs=1e-3
+        )
+
+    def test_a_map_left_as_mapped_is_not_turned(self):
+        from custom_components.roomba_plus.cloud_coordinator import umf_user_turn_rad
+
+        assert umf_user_turn_rad(self._umf(4.7163, 4.7163)) == 0.0
+
+    def test_the_turn_is_the_short_way_round(self):
+        import math
+
+        from custom_components.roomba_plus.cloud_coordinator import umf_user_turn_rad
+
+        assert umf_user_turn_rad(self._umf(0.1, 2 * math.pi - 0.1)) == pytest.approx(0.2)
+
+    def test_no_angles_or_junk_is_no_turn(self):
+        from custom_components.roomba_plus.cloud_coordinator import umf_user_turn_rad
+
+        for umf in (None, {}, {"poses": {}}, {"poses": {"orientation_rad": None}},
+                    self._umf(None, 1.0), self._umf(True, 1.0),
+                    self._umf(float("nan"), 1.0), self._umf("3", 1.0)):
+            assert umf_user_turn_rad(umf) == 0.0, umf
+

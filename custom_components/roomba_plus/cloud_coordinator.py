@@ -570,6 +570,45 @@ def umf_pose_report(umf: Any) -> dict[str, Any] | None:
     return report
 
 
+def umf_user_turn_rad(umf: Any) -> float:
+    """How far the user turned the map in the iRobot app, in radians.
+
+    THE ROBOT REPORTS ITS POSITION IN THE TURNED MAP (4.3.4,
+    @frnchfrgg, i-series on lewis). A map turned in the app and saved
+    turns the positions the robot answers from its next mission on; the
+    rooms map and the cloud's coverage stay in the map's own frame. With
+    the app's map left as it was after mapping, the two agree, which is
+    why 4.3.3 drew the path right on most robots and a quarter off on
+    his.
+
+    The header names both angles: `robot_orientation_rad`, the map as
+    the robot made it, and `user_orientation_rad`, as the user turned
+    it. On his map they were 4.7163 and 3.1454 after a quarter turn
+    counter-clockwise in the app -- the user angle a quarter smaller.
+    Turning a position by this result (user less robot, in (-pi, pi])
+    takes it back into the map's own frame, about the map's origin.
+
+    0.0 when the UMF names no angles or names junk: such a map is drawn
+    as before.
+    """
+    poses = umf.get("poses") if isinstance(umf, dict) else None
+    angles = poses.get("orientation_rad") if isinstance(poses, dict) else None
+    if not isinstance(angles, dict):
+        return 0.0
+    numbers: list[float] = []
+    for key in ("user_orientation_rad", "robot_orientation_rad"):
+        angle = angles.get(key)
+        if (
+            not isinstance(angle, (int, float))
+            or isinstance(angle, bool)
+            or not math.isfinite(angle)
+        ):
+            return 0.0
+        numbers.append(float(angle))
+    delta = numbers[0] - numbers[1]
+    return math.atan2(math.sin(delta), math.cos(delta))
+
+
 class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """Coordinator for iRobot cloud data (pmaps, mission history, favorites).
 

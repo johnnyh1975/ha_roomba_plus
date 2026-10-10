@@ -1501,7 +1501,7 @@ class TestTheGraceWindowFromTheField:
 
 class TestTheVendorTextArrivesAsAttributes:
     """The state stays a raw code — that argument holds — but it predates
-    `vendor_errors.py`, whose catalogue came from the **Prime** app's own
+    the vendor catalogue (now `roombapy_prime.vendor_errors`), from the **Prime** app's own
     locale files. "No text of ours would be sourced" stopped being true
     the moment iRobot's arrived.
 

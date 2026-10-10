@@ -5,6 +5,7 @@ Accessible via Settings → Devices & Services → Roomba+ → Download diagnost
 """
 from __future__ import annotations
 
+import math
 import re
 
 import time as _time_mod
@@ -33,7 +34,12 @@ from .const import (
 from .models import ConnectionType, RoombaConfigEntry
 from .binary_sensor import _prime_reports_tank
 from .cloud_account import async_diagnostics as cloud_account_diagnostics
-from .cloud_coordinator import pmap_record_id, pmap_version_report, umf_pose_report
+from .cloud_coordinator import (
+    pmap_record_id,
+    pmap_version_report,
+    umf_pose_report,
+    umf_user_turn_rad,
+)
 from .room_cleaning import resolve_user_pmapv_id
 
 _CLOUD_REDACT = DIAG_REDACT_KEYS | {"irobot_username", "irobot_password"}
@@ -810,6 +816,15 @@ def _position_chain(data: Any) -> dict[str, Any]:
         "live_position": (
             live.diagnostics() if isinstance(live, LivePositionStream) else None
         ),
+        # HOW FAR THE IROBOT APP TURNED THE MAP (4.3.4, @frnchfrgg):
+        # requested positions are turned back by this before they are
+        # drawn. 0.0 for a map left as mapped.
+        "requested_path_turn_deg": (
+            round(math.degrees(umf_user_turn_rad(cc.umf_data)), 1)
+            if (cc := getattr(data, "cloud_coordinator", None)) is not None
+            and isinstance(getattr(cc, "umf_data", None), dict)
+            else None
+        ),
         "aligner_present": aligner is not None,
         "aligner_aligned": getattr(aligner, "aligned", None),
         # AND HOW CLOSE IT CAME (4.3.3, @catongates): below 0.70 it is
@@ -1542,6 +1557,12 @@ def _field_evidence(data: Any) -> dict[str, Any]:
         "region_starts_in_open_cycle": list(
             getattr(data, "region_starts_in_open_cycle", None) or []
         ),
+        # 4.3.4: the command a starting mission found, and the next one.
+        "mission_start_commands": list(
+            getattr(data, "mission_start_commands", None) or []
+        ),
+        # 4.3.4 (#178): `skip` sent with vacuum.send_command.
+        "skip_attempts": list(getattr(data, "skip_attempts", None) or []),
     }
 
 

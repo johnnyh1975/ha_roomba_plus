@@ -438,7 +438,7 @@ class TestVendorTextTakesPrecedence:
         ours_only = next(
             c for c in ERROR_CATALOGUE
             if __import__(
-                "custom_components.roomba_plus.vendor_errors",
+                "roombapy_prime.vendor_errors",
                 fromlist=["vendor_error"],
             ).vendor_error(c) is None and c != 0
         )
@@ -671,64 +671,50 @@ class TestGetRobotProfile:
         assert any("unrecognised prefix" in r.message for r in debug_records)
 
 
-class TestThePlaceholdersAreRepairedOnTheWayOut:
-    """iRobot's own strings use more than one placeholder form, and two
-    of them are broken:
+class TestTheVendorTextComesFromTheLibrary:
+    """4.3.4: iRobot's texts come from roombapy-prime, not from a copy of
+    the same table kept here. The copy was a release behind the library
+    (app 3.0.0 against 3.2.0) and missed its corrections."""
 
-        `@val`          667 times -- the normal one
-        `%robotName`    once, in English code 251
-        `@valUpewnij`   the placeholder run together with the next word,
-                        in Spanish and Polish -- a lost space
+    def test_there_is_no_copy_left(self):
+        import importlib.util
 
-    A user seeing `%robotName` or `@valUpewnij` reads a bug. It is
-    iRobot's, but it is ours to display.
-    """
+        assert importlib.util.find_spec("custom_components.roomba_plus.vendor_errors") is None
 
-    def test_the_odd_english_placeholder_is_unified(self):
-        from custom_components.roomba_plus.vendor_errors import vendor_error
+    def test_the_entry_carries_the_librarys_text(self):
+        """234: app 3.2.0 dropped what to do; the library says it again."""
+        from custom_components.roomba_plus.const import get_localized_error_entry
+        from roombapy_prime.vendor_errors import vendor_error
 
-        content = vendor_error(251, "en")["content"]
+        entry = get_localized_error_entry(234, "de")
 
-        assert "%robotName" not in content
-        assert content.startswith("@val")
+        assert entry["description"] == vendor_error(234, "de")["content"]
+        assert entry["description"].startswith("Setzen Sie den Wischmopp ein")
 
-    def test_no_locale_ships_a_glued_placeholder(self):
-        """One token to substitute, not five variants of it."""
+    def test_one_placeholder_in_every_locale(self):
+        """`@val` only: never `%robotName`, never run into the next word.
+        Checked through what this integration shows, not the library's
+        table."""
         import re
 
-        from custom_components.roomba_plus.vendor_errors import (
-            VENDOR_ERROR_TEXTS,
-            vendor_error,
-        )
+        from custom_components.roomba_plus.const import get_localized_error_entry
+        from roombapy_prime.vendor_errors import VENDOR_ERROR_TEXTS
 
-        glued = []
+        bad = []
         for code in VENDOR_ERROR_TEXTS:
             for locale in ("en", "de", "es", "fr", "it", "nl", "pl", "pt"):
-                entry = vendor_error(code, locale)
-                if entry is None:
-                    continue
-                # CHECKED SEPARATELY, not concatenated. A title ending
-                # in `@val` beside a content starting with a capital
-                # letter reads as glued when the two are joined -- which
-                # is a seam in the test, not a fault in the data. The
-                # first version of this made exactly that mistake.
-                for text in (entry["title"], entry["content"]):
-                    glued += re.findall(r"@val\w+", text)
+                entry = get_localized_error_entry(code, locale)
+                # Title and description checked apart: joined, a title
+                # ending in `@val` before a capital reads as glued.
+                for text in (entry.get("label", ""), entry.get("description", "")):
+                    bad += re.findall(r"@val\w+|%robotName", text)
 
-        assert not glued, f"placeholder run into the next word: {set(glued)}"
-
-    def test_the_stored_catalogue_is_left_faithful(self):
-        """The repair happens on the way out, so the data stays a
-        faithful copy of what iRobot ships -- and regenerating it does
-        not have to reproduce our fixes."""
-        from custom_components.roomba_plus.vendor_errors import VENDOR_ERROR_TEXTS
-
-        assert "%robotName" in VENDOR_ERROR_TEXTS[251]["en"]["content"]
+        assert not bad, set(bad)
 
     def test_an_ordinary_message_is_untouched(self):
-        from custom_components.roomba_plus.vendor_errors import vendor_error
+        from custom_components.roomba_plus.const import get_localized_error_entry
 
-        assert vendor_error(46, "de")["title"] == "Akkustand zu niedrig für die Reinigung"
+        assert get_localized_error_entry(46, "de")["label"] == "Akkustand zu niedrig für die Reinigung"
 
 
 class TestEveryInitiatorHasALabel:
@@ -1937,3 +1923,62 @@ class TestMaintenanceProfileHours:
         from custom_components.roomba_plus.const import get_robot_profile
 
         assert get_robot_profile("R675020").name == "900-series"
+
+
+class TestMissionCommandRegions:
+    """4.3.4, @Hardy-196: a run started with the robot's CLEAN button was
+    recorded as his zone "Couch", the zone command Roomba+ had sent before
+    it. A mission started at the robot takes no regions from lastCommand."""
+
+    _COUCH = {"command": "start", "initiator": "localApp", "time": 100,
+              "regions": [{"region_id": "21", "type": "zid"}]}
+
+    def test_a_button_start_takes_none(self):
+        from custom_components.roomba_plus.const import mission_command_regions
+
+        assert mission_command_regions({"initiator": "manual"}, self._COUCH) == []
+        assert mission_command_regions({"initiator": "dockBtn"}, self._COUCH) == []
+
+    def test_every_other_start_reads_them_as_before(self):
+        from custom_components.roomba_plus.const import mission_command_regions
+
+        for initiator in ("localApp", "rmtApp", "schedule", "cloud", None):
+            assert mission_command_regions(
+                {"initiator": initiator}, self._COUCH
+            ) == self._COUCH["regions"], initiator
+
+    def test_junk_is_no_regions(self):
+        from custom_components.roomba_plus.const import mission_command_regions
+
+        assert mission_command_regions(None, None) == []
+        assert mission_command_regions("x", {"regions": "x"}) == []
+        assert mission_command_regions({}, {"regions": None}) == []
+
+    def test_the_list_is_a_copy(self):
+        from custom_components.roomba_plus.const import mission_command_regions
+
+        regions = mission_command_regions({}, self._COUCH)
+        regions.append("x")
+        assert len(self._COUCH["regions"]) == 1
+
+
+class TestMissionScope:
+    """4.3.4: a mission without rooms is the whole home, said as such."""
+
+    def test_a_robot_that_cannot_target_rooms_cleans_the_whole_home(self):
+        from custom_components.roomba_plus.const import mission_scope
+
+        assert mission_scope(False, {}, {"regions": [{"region_id": "1"}]}) == "whole_home"
+
+    def test_regions_in_the_command_are_rooms(self):
+        from custom_components.roomba_plus.const import mission_scope
+
+        assert mission_scope(True, {"initiator": "localApp"}, {"regions": [{"rid": "1"}]}) == "rooms"
+        assert mission_scope(True, {"cmd": {"regions": [{"rid": "1"}]}}, {}) == "rooms"
+
+    def test_no_regions_or_a_button_start_is_the_whole_home(self):
+        from custom_components.roomba_plus.const import mission_scope
+
+        assert mission_scope(True, {"initiator": "localApp"}, {"regions": []}) == "whole_home"
+        assert mission_scope(True, {"initiator": "manual"}, {"regions": [{"rid": "1"}]}) == "whole_home"
+        assert mission_scope(True, None, None) == "whole_home"

@@ -505,6 +505,20 @@ class RoombaData:
     region_starts_in_open_cycle: deque[dict[str, Any]] = field(
         default_factory=lambda: deque(maxlen=10)
     )
+    #: Which command a starting mission found, and the next one the
+    #: robot reported after it (4.3.4). Whether a robot reports the
+    #: running mission before its new last command decides how far
+    #: `lastCommand` can be trusted at a mission's start; nobody has
+    #: seen the order yet. Command, initiator, time and counts only.
+    mission_start_commands: deque[dict[str, Any]] = field(
+        default_factory=lambda: deque(maxlen=10)
+    )
+    #: A `skip` sent with `vacuum.send_command` (4.3.4, #178): the
+    #: mission's state when it was sent and a minute later. Whether a
+    #: robot takes it, and what it does, is unconfirmed on every robot.
+    skip_attempts: deque[dict[str, Any]] = field(
+        default_factory=lambda: deque(maxlen=10)
+    )
 
     # v3.2.1 — MQTT-watchdog resume grace: wall-clock timestamp of the last
     # observed phase transition INTO "run" from any non-run phase (fresh

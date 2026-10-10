@@ -381,8 +381,10 @@ says `position_source: request` instead. The robot reports the position from its
 900-series does; that this matches the cloud map's frame has not been checked on any robot yet, and
 a wrong frame in those stores would not wash out. A robot that never answers, or has not delivered a
 first position two minutes after the start (a Braava jet m6 answered without one for a whole run), is
-not asked again until its next mission; the
-diagnostics download says which (`position_chain.live_position`).
+not asked again until its next mission. A robot that has answered before and then falls silent is
+asked again after a pause (30 s, then 60 s, then every 2 minutes, up to ten times a mission): an
+i7+ once left three requests unanswered for a minute and then answered them all at once (4.3.4). The
+diagnostics download says which (`position_chain.live_position`: `status`, `stalls_this_mission`).
 
 Without that, or when the robot does not answer, and with cloud credentials configured, such a robot
 falls back to the **last completed mission's coverage as recorded by iRobot's cloud** — the same data the official app draws its post-clean map
@@ -458,8 +460,10 @@ Smart Map robot, the cloud coverage the map shows when it has no path,
 and since 4.3.3 the rooms map, its published pixel positions included.
 Nothing stored moves. A Smart Map's pictures start in the map's own
 orientation, the one it had right after mapping, not the turn set in the
-iRobot app; the option is how to match the app. Prime maps keep the
-app's orientation.
+iRobot app; the option is how to match the app. Since 4.3.4 the live
+path follows the same rule: the robot reports its positions in the map
+as the app turned it, and they are turned back before they are drawn.
+Prime maps keep the app's orientation.
 
 **Areas follow the coverage** *(4.3.2)*: the areas are recomputed when
 the coverage map has grown or shrunk by 30 cells, or holds 30 cells no
@@ -787,7 +791,7 @@ Every mission is recorded to a persistent log (up to 365 entries, FIFO). Survive
 | Area cleaned today | Sum of mission area today (VSLAM robots) |
 | Last mission result | `completed` / `stuck` / `cancelled` / `error` / `demand` |
 | Last mission duration | Duration in minutes |
-| Last mission summary | Most recent mission as a single entity — 14 attributes (duration, area, battery delta, recharges, dirt events, initiator, timestamps) for automation triggers without digging through history (v3.1.0) |
+| Last mission summary | Most recent mission as a single entity — duration, area, battery delta, recharges, dirt events, initiator, `scope` (`rooms` or `whole_home`, 4.3.4), timestamps — for automation triggers without digging through history (v3.1.0) |
 | Room cleaning history | Dictionary sensor: `{room_name: last_cleaned_timestamp}` across all recorded missions, SMART-tier with cloud access (v3.1.0), Prime too. Since 4.2.21 each room carries the time the robot finished it, not the end of the whole mission. Since 4.2.22 the same mapping is also under the attribute `rooms`, so a template can list the rooms without filtering out `friendly_name` and the like |
 | Last cleaned – *room or zone* | One timestamp sensor per room and saved zone, off by default: Configure → *Connection settings* → *Separate sensor per room and zone*. The time the robot finished that room on its newest clean (since 4.2.21; the mission's end where the timeline has no time of its own). Attributes: `last_duration_min` (time spent there on that clean, every visit added up, 4.2.21), `typical_duration_min` and `typical_duration_cleans` (the median of that time over the room's newest 10 cleans, and how many there were, 4.2.22; charging and the drives to and from the dock are in neither), `region_id`, `pmap_id`. Both generations |
 | Consecutive anomalous missions | Count of consecutive most-recent missions classified as anomalous (v3.0.0, disabled by default — threshold ≥ 3 triggers the Card C5-ANOMALY banner) |
@@ -854,7 +858,8 @@ source; one that is happy with an estimate carries on unchanged.
 
 | Attribute | When | Notes |
 |---|---|---|
-| `planned_room_order` | **During mission** | Rooms in requested order; populated at mission start |
+| `mission_scope` | **During mission** | `rooms` when the mission was sent to rooms or zones, `whole_home` otherwise (a start from the robot's own button, a 900- or 600-series always); `None` between missions (4.3.4). Also kept with each mission (`scope` on the last mission summary) |
+| `planned_room_order` | **During mission** | Rooms in requested order; populated at mission start. Empty for a mission started with the robot's own button, whatever the last command named (4.3.4) |
 | `mission_destination` | **During mission** | The last room in `planned_room_order` — where the mission ENDS, not where the robot is heading next. Recomputed from the commanded list every update, so it does not move as the robot progresses. Classic robots report no live position, so no attribute here can tell you where one currently is |
 | `room_progress_observed` | **During mission** | Whether the robot has been seen to move on from the first planned room. `false` means the room name above is still the PLAN, not an observation |
 | `last_cleaned_rooms` | **Post-mission** | Rooms confirmed cleaned |

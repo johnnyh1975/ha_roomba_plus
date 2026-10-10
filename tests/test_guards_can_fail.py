@@ -360,3 +360,34 @@ class TestAMissingLibraryFailsInCI:
         assert guard.main() == 0
         monkeypatch.setenv("CI", "true")
         assert guard.main() == 1
+
+
+# ── vendor values left out on purpose ───────────────────────────────────
+
+class TestNotOfferedValues:
+    """4.3.4: app 3.2.0 added `HeatType.deepHeat` and
+    `ReturnByMode.smartMode`, which the app offers on no screen. They are
+    left out of the pickers with a reason, and a reason that no longer
+    applies is reported."""
+
+    def test_the_real_tables_pass(self):
+        guard = _load("check_vendor_value_tables")
+        assert guard.main() == 0
+
+    def test_without_the_reason_the_new_value_fails(self, monkeypatch, capsys):
+        from custom_components.roomba_plus import select_prime
+
+        guard = _load("check_vendor_value_tables")
+        monkeypatch.setattr(select_prime, "VENDOR_VALUES_NOT_OFFERED", {})
+        assert guard.main() == 1
+        assert "only vendor: ['103']" in capsys.readouterr().err
+
+    def test_a_stale_reason_fails(self, monkeypatch, capsys):
+        from custom_components.roomba_plus import select_prime
+
+        guard = _load("check_vendor_value_tables")
+        stale = dict(select_prime.VENDOR_VALUES_NOT_OFFERED)
+        stale["PAD_WASH_HEAT_LEVELS"] = {2: "offered after all"}
+        monkeypatch.setattr(select_prime, "VENDOR_VALUES_NOT_OFFERED", stale)
+        assert guard.main() == 1
+        assert "stale" in capsys.readouterr().err

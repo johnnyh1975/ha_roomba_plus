@@ -2136,6 +2136,39 @@ class TestAFailedAlignmentSaysWhy:
         assert out["aligner_bootstrap_markers"] is None
 
 
+class TestTheDiagnosticsSayHowFarTheAppTurnedTheMap:
+    """4.3.4, @frnchfrgg: the requested path is turned back by the app's
+    turn; the download says by how much."""
+
+    @staticmethod
+    def _chain(umf):
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.diagnostics import _position_chain
+
+        return _position_chain(SimpleNamespace(
+            umf_aligner=None,
+            renderer=SimpleNamespace(point_count=0),
+            cloud_coordinator=SimpleNamespace(umf_data=umf),
+        ))
+
+    def test_his_quarter_turn(self) -> None:
+        out = self._chain({"poses": {"orientation_rad": {
+            "user_orientation_rad": 3.1454, "robot_orientation_rad": 4.7163,
+        }}})
+
+        assert out["requested_path_turn_deg"] == -90.0
+
+    def test_no_account_says_nothing(self) -> None:
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.diagnostics import _position_chain
+
+        out = _position_chain(SimpleNamespace(umf_aligner=None))
+
+        assert out["requested_path_turn_deg"] is None
+
+
 class TestAFalseAlignmentSaysWhatItCosts:
     """`aligner_aligned: false` reads like a defect and often is not
     one. Matching needs door candidates from the floor plan AND markers
@@ -2547,6 +2580,8 @@ class TestFieldEvidence:
         assert out == {
             "readiness_observations": [{"code": 15}],
             "region_starts_in_open_cycle": [{"what": "clean_room"}],
+            "mission_start_commands": [],
+            "skip_attempts": [],
         }
         assert isinstance(out["readiness_observations"], list)
 
@@ -2557,4 +2592,5 @@ class TestFieldEvidence:
 
         assert _field_evidence(SimpleNamespace()) == {
             "readiness_observations": [], "region_starts_in_open_cycle": [],
+            "mission_start_commands": [], "skip_attempts": [],
         }

@@ -5178,6 +5178,48 @@ class TestRequestedPositionsOnTheCleaningMap:
         assert m._handle_live_position in stream._listeners
 
 
+class TestTheRequestedPathTurnsBackWithTheApp:
+    """4.3.4, @frnchfrgg: with the map turned in the iRobot app and
+    saved, the robot answers positions in the turned map, and 4.3.3
+    drew them turned against the rooms map and the coverage -- twice
+    turned with Map rotation set as well. They are turned back by the
+    app's turn, read once per mission."""
+
+    @staticmethod
+    def _turned(user, robot):
+        return {"poses": {"orientation_rad": {
+            "user_orientation_rad": user, "robot_orientation_rad": robot,
+        }}}
+
+    _base = TestRequestedPositionsOnTheCleaningMap()
+    _pos = _base._pos
+
+    def _turned_entity(self, umf):
+        m, renderer, entry, _s = self._base._entity()
+        renderer._cfg.mirror_x = False
+        entry.runtime_data.cloud_coordinator.umf_data = umf
+        return m, renderer, entry
+
+    def test_his_quarter_counter_clockwise_is_turned_back_clockwise(self):
+        """1 m along x in the turned map is 1 m against y in the map's
+        own frame, heading a quarter less."""
+        m, renderer, _e = self._turned_entity(self._turned(3.1454, 4.7163))
+        m._handle_live_position(self._pos(1.0, 0.0, 0.0))
+        x, y, theta = renderer.add_pose.call_args.args
+        assert (x, y) == (pytest.approx(0.0, abs=1.0), pytest.approx(-1000.0, abs=1.0))
+        assert theta == pytest.approx(-90.0, abs=0.1)
+
+    def test_a_turn_saved_during_the_mission_does_not_turn_its_path(self):
+        """The robot loads a turned map at its next mission; the path
+        drawn so far must not swing round with the header."""
+        m, renderer, entry = self._turned_entity(self._turned(3.1454, 4.7163))
+        m._handle_live_position(self._pos(1.0, 0.0))
+        entry.runtime_data.cloud_coordinator.umf_data = self._turned(4.7163, 4.7163)
+        m._handle_live_position(self._pos(2.0, 0.0))
+        x, y, _t = renderer.add_pose.call_args.args
+        assert (x, y) == (pytest.approx(0.0, abs=1.0), pytest.approx(-2000.0, abs=1.0))
+
+
 class TestRequestedPathReviewFindings:
     """Found in the independent review of the first version."""
 
