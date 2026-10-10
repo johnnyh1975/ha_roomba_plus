@@ -254,7 +254,7 @@ class RoombaMaintenanceTodo(IRobotEntity, TodoListEntity):
         WITH AN IROBOT ACCOUNT, rooms take their names from it, and only
         a room on the map without a name anywhere needs one. Checked
         against the robot's own region ids, this item stood open for
-        @liblit's i7 while every room on his map had its name.
+        A tester's i7 while every room on his map had its name.
         """
         options = self._config_entry.options
         data = getattr(self._config_entry, "runtime_data", None)

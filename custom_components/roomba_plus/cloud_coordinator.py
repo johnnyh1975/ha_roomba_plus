@@ -18,6 +18,7 @@ import asyncio
 
 import aiohttp
 import logging
+import math
 import statistics
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta
@@ -477,6 +478,95 @@ def pmap_version_report(cloud_data: Any) -> list[dict[str, Any]]:
                 for key in ("user_orientation_rad", "robot_orientation_rad")
             } if isinstance(details.get("map_header"), dict) else None,
         })
+    return report
+
+
+#: The typed poses a UMF names, by the key this integration keeps them under.
+_UMF_TYPED_POSES: tuple[tuple[str, str], ...] = (
+    ("dock", "dock_poses"), ("start", "start_pose"), ("end", "end_pose"),
+)
+
+
+def umf_typed_poses(maps: Any) -> dict[str, Any]:
+    """The robot poses a UMF names, and the angles its header carries.
+
+    WHERE THE ROBOT'S OWN FRAME SITS IN THE MAP (4.3.3). A path requested
+    from the robot is in its own frame, metres from the dock with x along
+    the docked heading; the rooms map is in the UMF's. Nothing related
+    the two on a robot that publishes no pose: the aligner matches door
+    markers, and those come from local poses (@catongates, i7+, path
+    turned 90 degrees against the rooms map). A UMF names a start, an
+    end and the dock as poses -- position and heading in its own frame
+    -- and its header carries `robot_orientation_rad`. In iRobot's own
+    mission UMF of an i3+, the start pose heads -1.4859 rad and the
+    header says 4.7971: the same angle, a full turn apart. Kept
+    here so the diagnostics can show whether that holds on the robots
+    whose path is turned; nothing is drawn with it yet.
+
+    Returns {"dock": [...], "start": [...], "end": [...],
+    "orientation_rad": {...} | None}, each pose
+    {"x_mm", "y_mm", "ori_rad"}. Junk is skipped.
+    """
+    result: dict[str, Any] = {key: [] for key, _ in _UMF_TYPED_POSES}
+    result["orientation_rad"] = None
+    for umf_map in maps if isinstance(maps, list) else []:
+        if not isinstance(umf_map, dict):
+            continue
+        header = umf_map.get("map_header")
+        if isinstance(header, dict) and result["orientation_rad"] is None:
+            result["orientation_rad"] = {
+                key: header.get(key)
+                for key in ("user_orientation_rad", "robot_orientation_rad")
+            }
+        by_id: dict[str, dict[str, float]] = {}
+        for pose in umf_map.get("poses2d") or []:
+            if not isinstance(pose, dict):
+                continue
+            coords = pose.get("coordinates")
+            if not isinstance(coords, (list, tuple)):
+                continue
+            try:
+                by_id[str(pose["id"])] = {
+                    "x_mm": float(coords[0]) * 1000.0,
+                    "y_mm": float(coords[1]) * 1000.0,
+                    "ori_rad": float(pose["ori_rad"]),
+                }
+            except (KeyError, TypeError, ValueError, IndexError):
+                continue
+        typed = umf_map.get("typed_poses")
+        if not isinstance(typed, dict):
+            continue
+        for key, umf_key in _UMF_TYPED_POSES:
+            entry = typed.get(umf_key)
+            geometry = entry.get("geometry") if isinstance(entry, dict) else None
+            ids = geometry.get("ids") if isinstance(geometry, dict) else None
+            for pose_id in ids if isinstance(ids, list) else []:
+                pose = by_id.get(str(pose_id))
+                if pose is not None:
+                    result[key].append(pose)
+    return result
+
+
+def umf_pose_report(umf: Any) -> dict[str, Any] | None:
+    """The UMF's poses for diagnostics: headings and distances, no positions.
+
+    How far each pose lies from the map's origin and which way it heads
+    is what the frame question needs (umf_typed_poses); where it lies is
+    a point in somebody's home and stays out.
+    """
+    poses = umf.get("poses") if isinstance(umf, dict) else None
+    if not isinstance(poses, dict):
+        return None
+    report: dict[str, Any] = {"orientation_rad": poses.get("orientation_rad")}
+    for key, _ in _UMF_TYPED_POSES:
+        report[key] = [
+            {
+                "ori_rad": round(pose["ori_rad"], 4),
+                "from_origin_mm": round(math.hypot(pose["x_mm"], pose["y_mm"])),
+            }
+            for pose in poses.get(key) or []
+            if isinstance(pose, dict)
+        ]
     return report
 
 
@@ -1488,5 +1578,7 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "region_suggestions": geo["region_suggestions"],   # v3.2.0 ROOM-TYPE-SUGGEST
                 "pmap_id":    active_id,
                 "version_id": version_id,
+                # The poses and header angles (4.3.3, umf_typed_poses).
+                "poses":      umf_typed_poses(maps),
             }
         return None

@@ -770,7 +770,7 @@ class TestInferenceSuggestionsLayer:
         assert png_empty != png_with_room
 
     def test_an_unnamed_area_is_drawn_with_its_number(self):
-        """@liblit (980): the naming form asked for "zone_room_1" while
+        """A tester (980): the naming form asked for "zone_room_1" while
         the map drew the unnamed area as a bare outline, so nothing said
         which outline that was. The form now labels the field "Area 1"
         and the map draws "1" -- a named area still shows its name."""
@@ -1422,7 +1422,7 @@ class TestBothImagesShareOneFrame:
 
 
 class TestNamingAreaMap:
-    """4.2.20 (@liblit, 980) — the naming form's picture: each area as its
+    """4.2.20 (a tester's 980) — the naming form's picture: each area as its
     own cells, coloured and labelled, instead of overlapping boxes."""
 
     @staticmethod
@@ -1471,7 +1471,7 @@ class TestNamingAreaMap:
 
 
 class TestTheClassicViewIsNotAMirrorImage:
-    """@liblit's 980 against its floor plan, and a second 980: every map
+    """A tester's 980 against its floor plan, and a second 980: every map
     came out flipped left to right. The pose frame is a mirror image of
     the floor (the firmware's axes swapped); a 900-series' pictures
     mirror it back, and only the pictures -- nothing stored moves.

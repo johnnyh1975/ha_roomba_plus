@@ -309,7 +309,7 @@ class TestAsyncRecordMissionCompletedEvent:
         assert payload["missions_added"] == 1
 
     def test_one_mission_already_stored_under_another_id_fires_nothing(self):
-        """4.3.1: @liblit's store held nMssn 119 twice, 15 s apart. The
+        """4.3.1: a tester's store held nMssn 119 twice, 15 s apart. The
         second end of one mission is folded into the first record, and
         nothing downstream -- the completion event above all -- runs a
         second time."""
@@ -3589,7 +3589,7 @@ class TestRecordsIsAPropertyNotAMethod:
 class TestPropertiesAreNotCalledAsMethods:
     """Guard against a whole class of bug a MagicMock cannot catch.
 
-    Reported by @liblit against v3.5.2 with a full root cause: one
+    Reported by a tester against v3.5.2 with a full root cause: one
     call site wrote `ms.records()` where `records` is a property, so
     the GS-SMART-COVERAGE backfill raised TypeError on its first line
     every time the cloud coordinator refreshed. Four other call sites
@@ -6077,7 +6077,7 @@ class TestLiveRoomTimesOnlyWithoutACloudAccount:
 
 
 class TestEphemeralZoneNamesHiddenAndShared:
-    """@liblit, 980: area 7 lies outside the house (a mission that started
+    """A tester's 980: area 7 lies outside the house (a mission that started
     off the dock), and his kitchen is four areas. A hidden area is not a
     cleaned room, and four areas named "Kitchen" are one."""
 
@@ -6109,7 +6109,7 @@ class TestEphemeralZoneNamesHiddenAndShared:
 
 
 class TestAHalfMinuteOfNothingIsNotAMission:
-    """@liblit's 980 stored eleven zero-minute "completed" records among
+    """A tester's 980 stored eleven zero-minute "completed" records among
     sixteen, five within five minutes one evening; iRobot's history has
     none of them. Under 30 s from a known start, nothing cleaned, nothing
     stuck or lifted: not recorded. With no known start it is kept."""

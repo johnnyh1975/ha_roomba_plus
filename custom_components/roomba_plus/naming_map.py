@@ -2,7 +2,7 @@
 
 THE NUMBERS NEED A PICTURE. Both naming forms ask for a name per number,
 and nothing in Home Assistant showed which room a number is: the iRobot
-app shows no ids, and a 980 keeps no map at all (@liblit). Sending the
+app shows no ids, and a 980 keeps no map at all (a tester). Sending the
 user to the iRobot app to find out is not an answer either -- everything
 needed to name a room has to be visible in the integration itself.
 

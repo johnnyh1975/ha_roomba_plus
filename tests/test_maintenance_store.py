@@ -339,7 +339,7 @@ class TestMaintenanceStoreDueItems:
     def test_all_four_due_simultaneously_without_cloud_data(self):
         """A CLEAN BASE IS NOW PART OF THE PREMISE. This passed
         `{"bbrun": ...}` with no dock at all, which is a robot that has
-        no bag -- so it asserted the false positive @liblit reported on
+        no bag -- so it asserted the false positive a tester reported on
         his Roomba 980 rather than the behaviour it names."""
         store = MaintenanceStore()
         state = {"bbrun": {"hr": _B}, "dock": {"fwVer": "1.2.3"}}
@@ -1713,7 +1713,7 @@ class TestMaxHoursPerRole:
 
 
 class TestPartsTheRobotDoesNotHave:
-    """@liblit's Roomba 980 (R980020) reported a Clean Base bag due.
+    """A tester's Roomba 980 (R980020) reported a Clean Base bag due.
 
     It charges on a plain dock. There is no bag. Every per-part entity
     was already suppressed for it by `has_clean_base` -- no

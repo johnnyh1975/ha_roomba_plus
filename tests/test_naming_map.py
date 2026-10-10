@@ -1,6 +1,6 @@
 """The map the naming forms show, and which rooms they ask about (4.2.19).
 
-@liblit was asked to name numbered zones with nothing in Home Assistant
+A tester was asked to name numbered zones with nothing in Home Assistant
 saying which room a number was -- on a 980 with no map at all, and on an
 i7 whose rooms all had names in his iRobot account. Everything needed to
 answer the form must be in the form.

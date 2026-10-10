@@ -5139,7 +5139,7 @@ class TestEachRegionIsDatedByItsOwnEnd:
 
 
 class TestOneMissionRecordedTwice:
-    """@liblit's 980 stored mission 119 twice: ids m_1788968200 and
+    """A tester's 980 stored mission 119 twice: ids m_1788968200 and
     m_1788968215, started 15 s apart, ended 12 s apart, both 49 minutes.
     Both duplicate checks compare ids, so neither saw it, and the mission
     counted twice everywhere."""
@@ -5202,14 +5202,14 @@ class TestOneMissionRecordedTwice:
         assert not _same_mission(short, dict(short, started_at="2026-09-09T15:36:45+00:00"))
 
 
-class TestLiblitsWholeStore:
-    """@liblit's 980, the whole mission store from his backup of 6 October
-    2026, kept with his permission (tests/fixtures/liblit_980). Sixteen
+class TestTheSecond980sWholeStore:
+    """A tester's 980, the whole mission store from his backup of 6 October
+    2026, kept with his permission (tests/fixtures/tester_980). Sixteen
     records: five real missions, mission 119 twice, and eleven runs of
     zero minutes."""
 
     _RECORDS = __import__("json").loads(
-        __import__("pathlib").Path("tests/fixtures/liblit_980/missions.json").read_text()
+        __import__("pathlib").Path("tests/fixtures/tester_980/missions.json").read_text()
     )["records"]
 
     def test_only_mission_119_is_folded(self):
@@ -5228,3 +5228,265 @@ class TestLiblitsWholeStore:
         assert record["dockedAtStart"] == 0
         assert all(r["dockedAtStart"] == 1 for r in self._RECORDS
                    if r.get("nMssn") not in (None, 118))
+
+
+class TestTheCloudsCopyOfAnErrorMission:
+    """4.3.3. The maintainer's 980 stored 15 of its 79 missions twice: once
+    as the robot wrote it, once taken from the cloud. A mission that ends
+    in an error is closed by the cloud at the error (54 minutes, error 17)
+    while the robot reports it over hours later (413 minutes), so the ends
+    never agree and the end-only pairing recorded the cloud's copy as a
+    mission of its own. The start is what they share.
+    """
+
+    # Mission 458 as both records hold it (the fixture below).
+    _START = 1_791_529_200
+    _NOW = _START + 86_400
+
+    @staticmethod
+    def _iso(ts):
+        from datetime import datetime, timezone
+
+        return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+
+    def _local(self, start=None, minutes=413, **extra):
+        start = self._START if start is None else start
+        return {
+            "id": f"m_{start}", "started_at": self._iso(start),
+            "ended_at": self._iso(start + minutes * 60), "duration_min": minutes,
+            "area_sqft": None, "result": "stuck_and_resumed", "error_code": 17,
+            "bbrun_hr": 456, **extra,
+        }
+
+    def _raw_cloud(self, start=None, minutes=54, **extra):
+        start = (self._START + 12) if start is None else start
+        return {
+            "startTime": start, "timestamp": start + minutes * 60, "done": "error",
+            "initiator": "schedule", "sqft": 337, "runM": minutes, "nMssn": 458,
+            "dirt": 6, **extra,
+        }
+
+    def _adopted(self, start=None, minutes=54):
+        start = (self._START + 12) if start is None else start
+        return {
+            "id": f"m_{start}", "started_at": self._iso(start),
+            "ended_at": self._iso(start + minutes * 60), "duration_min": minutes,
+            "area_sqft": 337, "result": "error", "initiator": "schedule",
+            "error_code": 17, "source": "cloud", "sqft": 337, "nMssn": 458,
+        }
+
+    # -- the store as it was saved ---------------------------------------
+
+    def test_the_owners_store_loses_only_the_cloud_copies(self):
+        import json
+        from pathlib import Path
+
+        from custom_components.roomba_plus.mission_store import (
+            _without_same_mission_twice,
+        )
+
+        records = json.loads(Path(
+            "tests/fixtures/roomba_plus_missions_02_01KRRVYR4T1MPSYM7ACKA5XCBX.dms"
+        ).read_text())["data"]["records"]
+        kept, dropped = _without_same_mission_twice([dict(r) for r in records])
+
+        assert (len(records), len(kept), dropped) == (79, 64, 15)
+        kept_ids = {r["id"] for r in kept}
+        assert all(r["id"] in kept_ids for r in records if r.get("source") != "cloud"), (
+            "every record the robot wrote is still there"
+        )
+        # The eight cloud records with no local twin stay: HA missed those.
+        assert sum(1 for r in kept if r.get("source") == "cloud") == 8
+        ends = [r["ended_at"] for r in kept]
+        assert ends == sorted(ends), "still in end order"
+
+    def test_the_local_record_keeps_its_own_times_and_takes_the_area(self):
+        from custom_components.roomba_plus.mission_store import (
+            _without_same_mission_twice,
+        )
+
+        kept, dropped = _without_same_mission_twice([self._adopted(), self._local()])
+
+        assert dropped == 1
+        (record,) = kept
+        assert record["id"] == f"m_{self._START}"
+        assert record["duration_min"] == 413
+        assert record["result"] == "stuck_and_resumed"
+        assert "source" not in record, "it is the robot's record, not the cloud's"
+        assert (record["area_sqft"], record["nMssn"]) == (337, 458)
+
+    def test_either_order_folds_into_the_local_record(self):
+        from custom_components.roomba_plus.mission_store import (
+            _without_same_mission_twice,
+        )
+
+        kept, _ = _without_same_mission_twice([self._local(), self._adopted()])
+        assert [r["id"] for r in kept] == [f"m_{self._START}"]
+        assert kept[0]["area_sqft"] == 337
+
+    def test_the_local_record_takes_its_own_place_in_the_order(self):
+        """August's mission ran on locally for 16 days; missions ended in
+        between. It must not jump back to where the cloud copy was."""
+        from custom_components.roomba_plus.mission_store import (
+            _without_same_mission_twice,
+        )
+
+        long_one = self._local(minutes=16 * 24 * 60)
+        between = self._local(start=self._START + 3 * 86_400, minutes=60)
+        kept, _ = _without_same_mission_twice([self._adopted(), between, long_one])
+
+        assert [r["id"] for r in kept] == [between["id"], long_one["id"]]
+
+    def test_a_cloud_mission_starting_later_is_another_mission(self):
+        from custom_components.roomba_plus.mission_store import (
+            _without_same_mission_twice,
+        )
+
+        kept, dropped = _without_same_mission_twice(
+            [self._adopted(start=self._START + 600), self._local()]
+        )
+        assert dropped == 0 and len(kept) == 2
+
+    def test_a_cloud_mission_ending_after_the_local_one_is_another_mission(self):
+        from custom_components.roomba_plus.mission_store import (
+            _without_same_mission_twice,
+        )
+
+        kept, dropped = _without_same_mission_twice(
+            [self._local(minutes=20), self._adopted(minutes=300)]
+        )
+        assert dropped == 0 and len(kept) == 2
+
+    def test_a_zero_minute_run_is_left_alone(self):
+        from custom_components.roomba_plus.mission_store import (
+            _without_same_mission_twice,
+        )
+
+        kept, dropped = _without_same_mission_twice(
+            [self._local(minutes=0), self._adopted()]
+        )
+        assert dropped == 0 and len(kept) == 2
+
+    def test_two_cloud_records_are_not_paired_by_this(self):
+        """Only a cloud copy and the robot's own record: two records of
+        the same kind are _same_mission's business."""
+        from custom_components.roomba_plus.mission_store import _cloud_twin
+
+        assert not _cloud_twin(self._adopted(), self._adopted())
+        assert not _cloud_twin(self._local(), self._local())
+        assert _cloud_twin(self._local(), self._adopted())
+
+    # -- while it happens -------------------------------------------------
+
+    def test_the_cloud_mission_is_not_taken_when_the_robot_recorded_it(self):
+        store = MissionStore()
+        # An older record too: the oldest local end is the horizon, and the
+        # cloud's end must lie after it for the pairing to be what decides.
+        store._records = [self._local(start=self._START - 86_400, minutes=60), self._local()]
+
+        assert store.adopt_missing_from_cloud([self._raw_cloud()], now_ts=self._NOW) == 0
+        assert len(store.records) == 2
+
+    def test_a_cloud_mission_without_a_local_record_is_still_taken(self):
+        store = MissionStore()
+        store._records = [self._local(start=self._START - 86_400)]
+
+        assert store.adopt_missing_from_cloud([self._raw_cloud()], now_ts=self._NOW) == 1
+
+    @pytest.mark.asyncio
+    async def test_the_robots_record_replaces_the_copy_taken_before_it(self):
+        """The usual order: the cloud closes the mission at the error, the
+        copy is taken ten minutes later, the robot reports the end hours
+        after that."""
+        store = MissionStore()
+        earlier = self._local(start=self._START - 86_400, minutes=60)
+        store._records = [earlier, self._adopted()]
+
+        stored = await store.async_append(self._local())
+
+        assert stored is True, "the mission's end is reported as it always is"
+        assert [r["id"] for r in store.records] == [earlier["id"], f"m_{self._START}"]
+        latest = store.latest()
+        assert "source" not in latest
+        assert (latest["area_sqft"], latest["nMssn"]) == (337, 458)
+
+    @pytest.mark.asyncio
+    async def test_a_cloud_copy_arriving_after_the_robots_record_is_folded(self):
+        store = MissionStore()
+        store._records = [self._local()]
+
+        assert await store.async_append(self._adopted()) is False
+        assert len(store.records) == 1
+        assert store.latest()["area_sqft"] == 337
+
+    def test_the_robots_record_gets_the_clouds_fields(self):
+        store = MissionStore()
+        store._records = [self._local()]
+
+        result = store.backfill_from_cloud([self._raw_cloud()])
+
+        record = store.latest()
+        assert result.enriched == 1 and result.corrected == 0
+        assert (record["area_sqft"], record["nMssn"]) == (337, 458)
+        assert record["duration_min"] == 413, "the robot's own times stay"
+        assert record["started_at"] == self._iso(self._START)
+
+    def test_the_cloud_fields_go_to_one_recharge_segment_only_by_its_end(self):
+        """A 980's recharge segments share one start. The whole mission's
+        area must not be merged into the segment that does not end with it."""
+        store = MissionStore()
+        first = self._local(minutes=90)
+        second = dict(self._local(minutes=200), id=f"m_{self._START}_r1")
+        store._records = [first, second]
+
+        store.backfill_from_cloud([self._raw_cloud(minutes=120)])
+
+        assert first["area_sqft"] is None and second["area_sqft"] is None
+
+
+class TestTheFoldComparesOnlyNeighbours:
+    """4.3.3: the load-time fold compared every record with every other,
+    on the event loop, at each start -- about 0.27 s for a full history
+    of 365 in 4.3.2, 0.4 s with the cloud-copy rule added. Both rules
+    need the starts within two minutes, so only neighbours are compared."""
+
+    def test_a_full_history_costs_a_handful_of_comparisons_per_record(self, monkeypatch):
+        from datetime import datetime, timedelta, timezone
+
+        from custom_components.roomba_plus import mission_store as ms
+
+        calls = {"n": 0}
+        real = ms._same_mission
+
+        def counting(a, b):
+            calls["n"] += 1
+            return real(a, b)
+
+        monkeypatch.setattr(ms, "_same_mission", counting)
+        base = datetime(2025, 1, 1, tzinfo=timezone.utc)
+        records = [
+            {
+                "id": f"m_{i}",
+                "started_at": (base + timedelta(days=i)).isoformat(),
+                "ended_at": (base + timedelta(days=i, minutes=90)).isoformat(),
+                "duration_min": 90,
+            }
+            for i in range(365)
+        ]
+        kept, dropped = ms._without_same_mission_twice(records)
+
+        assert (len(kept), dropped) == (365, 0)
+        assert calls["n"] == 0, "no two of these start within two minutes"
+
+    def test_neighbours_across_a_bucket_edge_are_still_folded(self):
+        """Starts 100 s apart that fall into two buckets of 120 s."""
+        from custom_components.roomba_plus.mission_store import (
+            _without_same_mission_twice,
+        )
+
+        first = {"id": "a", "started_at": "2026-01-01T00:01:50+00:00",
+                 "ended_at": "2026-01-01T01:00:00+00:00", "duration_min": 58}
+        second = {"id": "b", "started_at": "2026-01-01T00:03:30+00:00",
+                  "ended_at": "2026-01-01T01:00:30+00:00", "duration_min": 57}
+        kept, dropped = _without_same_mission_twice([first, second])
+        assert (len(kept), dropped) == (1, 1)

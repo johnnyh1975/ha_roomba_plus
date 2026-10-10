@@ -629,6 +629,11 @@ class SmartZoneSelect(IRobotEntity, SelectEntity):
         ensures the issue fires on every HA startup when needed.
         """
         await super().async_added_to_hass()
+        if self._config_entry.runtime_data.cloud_coordinator is not None:
+            # A notice from an earlier start, when the cloud had not
+            # answered yet (see _async_raise_naming_issue). Home Assistant
+            # keeps it across restarts.
+            await self._async_dismiss_naming_issue()
         unlabelled = set(self._unlabelled_region_ids())
         if unlabelled:
             self._known_unlabelled = unlabelled
@@ -794,10 +799,15 @@ class SmartZoneSelect(IRobotEntity, SelectEntity):
         if not region_ids:
             return
 
-        # If cloud is active, names come from cloud pmaps — no repair needed.
-        if self._config_entry.runtime_data.has_cloud:
+        # WITH AN ACCOUNT, THE NAMES COME FROM IT -- even before it has
+        # answered. This asked whether cloud data had arrived, so a start
+        # whose first cloud fetch failed (a network not up yet at boot)
+        # asked @liblit to name seven zones his account had named long
+        # ago, and the notice stayed after the data came (4.3.3).
+        if self._config_entry.runtime_data.cloud_coordinator is not None:
             _LOGGER.debug(
-                "SmartZoneSelect: cloud active — suppressing naming repair issue"
+                "SmartZoneSelect: iRobot account configured — suppressing "
+                "naming repair issue"
             )
             return
 
@@ -836,7 +846,7 @@ class SmartZoneSelect(IRobotEntity, SelectEntity):
                 #
                 # With two robots the repairs list showed two cards with
                 # the same generic title, and the only way to tell them
-                # apart was to open one. @liblit: "Nothing tells me
+                # apart was to open one. A tester: "Nothing tells me
                 # which of my two Roomba devices this repair relates
                 # to." The form was fixed first and the card left
                 # generic, which is half an answer.

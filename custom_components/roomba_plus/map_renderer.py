@@ -60,7 +60,7 @@ def map_mm_to_view(x_mm: float, y_mm: float) -> tuple[float, float]:
     the firmware's own frame the robot's heading and its direction of
     travel agree; in the swapped one they agree only as 90 deg minus the
     heading. Every picture drawn from it came out flipped left to right:
-    @liblit's 980 against its floor plan, and a second 980 alike.
+    A tester's 980 against its floor plan, and a second 980 alike.
 
     Mirrored HERE, where millimetres become a picture, and nowhere else.
     Every store keeps the frame it was written in -- the coverage grid,
@@ -1152,7 +1152,7 @@ class MapRenderer:
             # there is no name yet. An unnamed area was drawn as a bare
             # outline, and the naming form asked for "zone_room_1"
             # with nothing on the map to say which outline that was
-            # (@liblit, 980). The form now labels its field "Area 1".
+            # (a tester's 980). The form now labels its field "Area 1".
             # Spelled out rather than imported: this module stays free
             # of the store's Home Assistant imports. It is
             # `room_seg_store.area_number`, and a test holds them equal.
@@ -1575,7 +1575,7 @@ def render_area_map(
 ) -> bytes:
     """The detected areas as coloured patches with their labels, and the dock.
 
-    FOR THE NAMING FORM, not the live map (@liblit, 980). The cleaning
+    FOR THE NAMING FORM, not the live map (a tester's 980). The cleaning
     path map drew each area as its bounding box, widened past the walls:
     on an L- or U-shaped floor the boxes overlap their neighbours, and
     one of nine covered half the picture. Here every area is the cells

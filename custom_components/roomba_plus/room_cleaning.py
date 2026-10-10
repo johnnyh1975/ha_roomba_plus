@@ -1929,14 +1929,31 @@ class ClassicRoomCleaning(RoomCleaningBackend):
                     continue
                 if pmap_id not in _offerable:
                     continue
+                # CARRYING THEIR MAP IN THE ID (4.3.3). Region ids are
+                # numbered per map, and everything keyed by the bare id
+                # below -- the map, the type -- was filled from the
+                # active map first. @catongates' upstairs Bathroom went
+                # out on the DOWNSTAIRS map as ZONE 5, "In front of the
+                # Oven": the zone had claimed the bare id first. A
+                # qualified id takes both from itself (`clean_rooms()`).
                 entries += [
-                    (str(rid), name, str(pmap_id))
+                    (f"{pmap_id}/{rid}", name, str(pmap_id))
                     for rid, name in names.items()
                     if rid and name
                 ]
 
+        #: bare id -> the id the list hands out for it, first one wins
+        #: like everything else here; an alias stored against a bare id
+        #: takes it, so it reaches the same map the room's own name does.
+        handed_out: dict[str, str] = {}
         for rid, name, pmap_id in entries:
-            bare = rid[len(ZID_PREFIX):] if rid.startswith(ZID_PREFIX) else rid
+            qualified = "/" in rid
+            unqualified = rid.split("/", 1)[1] if qualified else rid
+            bare = (
+                unqualified[len(ZID_PREFIX):]
+                if unqualified.startswith(ZID_PREFIX) else unqualified
+            )
+            handed_out.setdefault(bare, rid)
             if name in rooms:
                 # THE SAME REGION, NOW WITH ITS TYPE. Stored zone data
                 # comes first and carries no type; the cloud's entry
@@ -2005,8 +2022,8 @@ class ClassicRoomCleaning(RoomCleaningBackend):
                 # alias cannot say which it meant.
                 owner = rooms.get(name)
                 if owner is None:
-                    rooms[name] = rid
-                elif owner != rid:
+                    rooms[name] = handed_out.get(rid, rid)
+                elif owner not in (rid, handed_out.get(rid, rid)):
                     _LOGGER.warning(
                         "clean_room: the name '%s' given to region %s under "
                         "Zone management already belongs to region %s; "
@@ -2068,12 +2085,25 @@ class ClassicRoomCleaning(RoomCleaningBackend):
         # room id and the map lookup below never found it, so
         # `clean_zone` could not work on a Classic robot at all
         # (@Hardy-196, i7+).
-        forced_zones: set[str] = set()
+        #
+        # AND A ROOM FROM ANOTHER MAP ARRIVES AS `<map>/<id>` (4.3.3,
+        # `available_rooms()`): its map and its type are its own, never
+        # the bare-id lookups, which the active map's rooms and zones
+        # filled first. Per position, not per id: room 5 and zone 5 in
+        # one request are two regions.
         bare_ids: list[str] = []
+        types: list[str | None] = []
+        maps: list[str | None] = []
         for rid in room_ids:
+            on_map: str | None = None
+            if "/" in rid:
+                on_map, rid = rid.split("/", 1)
             if rid.startswith(ZID_PREFIX):
                 rid = rid[len(ZID_PREFIX):]
-                forced_zones.add(rid)
+                types.append("zid")
+            else:
+                types.append("rid" if on_map else None)
+            maps.append(on_map or None)
             bare_ids.append(rid)
         room_ids = bare_ids
 
@@ -2095,10 +2125,22 @@ class ClassicRoomCleaning(RoomCleaningBackend):
         state = self._data.roomba_reported_state()
         # Every requested region carries its own map; they must all come
         # from the same one, since the payload has a single pmap_id.
-        pmap_id = next(
-            (self._pmap_by_region.get(rid) for rid in room_ids if self._pmap_by_region.get(rid)),
-            "",
-        )
+        wanted = [
+            on_map or self._pmap_by_region.get(rid) or ""
+            for rid, on_map in zip(room_ids, maps, strict=True)
+        ]
+        # ONE COMMAND, ONE MAP. The payload has a single `pmap_id`; with
+        # regions from two maps it took the first and sent the rest to a
+        # map they are not on, where their ids name other regions.
+        if len({m for m in wanted if m}) > 1:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="rooms_different_floors",
+                translation_placeholders={
+                    "pmap_ids": ", ".join(sorted({m for m in wanted if m}))
+                },
+            )
+        pmap_id = next((m for m in wanted if m), "")
         # AN EMPTY MAP ID IS NOT A NEUTRAL VALUE.
         #
         # @Echovictor37 sent a region command with `map_id=None` on a
@@ -2206,6 +2248,10 @@ class ClassicRoomCleaning(RoomCleaningBackend):
         robot_two_pass = bool(state.get("twoPass", False))
         no_auto = bool(state.get("noAutoPasses", False))
 
+        def _region_type(index: int, rid: str) -> str:
+            """The id's own type where it carries one, else the lookup."""
+            return types[index] or getattr(self, "_type_by_region", {}).get(rid, "rid")
+
         params = {
             "ordered": 1 if ordered else 0,
             "pmap_id": pmap_id,
@@ -2229,10 +2275,7 @@ class ClassicRoomCleaning(RoomCleaningBackend):
                     # `clean_rooms` without the mapping existing. An
                     # AttributeError here would turn a missing lookup
                     # into a failed clean.
-                    "type": (
-                        "zid" if rid in forced_zones
-                        else getattr(self, "_type_by_region", {}).get(rid, "rid")
-                    ),
+                    "type": _region_type(i, rid),
                     "params": {
                         "noAutoPasses": no_auto,
                         # THE CLEANING MODE, when the user has expressed
@@ -2299,9 +2342,7 @@ class ClassicRoomCleaning(RoomCleaningBackend):
         # error 224; `async_clean_segments` has omitted it since 2.7.0.
         # Mixed room and zone commands keep it.
         if room_ids and all(
-            rid in forced_zones
-            or getattr(self, "_type_by_region", {}).get(rid, "rid") == "zid"
-            for rid in room_ids
+            _region_type(i, rid) == "zid" for i, rid in enumerate(room_ids)
         ):
             params.pop("user_pmapv_id", None)
             user_pmapv_id = ""
@@ -3157,7 +3198,7 @@ def smart_rooms_to_name(runtime_data: Any, options: Any) -> list[str]:
     is one the user cannot place.
 
     That leaves out every region id that is only known from an old
-    schedule or an earlier clean. @liblit's i7 was asked to name twelve
+    schedule or an earlier clean. A tester's i7 was asked to name twelve
     of them, all with names in his account or on no map at all. Those
     cannot be cleaned on the current map either, so nothing is lost by
     not asking.

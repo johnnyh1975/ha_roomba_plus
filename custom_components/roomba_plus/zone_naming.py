@@ -126,7 +126,7 @@ def map_room_label(
     last step differs from resolve_zone_name(): an unnamed room shows its
     bare number, not "Zone 21" -- the naming notice lists zones by number,
     and the map is where you find out which room that number is (the
-    Prime rooms map has done this since 4.2.10, @liblit).
+    Prime rooms map has done this since 4.2.10, a tester).
     """
     from .const import CONF_SMART_ZONE_ALIASES
 

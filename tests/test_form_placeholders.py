@@ -6,7 +6,7 @@ names and the code does not pass is not left blank: the frontend shows
 `Translation [formatjs Error: MISSING_VALUE] The intl string context
 variable "robot" was not provided ...` in place of the instructions.
 
-@liblit hit exactly that in 4.2.18, on both "Rooms & zones" steps. A
+A tester hit exactly that in 4.2.18, on both "Rooms & zones" steps. A
 4.2.5 rewrite had put the repair dialog's text, which names `{robot}`,
 into two options steps whose code never passed it. Nothing compared
 the two, and no test rendered the text.

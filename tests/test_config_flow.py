@@ -329,7 +329,7 @@ class TestAsyncStepZonesEphemeral:
     @pytest.mark.asyncio
     async def test_no_map_no_form(self, naming_map):
         """Nine fields labelled with numbers nothing on screen explains
-        is the form @liblit could not use (980). Without the map the
+        is the form a tester could not use (980). Without the map the
         step says what is missing instead."""
         from custom_components.roomba_plus.room_seg_store import RoomSegStore, SegRoom
 
@@ -360,14 +360,14 @@ class TestAsyncStepZonesEphemeral:
         flow.async_show_form.assert_called_once()
         schema_keys = {str(k) for k in result["data_schema"].schema.keys()}
         # "Area 1", the number the Cleaning path map draws -- not the
-        # store's internal `zone_room_1` (@liblit, 980).
+        # store's internal `zone_room_1` (a tester's 980).
         assert schema_keys == {"Area 1", "Area 2"}
 
     @pytest.mark.asyncio
     async def test_the_form_gets_every_placeholder_its_text_uses(self):
         """`{robot}` was in the text and never passed: Home Assistant
         showed `[formatjs Error: MISSING_VALUE]` instead of the
-        instructions (@liblit, 4.2.18)."""
+        instructions (a tester, 4.2.18)."""
         from custom_components.roomba_plus.room_seg_store import RoomSegStore, SegRoom
 
         rss = RoomSegStore()
@@ -1517,7 +1517,7 @@ class TestMapManagementOptionsStep:
 
 @pytest.mark.usefixtures("naming_map")
 class TestSmartZonesNamingStep:
-    """`async_step_smart_zones`, rebuilt in 4.2.19 (@liblit, i7).
+    """`async_step_smart_zones`, rebuilt in 4.2.19 (a tester's i7).
 
     It listed every region id Roomba+ had ever seen as a field labelled
     `zone_1`, pre-filled "Zone 1", and told him to find the numbers in
@@ -1567,7 +1567,7 @@ class TestSmartZonesNamingStep:
 
     @pytest.mark.asyncio
     async def test_rooms_named_by_the_account_are_not_asked_for(self):
-        """liblit's i7: every room on the map named in his account."""
+        """A tester's i7: every room on the map named in his account."""
         flow = self._flow(account={"3": "Kitchen", "7": "Hall"})
 
         result = await flow.async_step_smart_zones()

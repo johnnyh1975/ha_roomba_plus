@@ -2112,6 +2112,28 @@ class TestAFailedAlignmentSaysWhy:
 
         assert out["outline_points"] is None
         assert out["door_candidates"] is None
+        assert out["aligner_confidence"] is None
+        assert out["aligner_bootstrap_markers"] is None
+
+    def test_how_close_it_came_is_shown(self) -> None:
+        """4.3.3, @catongates: whether it is stuck below 0.70 or never had
+        markers to match was not answerable."""
+        aligner = self._aligner([{}] * 412, [(1.0, 2.0), (3.0, 4.0)])
+        aligner.confidence = 0.6349
+        aligner._bootstrap_markers = [object(), object(), object()]
+        out = self._chain(aligner)
+
+        assert out["aligner_confidence"] == 0.63
+        assert out["aligner_bootstrap_markers"] == 3
+
+    def test_a_confidence_that_is_not_a_number_is_not_shown(self) -> None:
+        aligner = self._aligner([], [])
+        aligner.confidence = True
+        aligner._bootstrap_markers = "x"
+        out = self._chain(aligner)
+
+        assert out["aligner_confidence"] is None
+        assert out["aligner_bootstrap_markers"] is None
 
 
 class TestAFalseAlignmentSaysWhatItCosts:

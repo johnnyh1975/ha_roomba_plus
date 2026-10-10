@@ -152,7 +152,7 @@ def segment_rooms(
                     #
                     # The narrowest point of a boundary is always at its
                     # ends, where it meets the wall -- 90 to 190 mm on
-                    # @liblit's 980, whatever the opening. The widest
+                    # A tester's 980, whatever the opening. The widest
                     # point is the middle of the opening. And the mask is
                     # the robot's footprint, not where its centre could
                     # go: its edge sits 23-46 mm from his walls, so no

@@ -504,7 +504,7 @@ class ConsumableRole:
     #: `has_clean_base`, but the maintenance-due path iterated all four
     #: roles regardless -- so a Roomba 980 reported a bag due after
     #: ~105 hours of runtime, for a bag that does not exist
-    #: (@liblit, R980020, diagnostics attached to the report).
+    #: (a tester's R980020, diagnostics attached to the report).
     #:
     #: Only `clean_base_bag` carries this. Filters, main brushes and
     #: side brushes exist on every robot in scope, Clean Base or not --

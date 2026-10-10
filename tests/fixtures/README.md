@@ -25,9 +25,9 @@ If you are adding tests for mop mission handling — pad type per mission,
 `clean` versus `start`, region names straight off the wire — this is the
 data to use.
 
-## liblit_980/ — a second home for the 900-series areas
+## tester_980/ — a second home for the 900-series areas
 
-@liblit's Roomba 980, from his Roomba+ backup of 6 October 2026, kept
+A tester's Roomba 980, from his Roomba+ backup of 6 October 2026, kept
 **with his permission** (October 2026). Three stores, as the backup holds
 them: `grid.json` (coverage grid, 2984 cells), `roomseg.json` (eight
 areas) and `missions.json` (sixteen records). Left out on purpose: the
@@ -38,7 +38,21 @@ three files holds a BLID, a credential or an address.
 His home fails the opposite way to the maintainer's: furniture splits
 his dining room and kitchen, where walls split the maintainer's flat. A
 change to the area logic that helps one and harms the other has been
-proposed before (hole filling, see `LIBLIT_980_ANALYSE.md` in the
-project notes), so every such change runs against both.
-Tests: `TestLiblitsHome` in `test_room_seg_store.py`,
-`TestLiblitsWholeStore` in `test_mission_store.py`.
+proposed before (hole filling, see the project notes), so every such
+change runs against both.
+Tests: `TestTheSecond980sHome` in `test_room_seg_store.py`,
+`TestTheSecond980sWholeStore` in `test_mission_store.py`.
+
+## roomba_plus_missions_02_01KRRVYR4T1MPSYM7ACKA5XCBX.dms — the maintainer's 980, 9 October 2026
+
+The whole mission store of the maintainer's own Roomba 980, 79 records
+up to mission 458. Room names are replaced by `Room A`, `Room B`,
+`Room C`; nothing else is changed. No BLID, credential or address.
+
+It is the store that showed one mission recorded twice: once by the
+robot, once taken from the cloud. A 980 mission that ends in an error
+(17, 2, 4) is closed by the cloud at the error, while the robot reports
+it over hours later, so the two records share their start and not their
+end. Fifteen of the 79 records are such cloud copies; eight more are
+cloud records of missions with no local record, which stay.
+Tests: `TestTheCloudsCopyOfAnErrorMission` in `test_mission_store.py`.

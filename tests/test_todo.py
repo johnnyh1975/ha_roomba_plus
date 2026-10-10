@@ -221,7 +221,7 @@ class TestReconfigureRooms:
         )
 
     def test_with_an_account_the_rooms_on_the_map_decide(self):
-        """@liblit's i7: every room named in his account, and the item
+        """A tester's i7: every room named in his account, and the item
         stood open because the robot's region ids had no name in Roomba+."""
         todo = _make_todo()
         with self._with_account(todo, []):

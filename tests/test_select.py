@@ -242,7 +242,7 @@ class TestZoneSelectHiddenFilter:
         assert entity.options == ["Kitchen"]
 
     def test_areas_sharing_a_name_are_offered_once(self):
-        """@liblit, 980: four areas named "Kitchen" are one room."""
+        """A tester's 980: four areas named "Kitchen" are one room."""
         from unittest.mock import MagicMock
         from custom_components.roomba_plus.select import ZoneSelect
         from custom_components.roomba_plus.room_seg_store import RoomSegStore, SegRoom
@@ -1530,10 +1530,15 @@ class TestPairedSettingsGoOutTogether:
 # from the cloud and nothing is raised. Hidden zones do not count. Run
 # against Home Assistant's real issue registry.
 
-def _zone_select_m(hass, *, has_cloud=False, options=None):
+def _zone_select_m(hass, *, has_cloud=False, account=None, options=None):
+    """`account`: an iRobot account configured (a cloud coordinator
+    exists), whether or not it has answered; defaults to `has_cloud`."""
     entry = MockConfigEntry(domain=DOMAIN, data={"blid": "B"}, options=options or {})
     entry.add_to_hass(hass)
-    entry.runtime_data = SimpleNamespace(has_cloud=has_cloud)
+    entry.runtime_data = SimpleNamespace(
+        has_cloud=has_cloud,
+        cloud_coordinator=MagicMock() if (has_cloud if account is None else account) else None,
+    )
     s = sel.SmartZoneSelect.__new__(sel.SmartZoneSelect)
     s._config_entry = entry
     s.hass = hass
@@ -1600,6 +1605,15 @@ class TestNamingIssue:
     async def test_with_a_cloud_account_nothing_is_raised(self, hass):
         s, entry = _zone_select_m(hass, has_cloud=True)
         await s._async_raise_naming_issue(["3"])
+        assert _issue(hass, entry) is None
+        assert "discovered_zone_ids" not in entry.options
+
+    @pytest.mark.asyncio
+    async def test_an_account_that_has_not_answered_yet_raises_nothing_either(self, hass):
+        """4.3.3, @liblit: a restart whose first cloud fetch failed asked
+        him to name seven zones his account had named long ago."""
+        s, entry = _zone_select_m(hass, has_cloud=False, account=True)
+        await s._async_raise_naming_issue(["2", "5", "9"])
         assert _issue(hass, entry) is None
         assert "discovered_zone_ids" not in entry.options
 
@@ -1747,6 +1761,20 @@ class TestPadWetnessKeepsTheOtherPad:
 
 
 class TestNamingIssueAtStartup:
+
+    @pytest.mark.asyncio
+    async def test_a_notice_from_an_earlier_start_goes_with_an_account(self, hass, monkeypatch):
+        """Home Assistant keeps the notice across restarts; with an account
+        configured it is taken down at the next start."""
+        s, entry = _zone_select_m(hass, account=False)
+        await s._async_raise_naming_issue(["3"])
+        assert _issue(hass, entry) is not None
+
+        entry.runtime_data.cloud_coordinator = MagicMock()
+        monkeypatch.setattr(IRobotEntity, "async_added_to_hass", AsyncMock())
+        s._unlabelled_region_ids = lambda: ["3"]
+        await s.async_added_to_hass()
+        assert _issue(hass, entry) is None
 
     @pytest.mark.asyncio
     async def test_unnamed_zones_present_at_start_raise_the_issue(self, hass, monkeypatch):

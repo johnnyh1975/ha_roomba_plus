@@ -91,9 +91,9 @@ class TestRoomsFromEveryMap:
 
         rooms = await backend.available_rooms()
 
-        assert rooms["Hallway"] == "19", (
+        assert rooms["Hallway"] == "second/19", (
             "a room that exists only on a non-active map used to answer "
-            "'unknown room'"
+            "'unknown room'; since 4.3.3 its id carries its map"
         )
         assert rooms["Master Bathroom"] == "1"
 
@@ -838,3 +838,114 @@ class TestKnowingWhichFloorTheRobotIsOn:
         upto_warning = after.split("_LOGGER.warning")[0]
 
         assert "raise" not in upto_warning
+
+
+class TestARoomOnAnotherMapKeepsItsMap:
+    """@catongates, i7+ with an upstairs and a downstairs map, 4.3.2:
+    `clean_room: Bathroom` (upstairs) went out as
+
+        start  pmap_id: <downstairs>  regions: ["5"]  region_types: ["zid"]
+
+    -- the downstairs zone "In front of the Oven", whose id is also 5.
+    The map and the type were looked up by the bare id, and the active
+    map's zones were read before the other maps' rooms. The robot,
+    upstairs, wandered looking for a zone on a map it was not on.
+
+    Since 4.3.3 a room from another map is handed out as `<map>/<id>`
+    and takes its map and its type from there.
+    """
+
+    DOWN = "rIYLrxkERSqQVXlgs8s1Bg"
+    UP = "TXKnHimlQcm1nHXtztKz8A"
+
+    def _backend(self):
+        coordinator = MagicMock()
+        coordinator.data = {"pmaps": []}
+        coordinator.regions = [
+            {"id": "1", "name": "Living Room", "pmap_id": self.DOWN},
+            {"id": "2", "name": "Kitchen", "pmap_id": self.DOWN},
+        ]
+        coordinator.zones = [
+            {"id": "5", "name": "In front of the Oven", "pmap_id": self.DOWN},
+        ]
+        coordinator.regions_by_pmap = {
+            self.DOWN: {"1": "Living Room", "2": "Kitchen"},
+            self.UP: {"5": "Bathroom", "6": "Office"},
+        }
+        coordinator.active_pmap_id = self.DOWN
+        return self._build(coordinator)
+
+    @staticmethod
+    def _build(coordinator):
+        from custom_components.roomba_plus.room_cleaning import ClassicRoomCleaning
+
+        backend = ClassicRoomCleaning.__new__(ClassicRoomCleaning)
+        backend._config_entry = SimpleNamespace(options={})
+        backend._data = MagicMock()
+        backend._data.blid = "BLID1"
+        backend._data.cloud_coordinator = coordinator
+        backend._data.roomba_reported_state = MagicMock(return_value={})
+        backend._pmap_by_region = {}
+        backend._type_by_region = {}
+        backend._hass = MagicMock()
+        backend._roomba = MagicMock()
+        return backend
+
+    async def _sent(self, backend, names):
+        from unittest.mock import patch
+
+        from custom_components.roomba_plus.room_cleaning import ClassicRoomCleaning
+
+        captured: dict = {}
+
+        async def _send(command, params):
+            captured["params"] = params
+
+        backend._roomba.send_command = _send
+        rooms = await backend.available_rooms()
+        with patch.object(ClassicRoomCleaning, "_raise_if_map_updating", MagicMock()):
+            await backend.clean_rooms([rooms[name] for name in names])
+        return captured["params"]
+
+    async def test_the_bathroom_goes_to_its_own_map_as_a_room(self) -> None:
+        params = await self._sent(self._backend(), ["Bathroom"])
+
+        assert params["pmap_id"] == self.UP
+        assert [(r["region_id"], r["type"]) for r in params["regions"]] == [("5", "rid")]
+
+    async def test_the_oven_zone_still_goes_out_as_the_zone(self) -> None:
+        params = await self._sent(self._backend(), ["In front of the Oven"])
+
+        assert params["pmap_id"] == self.DOWN
+        assert [(r["region_id"], r["type"]) for r in params["regions"]] == [("5", "zid")]
+
+    async def test_a_room_on_the_active_map_is_unchanged(self) -> None:
+        backend = self._backend()
+        rooms = await backend.available_rooms()
+        assert rooms["Kitchen"] == "2", "ids on the active map stay bare"
+
+        params = await self._sent(backend, ["Kitchen"])
+        assert params["pmap_id"] == self.DOWN
+        assert [(r["region_id"], r["type"]) for r in params["regions"]] == [("2", "rid")]
+
+    async def test_two_maps_in_one_command_are_refused(self) -> None:
+        """The payload names one map. With rooms from two it sent the
+        second map's rooms to the first, where their ids are other
+        regions."""
+        import pytest
+        from homeassistant.exceptions import ServiceValidationError
+
+        with pytest.raises(ServiceValidationError) as err:
+            await self._sent(self._backend(), ["Kitchen", "Office"])
+        assert err.value.translation_key == "rooms_different_floors"
+
+    async def test_an_alias_reaches_the_same_map_as_the_name(self) -> None:
+        backend = self._backend()
+        backend._config_entry = SimpleNamespace(
+            options={"smart_zone_aliases": {"6": "Study"}}
+        )
+
+        rooms = await backend.available_rooms()
+
+        assert rooms["Study"] == f"{self.UP}/6"
+        assert rooms["Office"] == f"{self.UP}/6"

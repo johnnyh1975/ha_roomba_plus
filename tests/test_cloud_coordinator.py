@@ -2769,6 +2769,85 @@ class TestTheCommittedVersionIsTheActiveOne:
         }
 
 
+class TestWhereTheRobotsFrameSitsInTheMap:
+    """4.3.3, @catongates: an i7+ that publishes no pose draws a path
+    requested from the robot, in the robot's frame, turned 90 degrees
+    against the rooms map. The UMF names the dock, start and end as poses
+    in its own frame; they are now kept, and the diagnostics show their
+    headings, never their positions."""
+
+    @staticmethod
+    def _maps():
+        import json
+        from pathlib import Path
+
+        return json.loads(
+            Path("tests/fixtures/irobot_mission_umf_i3plus.json").read_text()
+        )["maps"]
+
+    def test_the_poses_are_read_from_iRobots_own_umf(self):
+        from custom_components.roomba_plus.cloud_coordinator import umf_typed_poses
+
+        poses = umf_typed_poses(self._maps())
+        assert poses["start"] == [{"x_mm": 0.0, "y_mm": 0.0, "ori_rad": -1.4859}]
+        (end,) = poses["end"]
+        assert (round(end["x_mm"], 1), round(end["y_mm"], 1), end["ori_rad"]) == (50.8, 14.2, -1.527)
+        assert poses["dock"] == [], "this UMF names no dock pose"
+        assert poses["orientation_rad"] == {
+            "user_orientation_rad": 0.0, "robot_orientation_rad": 4.7971,
+        }
+
+    def test_the_start_heading_and_the_header_angle_are_one_angle(self):
+        """The observation the diagnostics are to test on other robots:
+        in this capture they differ by exactly a full turn."""
+        import math
+
+        from custom_components.roomba_plus.cloud_coordinator import umf_typed_poses
+
+        poses = umf_typed_poses(self._maps())
+        apart = poses["orientation_rad"]["robot_orientation_rad"] - poses["start"][0]["ori_rad"]
+        assert math.isclose(apart, 2 * math.pi, abs_tol=1e-3)
+
+    def test_the_report_holds_headings_and_distances_only(self):
+        from custom_components.roomba_plus.cloud_coordinator import (
+            umf_pose_report,
+            umf_typed_poses,
+        )
+
+        report = umf_pose_report({"poses": umf_typed_poses(self._maps())})
+        assert report["end"] == [{"ori_rad": -1.527, "from_origin_mm": 53}]
+        assert report["start"] == [{"ori_rad": -1.4859, "from_origin_mm": 0}]
+        assert "x_mm" not in str(report) and "y_mm" not in str(report)
+
+    def test_junk_is_skipped(self):
+        from custom_components.roomba_plus.cloud_coordinator import (
+            umf_pose_report,
+            umf_typed_poses,
+        )
+
+        assert umf_typed_poses(None) == {
+            "dock": [], "start": [], "end": [], "orientation_rad": None,
+        }
+        junk = [
+            "x",
+            {"poses2d": ["x", {"id": "1"}, {"id": "2", "coordinates": [1], "ori_rad": 0}],
+             "typed_poses": {"dock_poses": {"geometry": {"ids": ["1", "2", "9"]}},
+                             "start_pose": "x", "end_pose": {"geometry": "x"}}},
+        ]
+        assert umf_typed_poses(junk)["dock"] == []
+        assert umf_pose_report(None) is None
+        assert umf_pose_report({}) is None
+
+    def test_the_fetched_umf_carries_them(self):
+        import inspect
+
+        from custom_components.roomba_plus import diagnostics
+
+        source = inspect.getsource(IrobotCloudCoordinator._fetch_active_umf)
+        assert '"poses":      umf_typed_poses(maps)' in source
+        assert 'umf_pose_report(cc.data.get("umf"))' in inspect.getsource(diagnostics)
+
+
 # ── formerly tests/test_cloud_api.py (removed in 4.3 with cloud_api.py) ───────
 #
 # The grace period lives in the coordinator, so its tests moved here.

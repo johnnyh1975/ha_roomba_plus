@@ -521,7 +521,7 @@ def _capture_zone_names(
     data: RoombaData = entry.runtime_data
     if data.room_seg_store:                      # EPHEMERAL
         # NOT THE HIDDEN ONES, and EACH NAME ONCE. Hiding an area is how a
-        # bogus one is put away (@liblit, 980: an area outside the house
+        # bogus one is put away (a tester's 980: an area outside the house
         # from a mission that started off the dock), so it must not be
         # recorded as cleaned. And several areas may carry one name to
         # make one room of them; the mission cleaned that room once.
@@ -783,7 +783,7 @@ async def async_record_mission(
         record["rooms_source"] = ROOMS_AWAITING_CLOUD
 
     # NOT A MISSION: under half a minute between a known start and the
-    # end, "completed", nothing cleaned, nothing stuck or lifted. @liblit's
+    # end, "completed", nothing cleaned, nothing stuck or lifted. A tester's
     # 980 stored eleven of these among sixteen records -- five within
     # five minutes on one evening -- and iRobot's own history has none of
     # them. They counted as missions everywhere a mission is counted.

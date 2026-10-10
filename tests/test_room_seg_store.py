@@ -1504,7 +1504,7 @@ class TestConstrictionWidthIsPhysical:
 
 
 class TestTheOpeningIsMeasuredAtItsWidest:
-    """@liblit's 980: the narrowest point of a boundary is always where it
+    """A tester's 980: the narrowest point of a boundary is always where it
     meets the wall, whatever the opening. A second measurement takes the
     widest point and adds no robot radius (the mask is the footprint).
     Diagnostics only: merging is unchanged."""
@@ -1591,8 +1591,8 @@ class TestANameSurvivesItsAreaBeingAbsorbed:
         assert [r.name for r in store.rooms.values()] == ["Dining"]
 
 
-class TestLiblitsHome:
-    """@liblit's 980, kept with his permission (tests/fixtures/liblit_980,
+class TestTheSecond980sHome:
+    """A tester's 980, kept with his permission (tests/fixtures/tester_980,
     no BLID, no credentials, no addresses): the second home every change to
     the 900-series areas is checked against, beside the maintainer's own.
 
@@ -1605,7 +1605,7 @@ class TestLiblitsHome:
     import json as _json
     from pathlib import Path as _Path
 
-    _DIR = _Path("tests/fixtures/liblit_980")
+    _DIR = _Path("tests/fixtures/tester_980")
     _GRID = _json.loads((_DIR / "grid.json").read_text())
     _SEG = _json.loads((_DIR / "roomseg.json").read_text())
     _CELLS = {tuple(int(n) for n in k.split(",")): v for k, v in _GRID["cells"].items()}

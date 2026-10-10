@@ -538,7 +538,7 @@ class RoomSegStore:
 
         When a recompute divides the floor differently, an area can be
         absorbed by another -- most often an unnamed one this round
-        created, which then asked to be named again (@liblit's 980, where
+        created, which then asked to be named again (a tester's 980, where
         his kitchen and dining room are several areas each). The name
         goes to whichever live area took most of the old one's cells, if
         that area has none of its own. An area with its own name keeps

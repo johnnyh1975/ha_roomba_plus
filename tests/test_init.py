@@ -464,6 +464,43 @@ class TestPhaseCloudWithCoordinator:
         ctx.mission_store.backfill_from_cloud.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_the_entry_is_set_up_again_once_the_cloud_answers(self, hass, monkeypatch):
+        """4.3.3, @liblit: a start whose first fetch failed built the local
+        zone select and asked him to name zones his account had named.
+        The first refresh that succeeds reloads the entry -- once."""
+        from custom_components.roomba_plus import _phase_cloud, _phase_spatial
+
+        reload = MagicMock()
+        monkeypatch.setattr(hass.config_entries, "async_schedule_reload", reload)
+        ctx = _cloud_ctx(hass, monkeypatch, fail=OSError("dns"))
+        await _phase_spatial(ctx)
+        await _phase_cloud(ctx)
+        cc = ctx.cloud_coordinator
+
+        cc.last_update_success = False
+        cc.async_update_listeners()
+        reload.assert_not_called()
+
+        cc.data = {"pmaps": []}
+        cc.last_update_success = True
+        cc.async_update_listeners()
+        cc.async_update_listeners()
+        reload.assert_called_once_with(ctx.config_entry.entry_id)
+
+    @pytest.mark.asyncio
+    async def test_a_start_that_reached_the_cloud_is_not_reloaded(self, hass, monkeypatch):
+        from custom_components.roomba_plus import _phase_cloud, _phase_spatial
+
+        reload = MagicMock()
+        monkeypatch.setattr(hass.config_entries, "async_schedule_reload", reload)
+        ctx = _cloud_ctx(hass, monkeypatch)
+        await _phase_spatial(ctx)
+        ctx.grid_store = ctx.grid_store or MagicMock()
+        await _phase_cloud(ctx)
+        ctx.cloud_coordinator.async_update_listeners()
+        reload.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_rejected_credentials_stop_setup_for_reauthentication(self, hass, monkeypatch):
         from homeassistant.exceptions import ConfigEntryAuthFailed
 
@@ -1811,16 +1848,28 @@ class TestPhaseSpatialDecidesMapCapability:
 
 class TestEveryClassicMapIsDrawnMirroredBack:
     """The pose frame is a mirror image of the floor: 900-series since
-    4.3.1, Smart Map robots since 4.3.2 (@frnchfrgg, an i-series on lewis
-    firmware answering position requests, saw the same flip)."""
+    4.3.1, Smart Map robots' cleaning path since 4.3.2."""
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("state", [_STATE_POSE_ONLY, _STATE_SMART_MAP_NO_POSE])
-    async def test_path_and_coverage_are_mirrored(self, hass: Any, state) -> None:
+    async def test_the_path_is_mirrored(self, hass: Any, state) -> None:
         ctx = _ctx(hass, state)
         await _phase_spatial(ctx)
         assert ctx.renderer._cfg.mirror_x is True
+
+    @pytest.mark.asyncio
+    async def test_a_900_series_coverage_is_mirrored_with_its_path(self, hass: Any) -> None:
+        ctx = _ctx(hass, _STATE_POSE_ONLY)
+        await _phase_spatial(ctx)
         assert ctx.grid_store.mirror_x is True
+
+    @pytest.mark.asyncio
+    async def test_a_smart_map_coverage_is_not(self, hass: Any) -> None:
+        """4.3.3, @frnchfrgg: its grid is filled from the cloud's coverage,
+        in the cloud map's frame; mirrored in 4.3.2, it came out flipped."""
+        ctx = _ctx(hass, _STATE_SMART_MAP_NO_POSE)
+        await _phase_spatial(ctx)
+        assert ctx.grid_store.mirror_x is False
 
 
 class TestPhaseSpatialWiresTheStoresItPromises:

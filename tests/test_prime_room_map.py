@@ -2735,7 +2735,7 @@ class TestFloorPlanBuild:
 class TestAMapOptionSavedIsAMapRedrawn:
     """Switching "Draw room names" on changed nothing on the Prime rooms
     map until the robot re-versioned its map: the image is rendered when
-    the map version moves (found answering @liblit, #189). The polygons
+    the map version moves (found answering a tester, #189). The polygons
     are already loaded, so the redraw needs no cloud call."""
 
     @pytest.mark.asyncio

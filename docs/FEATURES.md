@@ -329,7 +329,7 @@ this, that phase fell through to the active branch and the tracker read
 Automatic room segmentation from the same coverage data used for the heatmap (distance-transform + watershed, the same core technique iRobot's own room-segmentation patent describes), not from travel-gap detection — the previous gap-based approach proved unreliable in the field and has been removed. Rooms and the doorways between them are identified from accumulated visit-density data across missions, with identity kept stable as more missions accumulate so a name you've assigned doesn't reset. New rooms surface via a Repair Issue for naming through the Options Flow; renaming also confirms a room so it appears in `select.{name}_select_zone`.
 
 What the areas learn from *(4.3.1)*:
-- **Only missions that started on the dock.** Positions count from where a mission starts, so a mission started elsewhere lands turned and shifted against all the others (@liblit: an area outside the house). Whether it started on the dock is read from the robot's own phase before the start (charging = on the dock). Such a mission is still drawn live; it is left out of the coverage grid, the areas and the doors, and counted in diagnostics as `position_chain.missions_kept_out_of_grid`. A start Roomba+ did not see (Home Assistant started mid-mission) counts as on the dock, as before.
+- **Only missions that started on the dock.** Positions count from where a mission starts, so a mission started elsewhere lands turned and shifted against all the others (a tester: an area outside the house). Whether it started on the dock is read from the robot's own phase before the start (charging = on the dock). Such a mission is still drawn live; it is left out of the coverage grid, the areas and the doors, and counted in diagnostics as `position_chain.missions_kept_out_of_grid`. A start Roomba+ did not see (Home Assistant started mid-mission) counts as on the dock, as before.
 - **A name survives a recompute.** When the areas are divided differently and a named area is absorbed by another, the name moves to the area that took most of it, unless that one has a name of its own.
 - **Doors in diagnostics** carry `opening_mm` (the opening at its widest) and `constriction` (how much it narrows the floor) beside the older `saddle_mm`. Measurement only; how areas are merged has not changed.
 
@@ -435,23 +435,31 @@ pins, and are the pair to use when placing the robot on a map.
 reflects, it does not turn. On a 900-series every picture is therefore
 drawn mirrored back in x — the cleaning path, the coverage map and the
 areas in *Rooms & zones* — and now shows the floor the right way round
-(@liblit, and a second 980). The millimetres are unchanged: `map_x_mm`,
+(two testers' 980s). The millimetres are unchanged: `map_x_mm`,
 `rooms`, the hazards and everything stored keep the frame they had; only
-the step to pixels mirrors. Since 4.3.2 the same holds for Smart Map
-robots: an i-series on lewis firmware showed the same flip (@frnchfrgg).
-Pictures from the iRobot cloud — the rooms map and the coverage of the
-last mission — were never flipped and are not mirrored.
+the step to pixels mirrors. Since 4.3.2 the cleaning path of a Smart Map
+robot is mirrored too. Pictures in the cloud map's frame — the rooms map,
+the coverage of the last mission and, on a Smart Map robot, the coverage
+map — were never flipped and are not mirrored (the coverage map was in
+4.3.2, by mistake).
+
+**A path requested from a Smart Map robot is in the cloud map's frame**
+*(4.3.3)*, not the dock's: two i-series on lewis firmware showed it
+(@frnchfrgg, @catongates). It is drawn as the rooms map draws the cloud
+map, so the path, the rooms map and the coverage map show the floor the
+same way round.
 
 **Turn the map to suit you** *(4.3.2)*: the map has no north. Its top is
 the way the robot faced as it left the dock, so it depends on how the
 dock stands. Configure → Settings → *Map rotation* turns every picture
 clockwise by 90, 180 or 270 degrees — the cleaning path with the robot's
 heading, doors and overlays, the area map, the coverage map and, on a
-Smart Map robot, the cloud coverage the map shows when it has no path.
-Nothing stored moves. Not turned yet: the rooms map of a Smart Map robot,
-which keeps the map's own orientation — the one it had right after
-mapping, not the turn set in the iRobot app. Prime maps keep the app's
-orientation.
+Smart Map robot, the cloud coverage the map shows when it has no path,
+and since 4.3.3 the rooms map, its published pixel positions included.
+Nothing stored moves. A Smart Map's pictures start in the map's own
+orientation, the one it had right after mapping, not the turn set in the
+iRobot app; the option is how to match the app. Prime maps keep the
+app's orientation.
 
 **Areas follow the coverage** *(4.3.2)*: the areas are recomputed when
 the coverage map has grown or shrunk by 30 cells, or holds 30 cells no
@@ -510,7 +518,7 @@ visited cells; the attribute `render_extent_mm` (`x_min`, `x_max`,
 `y_min`, `y_max`, `size_px`) is the frame the picture is actually drawn
 in. A point at (x, y) mm sits at pixel
 `((x − x_min) · s, (y_max − y) · s)` with `s = size_px / (x_max − x_min)`;
-on a 900-series since 4.3.1, and on every Classic robot since 4.3.2, at
+on a 900-series since 4.3.1 (and on every Classic robot in 4.3.2 only), at
 `((x_max − x) · s, (y_max − y) · s)`, the picture being mirrored in x
 (see *Robot position in the maps' frame*).
 Since 4.3.2 the attribute also carries `mirror_x` and `quarter_turns`, the

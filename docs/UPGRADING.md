@@ -9,6 +9,35 @@ note are listed — most releases need zero action beyond updating.
 
 ---
 
+## v4.3.3 — from v4.3.2
+
+**`clean_room` sends a room on another map to that map.** Room names
+work as before; internally such a room's id now carries its map
+(`<map>/<id>`). A request naming rooms from two maps is refused instead
+of cleaning the second map's ids on the first.
+
+**A "Name Smart Map Zones" notice on a robot with an iRobot account
+goes away by itself** at the next start; it was raised when the account
+had not answered yet.
+
+**Mission history may get shorter once.** A 980 mission that ended in an
+error could be stored twice, once by the robot and once from iRobot's
+cloud. The cloud's copies are folded into the robot's records the first
+time Home Assistant starts with 4.3.3, so mission counts and error
+counts drop to what actually happened, and the robot's records gain the
+area the cloud had for them. Nothing to do.
+
+**Smart Map robots: the cleaning path, the coverage map and the rooms
+map now show the floor the same way round.** The path requested from the
+robot is drawn in the cloud map's frame, and the coverage map is no
+longer mirrored (4.3.2 mirrored it by mistake). *Map rotation* now turns
+the rooms map too. If you set a rotation in 4.3.2 to make one of these
+pictures match, check it again: the same setting now turns all three
+alike. A card placing points on the coverage map reads `mirror_x` from
+`render_extent_mm`, which is false again on these robots.
+
+---
+
 ## v4.3.2 — from v4.3.1
 
 **900-series areas recompute once after the update** if they had frozen:

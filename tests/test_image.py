@@ -389,7 +389,7 @@ class TestRoombaRoomsImage:
         assert len(png) > 0
 
     def test_without_an_account_the_image_says_why(self):
-        """4.2.15, @liblit: the rooms map stayed black for good on a robot
+        """4.2.15, a tester: the rooms map stayed black for good on a robot
         without an iRobot account -- the only source of room shapes -- and
         the zone-naming notice sent him there. The placeholder says so."""
         import io
@@ -1742,7 +1742,7 @@ class TestRoomPalette:
 class TestTheRoomsMapLabels:
     """Room names on the Classic rooms map (option "Draw room names").
 
-    Two gaps, both found answering @liblit (#189): the label went into a
+    Two gaps, both found answering a tester (#189): the label went into a
     PNG cached on the map version alone, so switching the option on --
     or naming a zone -- changed nothing on screen until the map changed;
     and an unnamed room got no label at all, though the naming notice
@@ -1905,7 +1905,7 @@ class TestZoneLayerCache:
     def test_cache_key_set_after_first_render(self):
         entity, aligner = self._entity_with_rooms(self.ROOMS, pmap_version_id="v1")
         entity._render_rooms_png()
-        assert entity._room_render_cache_key == ("v1", True, ())
+        assert entity._room_render_cache_key == ("v1", True, (), 0)
         assert entity._room_render_cache is not None
 
     def test_pmap_version_change_invalidates_cache(self):
@@ -1922,17 +1922,17 @@ class TestZoneLayerCache:
         }
         entity._render_rooms_png()
 
-        assert entity._room_render_cache_key == ("v2", True, ())
+        assert entity._room_render_cache_key == ("v2", True, (), 0)
         assert entity._last_x_max != x_max_v1
 
     def test_alignment_state_change_invalidates_cache(self):
         entity, aligner = self._entity_with_rooms(self.ROOMS, pmap_version_id="v1")
         entity._render_rooms_png()
-        assert entity._room_render_cache_key == ("v1", True, ())
+        assert entity._room_render_cache_key == ("v1", True, (), 0)
 
         aligner._aligned = False  # falls back to UMF-space rendering mode
         entity._render_rooms_png()
-        assert entity._room_render_cache_key == ("v1", False, ())
+        assert entity._room_render_cache_key == ("v1", False, (), 0)
 
     def test_cached_transform_parameters_restored_on_cache_hit(self):
         entity, _ = self._entity_with_rooms(self.ROOMS)
@@ -3502,7 +3502,7 @@ class TestUnnamedZonesShowTheirNumber:
     skipped them for having no name — so the only place that could show
     you where zone 23 is was the one place refusing to draw it.
 
-    @liblit, twice: "Nothing shows me where these new zones might be
+    A tester, twice: "Nothing shows me where these new zones might be
     relative to existing landmarks that I would recognize on a map."
 
     Drawing the bare id closes the loop: the notice names a number, the
@@ -3582,7 +3582,7 @@ def _map(capability, entry, renderer=None):
 
 
 class TestCleaningPathNamingImage:
-    """4.2.20 (@liblit): the naming form draws the detected areas, not the
+    """4.2.20 (a tester): the naming form draws the detected areas, not the
     live map with its boxes, path and door markers."""
 
     def _store(self, *rooms):
@@ -5014,17 +5014,53 @@ class TestRequestedPositionsOnTheCleaningMap:
         m.async_write_ha_state = MagicMock()
         return m, renderer, entry, scheduled
 
-    def test_metres_to_millimetres_in_the_maps_frame(self):
-        """Metres and radians in; the shadow's millimetres and degrees out,
-        with the same axis swap every map applies to a shadow pose."""
+    def test_metres_to_millimetres_in_the_cloud_maps_frame(self):
+        """Metres and radians in, millimetres and degrees out, drawn as the
+        rooms map draws the cloud map (4.3.3): no swap, and through a
+        renderer that mirrors, the mirror image of both, so the picture
+        shows (x, y) and the heading as given."""
+        from custom_components.roomba_plus.map_renderer import (
+            map_mm_to_view,
+            raw_heading_to_view_deg,
+        )
+
         m, renderer, _e, _s = self._entity()
+        renderer._cfg.mirror_x = True
         m._handle_live_position(self._pos(1.5, -0.25, math.pi / 2))
         renderer.add_pose.assert_called_once()
         x, y, theta = renderer.add_pose.call_args.args
-        assert (x, y) == (-250.0, 1500.0)
-        assert theta == pytest.approx(90.0)
+        assert (x, y) == (-1500.0, -250.0)
+        assert map_mm_to_view(x, y) == (1500.0, -250.0), "the picture shows (x, y)"
+        assert raw_heading_to_view_deg(theta) == pytest.approx(90.0)
         assert m._position_source == img.POSITION_SOURCE_REQUEST
         m.async_write_ha_state.assert_called_once()
+
+    def test_a_renderer_that_does_not_mirror_gets_them_as_given(self):
+        m, renderer, _e, _s = self._entity()
+        renderer._cfg.mirror_x = False
+        m._handle_live_position(self._pos(1.5, -0.25, math.pi / 2))
+        x, y, theta = renderer.add_pose.call_args.args
+        assert (x, y) == (1500.0, -250.0)
+        assert theta == pytest.approx(90.0)
+
+    def test_the_path_lands_where_the_rooms_map_draws_the_same_point(self):
+        """@frnchfrgg's and @catongates' i-series: the requested path lay a
+        quarter turn (4.3.2) or a reflection (4.3.1) off the rooms map,
+        which draws the cloud map with x right and y up. A point the
+        robot reports at (2 m, 1 m) is now drawn right of and above the
+        origin, as the rooms map draws the cloud map's (2000, 1000)."""
+        from custom_components.roomba_plus.map_renderer import (
+            MapRenderer,
+            RendererConfig,
+        )
+
+        renderer = MapRenderer(RendererConfig(size_px=600, scale=10.0, mirror_x=True))
+        m, _r, _e, _s = self._entity()
+        m._renderer = renderer
+        m._handle_live_position(self._pos(2.0, 1.0))
+        x_mm, y_mm = renderer.points_mm[-1]
+        px, py = renderer._mm_to_px(x_mm, y_mm)
+        assert px > 300 and py < 300, (px, py)
 
     def test_not_fed_to_the_learning_stores(self):
         """The requested frame is not confirmed against the cloud map; a
@@ -5196,7 +5232,7 @@ class TestRequestedPathReviewFindings:
 
 
 class TestAMissionThatStartedOffTheDockIsNotLearnedFrom:
-    """@liblit's 980, 27 August: a mission that started away from the dock,
+    """A tester's 980, 27 August: a mission that started away from the dock,
     its path turned by about 95 degrees, 23% of its cells outside the
     house, two phantom areas. iRobot's own record said `dockedAtStart: 0`
     for exactly that one. The robot says it locally too: the phase before
@@ -5277,7 +5313,7 @@ class TestAMissionThatStartedOffTheDockIsNotLearnedFrom:
 
     def test_the_trajectory_is_stored_with_its_end_time(self):
         """`ended_at` was never passed: every stored trajectory had it
-        empty (@liblit's backup)."""
+        empty (a tester's backup)."""
         entry = entry_mock()
         entry.entry_id = "test_entry"
         entry.runtime_data = MagicMock()
@@ -5315,3 +5351,87 @@ class TestAMissionThatStartedOffTheDockIsNotLearnedFrom:
         kwargs = entry.runtime_data.trajectory_store.record_mission.call_args.kwargs
         assert kwargs["ended_at"]
 
+
+
+class TestTheRoomsMapTurnsWithTheOtherPictures:
+    """4.3.3, @frnchfrgg: the map rotation option turned the cleaning path
+    and the coverage map and left the rooms map as it was. It turns now,
+    and the pixel positions published for it turn with it."""
+
+    ROOMS = {"r1": [(0.0, 0.0), (4000.0, 0.0), (4000.0, 1000.0), (0.0, 1000.0)]}
+
+    def _entity(self, rotation: str):
+        from types import SimpleNamespace
+
+        entity = object.__new__(img.RoombaRoomsImage)
+        aligner = SimpleNamespace(
+            room_polygons_umf=self.ROOMS, aligned=False, pmap_version_id="v1",
+            rid_to_name=lambda: {},
+        )
+        entry = MagicMock()
+        entry.options = {"map_rotation": rotation}
+        entry.runtime_data.umf_aligner = aligner
+        entity._config_entry = entry
+        entity._room_render_cache_key = None
+        entity._room_render_cache = None
+        entity._rendered_once = False
+        entity._rendered_fallback = False
+        return entity
+
+    @staticmethod
+    def _size(png: bytes) -> tuple[int, int]:
+        import io
+
+        from PIL import Image
+
+        return Image.open(io.BytesIO(png)).size
+
+    @staticmethod
+    def _filled_box(png: bytes) -> tuple[int, int, int, int]:
+        import io
+
+        from PIL import Image
+
+        image = Image.open(io.BytesIO(png)).convert("RGB")
+        background = (30, 30, 30)
+        xs, ys = [], []
+        for x in range(0, image.width, 4):
+            for y in range(0, image.height, 4):
+                if image.getpixel((x, y)) != background:
+                    xs.append(x)
+                    ys.append(y)
+        return min(xs), max(xs), min(ys), max(ys)
+
+    def test_unturned_a_wide_room_is_drawn_wide(self):
+        x0, x1, y0, y1 = self._filled_box(self._entity("0")._render_rooms_png())
+        assert (x1 - x0) > 3 * (y1 - y0)
+
+    def test_a_quarter_turn_draws_it_tall(self):
+        x0, x1, y0, y1 = self._filled_box(self._entity("90")._render_rooms_png())
+        assert (y1 - y0) > 3 * (x1 - x0)
+
+    def test_the_published_pixels_turn_with_the_picture(self):
+        """The room's corner at the origin, bottom left unturned, is top
+        left after a clockwise quarter: the same rule as the coverage map,
+        (p, q) -> (1 - q, p) on the unit square."""
+        plain = self._entity("0")
+        plain._render_rooms_png()
+        turned = self._entity("90")
+        turned._render_rooms_png()
+
+        px, py = plain._to_px_last(0.0, 0.0)
+        tx, ty = turned._to_px_last(0.0, 0.0)
+        assert (tx, ty) == (600 - py, px)
+
+    def test_the_turn_is_part_of_the_cache_key(self):
+        entity = self._entity("270")
+        entity._render_rooms_png()
+        assert entity._room_render_cache_key[-1] == 3
+
+
+class TestTurnPx:
+    def test_four_quarters_are_none(self):
+        assert img._turn_px(10, 20, 600, 4) == (10, 20)
+
+    def test_one_clockwise_quarter(self):
+        assert img._turn_px(10, 20, 600, 1) == (580, 10)

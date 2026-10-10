@@ -33,7 +33,7 @@ from .const import (
 from .models import ConnectionType, RoombaConfigEntry
 from .binary_sensor import _prime_reports_tank
 from .cloud_account import async_diagnostics as cloud_account_diagnostics
-from .cloud_coordinator import pmap_record_id, pmap_version_report
+from .cloud_coordinator import pmap_record_id, pmap_version_report, umf_pose_report
 from .room_cleaning import resolve_user_pmapv_id
 
 _CLOUD_REDACT = DIAG_REDACT_KEYS | {"irobot_username", "irobot_password"}
@@ -178,6 +178,10 @@ def _cloud_diag(data: Any) -> dict[str, Any]:
         # this file, so "the wrong version was sent" could not be checked
         # against the right one. Map ids and version stamps only.
         result["pmap_versions"] = pmap_version_report(cc.data)
+        # WHICH WAY THE ROBOT'S FRAME SITS IN THE MAP (4.3.3): the UMF's
+        # dock, start and end poses as headings and distances from the
+        # origin, beside the header's angles. See umf_typed_poses().
+        result["umf_poses"] = umf_pose_report(cc.data.get("umf"))
         # And the version each favourite carries -- favourites run with
         # it unchanged, so a favourite that works names a version the
         # robot accepts.
@@ -808,6 +812,22 @@ def _position_chain(data: Any) -> dict[str, Any]:
         ),
         "aligner_present": aligner is not None,
         "aligner_aligned": getattr(aligner, "aligned", None),
+        # AND HOW CLOSE IT CAME (4.3.3, @catongates): below 0.70 it is
+        # not aligned; 0.0 also when it never had two pairs to match.
+        "aligner_confidence": (
+            round(confidence, 2)
+            if isinstance(confidence := getattr(aligner, "confidence", None), (int, float))
+            and not isinstance(confidence, bool)
+            else None
+        ),
+        # Markers from the robot's own positions, the half of the match
+        # a robot that publishes no pose never has. The cloud-traversal
+        # markers that stand in for them are in the cloud map's frame.
+        "aligner_bootstrap_markers": (
+            len(markers)
+            if isinstance(markers := getattr(aligner, "_bootstrap_markers", None), list)
+            else None
+        ),
         # THE TWO NUMBERS THAT SAY WHY IT IS NOT ALIGNED.
         #
         # `aligner_aligned: false` with room polygons present says the

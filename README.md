@@ -1,7 +1,7 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Default-blue.svg)](https://github.com/hacs/default)
-[![Version](https://img.shields.io/badge/Version-4.3.2-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-4.3.3-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2025.5%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Platinum-blueviolet.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
@@ -21,9 +21,9 @@ Roomba+ is a Platinum-quality Home Assistant custom integration for iRobot Roomb
 
 | Your robot | Install | Why |
 |---|---|---|
-| **Any supported robot** | **v4.3.2** (stable) — the default in HACS | One line for both generations, and one iRobot login for all the robots of an account. No beta channel needed. |
-| **Roomba Max · Combo/Plus 400-series** and other newer cloud robots | **v4.3.2** | Lines before 4.0 **cannot connect to your robot at all** |
-| Still on the 4.1 or 4.2 line | **v4.3.2** | Everything fixed through 4.2.22 is in it. 4.2.22 was the last 4.2 release; that line has ended, as has 4.1 |
+| **Any supported robot** | **v4.3.3** (stable) — the default in HACS | One line for both generations, and one iRobot login for all the robots of an account. No beta channel needed. |
+| **Roomba Max · Combo/Plus 400-series** and other newer cloud robots | **v4.3.3** | Lines before 4.0 **cannot connect to your robot at all** |
+| Still on the 4.1 or 4.2 line | **v4.3.3** | Everything fixed through 4.2.22 is in it. 4.2.22 was the last 4.2 release; that line has ended, as has 4.1 |
 | Not sure | Check your model number against the [supported hardware](#supported-hardware--capability-matrix) table below | |
 
 > ⚠️ If HACS shows you only `main` and downloading it hangs, see

@@ -208,7 +208,7 @@ def _span(record: Any) -> tuple[float, float] | None:
 def _same_mission(a: Any, b: Any) -> bool:
     """Whether two records are one mission recorded twice.
 
-    @liblit's 980 stored mission 119 twice: started 15 s apart, ended 12 s
+    A tester's 980 stored mission 119 twice: started 15 s apart, ended 12 s
     apart, both 49 minutes, under different ids, so neither duplicate
     check saw it -- they compare ids.
 
@@ -235,19 +235,126 @@ def _fill_from(kept: dict[str, Any], other: dict[str, Any]) -> None:
             kept[key] = value
 
 
+def _is_cloud_record(record: Any) -> bool:
+    """Whether a record was taken from the cloud (adopt_missing_from_cloud)."""
+    return isinstance(record, dict) and record.get("source") == "cloud"
+
+
+def _local_has_cloud_twin(
+    local_span: tuple[float, float], cloud_start: float, cloud_end: float
+) -> bool:
+    """Whether a cloud mission is the one a local record covers.
+
+    THE START IS WHAT THEY SHARE. A 980 whose mission ends in an error
+    (17, 2, 4) is closed by the cloud at the error, while the local record
+    runs on until the robot reports the mission over, hours later: the
+    owner's own 980 had 19 missions stored twice this way, 263 against
+    110 minutes, 413 against 54. The ends never agree, so the end-only
+    pairing recorded the cloud's copy as a mission of its own, and every
+    error was counted twice.
+
+    Same start (the cloud's is the moment the robot left, a few seconds
+    to two minutes after the local one), and the cloud's mission over
+    before the local record is. A local record under a minute is left
+    alone, as in _same_mission: the 980 writes zero-minute runs right
+    before real ones.
+    """
+    start, end = local_span
+    if end - start < 60:
+        return False
+    return (
+        abs(cloud_start - start) <= SAME_MISSION_TOLERANCE_SEC
+        and cloud_end <= end + SAME_MISSION_TOLERANCE_SEC
+    )
+
+
+def _cloud_twin(local: Any, cloud: Any) -> bool:
+    """Whether a cloud-taken record is the same mission as a local one."""
+    if _is_cloud_record(local) or not _is_cloud_record(cloud):
+        return False
+    local_span, cloud_span = _span(local), _span(cloud)
+    if local_span is None or cloud_span is None:
+        return False
+    return _local_has_cloud_twin(local_span, cloud_span[0], cloud_span[1])
+
+
+#: What a local record keeps as its own when its cloud twin is folded in:
+#: who it is, when the robot said it ran, and how it ended locally.
+_TWIN_KEEPS_LOCAL: frozenset[str] = frozenset(
+    {"id", "source", "started_at", "ended_at", "duration_min", "result", "error_code"}
+)
+
+
+def _fill_from_cloud_twin(local: dict[str, Any], cloud: dict[str, Any]) -> None:
+    """Fold a cloud-taken record into the local record of the same mission."""
+    for key, value in cloud.items():
+        if key in _TWIN_KEEPS_LOCAL:
+            continue
+        if value is not None and local.get(key) is None:
+            local[key] = value
+
+
 def _without_same_mission_twice(records: list[Any]) -> tuple[list[Any], int]:
-    """Fold records of one mission recorded twice into the first one."""
+    """Fold records of one mission recorded twice into the first one.
+
+    A cloud-taken record and the local record of the same mission
+    (_cloud_twin) are folded into the LOCAL one, whichever came first:
+    the local record is the one the live mission wrote.
+
+    ONLY NEIGHBOURS ARE COMPARED. Both rules need the starts within
+    SAME_MISSION_TOLERANCE_SEC, so a record is compared only with the
+    kept records whose start falls in its own or an adjacent bucket of
+    that width. Comparing each with all kept records cost 0.4 s for a
+    full store of 365 on every start of Home Assistant, on the event
+    loop (4.3.3).
+    """
     kept: list[Any] = []
     dropped = 0
+    buckets: dict[int, list[Any]] = {}
+
+    def _bucket(record: Any) -> int | None:
+        span = _span(record)
+        return None if span is None else int(span[0] // SAME_MISSION_TOLERANCE_SEC)
+
+    def _near(bucket: int | None) -> list[Any]:
+        if bucket is None:
+            return []
+        return [
+            k for b in (bucket - 1, bucket, bucket + 1) for k in buckets.get(b, ())
+        ]
+
+    def _forget(record: Any, bucket: int | None) -> None:
+        for i, k in enumerate(kept):
+            if k is record:
+                del kept[i]
+                break
+        if bucket is not None:
+            buckets[bucket] = [k for k in buckets.get(bucket, []) if k is not record]
+
     for record in records:
-        twin = next((k for k in kept if _same_mission(k, record)), None)
+        bucket = _bucket(record)
+        near = _near(bucket)
+        twin = next((k for k in near if _same_mission(k, record)), None)
         if twin is not None:
             _fill_from(twin, record)
             dropped += 1
             continue
+        local = next((k for k in near if _cloud_twin(k, record)), None)
+        if local is not None:
+            _fill_from_cloud_twin(local, record)
+            dropped += 1
+            continue
+        copy = next((k for k in near if _cloud_twin(record, k)), None)
+        if copy is not None:
+            # The local record takes its own place in the order, not the
+            # cloud copy's: it ends later, and the list is in end order.
+            _forget(copy, _bucket(copy))
+            _fill_from_cloud_twin(record, copy)
+            dropped += 1
         kept.append(record)
+        if bucket is not None:
+            buckets.setdefault(bucket, []).append(record)
     return kept, dropped
-
 
 class MissionStore:
     """Append-only mission log — max 365 records FIFO.
@@ -469,6 +576,28 @@ class MissionStore:
                     record.get("id"), existing.get("id"),
                 )
                 return False
+            if _cloud_twin(existing, record):
+                _fill_from_cloud_twin(existing, record)
+                self._region_index_cache = None
+                return False
+        # THE CLOUD'S COPY CAME FIRST: a 980 mission that ended in an error
+        # is closed by the cloud at the error and taken from there, while
+        # the robot reports it over only later (see _local_has_cloud_twin).
+        # The local record replaces it rather than standing beside it.
+        recent = self._records[-5:]
+        twin_at = next(
+            (i for i, existing in enumerate(recent) if _cloud_twin(record, existing)),
+            None,
+        )
+        if twin_at is not None:
+            cloud_copy = self._records.pop(len(self._records) - len(recent) + twin_at)
+            _fill_from_cloud_twin(record, cloud_copy)
+            if self._record_ids is not None:
+                self._record_ids.discard(cloud_copy.get("id"))
+            _LOGGER.info(
+                "MissionStore: %s replaces %s, the cloud's copy of the same mission",
+                record.get("id"), cloud_copy.get("id"),
+            )
         self._records.append(record)
         self._region_index_cache = None
         if self._record_ids is not None and record.get("id"):
@@ -2364,8 +2493,14 @@ class MissionStore:
                     best_delta = delta
                     best_cr = cr
 
+            twin_only = False
             if best_cr is None:
-                continue
+                best_cr = self._cloud_twin_of(local, cloud_records, tolerance_sec)
+                if best_cr is None:
+                    continue
+                # Same start, the cloud's end at the error: the fields
+                # are merged, the robot's own times are not touched.
+                twin_only = True
 
             cloud_start = best_cr.get("startTime")
             cloud_end   = best_cr.get("timestamp")
@@ -2417,6 +2552,8 @@ class MissionStore:
 
             if merge_wrote or area_wrote:
                 enriched += 1
+            if twin_only:
+                continue
 
             terminal = self.is_terminal_result(local.get("result"))
             # 980/900-series firmware resets mssnStrtTm to 0 at mission end:
@@ -2493,7 +2630,10 @@ class MissionStore:
           - ended at least `settle_sec` ago, so a mission whose local
             record is still being written is not recorded twice
           - with no local record ending within `tolerance_sec`, the same
-            pairing backfill_from_cloud() uses
+            pairing backfill_from_cloud() uses, and none the robot wrote
+            starting with it (4.3.3, _local_has_cloud_twin): a 980 mission
+            that ended in an error ends in the cloud hours before it does
+            here
 
         WHAT THEY CARRY: the fields the cloud has, merged exactly as
         backfill merges them -- timeline included, so their rooms come
@@ -2507,12 +2647,19 @@ class MissionStore:
         if not cloud_records:
             return 0
         local_ends: list[float] = []
+        # The spans of the records the robot wrote itself, for the cloud
+        # missions whose end the local record does not share
+        # (_local_has_cloud_twin).
+        local_spans: list[tuple[float, float]] = []
         for local in self._records:
             parsed = dt_util.parse_datetime(str(local.get("ended_at") or ""))
             if parsed is not None:
                 if parsed.tzinfo is None:
                     parsed = parsed.replace(tzinfo=timezone.utc)
                 local_ends.append(parsed.timestamp())
+            span = _span(local)
+            if span is not None and not _is_cloud_record(local):
+                local_spans.append(span)
         floors = [min(local_ends)] if local_ends else []
         if since_ts is not None:
             floors.append(float(since_ts))
@@ -2533,6 +2680,8 @@ class MissionStore:
             if end < start or end < horizon or now - end < settle_sec:
                 continue
             if any(abs(end - known) <= tolerance_sec for known in local_ends):
+                continue
+            if any(_local_has_cloud_twin(span, start, end) for span in local_spans):
                 continue
             result, error_code = _adopted_result(cloud)
             record: dict[str, Any] = {
@@ -2562,6 +2711,55 @@ class MissionStore:
             self._records.sort(key=lambda r: str(r.get("ended_at") or ""))
             self._region_index_cache = None
         return adopted
+
+    def _cloud_twin_of(
+        self,
+        local: dict[str, Any],
+        cloud_records: list[dict[str, Any]],
+        tolerance_sec: int,
+    ) -> dict[str, Any] | None:
+        """The cloud record of the mission `local` covers, found by its start.
+
+        For the missions whose ends do not agree (_local_has_cloud_twin).
+        Only when the pairing is unambiguous: the cloud record's end is not
+        another local record's end, and no other local record starts with
+        it -- a 980's recharge segments share one start, and the whole
+        mission's area must not be merged into each of them.
+        """
+        if _is_cloud_record(local):
+            return None
+        span = _span(local)
+        if span is None:
+            return None
+        others = [
+            other_span
+            for other in self._records
+            if other is not local
+            and not _is_cloud_record(other)
+            and (other_span := _span(other)) is not None
+        ]
+        best: dict[str, Any] | None = None
+        best_delta = float("inf")
+        for cr in cloud_records:
+            if not isinstance(cr, dict):
+                continue
+            try:
+                start = float(cr["startTime"])
+                end = float(cr["timestamp"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if not _local_has_cloud_twin(span, start, end):
+                continue
+            if any(
+                abs(end - o_end) <= tolerance_sec
+                or abs(start - o_start) <= SAME_MISSION_TOLERANCE_SEC
+                for o_start, o_end in others
+            ):
+                continue
+            delta = abs(start - span[0])
+            if delta < best_delta:
+                best, best_delta = cr, delta
+        return best
 
     def merge_latest_from_cloud(
         self,
@@ -2605,6 +2803,8 @@ class MissionStore:
                 best_delta = delta
                 best_cr = cr
 
+        if best_cr is None:
+            best_cr = self._cloud_twin_of(local, cloud_records, tolerance_sec)
         if best_cr is None:
             return False
 

@@ -1165,7 +1165,7 @@ def _make_maintenance_due(
     # A CLEAN BASE BY DEFAULT, because most of these tests are about the
     # four-role list and a robot without one has only three parts. The
     # dock shape is what `has_clean_base()` looks for; pass
-    # `clean_base=False` for a 900-series (@liblit's R980020 reported a
+    # `clean_base=False` for a 900-series (a tester's R980020 reported a
     # bag due on a plain dock, which is the bug that made this explicit).
     state: dict = {"bbrun": {"hr": hr}}
     if clean_base:
@@ -2138,7 +2138,7 @@ class TestTheTankFieldIsKnownUnreliable:
 
 
 class TestAPlainDockHasNoBag:
-    """The sensor half of @liblit's report (Roomba 980, R980020).
+    """The sensor half of a tester's report (Roomba 980, R980020).
 
     `binary_sensor.<robot>_maintenance_due` was `on` with
     `due: ["clean_base_bag"]` and an action telling him to replace a bag

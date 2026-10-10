@@ -2432,7 +2432,7 @@ class RoombaPlusOptionsFlow(OptionsFlow):
         #
         # The field was `zone_room_1`: the store's internal id, shown
         # verbatim because no translation can exist for a name built at
-        # runtime (@liblit, 980). The map draws each unnamed area with
+        # runtime (a tester's 980). The map draws each unnamed area with
         # this same number.
         #
         # A default only where the area already has a name; an empty
@@ -2460,7 +2460,7 @@ class RoombaPlusOptionsFlow(OptionsFlow):
     ) -> ConfigFlowResult:
         """Name the rooms on a Smart Map robot's map that have no name.
 
-        REBUILT IN 4.2.19 (@liblit, i7). The step listed every region id
+        REBUILT IN 4.2.19 (a tester's i7). The step listed every region id
         Roomba+ had ever seen -- from schedules, the last clean, the
         cloud -- as twelve fields labelled `zone_1` and pre-filled with
         "Zone 1", under instructions to look the numbers up in the

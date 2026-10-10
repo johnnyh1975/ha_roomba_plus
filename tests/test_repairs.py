@@ -3083,7 +3083,7 @@ class TestTheSharedLibraryConflictIsAnnounced:
 
 
 class TestTheZoneNamingDialogIsUsable:
-    """@liblit updated, got the notice, and could not act on it:
+    """A tester updated, got the notice, and could not act on it:
 
       - it did not say which of his two robots it meant
       - it gave no way to tell where the zones are
@@ -3110,7 +3110,7 @@ class TestTheZoneNamingDialogIsUsable:
         """THE PRE-FILL WAS THE PROBLEM, not its line endings.
 
         A grey box holding `2=`, `20=`, `21=` reads as a result list,
-        not as something to type into -- @liblit opened it and wrote
+        not as something to type into -- a tester opened it and wrote
         "I haven't the foggiest idea what to do here". Small zone
         counts now get a labelled, empty field each, which cannot be
         mistaken for output and needs no format at all.
@@ -3201,7 +3201,7 @@ class TestTheNamingFormNamesTheRobot:
     in `en.json` and not in `strings.json`, so editing the obvious file
     changed the text nobody was reading.
 
-    @liblit reported the same two problems against 4.2.9 that he had
+    A tester reported the same two problems against 4.2.9 that he had
     reported before, and he was right: one fix had landed in the wrong
     place.
     """
@@ -3249,7 +3249,7 @@ class TestTheNamingFormNamesTheRobot:
 
 
 class TestTheZoneFormIsRecognisableAsAForm:
-    """@liblit opened it and wrote "I haven't the foggiest idea what to
+    """A tester opened it and wrote "I haven't the foggiest idea what to
     do here". His screenshot explains why better than the sentence does:
     a borderless grey box holding `2=`, `20=`, `21=` reads as a result
     list, and the format hint sat below it, off screen.
@@ -3388,7 +3388,7 @@ class TestNamingFlowShape:
 
     @pytest.mark.asyncio
     async def test_each_field_shows_its_zone_id(self, hass):
-        """4.2.15, @liblit: Home Assistant shows no label for a field whose
+        """4.2.15, a tester: Home Assistant shows no label for a field whose
         key has no translation, so six boxes appeared with nothing to say
         which zone each was. The id is drawn inside the field."""
         f, _e = _flow(hass, options={"discovered_zone_ids": ["20", "9"]})
@@ -3402,7 +3402,7 @@ class TestNamingFlowShape:
     def test_the_text_no_longer_sends_them_to_a_map_they_cannot_have(self):
         """The notice is raised only for robots without an iRobot account,
         and the rooms map draws only what the account provides -- so the
-        pointer to it led to a black image every time (@liblit)."""
+        pointer to it led to a black image every time (a tester)."""
         import json
         import pathlib
 

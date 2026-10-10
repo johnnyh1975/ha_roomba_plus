@@ -767,7 +767,7 @@ class MaintenanceStore:
             # it, but this path iterated all four roles regardless -- so
             # a Roomba 980 reported the bag due once runtime passed the
             # 30-hour default, for a bag that does not exist
-            # (@liblit, R980020: `dock: {"known": false}`, bbrun.hr 105,
+            # (a tester's R980020: `dock: {"known": false}`, bbrun.hr 105,
             # reported 75 hours overdue).
             #
             # The cloud never contradicted it because there is no cloud

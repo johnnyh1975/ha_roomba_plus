@@ -290,7 +290,7 @@ class SmartZoneNamingRepairFlow(RepairsFlow):
         # ONE FIELD PER ZONE, while there are few enough to fit.
         #
         # This was a single multiline box pre-filled with "2=", "20=",
-        # one per line. @liblit opened it and wrote "I haven't the
+        # one per line. A tester opened it and wrote "I haven't the
         # foggiest idea what to do here" -- and his screenshot shows
         # why: a grey box with no visible border, holding what reads
         # as a result list rather than something to type into. The
@@ -315,7 +315,7 @@ class SmartZoneNamingRepairFlow(RepairsFlow):
                     # robot's zone ids at runtime, so no translation can
                     # exist for them. The assumption was that Home
                     # Assistant then shows the key. It does not in a
-                    # repair dialog: @liblit got six empty, unlabelled
+                    # repair dialog: a tester got six empty, unlabelled
                     # boxes. The prefix is drawn inside the field itself.
                     vol.Optional(f"Zone {rid}"): selector.TextSelector(
                         selector.TextSelectorConfig(prefix=f"{rid}:")
@@ -341,7 +341,7 @@ class SmartZoneNamingRepairFlow(RepairsFlow):
                 # WHICH ROBOT. The issue is raised per config entry and
                 # the flow has known which one all along -- the dialog
                 # just never said. With two robots there was no way to
-                # tell from the notice which one it meant (@liblit).
+                # tell from the notice which one it meant (a tester).
                 "robot": (
                     getattr(self._config_entry, "title", None) or "this robot"
                 ),

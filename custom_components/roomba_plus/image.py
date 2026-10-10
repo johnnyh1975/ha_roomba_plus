@@ -58,6 +58,7 @@ from .zone_naming import map_room_label, room_display_name
 from . import roomba_reported_state
 from .const import (
     CONF_LIVE_POSITION_REQUESTS,
+    CONF_MAP_ROTATION,
     CONF_MAP_CLEAN_ZONES,
     DEFAULT_LIVE_POSITION_REQUESTS,
     CONF_MAP_KEEPOUT_ZONES,
@@ -77,16 +78,23 @@ from .const import (
     REGION_TYPE_ICONS,
     ROOM_TRANSITION_CANDIDATE_PHASES,
     reports_local_pose,
+    DEFAULT_MAP_ROTATION,
 )
 from .entity import IRobotEntity
-from .geometry_utils import pose_point_to_map_mm, raw_pose_mm_to_map
+from .geometry_utils import pose_point_to_map_mm
 from .live_position import LivePositionStream
 from .room_cleaning import region_names_across_maps
 from .segment_anchoring import anchor_segment
 from .trajectory_segments import split_into_segments
 from .structural_failures import record_failure, record_success
 from .grid_store import GridStore, CELL_SIZE_MM, DECAY, VISIT_INCREMENT
-from .map_renderer import MapRenderer, _load_font, render_area_map
+from .map_renderer import (
+    MapRenderer,
+    _load_font,
+    map_mm_to_view,
+    quarter_turns,
+    render_area_map,
+)
 from .room_seg_store import CELL_MM as ROOM_SEG_CELL_MM, area_number
 from .mission_map import (
     MissionMapMismatch,
@@ -369,7 +377,7 @@ def _mission_start_on_dock(phase_before: str) -> bool | None:
     start -- Home Assistant started mid-mission -- is unknown, None.
 
     iRobot's own mission record agrees where it exists: `dockedAtStart`
-    was 0 for exactly the one mission of @liblit's four that started off
+    was 0 for exactly the one mission of a tester's four that started off
     the dock, and 1 for the rest.
     """
     if not phase_before:
@@ -1379,7 +1387,7 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
     # ── ImageEntity interface ─────────────────────────────────────────────────
 
     async def async_naming_image(self) -> bytes | None:
-        """The detected areas for the naming form (4.2.20, @liblit).
+        """The detected areas for the naming form (4.2.20, a tester).
 
         Each area as the cells it consists of, coloured and labelled --
         its number, or its name once it has one -- with the dock. The
@@ -2216,8 +2224,20 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         that has not been compared against a cloud map yet. A wrong
         frame in a persistent store would not wash out.
 
-        Metres and radians in, the shadow's millimetres and degrees out,
-        then the same axis swap every map applies to a shadow pose.
+        IN THE CLOUD MAP'S FRAME, NOT THE DOCK'S (4.3.3). roombapy calls
+        the frame the dock's; two i-series on lewis firmware say otherwise.
+        @frnchfrgg's path, drawn through the shadow's axis swap and the
+        4.3.2 mirror, lay a quarter turn counter-clockwise from his rooms
+        map and his coverage (both the cloud map's frame), and only
+        seemed to follow the iRobot app because he had turned the app's
+        map by exactly that quarter; turned by the map rotation option
+        as well, it came out turned twice. @catongates' path, drawn
+        through the swap alone, needed a clockwise quarter and a mirror
+        to meet his rooms map. Both are the cloud map's own (x, y) gone
+        through our swap. So the position is drawn as the rooms map
+        draws the cloud map: the picture shows (x, y) and the heading
+        as given -- which, through a renderer that mirrors, means
+        handing it the mirror image of both.
         """
         if self._renderer is None:
             return
@@ -2225,8 +2245,15 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
             # The shadow's own pose is drawn by _handle_pose; two sources
             # in one path would draw a zigzag between them.
             return
-        x, y = raw_pose_mm_to_map(position.x * 1000.0, position.y * 1000.0)
-        self._renderer.add_pose(x, y, math.degrees(position.theta))
+        x, y = position.x * 1000.0, position.y * 1000.0
+        heading = math.degrees(position.theta)
+        if getattr(getattr(self._renderer, "_cfg", None), "mirror_x", False) is True:
+            # map_mm_to_view is its own inverse, and the renderer adds a
+            # quarter to the heading of a mirrored frame (see
+            # map_renderer.raw_heading_to_view_deg).
+            x, y = map_mm_to_view(x, y)
+            heading -= 90.0
+        self._renderer.add_pose(x, y, heading)
         self._position_source = POSITION_SOURCE_REQUEST
         self._attr_image_last_updated = dt_util.now(datetime.timezone.utc)
         self.async_write_ha_state()
@@ -2574,7 +2601,7 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
 
         # NOT A MISSION THAT STARTED AWAY FROM THE DOCK. Positions count
         # from where a mission starts, so such a mission lands in the grid
-        # turned and shifted against every other: @liblit's 980 on 27
+        # turned and shifted against every other: a tester's 980 on 27
         # August started off the dock, its whole path turned by about 95
         # degrees, and 23% of the cells it left lay outside his house --
         # two phantom areas that stayed. The live picture still shows it;
@@ -2823,7 +2850,7 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                     _gdata.trajectory_store.record_mission(
                         _mission_key, self._mission_points,
                         # Was never passed: every stored trajectory had an
-                        # empty `ended_at` (@liblit's backup).
+                        # empty `ended_at` (a tester's backup).
                         ended_at=dt_util.now().isoformat(),
                         thetas_deg=self._mission_thetas,
                     )
@@ -3362,6 +3389,17 @@ class RoombaCoverageImage(IRobotEntity, ImageEntity):
 
 # v2.3.0 Step 5b — Issue #14 ──────────────────────────────────────────────────
 
+def _turn_px(px: int, py: int, size: int, turns: int) -> tuple[int, int]:
+    """A pixel of a square picture, turned clockwise by `turns` quarters.
+
+    The rooms map's counterpart of GridStore.render_heatmap's turn, so a
+    point and the calibration describing it turn together (4.3.3).
+    """
+    for _ in range(turns % 4):
+        px, py = size - py, px
+    return px, py
+
+
 class RoombaRoomsImage(IRobotEntity, ImageEntity):
     """Static room-layout image for xiaomi-vacuum-map-card room selection.
 
@@ -3396,6 +3434,8 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
         self._last_y_min: float = 0.0
         self._last_y_max: float = 1.0
         self._last_size:  int   = 600
+        #: The quarter turns the last render was drawn with (4.3.3).
+        self._last_turns: int   = 0
         # Guard: do not expose calibration/rooms until at least one render has
         # set the transform parameters correctly (avoids wrong coords at startup).
         self._rendered_once: bool = False
@@ -3514,7 +3554,15 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
         # Restore both the cached PNG and the transform parameters it was
         # computed with — calibration_points/_to_px_last depend on them
         # matching the returned image exactly.
-        cache_key = (aligner.pmap_version_id, aligned, tuple(sorted(labels.items())))
+        # TURNED AS THE OTHER PICTURES ARE (4.3.3): the map rotation
+        # option turned the path and the coverage and left this one as it
+        # was (@frnchfrgg), so the three no longer matched.
+        turns = quarter_turns(
+            self._config_entry.options.get(CONF_MAP_ROTATION, DEFAULT_MAP_ROTATION)
+        )
+        cache_key = (
+            aligner.pmap_version_id, aligned, tuple(sorted(labels.items())), turns,
+        )
         # Known limitation: this assumes umf_to_pose()'s rotation/translation
         # is stable for a given pmap_version_id once aligned=True is reached.
         # If a later alignment run meaningfully refines the transform for the
@@ -3532,6 +3580,7 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
             self._last_y_min = cached["y_min"]
             self._last_y_max = cached["y_max"]
             self._last_size  = cached["size"]
+            self._last_turns = turns
             if aligned:
                 self._rendered_once = True
             else:
@@ -3587,6 +3636,7 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
         self._last_y_min = y_min
         self._last_y_max = y_max
         self._last_size  = size
+        self._last_turns = turns
         # SHARE IT. The cleaning path fits to its own content otherwise,
         # so the two images publish calibration_points that describe
         # different frames and cannot be overlaid.
@@ -3599,9 +3649,10 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
             self._rendered_fallback = True
 
         def to_px(x: float, y: float) -> tuple[int, int]:
-            return (
+            return _turn_px(
                 int((x - x_min) * scale),
                 int(size - (y - y_min) * scale),  # y-flip: HA map convention
+                size, turns,
             )
 
         from PIL import Image, ImageDraw
@@ -3667,9 +3718,10 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
             self._last_y_max - self._last_y_min,
             1.0,
         )
-        return (
+        return _turn_px(
             int((x_mm - self._last_x_min) * scale),
             int(self._last_size - (y_mm - self._last_y_min) * scale),
+            self._last_size, getattr(self, "_last_turns", 0),
         )
 
     @property
@@ -3904,7 +3956,7 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
         """The placeholder when there is no room layout to draw, SAYING WHY
         (4.2.15). The layout comes only from the iRobot account; without
         one this image stayed black for good, and the zone-naming notice
-        sent people here to identify their zones (@liblit)."""
+        sent people here to identify their zones (a tester)."""
         runtime = getattr(self._config_entry, "runtime_data", None)
         if getattr(runtime, "cloud_coordinator", None) is None:
             return self._blank_png((
@@ -4024,7 +4076,7 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         # A MAP OPTION SAVED IS A MAP REDRAWN. "Draw room names" is read
         # when the image is rendered, and this image is rendered when the
         # map version moves -- so switching the names on changed nothing
-        # until the robot re-versioned its map (found answering @liblit,
+        # until the robot re-versioned its map (found answering a tester,
         # #189). The polygons are already here: re-rendering costs no
         # cloud call, and a reload of the whole entry would be a heavy
         # answer to a display option.
@@ -4737,7 +4789,7 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
             # pass inherited that separation without needing it -- it
             # walked rooms only, so a zone got an outline and no name,
             # and a user looking for "Foyer Zone" on the map found a
-            # blue rectangle (@chairstacker, @liblit).
+            # blue rectangle (@chairstacker and a tester).
             #
             # Dimmer than a room label, because a zone label sits on top
             # of the room label it overlaps.
@@ -4760,7 +4812,7 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
                         # could show you where zone 23 is was the one
                         # place that refused to draw it.
                         #
-                        # @liblit: "Nothing shows me where these new
+                        # A tester: "Nothing shows me where these new
                         # zones might be relative to existing landmarks
                         # that I would recognize on a map."
                         #

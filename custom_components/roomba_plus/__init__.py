@@ -513,11 +513,14 @@ async def _phase_spatial(ctx: _SetupContext) -> None:
                 robot_diameter_mm=_robot_diameter_mm,
                 # A robot's positions are in the pose frame, a mirror image
                 # of the floor; the picture turns them back. 900-series
-                # since 4.3.1 (two 980s); every Classic robot since 4.3.2,
-                # once an i-series on lewis firmware that answers position
-                # requests showed the same flip (@frnchfrgg). The swap
-                # that makes the mirror is ours (raw_pose_mm_to_map) and
-                # the same for every Classic robot.
+                # since 4.3.1 (two 980s); every Classic robot since 4.3.2.
+                # The swap that makes the mirror is ours
+                # (raw_pose_mm_to_map) and the same for every Classic
+                # robot. Positions REQUESTED from a Smart Map robot are in
+                # the cloud map's frame instead and are handed over
+                # pre-mirrored (RoombaMapImage._handle_live_position,
+                # 4.3.3); a Smart Map robot that publishes its own pose
+                # has not been checked against its floor yet.
                 mirror_x=map_capability in (MapCapability.EPHEMERAL, MapCapability.SMART),
                 # The turn the user chose (4.3.2): the map has no north.
                 quarter_turns=quarter_turns(
@@ -536,10 +539,14 @@ async def _phase_spatial(ctx: _SetupContext) -> None:
     grid_store: GridStore | None = None
     if map_capability != MapCapability.NONE and map_enabled:
         grid_store = GridStore()
-        # Drawn mirrored where the renderer is: see RendererConfig.mirror_x.
-        grid_store.mirror_x = map_capability in (
-            MapCapability.EPHEMERAL, MapCapability.SMART,
-        )
+        # MIRRORED ON THE 900-SERIES ONLY. Their grid is filled from the
+        # robot's own positions, the frame the cleaning path is mirrored
+        # back from. A Smart Map robot that publishes no position fills
+        # it from the cloud's coverage, in the cloud map's frame, which
+        # was never mirrored: 4.3.2 mirrored it with the path, and
+        # @frnchfrgg's coverage map came out flipped where 4.3.1 had it
+        # right (4.3.3).
+        grid_store.mirror_x = map_capability == MapCapability.EPHEMERAL
         grid_store.quarter_turns = quarter_turns(
             config_entry.options.get(CONF_MAP_ROTATION, DEFAULT_MAP_ROTATION)
         )
@@ -792,6 +799,37 @@ async def _phase_data(ctx: _SetupContext) -> None:
     ctx.presence_manager = presence_manager
 
 
+@callback
+def _reload_once_the_cloud_answers(
+    hass: HomeAssistant,
+    config_entry: RoombaConfigEntry,
+    cloud_coordinator: IrobotCloudCoordinator,
+) -> None:
+    """Set the entry up again when the cloud first answers after a failed start.
+
+    WHAT IS BUILT AT SETUP STAYS AS BUILT. With no cloud data at setup the
+    entry gets the local zone select and its naming notice instead of the
+    account's rooms; the login retry ten minutes later brings the data
+    and changed none of that. @liblit restarted Home Assistant and was
+    asked to name seven zones the account had long named -- the
+    notice from a start whose first fetch had failed. One reload, on the
+    first refresh that succeeds, sets the entry up as it would have been.
+    """
+    def _on_refresh() -> None:
+        if not cloud_coordinator.last_update_success or cloud_coordinator.data is None:
+            return
+        unsubscribe()
+        _LOGGER.info(
+            "Roomba+ cloud: reached for %s after a failed start; reloading the "
+            "entry so rooms and zones come from the account",
+            config_entry.data[CONF_BLID],
+        )
+        hass.config_entries.async_schedule_reload(config_entry.entry_id)
+
+    unsubscribe = cloud_coordinator.async_add_listener(_on_refresh)
+    config_entry.async_on_unload(unsubscribe)
+
+
 async def _phase_cloud(ctx: _SetupContext) -> None:
     """Phase 4 — Create cloud coordinator; load all cloud-dependent stores.
 
@@ -918,6 +956,7 @@ async def _phase_cloud(ctx: _SetupContext) -> None:
                 config_entry.data[CONF_BLID],
                 exc_info=True,
             )
+            _reload_once_the_cloud_answers(hass, config_entry, cloud_coordinator)
 
     # OutlineStore (EPHEMERAL + map enabled)
     outline_store: OutlineStore | None = None
