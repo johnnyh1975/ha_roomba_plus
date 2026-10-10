@@ -29,6 +29,11 @@ from typing import TYPE_CHECKING, Any
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.util import dt as dt_util
 
+try:
+    from roombapy import RoombaConnectionError
+except ImportError:  # pragma: no cover - environment
+    RoombaConnectionError = Exception  # type: ignore[assignment,misc]
+
 from .const import (
     CLEANING_PHASES,
     CONF_AWAY_DELAY_MIN,
@@ -140,10 +145,20 @@ class PresenceManager:
             and st.state not in _HOME_STATES
             for eid in person_ids
         )
-        if all_away:
-            await self._handle_all_away()
-        else:
-            await self._handle_someone_home()
+        # Runs as a fire-and-forget task, so an unreachable robot would
+        # otherwise surface only as "Task exception was never retrieved".
+        # Ownership flags are untouched on failure; the next presence
+        # change retries.
+        try:
+            if all_away:
+                await self._handle_all_away()
+            else:
+                await self._handle_someone_home()
+        except RoombaConnectionError as err:
+            _LOGGER.warning(
+                "PresenceManager: robot unreachable, schedule change skipped: %s",
+                err,
+            )
 
     async def _handle_all_away(self) -> None:
         """All persons away — start delay before unfreezing schedule."""
@@ -194,7 +209,16 @@ class PresenceManager:
 
         mode = self._entry.options.get(CONF_PRESENCE_MODE, DEFAULT_PRESENCE_MODE)
         if mode == "away_only":
-            await self._set_schedules_paused(False)
+            try:
+                await self._set_schedules_paused(False)
+            except RoombaConnectionError as err:
+                _LOGGER.warning(
+                    "PresenceManager: robot unreachable, schedules not "
+                    "resumed: %s",
+                    err,
+                )
+                self._away_task = None
+                return
             self._managed_hold = False
             self._did_unfreeze = True  # remember we performed the unfreeze
         else:
