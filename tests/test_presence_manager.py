@@ -655,6 +655,7 @@ class TestTotalEnergyConsumed:
         entity.battery_stats = {"estCap": 2500, "nLithChrg": 100}
         entity._config_entry.runtime_data.robot_profile = None
         entity._config_entry.runtime_data.robot_profile_store = RobotProfileStore()
+        entity.hass = None  # no save task for the rise from the empty floor
         # 2500 mAh × 14.8 V × 100 cycles = 3.7 kWh
         result = desc.value_fn(entity)
         assert result is not None
@@ -673,6 +674,7 @@ class TestTotalEnergyConsumed:
         }
         entity._config_entry.runtime_data.robot_profile = ROBOT_PROFILES["9"]
         entity._config_entry.runtime_data.robot_profile_store = RobotProfileStore()
+        entity.hass = None  # no save task for the rise from the empty floor
         result = _total_energy_consumed_kwh(entity)
         assert result is not None
         # 3300 mAh × 14.4V × 1 cycle / 1_000_000 ≈ 0.0475 kWh
@@ -691,6 +693,7 @@ class TestTotalEnergyConsumed:
         }
         entity._config_entry.runtime_data.robot_profile = ROBOT_PROFILES["9"]
         entity._config_entry.runtime_data.robot_profile_store = RobotProfileStore()
+        entity.hass = None  # no save task for the rise from the empty floor
         result = _total_energy_consumed_kwh(entity)
         assert result is not None
         # 3300 mAh × 14.4V × 1 cycle / 1_000_000
@@ -716,6 +719,7 @@ class TestTotalEnergyConsumed:
         }
         entity._config_entry.runtime_data.robot_profile = ROBOT_PROFILES["9"]
         entity._config_entry.runtime_data.robot_profile_store = RobotProfileStore()
+        entity.hass = None  # no save task for the rise from the empty floor
         result = _total_energy_consumed_kwh(entity)
         assert result is not None
         # Must use NiMH scale (÷ 1.87), not Li-ion (÷ 3.73)
@@ -735,6 +739,36 @@ class TestTotalEnergyConsumed:
         result = _total_energy_consumed_kwh(entity)
         assert result == 5.0
         assert store.lifetime_energy_kwh_high_water == 5.0
+
+    def test_energy_floor_advances_on_rise_so_later_dip_is_clamped(self):
+        """Post-mission charge cycle raises the value; estCap then re-settles lower."""
+        from custom_components.roomba_plus.sensor import _total_energy_consumed_kwh
+        entity = MagicMock()
+        entity._config_entry.runtime_data.robot_profile = None
+        store = RobotProfileStore()
+        store.async_save = MagicMock(return_value=None)
+        entity._config_entry.runtime_data.robot_profile_store = store
+
+        # Floor after mission end: 3000 mAh x 14.8 V x 100 cycles.
+        mission_end = round(3000 * 14.8 * 100 / 1_000_000, 3)
+        store.update_energy_high_water(mission_end)
+
+        # Charge cycle +1: raw value rises above the floor.
+        entity.battery_stats = {"estCap": 3000, "nLithChrg": 101}
+        risen = _total_energy_consumed_kwh(entity)
+        assert risen > mission_end
+        entity.hass.async_create_task.assert_called_once()
+        store.async_save.assert_called_once_with(
+            entity.hass, entity._config_entry.entry_id
+        )
+        assert store.lifetime_energy_kwh_high_water == risen
+
+        # estCap re-settles: raw falls, still above the mission-end value.
+        entity.battery_stats = {"estCap": 2950, "nLithChrg": 101}
+        entity.hass.async_create_task.reset_mock()
+        settled = _total_energy_consumed_kwh(entity)
+        assert settled == risen
+        entity.hass.async_create_task.assert_not_called()
 
     def test_returns_none_when_no_cycles(self):
         from custom_components.roomba_plus.sensor import SENSORS
