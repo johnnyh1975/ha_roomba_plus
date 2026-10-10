@@ -139,7 +139,7 @@ jobs:
 
       - name: Install roombapy and roombapy-prime
         run: |
-          uv pip install --system "roombapy==2.0.2" "roombapy-prime[map]==0.5.0"
+          uv pip install --system "roombapy==2.0.2" "roombapy-prime[map]==0.6.0"
 
       - name: Run full test suite (release gate — must pass before packaging)
         run: |
