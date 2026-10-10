@@ -2,3 +2,21 @@
 .venv-test/
 __pycache__/
 *.pyc
+
+# Tool caches. Added in 4.2: the first three lines predate mypy, ruff
+# and the coverage jobs being part of the routine, so a full local run
+# left thousands of untracked files behind -- `.mypy_cache` alone is
+# several thousand.
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# Coverage output, written by the CI command when it is run locally.
+.coverage
+coverage.xml
+htmlcov/
+
+# Editor leftovers. `device_tracker.py.orig` sat in this tree for weeks
+# and had to be stripped by hand at every packaging step.
+*.orig
+*.rej
