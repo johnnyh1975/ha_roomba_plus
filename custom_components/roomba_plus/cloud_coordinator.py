@@ -404,6 +404,17 @@ def pmap_committed_version(pmap: dict[str, Any]) -> str | None:
     Only an explicit `creator: "robot"` moves the active version back. A
     record without `creator` keeps the 4.2.13 answer: no report has
     shown that answer to be wrong for it.
+
+    OR `creator: "cloud"` ON THE ROBOT'S OWN VERSION (4.5.0, @pk-1966,
+    i7+). After a mission his active version became 261022T082426,
+    `creator: "cloud"` -- the cloud's processing of the robot's upload:
+    the same id as the root `robot_pmapv_id`. The rooms he had drawn
+    live on the user version (261006T122751), which the app, the
+    schedule and the room commands all carried. The map read for the
+    rooms under the cleaning path came from the cloud's version and had
+    none: room_polygons 0, the path on a blank background from one
+    mission to the next, with no restart. A "cloud" version that is NOT
+    the robot's upload is left alone: nothing says what that would be.
     """
     details = pmap.get("active_pmapv_details") or {}
     pmapv = details.get("active_pmapv") or {}
@@ -414,7 +425,12 @@ def pmap_committed_version(pmap: dict[str, Any]) -> str | None:
         or pmapv.get("pmapv_id")          # the active version (lewis, soho)
         or pmap.get("active_pmapv_id")    # the same, at the root
     )
-    robot_made = pmapv.get("creator") == "robot"
+    creator = pmapv.get("creator")
+    robot_made = creator == "robot" or (
+        creator == "cloud"
+        and bool(active)
+        and active == pmap.get("robot_pmapv_id")
+    )
     for value in (
         None if robot_made else active,
         pmap.get("user_pmapv_id"),

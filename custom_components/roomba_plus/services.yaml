@@ -64,8 +64,9 @@ clean_room:
     smart_scrub:
       name: Smart scrub
       description: >-
-        Extra scrubbing motion for this run only. Classic mopping robots
-        only; leave empty to keep whatever the robot would have done.
+        Extra scrubbing motion for this run only (SmartScrub), on mopping
+        robots that offer it, Classic and Prime; leave empty to keep
+        whatever the robot would have done.
       selector:
         boolean:
     pad_wetness:
@@ -693,8 +694,9 @@ clean_zone:
     smart_scrub:
       name: Smart scrub
       description: >-
-        Extra scrubbing motion for this run only. Classic mopping robots
-        only; leave empty to keep whatever the robot would have done.
+        Extra scrubbing motion for this run only (SmartScrub), on mopping
+        robots that offer it, Classic and Prime; leave empty to keep
+        whatever the robot would have done.
       selector:
         boolean:
     pad_wetness:

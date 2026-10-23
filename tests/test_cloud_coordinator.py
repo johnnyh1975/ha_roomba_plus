@@ -3187,6 +3187,22 @@ class TestARobotMadeVersionIsNotSent:
         del record["active_pmapv_details"]["active_pmapv"]["creator"]
         assert pmap_committed_version(record) == "250610T143229"
 
+    def test_the_clouds_processing_of_the_robots_upload_is_not_used(self):
+        """4.5.0, @pk-1966 (i7+): the active version after a mission was
+        the cloud's processing of the robot's upload -- `creator: "cloud"`,
+        the same id as the root `robot_pmapv_id` -- and its map had no
+        rooms. His rooms, his schedule and the room commands are on the
+        user version."""
+        record = _field_pmap("DJkG17m", active="261022T082426", creator="cloud",
+                             user="261006T122751", last_user="261006T122751")
+        assert pmap_committed_version(record) == "261006T122751"
+
+    def test_a_cloud_version_that_is_not_the_robots_upload_stays_first(self):
+        record = _field_pmap("p", active="261022T082426", creator="cloud",
+                             user="261006T122751", last_user="261006T122751",
+                             robot="261021T191500")
+        assert pmap_committed_version(record) == "261022T082426"
+
     def test_with_nothing_else_the_robots_version_is_sent_rather_than_none(self):
         record = _field_pmap("p", active="260918T205534", creator="robot",
                              user=None, last_user=None)

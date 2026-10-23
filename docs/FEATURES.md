@@ -181,7 +181,7 @@ data:
   ordered: true
 ```
 
-Before v4.2.5 only `two_pass` could be set per room, although the code underneath had always accepted all four.
+Before v4.2.5 only `two_pass` could be set per room, although the code underneath had always accepted all four. On Prime robots `two_pass`, `cleaning_mode` and, from 4.5.0b5, `smart_scrub` go out per room; `pad_wetness` is a Classic field and not sent to them.
 
 `room_name` and `room_passes` are mutually exclusive — provide one or the other, not both.
 

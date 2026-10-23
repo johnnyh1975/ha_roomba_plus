@@ -165,6 +165,7 @@ def _region_params(
     suction_level: list[int | None] | None,
     index: int,
     operating_mode: list[int | None] | None = None,
+    smart_scrub: list[bool | None] | None = None,
 ) -> Any:
     """Per-region params, or None when the caller expressed no opinion.
 
@@ -178,11 +179,19 @@ def _region_params(
     # and the rest vacuumed can say so; one that wants the same
     # everywhere passes a single value and gets it applied throughout.
     om = _per_room(operating_mode, index)
-    if tp is None and sl is None and om is None:
+    # SMARTSCRUB PER REGION (4.5.0b5, @gunzxz, Plus 405 Combo). The wire
+    # key is `swScrub` in the region's params, read from real Prime
+    # mission history (roombapy-prime CommandParams.scrub); 1 on, 0 off,
+    # as the Classic payload sends it and the robot's own per-room
+    # defaults store it.
+    sc = _per_room(smart_scrub, index)
+    if tp is None and sl is None and om is None and sc is None:
         return None
     fields = {}
     if om is not None:
         fields["operating_mode"] = om
+    if sc is not None:
+        fields["scrub"] = 1 if sc else 0
     if tp is not None:
         fields["two_pass"] = tp
     if sl is not None:
@@ -1379,13 +1388,17 @@ class PrimeRoomCleaning(RoomCleaningBackend):
         two_pass: list[bool | None] | None = None,
         suction_level: list[int | None] | None = None,
         operating_mode: list[int | None] | None = None,
-        # ACCEPTED AND IGNORED, on purpose. Both are Classic-shaped
-        # mop settings (the Classic app capture puts them in the region's own
-        # params). Prime carries pad wetness as `{"padPlate": N}` and
-        # has no confirmed per-region scrub field, so the honest
-        # behaviour is to take the arguments and do nothing rather than
-        # invent a Prime shape from a Classic payload.
+        # SENT PER REGION (4.5.0b5). This said "no confirmed per-region
+        # scrub field" and dropped it, while roombapy-prime had read
+        # `cmd.regions[].params.swScrub` from a real Prime mission
+        # history; @gunzxz's Plus 405 Combo (cap.scrub 3, per room)
+        # asked for it.
         smart_scrub: list[bool | None] | None = None,
+        # ACCEPTED AND IGNORED, on purpose: a Classic-shaped mop setting
+        # (the Classic app capture puts it in the region's own params).
+        # Prime carries pad wetness as `{"padPlate": N}`, so the honest
+        # behaviour is to take the argument and do nothing rather than
+        # invent a Prime shape from a Classic payload.
         pad_wetness: list[int | None] | None = None,
     ) -> None:
 
@@ -1461,7 +1474,7 @@ class PrimeRoomCleaning(RoomCleaningBackend):
             await self._send_region_command(
                 p2map_id, room_ids, ordered=ordered,
                 two_pass=two_pass, suction_level=suction_level,
-                operating_mode=operating_mode,
+                operating_mode=operating_mode, smart_scrub=smart_scrub,
             )
             return
 
@@ -1551,7 +1564,7 @@ class PrimeRoomCleaning(RoomCleaningBackend):
         await self._send_region_command(
             p2map_id, room_ids, ordered=ordered,
             two_pass=two_pass, suction_level=suction_level,
-            operating_mode=operating_mode,
+            operating_mode=operating_mode, smart_scrub=smart_scrub,
         )
 
     async def _send_region_command(
@@ -1563,6 +1576,7 @@ class PrimeRoomCleaning(RoomCleaningBackend):
         two_pass: list[bool | None] | None,
         suction_level: list[int | None] | None,
         operating_mode: list[int | None] | None = None,
+        smart_scrub: list[bool | None] | None = None,
     ) -> None:
         """Builds and sends the region command for one map.
 
@@ -1645,7 +1659,7 @@ class PrimeRoomCleaning(RoomCleaningBackend):
                     # whatever the user configured on the robot.
                     params=_region_params(
                         CommandParams, two_pass, suction_level, i,
-                        operating_mode=operating_mode,
+                        operating_mode=operating_mode, smart_scrub=smart_scrub,
                     ),
                 )
                 for i, rid in enumerate(room_ids)

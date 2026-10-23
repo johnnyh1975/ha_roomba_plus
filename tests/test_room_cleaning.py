@@ -247,6 +247,29 @@ class TestPrimeRoomCleaning:
         assert regions[1]["params"]["suctionLevel"] == 1
 
     @pytest.mark.asyncio
+    async def test_smart_scrub_is_sent_per_room(self):
+        """4.5.0b5, @gunzxz (Plus 405 Combo, cap.scrub 3): accepted and
+        dropped before. `swScrub` in the region's params, 1 or 0; a room
+        without a value carries none."""
+        backend, robot = self._backend()
+
+        await backend.clean_rooms(["12", "13", "14"], smart_scrub=[True, False])
+
+        regions = robot.send_routine_command_via_cmd_topic.await_args.args[0].to_json()["regions"]
+        assert regions[0]["params"] == {"swScrub": 1}
+        assert regions[1]["params"] == {"swScrub": 0}
+        assert "params" not in regions[2]
+
+    @pytest.mark.asyncio
+    async def test_pad_wetness_is_still_not_sent_on_prime(self):
+        backend, robot = self._backend()
+
+        await backend.clean_rooms(["12"], pad_wetness=[2])
+
+        regions = robot.send_routine_command_via_cmd_topic.await_args.args[0].to_json()["regions"]
+        assert "params" not in regions[0]
+
+    @pytest.mark.asyncio
     async def test_two_pass_and_suction_level_combine(self):
         """Both are per room and independent; setting one must not
         silently drop the other."""

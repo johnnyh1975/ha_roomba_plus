@@ -136,9 +136,11 @@ PAD_WASH_HEAT_LEVELS: dict[int, str] = {
 #: nothing has been set away from the default.
 #:
 #: SAME SHAPE AS `swScrub`: a household setting and a per-region
-#: parameter for the same idea, and this project exposes the household
-#: one. The per-region parameter is not offered anywhere, which is a
-#: gap rather than an error.
+#: parameter for the same idea. Here this project exposes the household
+#: one and offers the per-region parameter nowhere, which is a gap rather
+#: than an error. (For `swScrub` it is the other way round since
+#: 4.5.0b5: per region in clean_room, no household switch -- see
+#: roombapy-prime's ScrubSupport.)
 #:
 #: SO THE OPTION SET PLAUSIBLY DEPENDS ON THE DOCK -- and "plausibly"
 #: is the honest word, because this is an inference from the enum's own
