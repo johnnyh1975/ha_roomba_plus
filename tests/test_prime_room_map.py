@@ -505,7 +505,8 @@ class TestFloorPlanFromTheMapBundle:
             )
 
     @pytest.mark.asyncio
-    async def test_borders_are_read_as_multipolygons(self):
+    @pytest.mark.parametrize("include_interior", [False, True])
+    async def test_borders_are_read_as_multipolygons(self, include_interior):
         """Confirmed from the capture: borders.geojson carries
         MultiPolygon, which nests one level deeper than Polygon. Reading
         it as Polygon would take the first RING as a coordinate pair and
@@ -516,12 +517,15 @@ class TestFloorPlanFromTheMapBundle:
             async_build_prime_floor_plan,
         )
 
+        interior = [[0.6, 0.2], [0.8, 0.2], [0.8, 0.4], [0.6, 0.2]]
         parsed = {"borders": {"features": [{
             "geometry": {
                 "type": "MultiPolygon",
                 "coordinates": [[[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]]]],
             },
         }]}}
+        if include_interior:
+            parsed["borders"]["features"][0]["geometry"]["coordinates"][0].append(interior)
         entry = MagicMock()
         entry.runtime_data.prime_robot.get_map_geojson_link = AsyncMock(
             return_value={"map_url": "https://x"}
@@ -533,8 +537,10 @@ class TestFloorPlanFromTheMapBundle:
         ):
             plan = await async_build_prime_floor_plan(entry, "MAP-1", "V1")
 
-        assert len(plan.borders) == 1
+        assert len(plan.borders) == (2 if include_interior else 1)
         assert plan.borders[0][1] == (1000.0, 0.0)
+        if include_interior:
+            assert plan.borders[1] == [(x * 1000, y * 1000) for x, y in interior]
 
     @pytest.mark.asyncio
     async def test_only_carpet_features_are_taken(self):

@@ -291,9 +291,6 @@ class PrimeFloorPlan:
     Everything is millimetres by the time it lands here.
     """
 
-    #: Wall and boundary areas. MultiPolygon on the wire, so these are
-    #: AREAS rather than lines -- confirmed, and worth stating because
-    #: guessing lines would draw thin strokes where solid regions belong.
     #: {room_id: name} from rooms.geojson, where the app appears to read
     #: them. Empty when the bundle has no rooms layer.
     #: The raw `cleanZones`, `adHocCleanZones` and `policyZones` files,
@@ -307,6 +304,10 @@ class PrimeFloorPlan:
     #: Fine-grained floor-plan outlines, including interior walls and
     #: doorway cut-outs.  These are separate from cleanable room polygons.
     floor_plan: list[list[tuple[float, float]]]
+    #: Wall and boundary areas. MultiPolygon on the wire, so these are
+    #: AREAS rather than lines -- confirmed, and worth stating because
+    #: guessing lines would draw thin strokes where solid regions belong.
+    #: Stored as separate exterior and interior outline paths.
     borders: list[list[tuple[float, float]]]
     #: Carpeted areas. The only observed floor_type value is "carpet",
     #: which suggests the file lists carpet rather than classifying every
@@ -454,9 +455,9 @@ def rings_mm(
 ) -> list[list[tuple[float, float]]]:
     """GeoJSON polygon rings in millimetres.
 
-    Floor-plan holes are structural outlines too, so callers can retain
-    them with ``include_holes``.  Other layers intentionally use only an
-    outer ring.
+    By default, return only each polygon's exterior ring. With
+    ``include_holes=True``, also return its interior rings as separate
+    paths, suitable for outlining rather than filling polygon areas.
     """
     rings: list[list[tuple[float, float]]] = []
 
@@ -761,7 +762,9 @@ async def async_build_prime_floor_plan(
         # `feature.id`, which a zone has.
         zone_polygons=_room_polygons_from_bundle(parsed.get("cleanZones")),
         floor_plan=lines_mm(parsed.get("floorPlan")),
-        borders=rings_mm(parsed.get("borders")),
+        # Unlike filled regions, borders are outlined ring by ring: retain
+        # interior rings without inferring walls or changing room membership.
+        borders=rings_mm(parsed.get("borders"), include_holes=True),
         carpet=_carpet_rings_mm(parsed.get("floorTypes")),
         furniture=rings_mm(parsed.get("furniture")),
         dock=_dock_from(parsed.get("dockPose")),

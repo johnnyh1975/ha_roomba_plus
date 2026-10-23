@@ -6622,3 +6622,86 @@ class TestTheRoomsMapDrawsWallsAndDoors:
     def test_the_settings_are_part_of_the_cache_key(self):
         entity, _img = self._png({"wall_thickness_cm": 24, "door_width_cm": 90})
         assert entity._room_render_cache_key[-2:] == (240.0, 900.0)
+
+
+class TestPrimeBorderInteriorRendering:
+    """Bundle border interior rings reach the existing outline renderer."""
+
+    @staticmethod
+    async def _render(hass, *, include_hole=True, floor_plan=False, include_live=False,
+                      second_component=False):
+        import tarfile
+        from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+        def ring(x, y, size):
+            return [[x, y], [x + size, y], [x + size, y + size],
+                    [x, y + size], [x, y]]
+        outer, hole = ring(0, 0, 12), ring(3, 3, 2)
+        components = [[outer, hole] if include_hole else [outer]]
+        if second_component:
+            other = [ring(14, 0, 4)]
+            if include_hole:
+                other.append(ring(15, 1, 2))
+            components.append(other)
+        parsed = {
+            "rooms": {"features": [{"id": "synthetic-room",
+                "geometry": {"type": "Polygon", "coordinates": [outer]},
+                "properties": {"name": "Synthetic room"}}]},
+            "borders": {"type": "Feature", "geometry": {
+                "type": "MultiPolygon", "coordinates": components}},
+        }
+        if floor_plan:
+            parsed["floorPlan"] = {"features": [{"geometry": {
+                "type": "MultiLineString", "coordinates": [
+                    [[8, 0], [8, 4]], [[8, 6], [8, 12]]]} }]}
+        archive = io.BytesIO()
+        with tarfile.open(fileobj=archive, mode="w:gz") as tar:
+            for name, content in parsed.items():
+                raw = json.dumps(content).encode()
+                member = tarfile.TarInfo(name + ".geojson")
+                member.size = len(raw)
+                tar.addfile(member, io.BytesIO(raw))
+        robot = SimpleNamespace(
+            get_map_geojson_link=AsyncMock(return_value={"map_url": "https://example.invalid/map"}),
+            download_map_bundle=AsyncMock(return_value=archive.getvalue()),
+        )
+        entry = MockConfigEntry(domain="roomba_plus", title="Synthetic robot", data={})
+        entry.runtime_data = SimpleNamespace(prime_robot=robot, prime_positions=[],
+            prime_serial_info=None, prime_status_coordinator=None)
+        plan = await prime_room_map.async_build_prime_floor_plan(entry, "synthetic-map", "v1")
+        entity = img.PrimeRoomsImage("0123456789ABCDEF", entry, hass, include_live=include_live)
+        entity._show_live_overlay = False
+        entity._floor_plan = plan
+        entity._polygons = plan.room_polygons
+        entity._names = plan.room_names
+        png = entity._render_png()
+        robot.download_map_bundle.assert_awaited_once()
+        return entity, png
+
+    @staticmethod
+    def _pixel(entity, png, x, y):
+        point = entity._renderer._mm_to_px_fit(x * 1000, y * 1000)
+        return _decode(png).convert("RGB").getpixel(tuple(round(v) for v in point))
+
+    @pytest.mark.parametrize("include_live", [False, True])
+    @pytest.mark.parametrize("floor_plan", [False, True])
+    async def test_interior_boundary_is_visible_and_room_fill_is_not_erased(self, hass, include_live, floor_plan):
+        entity, png = await self._render(hass, include_live=include_live, floor_plan=floor_plan)
+        baseline, old_png = await self._render(hass, include_hole=False, include_live=include_live, floor_plan=floor_plan)
+        assert self._pixel(entity, png, 3, 4) == (90, 90, 90)
+        assert self._pixel(baseline, old_png, 3, 4) != (90, 90, 90)
+        assert self._pixel(entity, png, 4, 4) == self._pixel(baseline, old_png, 4, 4)
+        assert entity.extra_state_attributes == baseline.extra_state_attributes
+        assert entity._polygons == baseline._polygons
+        assert entity._floor_plan.floor_plan == baseline._floor_plan.floor_plan
+        if floor_plan:
+            assert self._pixel(entity, png, 8, 2) == (175, 175, 175)
+            assert self._pixel(entity, png, 8, 5) == self._pixel(baseline, old_png, 8, 5)
+        else:
+            assert not entity._floor_plan.floor_plan
+
+    async def test_all_border_components_are_outlined_without_joining_them(self, hass):
+        entity, png = await self._render(hass, second_component=True)
+        assert self._pixel(entity, png, 3, 4) == (90, 90, 90)
+        assert self._pixel(entity, png, 15, 2) == (90, 90, 90)
+        assert self._pixel(entity, png, 13, 2) == (30, 30, 30)
