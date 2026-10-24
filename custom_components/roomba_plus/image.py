@@ -46,6 +46,7 @@ from typing import Any
 from homeassistant.components.image import ImageEntity
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.dispatcher import (
     async_dispatcher_connect,
     async_dispatcher_send,
@@ -493,11 +494,24 @@ def _checkpoint_on_dock(checkpoint: Mapping[str, Any]) -> bool | None:
 
 #: The largest dock correction taken for drift (4.5.0). Odometry and
 #: vSLAM drift on the maintainer's 980 measured 0.2 and 0.5 m; the one
-#: correction of 6.2 m was a robot carried back to its dock after it got
-#: stuck, with no pickup counted -- the "drift" was the distance it was
-#: carried. Spread over the path as drift, it bent the whole stretch
+#: correction of 6.2 m was taken for a robot carried back to its dock
+#: after it got stuck, with no pickup counted. It may as well have been
+#: the gap DOCK_POSE_WAIT_SECONDS closes: no positions on the way home. Spread over the path as drift, it bent the whole stretch
 #: after the stuck and the areas cut from it.
 MAX_DOCK_CORRECTION_MM = 1500.0
+
+#: How long a confirmed dock contact waits for the robot's first position
+#: AT the dock (4.5.0). The maintainer's 980 publishes no position on
+#: its way home: on 22 October its last positions before two mid-mission
+#: recharges lay 3.0 and 7.6 m from the dock, the contact was confirmed
+#: before the next one arrived, and both stretches were taken as carried
+#: (5383 of 6292 points). The positions it reported once docked were 0.17
+#: and 0.10 m from the dock -- the real drift. Without such a position in
+#: this time there is no measurement, and the stretch stays as measured.
+DOCK_POSE_WAIT_SECONDS = 300.0
+#: A last position this close to the dock already measures the contact:
+#: a robot that reports its way home needs no wait.
+DOCK_POSE_NEAR_MM = 500.0
 
 #: One stretch of a mission the grid learns from: points[start:end],
 #: shifted by (dx, dy) mm where anchoring placed it.
@@ -1524,6 +1538,16 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         self._dock_anchor_buffering: bool = False
         self._pending_segment_points: list[tuple[float, float]] = []
         self._pending_segment_thetas: list[float] = []
+        # 4.5.0 -- the dock contact measures against the robot's own
+        # position AT the dock, not the last one before it went home
+        # (DOCK_POSE_WAIT_SECONDS). True once a position arrived while
+        # docked in this contact episode; the confirmed contact waits for
+        # one otherwise, and a mission end confirmed meanwhile waits with
+        # it.
+        self._pose_seen_docked: bool = False
+        self._awaiting_dock_pose: bool = False
+        self._dock_pose_timer: Any = None
+        self._mission_end_waiting: str | None = None
         # v3.2.1 DOCK-ANCHOR — index into _mission_points/_mission_thetas
         # marking the start of the segment since the LAST confirmed dock
         # contact (or mission start, index 0, if none yet this mission).
@@ -1595,6 +1619,7 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         )
         if isinstance(live, LivePositionStream):
             self.async_on_remove(live.add_listener(self._handle_live_position))
+        self.async_on_remove(self._cancel_dock_pose_timer)
         # Options saved without a reload (4.4.1).
         blid = getattr(getattr(self._config_entry, "runtime_data", None), "blid", None)
         if isinstance(blid, str):
@@ -2121,6 +2146,10 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                     self._last_dock_anchor_index = 0
                     self._dock_contact_streak = 0
                     self._dock_contact_first_ts = 0.0
+                    self._pose_seen_docked = False
+                    self._awaiting_dock_pose = False
+                    self._mission_end_waiting = None
+                    self._cancel_dock_pose_timer()
                     self._mission_start_ts: str | None = dt_util.now().isoformat()
                     self._mission_started_on_dock = _mission_start_on_dock(
                         self._last_phase
@@ -2238,7 +2267,16 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                         and (_time_mod.monotonic() - self._dock_contact_first_ts)
                         >= END_SIGNAL_MIN_HOLD_SECONDS
                     ):
-                        self._handle_dock_contact_confirmed()
+                        # AGAINST THE POSITION AT THE DOCK (4.5.0): with
+                        # none yet, wait for it -- see DOCK_POSE_WAIT_SECONDS.
+                        if (
+                            getattr(self, "_pose_seen_docked", False)
+                            or not self._stretch_since_anchor()
+                            or self._last_position_at_dock()
+                        ):
+                            self._handle_dock_contact_confirmed()
+                        else:
+                            self._wait_for_dock_pose()
                         # Sentinel -1: already handled this contact episode;
                         # re-arms to 0 only once phase leaves the contact
                         # set (see the else-branch below) — otherwise every
@@ -2248,6 +2286,12 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
             else:
                 self._dock_contact_streak = 0
                 self._dock_contact_first_ts = 0.0
+                if current_phase not in ROOM_TRANSITION_CANDIDATE_PHASES:
+                    # Off the dock again without a position from it: no
+                    # measurement for this contact.
+                    self._pose_seen_docked = False
+                    if getattr(self, "_awaiting_dock_pose", False):
+                        self._dock_contact_without_pose()
 
             # v2.6.3 A — use _had_cleaning_phase so stuck → stop/charge
             # (stuck_and_abandoned) correctly triggers _handle_mission_end().
@@ -2267,7 +2311,12 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                 self._had_cleaning_phase = False
                 self._end_signal_streak = 0
                 self._end_signal_first_ts = 0.0
-                self._handle_mission_end(current_phase)
+                if getattr(self, "_awaiting_dock_pose", False):
+                    # The dock contact must resolve first (order point 4
+                    # in _handle_mission_end); it ends the mission then.
+                    self._mission_end_waiting = current_phase
+                else:
+                    self._handle_mission_end(current_phase)
 
         # Pose update — process regardless of phase so the map and direction
         # vector stay live even when the robot is stuck, returning, or
@@ -2446,6 +2495,15 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         else:
             self._mission_points.append((x, y))
             self._mission_thetas.append(theta)
+        # THE ROBOT'S POSITION AT THE DOCK (4.5.0): what a dock contact
+        # is measured against. A contact already confirmed resolves now.
+        _phase_now = (
+            (getattr(self, "vacuum_state", None) or {}).get("cleanMissionStatus") or {}
+        ).get("phase")
+        if _phase_now == "charge":
+            self._pose_seen_docked = True
+            if getattr(self, "_awaiting_dock_pose", False):
+                self._resolve_waiting_dock_contact(with_position=True)
         self._observe_position_room(x, y, frame="pose")
         self._attr_image_last_updated = dt_util.now(datetime.timezone.utc)
 
@@ -2835,6 +2893,78 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
             scale=float(options.get(CONF_MAP_SCALE, DEFAULT_MAP_SCALE)),
             quarter_turns=turns,
         )
+
+    def _stretch_since_anchor(self) -> bool:
+        """Whether a dock contact has anything to measure: positions
+        since the last anchor, or buffered ones."""
+        if getattr(self, "_dock_anchor_buffering", False):
+            return bool(getattr(self, "_pending_segment_points", None))
+        points = getattr(self, "_mission_points", None) or []
+        return len(points) > getattr(self, "_last_dock_anchor_index", 0)
+
+    def _last_position_at_dock(self) -> bool:
+        """Whether the newest position is within DOCK_POSE_NEAR_MM of
+        the dock."""
+        if getattr(self, "_dock_anchor_buffering", False):
+            points = getattr(self, "_pending_segment_points", None) or []
+        else:
+            points = getattr(self, "_mission_points", None) or []
+        return bool(points) and math.hypot(*points[-1]) <= DOCK_POSE_NEAR_MM
+
+    def _wait_for_dock_pose(self) -> None:
+        """A confirmed dock contact with no position from the dock yet
+        (4.5.0): resolved by the next position while docked, or after
+        DOCK_POSE_WAIT_SECONDS without one."""
+        if getattr(self, "_awaiting_dock_pose", False):
+            return
+        self._awaiting_dock_pose = True
+        hass = getattr(self, "hass", None)
+        if hass is None:
+            return
+        self._cancel_dock_pose_timer()
+        self._dock_pose_timer = async_call_later(
+            hass, DOCK_POSE_WAIT_SECONDS, self._dock_pose_timed_out,
+        )
+
+    @callback
+    def _dock_pose_timed_out(self, _now: Any) -> None:
+        self._dock_pose_timer = None
+        if getattr(self, "_awaiting_dock_pose", False):
+            self._dock_contact_without_pose()
+
+    def _cancel_dock_pose_timer(self) -> None:
+        timer = getattr(self, "_dock_pose_timer", None)
+        self._dock_pose_timer = None
+        if callable(timer):
+            timer()
+
+    def _dock_contact_without_pose(self) -> None:
+        """No position from the dock: nothing to measure the stretch
+        against, so it stays as measured -- not corrected, not taken as
+        carried, not a drift sample."""
+        _LOGGER.info(
+            "Map: dock contact without a position from the dock; the "
+            "stretch since the last one is kept as measured"
+        )
+        self._resolve_waiting_dock_contact(with_position=False)
+
+    def _resolve_waiting_dock_contact(self, *, with_position: bool) -> None:
+        self._awaiting_dock_pose = False
+        self._cancel_dock_pose_timer()
+        if with_position:
+            self._handle_dock_contact_confirmed()
+        else:
+            if self._dock_anchor_buffering:
+                self._mission_points.extend(self._pending_segment_points)
+                self._mission_thetas.extend(self._pending_segment_thetas)
+            self._dock_anchor_buffering = False
+            self._pending_segment_points = []
+            self._pending_segment_thetas = []
+            self._last_dock_anchor_index = len(self._mission_points)
+        ending = getattr(self, "_mission_end_waiting", None)
+        self._mission_end_waiting = None
+        if ending is not None:
+            self._handle_mission_end(ending)
 
     def _handle_dock_contact_confirmed(self) -> None:
         """v3.2.1 DOCK-ANCHOR — fires once per confirmed dock contact

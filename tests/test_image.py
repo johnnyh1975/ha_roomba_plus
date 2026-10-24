@@ -1065,6 +1065,112 @@ def _feed_map_entity(entity, msg: dict) -> None:
     entity.on_message(msg)
 
 
+class TestTheDockContactMeasuresAtTheDock:
+    """4.5.0, the maintainer's 980 on 22 October: it publishes no
+    position on its way home. Its last positions before two mid-mission
+    recharges lay 3.0 and 7.6 m from the dock, the contact was confirmed
+    before the next position arrived, and both stretches were taken as
+    carried; the positions it reported once docked were 0.17 and 0.10 m
+    away. Coordinates here are made up and follow that order."""
+
+    @staticmethod
+    def _entity():
+        import itertools
+
+        entity = _make_map_entity()
+        clock = itertools.count(0.0, 3.0)
+        timers: list = []
+
+        def call_later(_hass, _delay, action):
+            timers.append(action)
+            return MagicMock()
+
+        patches = [
+            patch("custom_components.roomba_plus.image._time_mod.monotonic",
+                  side_effect=lambda: next(clock)),
+            patch("custom_components.roomba_plus.image.async_call_later",
+                  side_effect=call_later),
+        ]
+        for p in patches:
+            p.start()
+        return entity, timers, patches
+
+    @staticmethod
+    def _away_then_docked(entity):
+        _feed_map_entity(entity, _map_msg("run", cycle="quick"))
+        _feed_map_entity(entity, _pose_msg(0, 0))
+        _feed_map_entity(entity, _pose_msg(150, 0))
+        _feed_map_entity(entity, _pose_msg(300, 0))   # 3 m out, then home unreported
+        _feed_map_entity(entity, _map_msg("charge", cycle="none"))
+        _feed_map_entity(entity, _map_msg("charge", cycle="none"))
+
+    def test_the_contact_waits_for_the_position_at_the_dock(self):
+        entity, _timers, patches = self._entity()
+        try:
+            self._away_then_docked(entity)
+            assert entity._awaiting_dock_pose is True
+            entity._handle_mission_end.assert_not_called()
+
+            _feed_map_entity(entity, _pose_msg(2, -17))  # docked: 0.17 m
+        finally:
+            for p in patches:
+                p.stop()
+        assert entity._awaiting_dock_pose is False
+        # Measured against 0.17 m: drift, not carried.
+        assert getattr(entity, "_unverified_ranges", []) == []
+        assert entity._last_dock_anchor_index == len(entity._mission_points)
+        entity._handle_mission_end.assert_called_once_with("charge")
+
+    def test_without_a_position_from_the_dock_the_stretch_stays_as_measured(self):
+        entity, timers, patches = self._entity()
+        try:
+            self._away_then_docked(entity)
+            measured = list(entity._mission_points)
+            assert len(timers) == 1
+            timers[0](None)   # DOCK_POSE_WAIT_SECONDS without a position
+        finally:
+            for p in patches:
+                p.stop()
+        assert entity._awaiting_dock_pose is False
+        assert getattr(entity, "_unverified_ranges", []) == []
+        assert entity._mission_points == measured
+        entity._handle_mission_end.assert_called_once_with("charge")
+
+    def test_a_robot_that_reports_its_way_home_does_not_wait(self):
+        entity, timers, patches = self._entity()
+        try:
+            _feed_map_entity(entity, _map_msg("run", cycle="quick"))
+            _feed_map_entity(entity, _pose_msg(0, 0))
+            _feed_map_entity(entity, _pose_msg(300, 0))
+            _feed_map_entity(entity, _pose_msg(30, 0))   # 0.3 m: at the dock
+            _feed_map_entity(entity, _map_msg("charge", cycle="none"))
+            _feed_map_entity(entity, _map_msg("charge", cycle="none"))
+        finally:
+            for p in patches:
+                p.stop()
+        assert entity._awaiting_dock_pose is False
+        assert timers == []
+        entity._handle_mission_end.assert_called_once_with("charge")
+
+    def test_leaving_the_dock_without_a_position_from_it_resolves_too(self):
+        entity, _timers, patches = self._entity()
+        try:
+            _feed_map_entity(entity, _map_msg("run", cycle="quick"))
+            _feed_map_entity(entity, _pose_msg(0, 0))
+            _feed_map_entity(entity, _pose_msg(760, 0))
+            _feed_map_entity(entity, _map_msg("charge", cycle="quick"))
+            _feed_map_entity(entity, _map_msg("charge", cycle="quick"))
+            assert entity._awaiting_dock_pose is True
+            _feed_map_entity(entity, _map_msg("run", cycle="quick"))
+        finally:
+            for p in patches:
+                p.stop()
+        assert entity._awaiting_dock_pose is False
+        assert getattr(entity, "_unverified_ranges", []) == []
+        assert entity._last_dock_anchor_index == len(entity._mission_points)
+        entity._handle_mission_end.assert_not_called()
+
+
 class TestImageEndDebounceV281:
     """v2.8.1 (END-DEBOUNCE) — image.py's independent mission-end detection
     had zero protection at all (not even the v2.8.0 cycle-only guard), so a

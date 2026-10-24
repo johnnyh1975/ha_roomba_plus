@@ -57,7 +57,7 @@ an existing installation:
   statistics and maintenance are not affected. If your rooms look right,
   leave the files alone.
 - **A Classic robot's error text is the Classic app's** (roombapy-prime
-  0.8.1, installed with this version). The error sensor's state changes
+  0.8.2, installed with this version). The error sensor's state changes
   for 44 codes -- "Debris extractors stuck" reads "Brushes need
   cleaning", "Charging error" for 102 "Battery not charging". An
   automation that compares the text: compare the code instead
