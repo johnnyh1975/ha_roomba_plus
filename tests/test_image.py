@@ -1171,6 +1171,38 @@ class TestTheDockContactMeasuresAtTheDock:
         entity._handle_mission_end.assert_not_called()
 
 
+class TestTheBinEmptiedAfterTheMissionKeepsThePath:
+    """4.5.1, @nareso's j7+: lines while cleaning, the cloud's coverage
+    dots once docked. The Clean Base's evacuation after the mission
+    (phase `evac`) was taken as a new mission and reset the path."""
+
+    def _ended(self):
+        entity = _make_map_entity()
+        with patch("custom_components.roomba_plus.image._time_mod") as tmock:
+            tmock.monotonic.side_effect = [1.0, 1.0, 4.0, 4.0]
+            _feed_map_entity(entity, _map_msg("run", cycle="clean"))
+            _feed_map_entity(entity, _map_msg("charge", cycle="none"))
+            _feed_map_entity(entity, _map_msg("charge", cycle="none"))
+        entity._handle_mission_end.assert_called_once_with("charge")
+        entity._renderer.reset.reset_mock()
+        return entity
+
+    @pytest.mark.parametrize("phase, cycle", [("evac", "none"), ("run", "evac")])
+    def test_an_evacuation_after_the_end_does_not_reset_the_path(self, phase, cycle):
+        entity = self._ended()
+        _feed_map_entity(entity, _map_msg(phase, cycle=cycle))
+        entity._renderer.reset.assert_not_called()
+        assert entity._had_cleaning_phase is False
+
+    def test_the_next_mission_still_starts_the_path_afresh(self):
+        entity = self._ended()
+        _feed_map_entity(entity, _map_msg("evac", cycle="none"))
+        _feed_map_entity(entity, _map_msg("charge", cycle="none"))
+        _feed_map_entity(entity, _map_msg("run", cycle="clean"))
+        entity._renderer.reset.assert_called_once()
+        assert entity._had_cleaning_phase is True
+
+
 class TestImageEndDebounceV281:
     """v2.8.1 (END-DEBOUNCE) — image.py's independent mission-end detection
     had zero protection at all (not even the v2.8.0 cycle-only guard), so a

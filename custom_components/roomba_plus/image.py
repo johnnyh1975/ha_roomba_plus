@@ -2115,7 +2115,21 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         if current_phase != self._last_phase:
             # v2.6.3 D — guard with _had_cleaning_phase so stuck → run (recovery)
             # does NOT reset the renderer mid-mission.
-            if current_phase in CLEANING_PHASES and not self._had_cleaning_phase:
+            # A BIN EMPTIED AFTER THE MISSION IS NOT A NEW ONE (4.5.1,
+            # @nareso's j7+): once docked, the Clean Base empties the bin
+            # (phase `evac`, or cycle `evac` for an evacuation on command).
+            # Taken as a mission start, it reset the path the mission had
+            # just drawn, and the picture fell back to the cloud's coverage
+            # dots. The mission callback leaves evacuations out the same way.
+            _cycle_now = (
+                (self.vacuum_state.get("cleanMissionStatus") or {}).get("cycle")
+            )
+            _only_evacuating = current_phase == "evac" or _cycle_now == "evac"
+            if (
+                current_phase in CLEANING_PHASES
+                and not self._had_cleaning_phase
+                and not _only_evacuating
+            ):
                 self._had_cleaning_phase = True
                 if self._renderer:
                     self._renderer.reset()

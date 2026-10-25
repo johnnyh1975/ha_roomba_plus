@@ -3141,7 +3141,7 @@ def make_mission_complete_callback(
             return False
         record: dict[str, Any] = latest
         if record is not _baseline_latest_record:
-            return isinstance(record.get("timeline"), dict)
+            return _caught_up(record)
         # SAME OBJECT AS THE BASELINE — two opposite situations look
         # identical here, and the frozen answer is right for only one.
         #
@@ -3165,8 +3165,33 @@ def make_mission_complete_callback(
         # The record's own end time separates them: this mission ended
         # when the sequence started, an older one ended before that.
         if _baseline_is_this_mission(record):
-            return isinstance(record.get("timeline"), dict)
+            return _caught_up(record)
         return _baseline_had_timeline
+
+    def _keeps_timeline() -> bool:
+        """Whether the cloud ever sends this robot a mission timeline.
+
+        Only Smart Map robots get one. A 900-series without Smart Map has
+        an empty timeline on every mission in iRobot's history (the
+        maintainer's 980: 74 of 74), so waiting for one ended in "giving
+        up for this mission" after every run.
+        """
+        from .models import MapCapability
+
+        return (
+            getattr(entry.runtime_data, "map_capability", None)
+            == MapCapability.SMART
+        )
+
+    def _caught_up(record: dict[str, Any]) -> bool:
+        """The cloud's record of the mission is in `record`.
+
+        The timeline on a Smart Map robot; on any other robot the mission's
+        `durationM`, which only the cloud's history supplies.
+        """
+        if isinstance(record.get("timeline"), dict):
+            return True
+        return not _keeps_timeline() and record.get("durationM") is not None
 
     def _baseline_is_this_mission(record: dict[str, Any]) -> bool:
         """True when `record` is the mission whose end started this sequence.
@@ -3200,12 +3225,19 @@ def make_mission_complete_callback(
             return
         if checkpoint == 1:
             _schedule(2, CLOUD_CATCHUP_SECOND_DELAY_SEC)
-        else:
+        elif _keeps_timeline():
             _LOGGER.warning(
                 "Roomba+ cloud: newest mission still missing cloud timeline "
                 "data %ds after mission end (last_cleaned_rooms and similar "
                 "attributes will stay unavailable until the next scheduled "
                 "refresh) — giving up for this mission",
+                CLOUD_CATCHUP_FIRST_DELAY_SEC + CLOUD_CATCHUP_SECOND_DELAY_SEC,
+            )
+        else:
+            _LOGGER.info(
+                "Roomba+ cloud: iRobot's record of the newest mission has not "
+                "arrived %ds after mission end; it is read at the next "
+                "scheduled refresh",
                 CLOUD_CATCHUP_FIRST_DELAY_SEC + CLOUD_CATCHUP_SECOND_DELAY_SEC,
             )
 
@@ -3225,7 +3257,7 @@ def make_mission_complete_callback(
             _baseline_latest_record = ms.latest() if ms is not None else None
             _baseline_had_timeline = bool(
                 _baseline_latest_record
-                and isinstance(_baseline_latest_record.get("timeline"), dict)
+                and _caught_up(_baseline_latest_record)
             )
             _baseline_captured_ts = _time_mod.time()
 

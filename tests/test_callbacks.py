@@ -1072,6 +1072,9 @@ class TestMissionCompleteCallback:
         hass.loop = self._new_loop()
         entry = entry_mock(schedule_on=hass)
         entry.runtime_data.mission_store.latest.return_value = latest_record
+        # The timeline is what a Smart Map robot waits for.
+        from custom_components.roomba_plus.models import MapCapability
+        entry.runtime_data.map_capability = MapCapability.SMART
         return cc, hass, entry
 
     def _drain(self, hass) -> None:
@@ -1166,6 +1169,55 @@ class TestMissionCompleteCallback:
         assert len(captured) == 2, "must not schedule a third checkpoint — falls back to 24h idle"
         assert any("giving up" in r.message.lower() for r in caplog.records)
 
+    def _setup_without_smart_map(self, record):
+        from custom_components.roomba_plus.models import MapCapability
+        cc, hass, entry = self._setup()
+        entry.runtime_data.map_capability = MapCapability.EPHEMERAL
+        state = {"latest": None}
+        entry.runtime_data.mission_store.latest.side_effect = lambda: state["latest"]
+        return cc, hass, entry, state
+
+    def test_a_robot_without_smart_map_is_done_when_the_cloud_record_is_merged(self, caplog):
+        """The maintainer's 980 (4.5.1): iRobot's history has an empty
+        timeline for every one of its missions, so waiting for one gave
+        up with a warning after every run. Its mission is caught up once
+        the cloud's `durationM` is merged into the record."""
+        from custom_components.roomba_plus.callbacks import make_mission_complete_callback
+        record = {"id": "m_980", "timeline": None}
+        cc, hass, entry, state = self._setup_without_smart_map(record)
+        captured: list = []
+        with patch("custom_components.roomba_plus.callbacks.async_call_later",
+                    side_effect=self._fake_later(captured)):
+            cb = make_mission_complete_callback(hass, cc, entry)
+            cb(self._msg("run"))
+            cb(self._msg("charge"))
+            self._drain(hass)
+            state["latest"] = record          # recorded after the end
+            record["durationM"] = 390         # the cloud's history merged
+            with caplog.at_level("INFO"):
+                hass.loop.run_until_complete(captured[0][1](None))
+        assert len(captured) == 1, "caught up: no second checkpoint"
+        assert not any("giving up" in r.message for r in caplog.records)
+
+    def test_a_robot_without_smart_map_waits_for_its_cloud_record_without_a_warning(self, caplog):
+        from custom_components.roomba_plus.callbacks import make_mission_complete_callback
+        record = {"id": "m_980", "timeline": None}
+        cc, hass, entry, state = self._setup_without_smart_map(record)
+        captured: list = []
+        with patch("custom_components.roomba_plus.callbacks.async_call_later",
+                    side_effect=self._fake_later(captured)):
+            cb = make_mission_complete_callback(hass, cc, entry)
+            cb(self._msg("run"))
+            cb(self._msg("charge"))
+            self._drain(hass)
+            state["latest"] = record
+            hass.loop.run_until_complete(captured[0][1](None))
+            assert len(captured) == 2, "nothing merged yet: second checkpoint"
+            with caplog.at_level("INFO"):
+                hass.loop.run_until_complete(captured[1][1](None))
+        assert not [r for r in caplog.records if r.levelname == "WARNING"]
+        assert any("has not arrived" in r.message for r in caplog.records)
+
     def test_no_mission_store_treated_as_nothing_to_wait_for(self):
         """If mission_store isn't set up at all, don't schedule a pointless
         second checkpoint — there's nothing that could ever populate."""
@@ -1217,6 +1269,8 @@ class TestMissionCompleteCallback:
         hass.loop = self._new_loop()
         entry = entry_mock(schedule_on=hass)
         entry.runtime_data.mission_store.latest.side_effect = lambda: state["latest"]
+        from custom_components.roomba_plus.models import MapCapability
+        entry.runtime_data.map_capability = MapCapability.SMART
 
         captured: list = []
         with patch("custom_components.roomba_plus.callbacks.async_call_later",
@@ -1266,6 +1320,8 @@ class TestMissionCompleteCallback:
         hass.loop = self._new_loop()
         entry = entry_mock(schedule_on=hass)
         entry.runtime_data.mission_store.latest.side_effect = lambda: state["latest"]
+        from custom_components.roomba_plus.models import MapCapability
+        entry.runtime_data.map_capability = MapCapability.SMART
 
         captured: list = []
         with patch("custom_components.roomba_plus.callbacks.async_call_later",
