@@ -102,9 +102,11 @@ def _make_hass(loop=None):
                 _os.makedirs(_os.path.dirname(p), exist_ok=True)
                 return p
         async def async_add_executor_job(self, fn, *args):
-            import asyncio as _asyncio
-            loop = _asyncio.get_event_loop()
-            return await loop.run_in_executor(None, fn, *args)
+            # INLINE, NOT ON THE LOOP'S DEFAULT EXECUTOR: the tests close
+            # their loop without waiting for it, and the executor's thread
+            # outliving the test fails Home Assistant's thread check
+            # whenever it is still alive (seen on HA 2026.10).
+            return fn(*args)
 
         def async_create_task(self, coro, *args, **kwargs):
             # CLOSES IT rather than dropping it. Production launches
@@ -1168,6 +1170,23 @@ class TestMissionCompleteCallback:
 
         assert len(captured) == 2, "must not schedule a third checkpoint — falls back to 24h idle"
         assert any("giving up" in r.message.lower() for r in caplog.records)
+
+    @pytest.mark.parametrize("phase, cycle", [("evac", "none"), ("run", "evac")])
+    def test_a_bin_emptied_after_the_end_does_not_start_it_again(self, phase, cycle):
+        """4.5.2: the Clean Base's evacuation after docking is not a
+        cleaning phase; it restarted the catch-up for the same mission."""
+        from custom_components.roomba_plus.callbacks import make_mission_complete_callback
+        cc, hass, entry = self._setup(latest_record={"timeline": None})
+        captured: list = []
+        with patch("custom_components.roomba_plus.callbacks.async_call_later",
+                    side_effect=self._fake_later(captured)):
+            cb = make_mission_complete_callback(hass, cc, entry)
+            cb(self._msg("run"))
+            cb(self._msg("charge"))
+            cb({"state": {"reported": {"cleanMissionStatus": {"phase": phase, "cycle": cycle}}}})
+            cb(self._msg("charge"))
+            self._drain(hass)
+        assert len(captured) == 1, "one catch-up per mission"
 
     def _setup_without_smart_map(self, record):
         from custom_components.roomba_plus.models import MapCapability
@@ -6358,7 +6377,8 @@ class TestAHalfMinuteOfNothingIsNotAMission:
     """A tester's 980 stored eleven zero-minute "completed" records among
     sixteen, five within five minutes one evening; iRobot's history has
     none of them. Under 30 s from a known start, nothing cleaned, nothing
-    stuck or lifted: not recorded. With no known start it is kept."""
+    stuck or lifted: not recorded. With no known start, only kept when it
+    cleaned something (4.5.2)."""
 
     @staticmethod
     def _record(seconds_ago, *, sqft=None, start_known=True):
@@ -6391,8 +6411,14 @@ class TestAHalfMinuteOfNothingIsNotAMission:
     def test_a_real_mission_is_kept(self):
         assert len(self._record(600).records) == 1
 
-    def test_an_unknown_start_is_kept(self):
-        assert len(self._record(10, start_known=False).records) == 1
+    def test_an_unknown_start_that_cleaned_is_kept(self):
+        assert len(self._record(10, sqft=40, start_known=False).records) == 1
+
+    def test_an_unknown_start_with_nothing_cleaned_is_skipped(self):
+        """4.5.2, the maintainer's 980: after its battery ran out, a
+        "completed" run with no start and no area, which iRobot's history
+        does not have."""
+        assert self._record(10, start_known=False).records == []
 
 
 class TestAButtonStartNamesNoZones:
@@ -6865,7 +6891,12 @@ class TestAClassicMissionIsReassessedWithTheCloudsNumbers:
         coordinator.umf_data = {}
         coordinator.regions_by_pmap = {}
         coordinator.pmaps = []
+        # Both clocks: the baseline is the last 30 days by dt_util.now(),
+        # and with only the first pinned this test failed from 29.10.2026
+        # on, when the oldest of its 20 missions left the real window.
         with patch("custom_components.roomba_plus.callbacks.dt_util.utcnow",
+                   return_value=self.NOW), \
+             patch("custom_components.roomba_plus.mission_store.dt_util.now",
                    return_value=self.NOW):
             callback_fn = make_cloud_refresh_callback(hass, config_entry, coordinator)
             for _ in range(times):

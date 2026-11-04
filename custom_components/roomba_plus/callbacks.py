@@ -813,7 +813,8 @@ async def async_record_mission(
         # Should not be reached after the closure fix — log for diagnostics.
         started_at = now
         _LOGGER.warning(
-            "MissionStore: no cached start_ts for mission — duration will be 0"
+            "MissionStore: mission end without a known start time — "
+            "duration 0 if it is recorded"
         )
 
     phase = mission.get("phase", "")
@@ -983,24 +984,29 @@ async def async_record_mission(
         # cleaned (#196 side note).
         record["rooms_source"] = ROOMS_REQUESTED
 
-    # NOT A MISSION: under half a minute between a known start and the
-    # end, "completed", nothing cleaned, nothing stuck or lifted. A tester's
-    # 980 stored eleven of these among sixteen records -- five within
-    # five minutes on one evening -- and iRobot's own history has none of
-    # them. They counted as missions everywhere a mission is counted.
-    # Kept when the start is not known: duration 0 then means a lost
-    # start time, not a short run.
-    if (
-        start_ts
-        and result == "completed"
-        and elapsed_sec < 30
+    # NOT A MISSION: "completed", nothing cleaned, nothing stuck or lifted,
+    # and either under half a minute from a known start or no start at
+    # all. A tester's 980 stored eleven short ones among sixteen records
+    # -- five within five minutes on one evening -- and iRobot's own
+    # history has none of them. They counted as missions everywhere a
+    # mission is counted.
+    #
+    # WITHOUT A START TOO (4.5.2, the maintainer's 980 on 23 October):
+    # its battery ran out at 09:48 and ended mission 462; at 14:47 a
+    # "completed" run with no start, no area and no mission number was
+    # recorded, and iRobot's history has nothing after 462. A real
+    # mission ends with the area it cleaned, so one with an unknown start
+    # is kept as long as it cleaned something.
+    _nothing_happened = (
+        result == "completed"
         and not record.get("area_sqft")
         and nstuck_delta <= 0
         and npicks_delta <= 0
-    ):
+    )
+    if _nothing_happened and (not start_ts or elapsed_sec < 30):
         _LOGGER.debug(
-            "MissionStore: %.0f s run with nothing cleaned is not recorded as a mission",
-            elapsed_sec,
+            "MissionStore: a run with nothing cleaned (%s) is not recorded as a mission",
+            f"{elapsed_sec:.0f} s" if start_ts else "no start time",
         )
         return
 
@@ -3276,7 +3282,13 @@ def make_mission_complete_callback(
         mission = reported["cleanMissionStatus"]
         phase = mission.get("phase", "")
         if phase in _ACTIVE_CLEANING_PHASES:
-            had_cleaning_phase = True
+            # A BIN EMPTIED AFTER THE MISSION IS NOT CLEANING (4.5.2), as
+            # for the map and the mission records: taken as one, the Clean
+            # Base's evacuation after docking started the catch-up again,
+            # and with the evacuation more than 120 s after the end it
+            # waited for a record that never comes and logged "giving up".
+            if phase != "evac" and mission.get("cycle") not in _NON_MISSION_CYCLES:
+                had_cleaning_phase = True
         else:
             # v2.8.0 INTER-ROOM-TRANSITION guard (same discriminator as
             # _on_mission_message): lewis firmware briefly shows a

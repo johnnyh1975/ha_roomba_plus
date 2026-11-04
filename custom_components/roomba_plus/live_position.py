@@ -329,12 +329,25 @@ class LivePositionStream:
                     except Exception:  # noqa: BLE001 - one consumer must not end the stream
                         _LOGGER.exception("Roomba+ live position: listener failed")
         except TimeoutError:
-            self._give_up(STATUS_NO_FIX)
-            _LOGGER.info(
-                "Roomba+ live position: no position within %.0f s; not "
-                "asking again until the next mission",
-                NO_FIX_GIVE_UP_S,
-            )
+            if self._has_answered:
+                # A ROBOT THAT HAS GIVEN POSITIONS IS ASKED AGAIN (4.5.2,
+                # @nareso's j7+). After a zone clean from Home Assistant it
+                # gave none in the first two minutes, this module stopped
+                # asking for the rest of the mission, and the cleaning
+                # path stayed empty -- the map showed iRobot's coverage
+                # dots instead. Started from a favourite, the same robot
+                # answered at once. Two minutes without a fix is not "this
+                # robot cannot": it is asked again after a pause, as for a
+                # stall. A robot that has never given a position (a Braava
+                # jet m6) is still given up on.
+                self._stalled(f"gave no position within {NO_FIX_GIVE_UP_S:.0f} s")
+            else:
+                self._give_up(STATUS_NO_FIX)
+                _LOGGER.info(
+                    "Roomba+ live position: no position within %.0f s; not "
+                    "asking again until the next mission",
+                    NO_FIX_GIVE_UP_S,
+                )
         except RrtpUnsupportedError:
             if self._has_answered:
                 self._stalled()
@@ -371,8 +384,9 @@ class LivePositionStream:
         self._given_up = True
         self.status = status
 
-    def _stalled(self) -> None:
-        """A robot that has answered before fell silent: pause, ask again."""
+    def _stalled(self, what: str = "stopped answering position requests") -> None:
+        """A robot that has answered before fell silent, or gives no
+        position: pause, ask again."""
         self._stalls += 1
         if self._stalls > MAX_STALLS_PER_MISSION:
             self._give_up(STATUS_STALLED)
@@ -388,9 +402,8 @@ class LivePositionStream:
         ]
         self.status = STATUS_STALLED
         _LOGGER.info(
-            "Roomba+ live position: the robot stopped answering position "
-            "requests; asking again in %.0f s",
-            delay,
+            "Roomba+ live position: the robot %s; asking again in %.0f s",
+            what, delay,
         )
         self._cancel_retry()
         self._retry_cancel = async_call_later(self._hass, delay, self._retry)

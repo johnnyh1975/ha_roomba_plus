@@ -1203,6 +1203,49 @@ class TestTheBinEmptiedAfterTheMissionKeepsThePath:
         assert entity._had_cleaning_phase is True
 
 
+class TestAReplayAfterTheEndKeepsThePath:
+    """4.5.2: a cleaning phase under the start time of the mission the
+    map just closed is the robot repeating its state, not a new mission,
+    as the mission records already treat it. Prompted by @nareso's j7+
+    (dots after a zone clean); his log has not confirmed it yet."""
+
+    START = 1_790_000_000
+
+    def _ended(self):
+        entity = _make_map_entity()
+        with patch("custom_components.roomba_plus.image._time_mod") as tmock:
+            tmock.monotonic.side_effect = [1.0, 1.0, 4.0, 4.0]
+            _feed_map_entity(entity, _map_msg("run", cycle="clean", mssn_strt_tm=self.START))
+            _feed_map_entity(entity, _map_msg("charge", cycle="none", mssn_strt_tm=self.START))
+            _feed_map_entity(entity, _map_msg("charge", cycle="none", mssn_strt_tm=self.START))
+        entity._handle_mission_end.assert_called_once_with("charge")
+        entity._renderer.reset.reset_mock()
+        return entity
+
+    def test_a_replay_of_the_ended_mission_keeps_the_path(self):
+        entity = self._ended()
+        _feed_map_entity(entity, _map_msg("run", cycle="clean", mssn_strt_tm=self.START))
+        entity._renderer.reset.assert_not_called()
+        assert entity._had_cleaning_phase is False
+
+    def test_a_new_start_time_is_a_new_mission(self):
+        entity = self._ended()
+        _feed_map_entity(entity, _map_msg("run", cycle="clean", mssn_strt_tm=self.START + 600))
+        entity._renderer.reset.assert_called_once()
+        assert entity._had_cleaning_phase is True
+
+    def test_the_same_start_time_after_the_window_is_a_new_segment(self):
+        import datetime as _dt
+
+        from homeassistant.util import dt as dt_util
+
+        entity = self._ended()
+        later = dt_util.utcnow() + _dt.timedelta(seconds=600)
+        with patch("custom_components.roomba_plus.image.dt_util.utcnow", return_value=later):
+            _feed_map_entity(entity, _map_msg("run", cycle="clean", mssn_strt_tm=self.START))
+        entity._renderer.reset.assert_called_once()
+
+
 class TestImageEndDebounceV281:
     """v2.8.1 (END-DEBOUNCE) — image.py's independent mission-end detection
     had zero protection at all (not even the v2.8.0 cycle-only guard), so a

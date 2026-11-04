@@ -1868,6 +1868,20 @@ async def async_cleanup_removed_repairs(hass: HomeAssistant) -> int:
     return len(to_remove)
 
 
+#: The Home Assistant release whose built-in Roomba integration uses
+#: `roombapy` 2.0.2, the version Roomba+ pins (checked on 2026.11.0b4).
+#: From here on the two share one library and both can load.
+CORE_ROOMBA_SHARES_ROOMBAPY_FROM = (2026, 11)
+
+
+def core_roomba_shares_our_library() -> bool:
+    """True on a Home Assistant whose built-in Roomba integration uses
+    the same `roombapy` as Roomba+ (2026.11 and later, betas included)."""
+    from homeassistant.const import MAJOR_VERSION, MINOR_VERSION  # noqa: PLC0415
+
+    return (MAJOR_VERSION, MINOR_VERSION) >= CORE_ROOMBA_SHARES_ROOMBAPY_FROM
+
+
 async def async_check_core_roomba_conflict(hass: HomeAssistant) -> None:
     """Warns when the built-in `roomba` integration is also configured.
 
@@ -1947,6 +1961,44 @@ async def async_check_core_roomba_conflict(hass: HomeAssistant) -> None:
         and entry.source != SOURCE_IGNORE
         and entry.disabled_by is None
     ]
+    if core_roomba_shares_our_library():
+        # FROM HOME ASSISTANT 2026.11 THE LIBRARY CONFLICT IS GONE: the
+        # built-in integration asks for the same roombapy 2.0.2, and both
+        # load. A wrong library is still reported, by the setup error and
+        # the setup dialog, which no longer blame the built-in one.
+        #
+        # WHAT IS LEFT IS THE SAME ROBOT IN BOTH. An entry the built-in
+        # integration could not load before now loads, and connects to
+        # the robot. A robot takes one local connection at a time, so
+        # the two take it from each other. Both identify a robot by its
+        # BLID (the entry's unique id); a different robot in each
+        # integration is fine.
+        ir.async_delete_issue(hass, DOMAIN, "core_roomba_conflict")
+        ours = {
+            entry.unique_id
+            for entry in hass.config_entries.async_entries(DOMAIN)
+            if entry.unique_id
+        }
+        twice = sorted(
+            entry.title or str(entry.unique_id)
+            for entry in _conflicting
+            if entry.unique_id in ours
+        )
+        if not twice:
+            ir.async_delete_issue(hass, DOMAIN, "core_roomba_same_robot")
+            return
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            "core_roomba_same_robot",
+            is_fixable=False,
+            is_persistent=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key="core_roomba_same_robot",
+            translation_placeholders={"robots": ", ".join(twice)},
+        )
+        return
+
     if not _conflicting and not _wrong_library:
         ir.async_delete_issue(hass, DOMAIN, "core_roomba_conflict")
         return

@@ -67,8 +67,8 @@ class _FakeHass:
                 entry.version = version
 
     async def async_add_executor_job(self, fn, *args):
-        import asyncio as _asyncio
-        return await _asyncio.get_event_loop().run_in_executor(None, fn, *args)
+        # Inline, see tests/test_callbacks.py's _make_hass.
+        return fn(*args)
 
     def __init__(self):
         self.config_entries = _FakeHass._ConfigEntries(self)

@@ -1023,3 +1023,80 @@ async def test_every_blueprint_makes_an_automation_home_assistant_accepts(hass, 
     assert result is not None and result.validation_error is None, (
         path.name, getattr(result, "validation_error", None),
     )
+
+
+# ── the release body (scripts/build_release_body.py) ─────────────────────────
+
+
+def _release_body_module():
+    import importlib.util
+
+    path = Path(__file__).resolve().parent.parent / "scripts" / "build_release_body.py"
+    spec = importlib.util.spec_from_file_location("build_release_body", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class TestTheReleaseBody:
+    """The notes file stays as written; the release page gets the channel,
+    the areas changed, details and links around it."""
+
+    TAGS = ["v4.4.4", "v4.5.0b5", "v4.5.0b6", "v4.5.0", "v4.5.1"]
+
+    def test_a_stable_release_compares_with_the_previous_stable_one(self):
+        rb = _release_body_module()
+        assert rb.previous_tag("v4.5.1", self.TAGS) == "v4.5.0"
+        assert rb.previous_tag("v4.5.0", self.TAGS) == "v4.4.4"
+
+    def test_a_beta_compares_with_the_previous_release_of_any_kind(self):
+        rb = _release_body_module()
+        assert rb.previous_tag("v4.5.0b6", self.TAGS) == "v4.5.0b5"
+        assert rb.previous_tag("v4.5.0b5", self.TAGS) == "v4.4.4"
+
+    def test_changed_files_are_counted_per_area(self):
+        rb = _release_body_module()
+        assert rb.area_counts([
+            "custom_components/roomba_plus/image.py",
+            "custom_components/roomba_plus/translations/de.json",
+            "tests/test_image.py",
+            "release-notes/v4.5.1.md",
+            "hacs.json",
+        ]) == [
+            ("🧩 Integration", 1), ("🌐 Translations", 1), ("🧪 Tests", 1),
+            ("📖 Docs", 1), ("🚀 Other", 1),
+        ]
+
+    def _body(self, tag, notes, previous="v4.5.0"):
+        import datetime
+
+        rb = _release_body_module()
+        return rb.build_body(
+            tag, notes, previous=previous,
+            changed=["custom_components/roomba_plus/image.py"],
+            released=datetime.date(2026, 10, 27),
+            requires="Home Assistant 2025.5.0+",
+        )
+
+    def test_the_title_carries_the_channel_and_the_notes_follow(self):
+        body = self._body("v4.5.1", "# Roomba+ 4.5.1\n\n**Headline.**\n")
+        assert body.startswith("# Roomba+ 4.5.1 ![Stable](")
+        assert "**Changed since v4.5.0:** 🧩 Integration 1" in body
+        assert "**Headline.**" in body
+        assert "compare/v4.5.0...v4.5.1" in body
+        assert "[!WARNING]" not in body
+
+    def test_a_beta_says_so(self):
+        body = self._body("v4.5.2b1", "# Roomba+ 4.5.2b1\n")
+        assert "![Beta](" in body
+        assert "| **Channel** | Beta |" in body
+
+    def test_a_breaking_change_gets_a_warning(self):
+        body = self._body("v4.5.0", "# Roomba+ 4.5.0\n\n> **Breaking** for ...\n")
+        assert "> [!WARNING]" in body
+
+    def test_without_a_previous_release_there_is_no_comparison(self):
+        body = self._body("v4.5.1", "# Roomba+ 4.5.1\n", previous=None)
+        assert "Changed since" not in body
+        assert "first release" in body
+

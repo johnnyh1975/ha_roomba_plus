@@ -3296,8 +3296,43 @@ class TestPausedResume:
         v = _make_vacuum_entity({"cleanMissionStatus": {"phase": "stop", "cycle": "clean"}})
         monkeypatch.setattr(type(v), "activity", property(lambda _s: VacuumActivity.PAUSED))
         v.vacuum.send_command = AsyncMock()
-        await v.async_start()
+        with patch("custom_components.roomba_plus.vacuum.watch_for_swallowed_command") as watch:
+            await v.async_start()
         v.vacuum.send_command.assert_awaited_once_with("resume")
+        watch.assert_not_called()
+
+
+class TestAStartIsWatched:
+    """4.5.2: "accepted and nothing started" was watched for room
+    starts only. A whole-home start from a closed cycle is watched the
+    same way; a start into an open mission is not (it resumes, and
+    whether the robot took it cannot be told from the state)."""
+
+    @staticmethod
+    async def _start(cycle):
+        v = _make_vacuum_entity()
+        v.hass = MagicMock()
+        v.vacuum.send_command = AsyncMock()
+        reported = {"cleanMissionStatus": {"cycle": cycle, "phase": "charge"}}
+        with patch(
+            "custom_components.roomba_plus.roomba_reported_state", return_value=reported,
+        ), patch(
+            "custom_components.roomba_plus.vacuum.watch_for_swallowed_command"
+        ) as watch:
+            await v.async_start()
+        v.vacuum.send_command.assert_awaited_once_with("start")
+        return v, watch
+
+    @pytest.mark.asyncio
+    async def test_a_start_from_the_dock_is_watched(self):
+        v, watch = await self._start("none")
+        watch.assert_called_once()
+        assert watch.call_args.args[:3] == (v.hass, v._config_entry, "start")
+
+    @pytest.mark.asyncio
+    async def test_a_start_into_an_open_mission_is_not(self):
+        _v, watch = await self._start("clean")
+        watch.assert_not_called()
 
 
 class TestWhichVacuumClass:

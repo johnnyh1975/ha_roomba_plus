@@ -99,8 +99,8 @@ _SWALLOWED_COMMAND_GRACE_SEC = 20
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 # v3.5.0 FULL-BACKUP — every per-robot Store this integration persists.
-# (runtime_data attribute name, HA Store storage-key prefix). All nine
-# stores share STORAGE_VERSION/_HA_STORE_VERSION == 1 today (verified
+# (runtime_data attribute name, HA Store storage-key prefix). All of them
+# (eleven since 4.5.2) share STORAGE_VERSION == 1 today (verified
 # against each module directly) — hardcoded here rather than imported
 # per-module to keep this list a single, auditable source of truth
 # independent of any one store's internal naming (STORAGE_VERSION vs.
@@ -125,7 +125,29 @@ _BACKUP_STORES: tuple[tuple[str, str], ...] = (
     ("maintenance_store", "roomba_plus_maintenance"),
     ("trajectory_store", "roomba_plus_trajectories"),
     ("freeze_snapshot_store", "roomba_plus_freeze"),
+    # MISSING UNTIL 4.5.2, and history like the rest: the mission archive
+    # (up to 800 missions, on Classic paged back from iRobot's history)
+    # and the turn of the path learned per map. A backup moved to a new
+    # Home Assistant left both behind.
+    ("mission_archive", "roomba_plus_mission_archive"),
+    ("path_turn", "roomba_plus_path_turn"),
 )
+
+#: Stores DELIBERATELY not in a backup (see _BACKUP_STORES for why the
+#: timer is not): the state of the running mission, when demand cleaning
+#: last started one (a pause between two, not history), and pictures
+#: that are drawn again or fetched again. A test holds every store of the entry to
+#: one of the two lists, so a new store has to be decided on.
+_NOT_BACKED_UP: frozenset[str] = frozenset({
+    "roomba_plus_mission_timer",
+    "roomba_plus_dirt_threshold",
+    "roomba_plus_map",
+    "roomba_plus_map_checkpoint",
+    "roomba_plus_prime_map",
+    "roomba_plus_prime_live_bundle",
+    "roomba_plus_prime_room_names",
+    "roomba_plus_zones",  # legacy, migrated into the room segmentation
+})
 
 
 
@@ -253,6 +275,15 @@ async def _async_warn_if_swallowed(
     """
     import asyncio  # noqa: PLC0415
 
+    # CLASSIC ONLY (4.5.2). A Prime robot has no local state to read:
+    # `roomba_reported_state` answers {} for it, which reads as "no
+    # mission", so every room clean on a Prime robot was followed by
+    # this warning 20 s later, whether it started or not. What a
+    # swallowed Prime command looks like after 20 s is not recorded;
+    # until it is, Prime is not watched.
+    if getattr(getattr(entry, "runtime_data", None), "roomba", None) is None:
+        return
+
     await asyncio.sleep(_SWALLOWED_COMMAND_GRACE_SEC)
 
     try:
@@ -333,6 +364,24 @@ async def _async_warn_if_swallowed(
         not_ready,
         err,
         _detail,
+    )
+
+
+def watch_for_swallowed_command(
+    hass: HomeAssistant, entry: Any, what: str,
+    before: dict[str, Any] | None = None,
+) -> None:
+    """Report later if `what` was taken and nothing started (Classic).
+
+    Fire and forget: the caller returns now. Used by room clean, zone
+    clean (4.5.2) and the vacuum's start (4.5.2).
+    """
+    if entry is None or not hasattr(entry, "async_create_background_task"):
+        return
+    entry.async_create_background_task(
+        hass,
+        _async_warn_if_swallowed(hass, entry, what, before),
+        name=f"roomba_plus_swallow_watch_{entry.entry_id}",
     )
 
 
@@ -612,12 +661,7 @@ async def _async_clean_rooms_via_backend(
 
     # Fire and forget: the service returns now, and this reports later
     # if nothing actually started.
-    if _entry is not None and hasattr(_entry, "async_create_background_task"):
-        _entry.async_create_background_task(
-            call.hass,
-            _async_warn_if_swallowed(call.hass, _entry, "clean_room", _before),
-            name=f"roomba_plus_swallow_watch_{_entry.entry_id}",
-        )
+    watch_for_swallowed_command(call.hass, _entry, "clean_room", _before)
 
 
 def _classic_zone_ids(config_entry: Any, names: list[str]) -> list[str]:
@@ -846,6 +890,9 @@ async def async_handle_clean_zone(call: ServiceCall) -> None:
         wetness = int(_wetness_raw) if _wetness_raw not in (None, "") else None
 
         _two_pass_raw = call.data.get(ATTR_TWO_PASS)
+        # The same watch as clean_room (4.5.2): a zone start is the same
+        # region-targeted command, and is swallowed the same ways.
+        _before = _mission_snapshot(config_entry)
         await backend.clean_rooms(
             prefixed,
             # One value spread across every requested zone, same as
@@ -857,6 +904,7 @@ async def async_handle_clean_zone(call: ServiceCall) -> None:
                 [bool(_two_pass_raw)] if _two_pass_raw is not None else None
             ),
         )
+        watch_for_swallowed_command(hass, config_entry, "clean_zone", _before)
 
 
 async def async_handle_clean_room(call: ServiceCall) -> None:

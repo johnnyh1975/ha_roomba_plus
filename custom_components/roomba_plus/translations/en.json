@@ -168,7 +168,7 @@
       "room_schedule_not_supported": "Room schedules need a robot that reports room data.",
       "no_rooms_to_name": "No rooms were found to name. This robot's rooms appear once it has cleaned specific rooms at least once, or once its map is available from your iRobot account.",
       "all_rooms_named": "Every room already has a name. Rename one from the zone selector on the device page.",
-      "wrong_roombapy": "Roomba+ needs the asynchronous `roombapy` 2.x, and the copy Home Assistant has loaded is an older one:\n\n`{error}`\n\n**Restart Home Assistant first** — that makes it install the version Roomba+ asks for.\n\nIf it comes back after a restart, Home Assistant's **built-in Roomba integration** loaded its older library first. Python holds one copy of a library at a time, so Roomba+ cannot use its own. Deleting the built-in integration's entry is not always enough: when Home Assistant finds your robot on the network, it prepares the built-in setup dialog after every restart, and that loads the older library again. The troubleshooting guide shows how to stop that, under \"A workaround, if you do not use the built-in integration\": [{troubleshooting_url}]({troubleshooting_url})\n\nThe Roomba+ version makes no difference here — every release since 4.2.0 needs the same library.",
+      "wrong_roombapy": "Roomba+ needs the asynchronous `roombapy` 2.x, and the copy Home Assistant has loaded is an older one:\n\n`{error}`\n\n**Restart Home Assistant first** — that makes it install the version Roomba+ asks for.\n\nIf it comes back after a restart on Home Assistant 2026.10 or earlier, Home Assistant's **built-in Roomba integration** loaded its older library first. Python holds one copy of a library at a time, so Roomba+ cannot use its own. Deleting the built-in integration's entry is not always enough: when Home Assistant finds your robot on the network, it prepares the built-in setup dialog after every restart, and that loads the older library again. The troubleshooting guide shows how to stop that, under \"A workaround, if you do not use the built-in integration\": [{troubleshooting_url}]({troubleshooting_url})\n\nFrom Home Assistant 2026.11 the built-in integration uses the same version as Roomba+, so it is not the cause there. If this still appears on 2026.11 or later, look for a custom integration that requires an older `roombapy`.\n\nThe Roomba+ version makes no difference here — every release since 4.2.0 needs the same library.",
       "robot_not_on_account": "This robot is no longer on the iRobot account. If it was moved to another account, set it up with that one."
     },
     "flow_title": "{name}"
@@ -2034,6 +2034,10 @@
       "title": "Two Roomba integrations installed",
       "description": "Home Assistant's built-in **Roomba** integration is set up alongside Roomba+. Both use the same `roombapy` library, and Home Assistant installs only one copy of it — so one of the two will fail to load, usually with an `ImportError` in the log.\n\nThis is not something either integration can fix. Remove whichever one you do not need: Roomba+ covers everything the built-in one does and adds the newer cloud robots, but if you only have older robots and are happy with the built-in one, remove Roomba+ instead.\n\nIf you see `cannot import name 'Roomba' from 'roombapy'` in your log without having set the built-in one up, that is a different thing — see TROUBLESHOOTING.md, \"Error occurred loading flow for integration roomba\"."
     },
+    "core_roomba_same_robot": {
+      "title": "A robot set up in two integrations",
+      "description": "**{robots}** is set up both in Roomba+ and in Home Assistant's built-in **Roomba** integration.\n\nFrom Home Assistant 2026.11 both use the same `roombapy` library and both load, so both connect to the robot. A robot takes one local connection at a time, and the two take it from each other: either of them can lose the robot or show it as unavailable.\n\nRemove the robot from one of the two. Removing it from the built-in integration changes nothing in Roomba+.\n\nUntil 2026.10 the built-in integration could not load next to Roomba+, which is why you may not have noticed its entry before."
+    },
     "maintenance_part_overdue": {
       "title": "{name}: overdue – {part}",
       "fix_flow": {
@@ -2317,7 +2321,7 @@
       "message": "The Roomba+ robot for {entity_id} is not loaded right now. Check that its integration entry is enabled and set up, then try again."
     },
     "roombapy_too_old": {
-      "message": "Roomba+ needs the asynchronous roombapy 2.x, but an older version is installed ({error}). Restart Home Assistant. If this persists, Home Assistant's built-in Roomba integration is reinstalling the old library and needs to be removed."
+      "message": "Roomba+ needs the asynchronous roombapy 2.x, but an older version is installed ({error}). Restart Home Assistant. If this persists on Home Assistant 2026.10 or earlier, the built-in Roomba integration is reinstalling the old library and needs to be removed. From 2026.11 the built-in one uses the same version; look for a custom integration that requires an older roombapy."
     },
     "cannot_connect_local": {
       "message": "Cannot connect to the robot at {host}."

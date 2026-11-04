@@ -371,9 +371,8 @@ def _make_hass(loop=None):
                 _os.makedirs(_os.path.dirname(p), exist_ok=True)
                 return p
         async def async_add_executor_job(self, fn, *args):
-            import asyncio as _asyncio
-            loop = _asyncio.get_event_loop()
-            return await loop.run_in_executor(None, fn, *args)
+            # Inline, see tests/test_callbacks.py's _make_hass.
+            return fn(*args)
         def __init__(self):
             self.loop = loop
             self.data = {}

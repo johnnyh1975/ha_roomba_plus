@@ -509,6 +509,11 @@ MAX_DOCK_CORRECTION_MM = 1500.0
 #: and 0.10 m from the dock -- the real drift. Without such a position in
 #: this time there is no measurement, and the stretch stays as measured.
 DOCK_POSE_WAIT_SECONDS = 300.0
+#: How long after the map closed a mission a cleaning phase under that
+#: mission's own start time counts as the robot repeating its last state
+#: rather than a new mission (4.5.2). The window the mission records use
+#: for the same replay (callbacks._mission_already_terminal).
+MISSION_REPLAY_WINDOW_SECONDS = 120.0
 #: A last position this close to the dock already measures the contact:
 #: a robot that reports its way home needs no wait.
 DOCK_POSE_NEAR_MM = 500.0
@@ -1599,6 +1604,10 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         # loaded from storage at startup until the first MQTT message
         # resolves it (resume or salvage) — see _consume_pending_checkpoint().
         self._mission_checkpoint_mssn_strt_tm: int = 0
+        # The mission the map closed last, to tell a replay of its state
+        # from a new mission (_replays_ended_mission, 4.5.2).
+        self._ended_mission_mssn_strt_tm: int = 0
+        self._ended_mission_at: datetime.datetime | None = None
         self._pending_checkpoint: dict[str, Any] | None = None
         self._last_terminal_mission_key: str | None = None
 
@@ -2129,6 +2138,7 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                 current_phase in CLEANING_PHASES
                 and not self._had_cleaning_phase
                 and not _only_evacuating
+                and not self._replays_ended_mission()
             ):
                 self._had_cleaning_phase = True
                 if self._renderer:
@@ -2325,6 +2335,10 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                 self._had_cleaning_phase = False
                 self._end_signal_streak = 0
                 self._end_signal_first_ts = 0.0
+                self._ended_mission_mssn_strt_tm = getattr(
+                    self, "_mission_checkpoint_mssn_strt_tm", 0
+                ) or 0
+                self._ended_mission_at = dt_util.utcnow()
                 if getattr(self, "_awaiting_dock_pose", False):
                     # The dock contact must resolve first (order point 4
                     # in _handle_mission_end); it ends the mission then.
@@ -2393,6 +2407,31 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         self.schedule_update_ha_state()
 
     # ── Private helpers ───────────────────────────────────────────────────────
+    def _replays_ended_mission(self) -> bool:
+        """A cleaning phase under the start time of the mission the map
+        just closed: the robot repeating its last state, not a new mission.
+
+        THE PATH SURVIVES THE REPLAY (4.5.2). Taken as a mission start, a
+        repeated `run` reset the path the mission had drawn, and the
+        picture fell back to the cloud's coverage dots. The mission
+        records already ignore the same replay within the same window
+        (callbacks._mission_already_terminal); the map did not. One
+        explanation that fits @nareso's j7+ -- dots after a zone clean,
+        lines after a favourite -- not yet confirmed from his log.
+        """
+        ended_tm = getattr(self, "_ended_mission_mssn_strt_tm", 0)
+        ended_at = getattr(self, "_ended_mission_at", None)
+        if not ended_tm or ended_at is None:
+            return False
+        started = (
+            (getattr(self, "vacuum_state", None) or {}).get("cleanMissionStatus") or {}
+        ).get("mssnStrtTm") or 0
+        return (
+            started == ended_tm
+            and (dt_util.utcnow() - ended_at).total_seconds()
+            <= MISSION_REPLAY_WINDOW_SECONDS
+        )
+
     def _refresh_terminal_mission_images(self) -> None:
         state = getattr(self, "vacuum_state", {})
         mission_status = state.get("cleanMissionStatus") or {}

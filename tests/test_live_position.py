@@ -333,6 +333,42 @@ class TestARobotThatHasAnsweredStalls:
         await _settle()
 
     @pytest.mark.asyncio
+    async def test_no_fix_from_a_robot_that_has_answered_is_asked_again(
+        self, hass: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """4.5.2, @nareso's j7+: after a zone clean it gave no position in
+        the first two minutes, and the path stayed empty for the whole
+        mission. A robot that has given positions before is asked again."""
+        # Longer than the pauses (0.02 s), so the pause can be seen.
+        monkeypatch.setattr(lp, "NO_FIX_GIVE_UP_S", 0.2)
+        robot = _Robot()
+        stream = _stream(hass, robot)
+        seen: list[RobotPosition] = []
+        stream.add_listener(seen.append)
+        # An earlier mission it answered in.
+        robot.report(phase="run")
+        await _settle()
+        robot.queue.put_nowait(_pos(1.0))
+        await _settle()
+        robot.report(phase="charge", cycle="none")
+        await _settle()
+
+        robot.report(phase="run")
+        await asyncio.sleep(0.21)
+        await _settle()
+        assert stream.status == lp.STATUS_STALLED
+        assert stream.diagnostics()["given_up_this_mission"] is False
+
+        await asyncio.sleep(0.03)
+        await _settle()
+        assert robot.streams_opened == 3
+        robot.queue.put_nowait(_pos(7.0))
+        await _settle()
+        assert [p.x for p in seen] == [1.0, 7.0]
+        stream.stop()
+        await _settle()
+
+    @pytest.mark.asyncio
     async def test_a_robot_that_never_answered_is_still_given_up_on(
         self, hass: Any
     ) -> None:

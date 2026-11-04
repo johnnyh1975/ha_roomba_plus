@@ -49,6 +49,14 @@ PACKAGE = ROOT / "custom_components" / "roomba_plus"
 #:
 #: An unlisted difference fails the check. That is the whole mechanism:
 #: it forces a decision rather than allowing an omission.
+#: One reason for the three calls of the Classic start's watch.
+_SWALLOW_WATCH = (
+    "The swallowed-command watch (4.5.2) reads the robot's local state "
+    "20 s after the start. A Prime robot has none, and what a swallowed "
+    "Prime start looks like is not recorded; the watch itself returns at "
+    "once for Prime"
+)
+
 DELIBERATE: dict[str, dict[str, str]] = {
     "vacuum.py::_dock_operation_in_progress": {
         # THE WHOLE METHOD IS PRIME-ONLY and returns early for Classic,
@@ -100,6 +108,9 @@ DELIBERATE: dict[str, dict[str, str]] = {
             "records the region command itself; its bare start never "
             "recorded"
         ),
+        "_mission_snapshot": _SWALLOW_WATCH,
+        "_in_open_cycle": _SWALLOW_WATCH,
+        "watch_for_swallowed_command": _SWALLOW_WATCH,
     },
     "vacuum.py::async_return_to_base": {
         "send_command": (

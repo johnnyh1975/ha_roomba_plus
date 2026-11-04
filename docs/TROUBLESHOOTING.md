@@ -88,10 +88,16 @@ swap the library on disk at every restart.
 if you do not use the built-in integration"), restart, then add
 Roomba+.
 
-**Home Assistant 2026.11.** Its development branch already moves the
-built-in integration to `roombapy` 2.0.2, the version Roomba+ pins. If
-that ships as planned, both integrations ask for the same library and
-neither replaces the other's; the workaround folder can then be deleted.
+**Home Assistant 2026.11** moves the built-in integration to `roombapy`
+2.0.2, the version Roomba+ pins (checked on 2026.11.0b4). Both
+integrations ask for the same library and neither replaces the other's,
+so this no longer happens. After updating, the workaround folder can be
+deleted. If the same robot is then set up in both integrations, see
+[A robot set up in two integrations](#a-robot-set-up-in-two-integrations-home-assistant-202611-and-later).
+
+If this error appears on 2026.11 or later all the same, the old library
+comes from somewhere else: look in `custom_components` for an integration
+that requires an older `roombapy`.
 
 ---
 
@@ -106,6 +112,10 @@ repeating every few minutes, alongside a blocking-call warning about
 ERROR [homeassistant.components.roomba] Error occurred loading flow for
 integration roomba: cannot import name 'Roomba' from 'roombapy'
 ```
+
+**Home Assistant 2026.10 and earlier.** From 2026.11 the built-in
+integration uses the same library as Roomba+, and neither symptom
+appears there.
 
 **Nothing is broken.** Roomba+ needs `roombapy` 2.x, which is
 asynchronous; Home Assistant's built-in Roomba integration uses the
@@ -152,7 +162,7 @@ longer triggers the "Two Roomba integrations" notice.
 **Why it is not simply fixed:** resolving it means the built-in
 integration moving from the synchronous library to the asynchronous
 one — a rewrite of that integration, not a version bump, and not ours
-to make.
+to make. Home Assistant made it in 2026.11.
 
 #### A workaround, if you do not use the built-in integration
 
@@ -204,6 +214,23 @@ integration with an empty one:
   through discovery, or who cannot add Roomba+ because of it (previous
   section).
 
+
+---
+
+### A robot set up in two integrations (Home Assistant 2026.11 and later)
+
+Roomba+ shows this notice when a robot it runs is also set up in Home
+Assistant's built-in Roomba integration.
+
+**Why it is new.** Until 2026.10 the built-in integration could not load
+next to Roomba+ (the two sections above), so an old entry of it sat there
+and did nothing. From 2026.11 both use the same `roombapy` and both load,
+so both connect to the robot. A robot takes one local connection at a
+time, and the two take it from each other.
+
+**What to do.** Remove the robot from one of the two. Removing the
+built-in integration's entry changes nothing in Roomba+. A different
+robot in each integration is fine, and gets no notice.
 
 ---
 

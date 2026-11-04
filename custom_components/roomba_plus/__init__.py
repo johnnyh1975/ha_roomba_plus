@@ -1548,9 +1548,10 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: RoombaConfigEntry
         raise exceptions.ConfigEntryNotReady(
             f"Roomba+ needs the asynchronous roombapy 2.x and an older "
             f"one is installed ({ROOMBAPY_IMPORT_ERROR}). Restart Home "
-            f"Assistant; if it persists, Home Assistant's built-in "
-            f"Roomba integration is reinstalling the old library and "
-            f"needs removing.", translation_domain=DOMAIN, translation_key="roombapy_too_old", translation_placeholders={"error": str(ROOMBAPY_IMPORT_ERROR)}
+            f"Assistant; if it persists on Home Assistant 2026.10 or "
+            f"earlier, the built-in Roomba integration is reinstalling "
+            f"the old library and needs removing (from 2026.11 it uses "
+            f"the same version).", translation_domain=DOMAIN, translation_key="roombapy_too_old", translation_placeholders={"error": str(ROOMBAPY_IMPORT_ERROR)}
         )
 
     _seed_reload_baseline(hass, config_entry)

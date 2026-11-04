@@ -1868,7 +1868,9 @@ def _make_backup_hass(tmp_path):
     fn against a real (tmp_path-backed) filesystem — the ZIP read/write
     logic is exercised for real, not mocked away."""
     hass = hass_mock()
-    hass.config.path.side_effect = lambda name: str(tmp_path / name)
+    # Any number of parts, as the real one: HA 2026.11's Store asks for
+    # config.path(".storage", key) when it is built.
+    hass.config.path.side_effect = lambda *parts: str(tmp_path.joinpath(*parts))
 
     async def _run_executor(fn, *args):
         return fn(*args)
@@ -2039,6 +2041,32 @@ class TestRestoreBackup:
             call.data = {"entity_id": "vacuum.test", "path": str(bad_zip)}
             with pytest.raises(HomeAssistantError):
                 await async_handle_restore_backup(call)
+
+
+class TestEveryStoreIsDecidedForTheBackup:
+    """4.5.2: create_backup left the mission archive and the learned path
+    turn out. Every store the entry persists (the list removed with the
+    entry) is now either in the backup or deliberately not."""
+
+    def test_every_store_of_the_entry_is_in_one_list(self):
+        from custom_components.roomba_plus import _STORAGE_KEYS_TO_REMOVE
+        from custom_components.roomba_plus.services import (
+            _BACKUP_STORES,
+            _NOT_BACKED_UP,
+        )
+
+        persisted = {
+            template.removesuffix("_{entry_id}") for _label, template in _STORAGE_KEYS_TO_REMOVE
+        }
+        backed_up = {prefix for _attr, prefix in _BACKUP_STORES}
+        assert persisted - backed_up - _NOT_BACKED_UP == set()
+        assert backed_up & _NOT_BACKED_UP == set()
+
+    @pytest.mark.parametrize("attr", ["mission_archive", "path_turn"])
+    def test_the_two_that_were_missing_are_in_it(self, attr):
+        from custom_components.roomba_plus.services import _BACKUP_STORES
+
+        assert attr in {a for a, _prefix in _BACKUP_STORES}
 
 
 class TestTheRemovalListMatchesWhatIsRegistered:
@@ -2503,6 +2531,22 @@ class TestASwallowedCommandIsReported:
         ):
             await _async_warn_if_swallowed(MagicMock(), entry, "clean_room")
         return caplog.text
+
+    @pytest.mark.asyncio
+    async def test_a_prime_robot_is_not_watched(self, caplog):
+        """4.5.2: a Prime robot has no local state, which read as "no
+        mission", so every Prime room clean was followed by the warning."""
+        from unittest.mock import MagicMock, patch
+
+        from custom_components.roomba_plus.services import _async_warn_if_swallowed
+
+        entry = MagicMock()
+        entry.runtime_data.roomba = None
+        with patch(
+            "custom_components.roomba_plus.services._SWALLOWED_COMMAND_GRACE_SEC", 0,
+        ):
+            await _async_warn_if_swallowed(MagicMock(), entry, "clean_room")
+        assert "no mission started" not in caplog.text
 
     @pytest.mark.asyncio
     async def test_a_start_into_an_open_mission_is_recorded(self, caplog):
@@ -3671,6 +3715,19 @@ class TestCleanZoneOnClassic:
                 zones=self.ZONES, options={CONF_SMART_ZONE_ALIASES: {"31": "Tisch"}}
             )
             assert await self._run(hass, backend, [name]) == ["zid_31"]
+
+    @pytest.mark.asyncio
+    async def test_a_zone_start_is_watched_like_a_room_start(self):
+        """4.5.2: a zone start is the same region command as a room
+        start and is swallowed the same ways; only rooms were watched."""
+        hass, backend = self._setup(zones=self.ZONES)
+        with patch(
+            "custom_components.roomba_plus.services.watch_for_swallowed_command"
+        ) as watch:
+            await self._run(hass, backend, ["Esstisch"])
+        entry = hass.config_entries.async_get_entry.return_value
+        watch.assert_called_once()
+        assert watch.call_args.args[1:3] == (entry, "clean_zone")
 
     @pytest.mark.asyncio
     async def test_an_unknown_name_lists_the_known_ones(self):

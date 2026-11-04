@@ -1,7 +1,7 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Default-blue.svg)](https://github.com/hacs/default)
-[![Version](https://img.shields.io/badge/Version-4.5.1-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-4.5.2-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2025.5%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Platinum-blueviolet.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
@@ -21,9 +21,9 @@ Roomba+ is a Platinum-quality Home Assistant custom integration for iRobot Roomb
 
 | Your robot | Install | Why |
 |---|---|---|
-| **Any supported robot** | **v4.5.1** (stable) — the default in HACS | One line for both generations, and one iRobot login for all the robots of an account. No beta channel needed. |
-| **Roomba Max · Combo/Plus 400-series** and other newer cloud robots | **v4.5.1** | Lines before 4.0 **cannot connect to your robot at all** |
-| Still on the 4.1 or 4.2 line | **v4.5.1** | Everything fixed through 4.2.22 is in it. 4.2.22 was the last 4.2 release; that line has ended, as has 4.1 |
+| **Any supported robot** | **v4.5.2** (stable) — the default in HACS | One line for both generations, and one iRobot login for all the robots of an account. No beta channel needed. |
+| **Roomba Max · Combo/Plus 400-series** and other newer cloud robots | **v4.5.2** | Lines before 4.0 **cannot connect to your robot at all** |
+| Still on the 4.1 or 4.2 line | **v4.5.2** | Everything fixed through 4.2.22 is in it. 4.2.22 was the last 4.2 release; that line has ended, as has 4.1 |
 | Not sure | Check your model number against the [supported hardware](#supported-hardware--capability-matrix) table below | |
 
 > ⚠️ If HACS shows you only `main` and downloading it hangs, see
@@ -380,7 +380,7 @@ the resulting state change arrives by push.
 
 **Requirements:** Home Assistant 2025.5 or newer (which itself needs Python 3.13.2+) · HACS installed (for recommended install)
 
-> Both CI test jobs run against versions you can actually have: the supported minimum (HA 2025.5 on Python 3.13) and a much newer one (HA 2026.8 on Python 3.14). Until v4.2 the first of those pinned HA 2025.1.4 on Python 3.12 — a combination no installation can be in, since 2025.5 requires 3.13.2.
+> Both CI test jobs run against versions you can actually have: the supported minimum (HA 2025.5 on Python 3.13) and a much newer one (HA 2026.10 on Python 3.14). Until v4.2 the first of those pinned HA 2025.1.4 on Python 3.12 — a combination no installation can be in, since 2025.5 requires 3.13.2.
 
 ### HACS (recommended)
 

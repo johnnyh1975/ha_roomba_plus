@@ -15,6 +15,7 @@ test (I2).
 """
 from __future__ import annotations
 
+import datetime
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -27,8 +28,16 @@ from custom_components.roomba_plus.models import ConnectionType, RoombaData
 
 ENTRY_ID = "prime_entry"
 
+# Days relative to today: the views ask for the last 90 days, and with
+# fixed dates in October 2026 these tests would have failed from the
+# new year on.
+_TODAY = datetime.datetime.now(datetime.UTC).date()
+DAY_0, DAY_1, DAY_2 = (
+    (_TODAY - datetime.timedelta(days=n)).isoformat() for n in (31, 30, 29)
+)
 
-def _prime_record(mission_id="M1", day="2026-10-02"):
+
+def _prime_record(mission_id="M1", day=DAY_1):
     return {
         "id": f"p_{mission_id}",
         "started_at": f"{day}T09:00:00+00:00",
@@ -87,7 +96,7 @@ def _body(resp):
 
 @pytest.fixture
 def entry():
-    return _prime_entry([_prime_record("M1"), _prime_record("M2", "2026-10-03")])
+    return _prime_entry([_prime_record("M1"), _prime_record("M2", DAY_2)])
 
 
 class TestEveryViewAnswersOnAPrimeEntry:
@@ -154,7 +163,7 @@ class TestEveryViewAnswersOnAPrimeEntry:
     @pytest.mark.asyncio
     async def test_digest(self, entry):
         resp = await api_views.DailyDigestView().get(
-            _req(_hass(entry), date="2026-10-02"), ENTRY_ID
+            _req(_hass(entry), date=DAY_1), ENTRY_ID
         )
         assert resp.status == 200
         assert _body(resp)["missions"] == 1
@@ -195,7 +204,7 @@ class TestEveryViewAnswersOnAPrimeEntry:
     async def test_import(self, entry):
         request = _req(_hass(entry))
         request.json = AsyncMock(return_value={
-            "export_version": 1, "records": [_prime_record("M3", "2026-10-01")],
+            "export_version": 1, "records": [_prime_record("M3", DAY_0)],
         })
         resp = await api_views.MissionHistoryImportView().post(request, ENTRY_ID)
         assert _body(resp)["imported"] == 1

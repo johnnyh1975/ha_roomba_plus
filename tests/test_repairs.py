@@ -3021,6 +3021,71 @@ class TestTheSharedLibraryConflictIsAnnounced:
             assert len(entry.get("description", "")) > 100, path.name
 
 
+class TestTheBuiltInRoombaFromHomeAssistant2026_11:
+    """HA 2026.11 moves the built-in Roomba integration to roombapy
+    2.0.2, the version Roomba+ pins (checked on 2026.11.0b4). Both load,
+    so the library notice no longer applies there. What is left is the
+    same robot in both: a robot takes one local connection at a time."""
+
+    @staticmethod
+    async def _check(hass, *, shares, core_ids, ours=("0123456789ABCDEF",)):
+        from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+        from custom_components.roomba_plus import repairs
+        from custom_components.roomba_plus.const import DOMAIN
+        from homeassistant.helpers import issue_registry as ir
+
+        for blid in ours:
+            MockConfigEntry(domain=DOMAIN, unique_id=blid, title="Ours").add_to_hass(hass)
+        for blid in core_ids:
+            MockConfigEntry(domain="roomba", unique_id=blid, title=f"Core {blid[-4:]}").add_to_hass(hass)
+        with patch.object(repairs, "core_roomba_shares_our_library", return_value=shares):
+            await repairs.async_check_core_roomba_conflict(hass)
+        registry = ir.async_get(hass)
+        return {
+            issue_id: issue for (domain, issue_id), issue in registry.issues.items()
+            if domain == DOMAIN
+        }
+
+    @pytest.mark.asyncio
+    async def test_the_same_robot_in_both_is_named(self, hass):
+        issues = await self._check(hass, shares=True, core_ids=["0123456789ABCDEF"])
+        assert "core_roomba_conflict" not in issues
+        same = issues["core_roomba_same_robot"]
+        assert same.translation_placeholders == {"robots": "Core CDEF"}
+
+    @pytest.mark.asyncio
+    async def test_another_robot_in_the_built_in_one_is_fine(self, hass):
+        issues = await self._check(hass, shares=True, core_ids=["FEDCBA9876543210"])
+        assert issues == {}
+
+    @pytest.mark.asyncio
+    async def test_before_2026_11_it_is_the_library_notice(self, hass):
+        issues = await self._check(hass, shares=False, core_ids=["FEDCBA9876543210"])
+        assert set(issues) == {"core_roomba_conflict"}
+
+    def test_the_version_line(self):
+        from custom_components.roomba_plus import repairs
+
+        with patch("homeassistant.const.MINOR_VERSION", 11), \
+             patch("homeassistant.const.MAJOR_VERSION", 2026):
+            assert repairs.core_roomba_shares_our_library()
+        with patch("homeassistant.const.MINOR_VERSION", 10), \
+             patch("homeassistant.const.MAJOR_VERSION", 2026):
+            assert not repairs.core_roomba_shares_our_library()
+
+    def test_every_language_has_the_new_text_and_the_version(self):
+        import json
+        import pathlib
+
+        for path in pathlib.Path("custom_components/roomba_plus/translations").glob("*.json"):
+            data = json.loads(path.read_text(encoding="utf-8"))
+            same = data["issues"]["core_roomba_same_robot"]
+            assert "{robots}" in same["description"], path.name
+            assert "2026.11" in data["config"]["abort"]["wrong_roombapy"], path.name
+            assert "2026.11" in data["exceptions"]["roombapy_too_old"]["message"], path.name
+
+
 class TestTheZoneNamingDialogIsUsable:
     """A tester updated, got the notice, and could not act on it:
 

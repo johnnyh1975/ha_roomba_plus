@@ -168,7 +168,7 @@
       "room_schedule_not_supported": "Kamerschema's vereisen een robot die kamergegevens rapporteert.",
       "no_rooms_to_name": "Geen kamers gevonden om te benoemen. De kamers van deze robot verschijnen zodra hij minstens één keer specifieke kamers heeft schoongemaakt, of zodra zijn kaart beschikbaar is via je iRobot-account.",
       "all_rooms_named": "Elke kamer heeft al een naam. Hernoem er een via de zoneselector op de apparaatpagina.",
-      "wrong_roombapy": "Roomba+ heeft het asynchrone `roombapy` 2.x nodig; de door Home Assistant geladen versie is ouder:\n\n`{error}`\n\n**Start Home Assistant eerst opnieuw op** — dan wordt de versie geïnstalleerd die Roomba+ vraagt.\n\nKomt de fout daarna terug, dan heeft de **ingebouwde Roomba-integratie** van Home Assistant haar oudere bibliotheek eerst geladen. Python houdt van een bibliotheek maar één kopie tegelijk, dus Roomba+ kan de eigene niet gebruiken. De vermelding van de ingebouwde integratie verwijderen is niet altijd genoeg: als Home Assistant je robot op het netwerk vindt, bereidt het na elke herstart het ingebouwde instellingsvenster voor, en dat laadt de oude bibliotheek opnieuw. De probleemoplossingsgids legt uit hoe je dat stopt, onder \"A workaround, if you do not use the built-in integration\": [{troubleshooting_url}]({troubleshooting_url})\n\nDe Roomba+-versie maakt hier niets uit — elke versie sinds 4.2.0 vraagt dezelfde bibliotheek.",
+      "wrong_roombapy": "Roomba+ heeft het asynchrone `roombapy` 2.x nodig; de door Home Assistant geladen versie is ouder:\n\n`{error}`\n\n**Start Home Assistant eerst opnieuw op** — dan wordt de versie geïnstalleerd die Roomba+ vraagt.\n\nKomt de fout na een herstart onder Home Assistant 2026.10 of ouder terug, dan heeft de **ingebouwde Roomba-integratie** van Home Assistant haar oudere bibliotheek eerst geladen. Python houdt van een bibliotheek maar één kopie tegelijk, dus Roomba+ kan de eigene niet gebruiken. De vermelding van de ingebouwde integratie verwijderen is niet altijd genoeg: als Home Assistant je robot op het netwerk vindt, bereidt het na elke herstart het ingebouwde instellingsvenster voor, en dat laadt de oude bibliotheek opnieuw. De probleemoplossingsgids legt uit hoe je dat stopt, onder \"A workaround, if you do not use the built-in integration\": [{troubleshooting_url}]({troubleshooting_url})\n\nVanaf Home Assistant 2026.11 gebruikt de ingebouwde integratie dezelfde versie als Roomba+ en is ze daar niet de oorzaak. Verschijnt de fout onder 2026.11 of nieuwer toch, zoek dan een aangepaste integratie die een oudere `roombapy` vraagt.\n\nDe Roomba+-versie maakt hier niets uit — elke versie sinds 4.2.0 vraagt dezelfde bibliotheek.",
       "robot_not_on_account": "Deze robot staat niet meer op het iRobot-account. Als hij naar een ander account is verplaatst, stel hem dan daarmee in."
     },
     "flow_title": "{name}"
@@ -2034,6 +2034,10 @@
       "title": "Twee Roomba-integraties geïnstalleerd",
       "description": "De ingebouwde **Roomba**-integratie van Home Assistant is naast Roomba+ ingesteld. Beide gebruiken dezelfde `roombapy`-bibliotheek, en Home Assistant installeert daarvan één versie — een van beide zal dus niet laden, meestal met een `ImportError` in het logboek.\n\nGeen van beide kan dit oplossen. Verwijder degene die u niet nodig hebt."
     },
+    "core_roomba_same_robot": {
+      "title": "Een robot in twee integraties ingesteld",
+      "description": "**{robots}** is zowel in Roomba+ als in de ingebouwde **Roomba**-integratie van Home Assistant ingesteld.\n\nVanaf Home Assistant 2026.11 gebruiken beide dezelfde `roombapy`-bibliotheek en laden ze allebei, dus maken ze allebei verbinding met de robot. Een robot neemt maar één lokale verbinding tegelijk aan, en de twee nemen die van elkaar over: elk van beide kan de robot kwijtraken of als niet beschikbaar tonen.\n\nVerwijder de robot uit een van de twee. Hem uit de ingebouwde integratie verwijderen verandert niets in Roomba+.\n\nTot 2026.10 kon de ingebouwde integratie niet naast Roomba+ laden; daarom is haar vermelding je misschien niet eerder opgevallen."
+    },
     "maintenance_part_overdue": {
       "title": "{name}: te laat – {part}",
       "fix_flow": {
@@ -2317,7 +2321,7 @@
       "message": "De Roomba+-robot voor {entity_id} is momenteel niet geladen. Controleer of de integratie-invoer is ingeschakeld en ingesteld en probeer het opnieuw."
     },
     "roombapy_too_old": {
-      "message": "Roomba+ heeft de asynchrone roombapy 2.x nodig, maar er is een oudere versie geïnstalleerd ({error}). Herstart Home Assistant. Blijft dit gebeuren, dan installeert de ingebouwde Roomba-integratie van Home Assistant de oude bibliotheek opnieuw en moet die worden verwijderd."
+      "message": "Roomba+ heeft de asynchrone roombapy 2.x nodig, maar er is een oudere versie geïnstalleerd ({error}). Herstart Home Assistant. Blijft dit gebeuren onder Home Assistant 2026.10 of ouder, dan installeert de ingebouwde Roomba-integratie de oude bibliotheek opnieuw en moet die worden verwijderd. Vanaf 2026.11 gebruikt de ingebouwde dezelfde versie; zoek dan een aangepaste integratie die een oudere roombapy vraagt."
     },
     "cannot_connect_local": {
       "message": "Kan geen verbinding maken met de robot op {host}."
