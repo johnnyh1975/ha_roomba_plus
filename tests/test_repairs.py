@@ -3023,7 +3023,7 @@ class TestTheSharedLibraryConflictIsAnnounced:
 
 class TestTheBuiltInRoombaFromHomeAssistant2026_11:
     """HA 2026.11 moves the built-in Roomba integration to roombapy
-    2.0.2, the version Roomba+ pins (checked on 2026.11.0b4). Both load,
+    2.0.2, the version Roomba+ pins (checked on 2026.11.0). Both load,
     so the library notice no longer applies there. What is left is the
     same robot in both: a robot takes one local connection at a time."""
 

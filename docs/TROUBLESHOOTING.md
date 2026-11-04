@@ -89,7 +89,7 @@ if you do not use the built-in integration"), restart, then add
 Roomba+.
 
 **Home Assistant 2026.11** moves the built-in integration to `roombapy`
-2.0.2, the version Roomba+ pins (checked on 2026.11.0b4). Both
+2.0.2, the version Roomba+ pins (checked on 2026.11.0). Both
 integrations ask for the same library and neither replaces the other's,
 so this no longer happens. After updating, the workaround folder can be
 deleted. If the same robot is then set up in both integrations, see
