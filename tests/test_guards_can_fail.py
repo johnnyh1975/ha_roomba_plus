@@ -90,14 +90,17 @@ class TestCiPinGuard:
     """A workflow installing a different library version than the
     manifest pins — CI then tests a build nobody runs."""
 
+    # A minimum counts as the pin (4.5.2): hassfest asks for
+    # `roombapy>=2.0.2` once Home Assistant itself pins roombapy.
+    @pytest.mark.parametrize("requirement", ["roombapy==2.0.2", "roombapy>=2.0.2"])
     def test_it_reports_a_workflow_that_disagrees_with_the_manifest(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, requirement: str
     ) -> None:
         guard = _load("check_ci_pins_match_manifest")
 
         manifest = tmp_path / "manifest.json"
         manifest.write_text(
-            json.dumps({"domain": "roomba_plus", "requirements": ["roombapy==2.0.2"]}),
+            json.dumps({"domain": "roomba_plus", "requirements": [requirement]}),
             encoding="utf-8",
         )
         workflows = tmp_path / "workflows"

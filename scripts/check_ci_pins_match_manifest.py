@@ -13,6 +13,12 @@ unable to reach a robot. It was caught by reading the workflow, not by
 anything failing.
 
 Checks every `name==version` for the packages the manifest pins.
+
+A MINIMUM COUNTS AS THE PIN (4.5.2). From Home Assistant 2026.11 its
+built-in Roomba integration pins `roombapy==2.0.2` too, and hassfest
+rejects a custom integration pinning a package Home Assistant depends
+on: it asks for `roombapy>=2.0.2`. CI then has to test that minimum,
+so `name>=version` in the manifest is compared like `name==version`.
 """
 from __future__ import annotations
 
@@ -26,17 +32,19 @@ MANIFEST = ROOT / "custom_components" / "roomba_plus" / "manifest.json"
 WORKFLOWS = ROOT / ".github" / "workflows"
 
 
-def _pins(text: str) -> dict[str, str]:
-    """{package: version} from `name[extra]==version` occurrences."""
+def _pins(text: str, *, minimum: bool = False) -> dict[str, str]:
+    """{package: version} from `name[extra]==version` occurrences, and
+    from `name[extra]>=version` too when `minimum` is set."""
+    op = "(?:==|>=)" if minimum else "=="
     found: dict[str, str] = {}
-    for match in re.finditer(r"([A-Za-z0-9_.-]+)(?:\[[^\]]*\])?==([0-9][\w.]*)", text):
+    for match in re.finditer(rf"([A-Za-z0-9_.-]+)(?:\[[^\]]*\])?{op}([0-9][\w.]*)", text):
         found.setdefault(match.group(1).lower(), match.group(2))
     return found
 
 
 def main() -> int:
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
-    wanted = _pins("\n".join(manifest.get("requirements", [])))
+    wanted = _pins("\n".join(manifest.get("requirements", [])), minimum=True)
     if not wanted:
         print("manifest.json pins nothing; nothing to compare.")
         return 0

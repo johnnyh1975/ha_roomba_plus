@@ -1869,7 +1869,7 @@ async def async_cleanup_removed_repairs(hass: HomeAssistant) -> int:
 
 
 #: The Home Assistant release whose built-in Roomba integration uses
-#: `roombapy` 2.0.2, the version Roomba+ pins (checked on 2026.11.0).
+#: `roombapy` 2.0.2, the version Roomba+ requires (checked on 2026.11.0).
 #: From here on the two share one library and both can load.
 CORE_ROOMBA_SHARES_ROOMBAPY_FROM = (2026, 11)
 
