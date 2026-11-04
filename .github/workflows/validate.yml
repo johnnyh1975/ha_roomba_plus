@@ -52,17 +52,19 @@ jobs:
   # TWO COMBINATIONS, deliberately not a matrix. Each HA release fixes
   # its own Python floor, so the pairs are not free to vary: the minimum
   # this integration supports (2025.5 on 3.13) and a much newer one
-  # (2026.8 on 3.14, about fifteen months ahead of it).
+  # (2026.10 on 3.14, about seventeen months ahead of it).
   #
   # This job proves the integration still works against a much newer HA
-  # (2026.8 on Python 3.14, about eighteen months ahead of the pin).
+  # (2026.10 on Python 3.14, about seventeen months ahead of the pin).
   # Verified locally: the whole suite passes on both.
   #
   # A REAL GATE, not advisory. It carried `continue-on-error: true` while
   # the combination was new and unproven. It no longer is: the full suite
   # passes here (6145 passed / 4 skipped) on 2026.8.3 and, checked
   # separately, on 2026.9.0 as well -- the same counts as the
-  # minimum-version job. This is also the ONLY job that runs against the HA
+  # minimum-version job. Moved to 2026.10.3 in 4.5.1 (10010 passed / 4
+  # skipped, the minimum's counts); it surfaced test stubs that left an
+  # executor thread behind, fixed in the tests. This is also the ONLY job that runs against the HA
   # version the field actually runs; the a38 breakage that hit every
   # installation on HA 2026.7+ is exactly the class of failure it exists
   # to catch, and an advisory job would have gone unread.
@@ -72,11 +74,11 @@ jobs:
   # one and redundant on the other -- mypy cannot be satisfied by both
   # at once, and `warn_unused_ignores` is worth keeping.
   test-newer-ha:
-    name: Test Suite (HA 2026.8 / Python 3.14)
+    name: Test Suite (HA 2026.10 / Python 3.14)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Python 3.14
         uses: actions/setup-python@v7
@@ -90,7 +92,7 @@ jobs:
         run: python -m pip install "uv==0.12.18"
 
       # ONE version number, not two. Every phahc release pins Home
-      # Assistant EXACTLY (0.13.357 -> homeassistant==2026.8.3), so
+      # Assistant EXACTLY (0.13.374 -> homeassistant==2026.10.3), so
       # naming both is redundant -- and worse, naming only HA leaves the
       # phahc version implicit: pip picks the newest release compatible
       # with the HA pin, which silently drags pytest, pytest-asyncio and
@@ -112,11 +114,11 @@ jobs:
       # single line of what it changed.
       - name: Install a recent Home Assistant and test tooling
         run: |
-          uv pip install --system "pytest-homeassistant-custom-component==0.13.357" \
+          uv pip install --system "pytest-homeassistant-custom-component==0.13.374" \
                       "roombapy==2.0.2" aiohttp pillow
 
       # --no-deps is NOT required here:
-      # phahc 0.13.357 allows paho-mqtt 2.x, so roombapy-prime's own
+      # phahc 0.13.374 allows paho-mqtt 2.x, so roombapy-prime's own
       # constraint (>=2.0,<3.0) is satisfiable and `pip check` is clean.
       # Kept anyway, so both test jobs install it identically and the
       # roombapy-prime pin guard sees the same string in both.
@@ -157,7 +159,7 @@ jobs:
         run: python scripts/check_coverage_per_module.py coverage.xml
 
       - name: Upload coverage report
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-report
           path: coverage.xml
@@ -168,7 +170,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       # THE MINIMUM WE ACTUALLY CLAIM, which this job did not test until
       # 4.2. It ran HA 2025.1.4 on Python 3.12 from a pinned set, while
@@ -204,7 +206,7 @@ jobs:
       # the newest pycares and `import aiohttp` raises AttributeError
       # before a single test is collected.
       #
-      # The 2026.8 job is unaffected: its newer HA pins an aiodns that
+      # The 2026.10 job is unaffected: its newer HA pins an aiodns that
       # allows pycares 5. So this is not a general pin, it belongs to
       # the minimum-version job.
       #
@@ -263,7 +265,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v7
@@ -271,8 +273,11 @@ jobs:
           python-version: "3.12"
           cache: "pip"
 
+      # PINNED (4.5.2), like every other tool here: an unpinned ruff can
+      # turn CI red with nothing changed in this repository. Raise it on
+      # purpose, after `ruff check .` passes locally with the new one.
       - name: Install ruff
-        run: pip install ruff
+        run: pip install "ruff==0.17.3"
 
       # F = Pyflakes rule family (see pyproject.toml's [tool.ruff.lint] for
       # why only F, and why formatting/style rules are deliberately not
@@ -291,7 +296,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v7
@@ -311,7 +316,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -337,7 +342,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v7
@@ -356,7 +361,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v7
@@ -386,7 +391,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v7

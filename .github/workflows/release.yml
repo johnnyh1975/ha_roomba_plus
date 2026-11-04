@@ -28,7 +28,11 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
+        with:
+          # Every tag, for the comparison with the previous release in
+          # the release body (scripts/build_release_body.py).
+          fetch-depth: 0
 
       # THE TAG MUST POINT AT THE CODE IT NAMES.
       #
@@ -123,7 +127,7 @@ jobs:
       # the newest pycares and `import aiohttp` raises AttributeError
       # before a single test is collected.
       #
-      # The 2026.8 job is unaffected: its newer HA pins an aiodns that
+      # The 2026.10 job is unaffected: its newer HA pins an aiodns that
       # allows pycares 5. So this is not a general pin, it belongs to
       # the minimum-version job.
       #
@@ -153,6 +157,12 @@ jobs:
           if [ -f "$NOTES_FILE" ]; then
             echo "found=true" >> "$GITHUB_OUTPUT"
             echo "path=$NOTES_FILE" >> "$GITHUB_OUTPUT"
+            # THE PAGE, NOT THE FILE: the notes with the channel, the
+            # areas changed since the previous release, a table of
+            # details and links around them (FaserF/ha-openwrt's shape).
+            # The notes file itself stays as written.
+            python scripts/build_release_body.py "${{ steps.version.outputs.tag }}" > "${RUNNER_TEMP}/release-body.md"
+            echo "body=${RUNNER_TEMP}/release-body.md" >> "$GITHUB_OUTPUT"
           else
             echo "::warning::No $NOTES_FILE found — release will be created without notes body. Commit it before tagging next time."
             echo "found=false" >> "$GITHUB_OUTPUT"
@@ -248,7 +258,7 @@ jobs:
           # correct tree; the tag was placed afterwards, elsewhere.
           target_commitish: ${{ github.sha }}
           name: ${{ steps.version.outputs.tag }}
-          body_path: ${{ steps.notes.outputs.found == 'true' && steps.notes.outputs.path || '' }}
+          body_path: ${{ steps.notes.outputs.found == 'true' && steps.notes.outputs.body || '' }}
           draft: false
           prerelease: ${{ steps.version.outputs.prerelease }}
           files: |
