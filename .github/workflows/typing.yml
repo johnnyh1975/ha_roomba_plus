@@ -30,7 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Python 3.13
         uses: actions/setup-python@v7
@@ -51,7 +51,7 @@ jobs:
       # the newest pycares and `import aiohttp` raises AttributeError
       # before a single test is collected.
       #
-      # The 2026.8 job is unaffected: its newer HA pins an aiodns that
+      # The 2026.10 job is unaffected: its newer HA pins an aiodns that
       # allows pycares 5. So this is not a general pin, it belongs to
       # the minimum-version job.
       #
@@ -72,7 +72,7 @@ jobs:
       # Pinned, because an unpinned type checker turns every one of its
       # releases into a build break nobody chose.
       - name: Install mypy
-        run: uv pip install --system "mypy==2.3.1"
+        run: uv pip install --system "mypy==2.4.1"
 
       - name: Install roombapy and roombapy-prime
         run: |
