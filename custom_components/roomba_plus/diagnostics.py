@@ -1625,6 +1625,18 @@ def _structural_diagnostics() -> dict[str, Any]:
     return diagnostic_info()
 
 
+def _prefix_matches_deployment(robot: Any) -> bool | None:
+    """Whether the robot's irbt topic prefix belongs to its own
+    deployment (`svcDeplId`), see the diagnostics field of that name."""
+    if robot is None:
+        return None
+    prefix = getattr(robot, "_irbt_topic_prefix", None)
+    depl = getattr(robot, "svc_deployment_id", None)
+    if not isinstance(prefix, str) or not isinstance(depl, str) or not depl:
+        return None
+    return prefix.startswith(f"{depl}-")
+
+
 def _push_freshness(data: Any) -> dict[str, Any]:
     """How long since ANY Prime push message arrived.
 
@@ -2161,6 +2173,18 @@ async def _build_diagnostics(
             "irbt_topic_prefix_present": bool(
                 getattr(data.prime_robot, "_irbt_topic_prefix", None)
             ) if data.prime_robot is not None else None,
+            # THE PREFIX CAN BE THERE AND STILL BE WRONG (4.5.3,
+            # @ecovictor75). His robot was moved to deployment v011
+            # while every command went out under v007-irbthbu: broker
+            # acknowledged, robot ignored, nothing in any report. False
+            # here is that case. A yes/no rather than the two ids:
+            # `svcEndpoints` is withheld from the shadow dump above, and
+            # this does not undo that. None when the library does not
+            # carry the robot's deployment (roombapy-prime before 0.8.3)
+            # or the login answer has none.
+            "topic_prefix_matches_robot_deployment": _prefix_matches_deployment(
+                data.prime_robot
+            ),
             # THE OTHER HALF of a silent stream. push_freshness says
             # nothing is arriving; this says whether the ROBOT is even
             # connected to the cloud to send anything.

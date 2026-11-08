@@ -562,7 +562,26 @@ def _last_error_at_value(entity: "IRobotEntity") -> StateType | datetime.datetim
     return dt_util.parse_datetime(at_str)
 
 
+#: Errors that happen at the dock, not in a room: roombapy's 18,
+#: "Docking issue". A stuck mission with one of them names no room.
+_DOCK_ERROR_CODES: frozenset[int] = frozenset({18})
+
+
 def _problem_zone_value(entity: "IRobotEntity") -> StateType:
+    """The room the robot got stuck in most often in 30 days, or None.
+
+    A STUCK RECORD DOES NOT SAY WHERE (4.5.3, @albertompinto). Its
+    `zones` are the rooms the mission was SENT to. Counting all of them
+    named "Cozinha" on a j9+ that had never got stuck there: one of four
+    stuck missions had zones at all, three of them, each counted once,
+    and the first of the tie won. So a mission counts only when
+    - it was sent to exactly one room, so that room is where it was;
+    - its error is not a docking one (_DOCK_ERROR_CODES), which happens
+      at the dock whatever room it was sent to;
+    and a room is named only when it leads with at least two missions,
+    not on a tie. `phase_at_error` is no help: it is the phase when the
+    record is written, at the end of the mission, not when it stuck.
+    """
     store = entity._config_entry.runtime_data.mission_store
     if not store:
         return None
@@ -571,11 +590,16 @@ def _problem_zone_value(entity: "IRobotEntity") -> StateType:
         return None
     zone_counts: Counter[str] = Counter()
     for r in stuck_records:
-        for z in (r.get("zones") or []):
-            zone_counts[z] += 1
-    if not zone_counts:
+        zones = [z for z in (r.get("zones") or []) if z]
+        if len(zones) != 1 or r.get("error_code") in _DOCK_ERROR_CODES:
+            continue
+        zone_counts[zones[0]] += 1
+    ranked = zone_counts.most_common(2)
+    if not ranked or ranked[0][1] < 2:
         return None
-    return zone_counts.most_common(1)[0][0]
+    if len(ranked) == 2 and ranked[1][1] == ranked[0][1]:
+        return None
+    return ranked[0][0]
 
 
 def _presence_opportunities(entity: "IRobotEntity", days: int) -> int | None:
@@ -665,12 +689,30 @@ def _parse_netinfo_addr(addr: object) -> str | None:
     return None
 
 
-def _raw_wifi_floor(records: list[dict[str, Any]]) -> StateType:
-    """Return the weakest WiFi signal bucket present in the most recent mission.
+#: wlBars IS ORDERED STRONGEST FIRST (4.5.3, @albertompinto). Index i
+#: holds the share of the mission spent at 4 - i Wi-Fi bars: index 0 is
+#: four bars, index 4 none. It was read the other way round since
+#: v2.2.0, so a robot at -50 dBm showed 3.5 % Wi-Fi health. Two sources
+#: agree on the order: the cloud's own `startEndWlBars` next to it (bars
+#: at start and end: 4/4 beside [100, 0, 0, 0, 0], 3/3 beside
+#: [0, 100, 0, 0, 0], 1/1 beside [0, 0, 0, 100, 0], in the captured
+#: histories), and a j9+ whose 345 000 RSSI readings average -54 dBm
+#: while 80-100 % of every mission sits in index 0.
+WL_BARS_MAX = 4
 
-    F1 -- wlBars is a 5-element histogram, NOT a time-series.
-    Index 0 = weakest signal bucket, index 4 = strongest.
-    Floor = lowest index with a non-zero count (worst signal actually seen).
+
+def _wl_bars_of(index: int) -> int:
+    """Wi-Fi bars (0 = none, 4 = full) for a wlBars index."""
+    return WL_BARS_MAX - index
+
+
+def _raw_wifi_floor(records: list[dict[str, Any]]) -> StateType:
+    """Return the fewest Wi-Fi bars (0-4) seen in the most recent mission.
+
+    F1 -- wlBars is a 5-element histogram, NOT a time-series, ordered
+    strongest first (see WL_BARS_MAX). Floor = the highest index with a
+    share in it, as bars: 0 = no bars, 4 = full (4.5.3; it returned the
+    lowest index before, which was the STRONGEST signal seen).
 
     Amendment 8d: corrects the previous min(bars) implementation which
     returned the minimum bucket count, not the weakest signal bucket.
@@ -687,9 +729,8 @@ def _raw_wifi_floor(records: list[dict[str, Any]]) -> StateType:
     for r in records:
         bars = r.get("wlBars")
         if isinstance(bars, list) and len(bars) == 5 and any(bars):
-            for i, count in enumerate(bars):
-                if count > 0:
-                    return i     # 0 = worst present, 4 = best present
+            weakest = max(i for i, count in enumerate(bars) if count > 0)
+            return _wl_bars_of(weakest)     # 0 = no bars, 4 = full
     return None
 
 
@@ -704,13 +745,11 @@ def _raw_wifi_quality_pct(records: list[dict[str, Any]]) -> StateType:
     bucket-index value displayed as "0%" reads as "WiFi is unusable" when
     it may just mean one brief dip during an otherwise good connection.
 
-    F1 -- wlBars is a 5-element histogram (index = signal bucket 0=weakest,
-    4=strongest, value = count). For each mission record, compute the
-    weighted mean bucket index (same approach as the already-correct
-    _raw_wifi_stability, which uses the full histogram distribution rather
-    than just whether the weakest bucket was ever touched), then average
-    those per-mission means across all available records and scale the
-    0.0-4.0 result to a genuine 0-100% PERCENTAGE.
+    F1 -- wlBars is a 5-element histogram, ordered strongest first (see
+    WL_BARS_MAX). For each mission record, compute the weighted mean
+    number of bars, then average those per-mission means across all
+    available records and scale the 0.0-4.0 result to 0-100 %. 4.5.3:
+    the index was taken as the bars before, which turned 96 % into 3.5 %.
     """
     means: list[float] = []
     for r in records:
@@ -720,10 +759,10 @@ def _raw_wifi_quality_pct(records: list[dict[str, Any]]) -> StateType:
         total = sum(bars)
         if total == 0:
             continue
-        means.append(sum(i * b for i, b in enumerate(bars)) / total)
+        means.append(sum(_wl_bars_of(i) * b for i, b in enumerate(bars)) / total)
     if not means:
         return None
-    return round((sum(means) / len(means)) / 4 * 100, 1)
+    return round((sum(means) / len(means)) / WL_BARS_MAX * 100, 1)
 
 
 def _health_band(score: int) -> str:
@@ -1080,7 +1119,9 @@ def _raw_wifi_stability(records: list[dict[str, Any]]) -> StateType:
     """Return mean weighted standard deviation of WiFi signal across the API window.
 
     F1 -- wlBars is a 5-element histogram (index = signal bucket, value = count).
-    Computes weighted mean bucket index and its weighted stdev per mission.
+    Computes weighted mean bucket index and its weighted stdev per mission,
+    in bars: the spread does not depend on which end is strongest. NOT a
+    percentage, whatever the attribute it fills is called.
     High stdev = readings spread across multiple signal buckets (unstable).
     Low stdev = readings concentrated in one bucket (stable).
     Requires at least 3 records with valid WiFi data.

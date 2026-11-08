@@ -980,6 +980,43 @@ class TestTheTopicPrefixIsVisible:
             assert bool(getattr(robot, "_irbt_topic_prefix", None)) is False
 
 
+class TestThePrefixIsCheckedAgainstTheRobotsDeployment:
+    """4.5.3, @ecovictor75: robot on v011, commands under v007-irbthbu,
+    acknowledged and ignored, nothing in any report."""
+
+    @pytest.mark.parametrize(
+        ("prefix", "depl", "expected"),
+        [
+            ("v011-irbthbu", "v011", True),
+            ("v007-irbthbu", "v011", False),
+            ("v007-irbthbu", None, None),
+            (None, "v011", None),
+        ],
+    )
+    def test_the_answer(self, prefix, depl, expected):
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.diagnostics import _prefix_matches_deployment
+
+        robot = SimpleNamespace(_irbt_topic_prefix=prefix, svc_deployment_id=depl)
+        assert _prefix_matches_deployment(robot) is expected
+
+    def test_a_library_without_the_field_answers_none(self):
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.diagnostics import _prefix_matches_deployment
+
+        assert _prefix_matches_deployment(SimpleNamespace(_irbt_topic_prefix="v007-irbthbu")) is None
+        assert _prefix_matches_deployment(None) is None
+
+    def test_the_field_is_in_the_builder(self):
+        import inspect
+
+        from custom_components.roomba_plus import diagnostics
+
+        assert '"topic_prefix_matches_robot_deployment"' in inspect.getsource(diagnostics)
+
+
 class TestTheTimelineShapeIsReported:
     """Diagnostics reported a bare True/False for the mission timeline
     and threw the rest away. One capture already came back True -- the

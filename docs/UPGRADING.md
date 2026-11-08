@@ -9,6 +9,21 @@ note are listed — most releases need zero action beyond updating.
 
 ---
 
+## v4.5.3 — from v4.5.x
+
+- **A 600-series Roomba added through the iRobot account** (SKU starting
+  with `R6`, such as a 694) was set up as a Prime robot, cloud only, and
+  its state never changed. Delete that entry and add the robot again,
+  from the account or by its IP address: it is set up on the local
+  connection now.
+- **Wi-Fi health changes value.** It read the histogram the wrong way
+  round, so a strong signal showed a low value and a weak one a high
+  value. An automation or alert on it needs its threshold checked;
+  `weakest_bucket_observed` now counts bars as documented (0 = none,
+  4 = full).
+
+---
+
 ## v4.5.0 — from v4.4.x
 
 Maintenance was rebuilt around one set of entries (see

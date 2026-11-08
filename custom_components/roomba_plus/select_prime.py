@@ -38,7 +38,7 @@ from homeassistant.components.select import SelectEntity, SelectEntityDescriptio
 from homeassistant.const import EntityCategory
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.core import callback
-from homeassistant.helpers.restore_state import RestoreEntity
+from homeassistant.helpers.restore_state import ExtraStoredData, RestoredExtraData, RestoreEntity
 
 from .const import (
     CLEANING_MODES_PRIME,
@@ -1081,6 +1081,12 @@ class PrimeCleaningModeSelect(IRobotEntity, RestoreEntity, SelectEntity):
     #: Use `cleaning_modes_for(is_prime)` in tier-neutral code.
     MODES: dict[str, int] = CLEANING_MODES_PRIME
 
+    #: The robot's last start at the moment the user picked (4.5.3), see
+    #: current_option. A class default, so an instance made without
+    #: __init__ (and a pick restored without one) reads as "none known".
+    _choice_base: Any = None
+    _has_choice_base: bool = False
+
     def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:
         IRobotEntity.__init__(
             self, roomba=None, blid=blid, config_entry=config_entry
@@ -1182,19 +1188,8 @@ class PrimeCleaningModeSelect(IRobotEntity, RestoreEntity, SelectEntity):
                 return block["oMode"]
         return None
 
-    def _mode_from_last_start(self) -> str | None:
-        """The mode of the robot's last START command, if it had one.
-
-        Reads the first region's params rather than checking every one:
-        a mixed-mode command is possible on paper, has never been seen,
-        and the app shows a single mode per mission.
-        """
-        # BOTH TIERS CARRY `lastCommand`, in different places. Prime
-        # has it in the `rw-software` named shadow; a Classic robot
-        # reports it in its ordinary state. Falling back rather than
-        # branching on connection_type, because the shape underneath is
-        # identical once found and one lookup that fails is cheaper
-        # than a tier check that can drift.
+    def _last_start(self) -> dict[str, Any] | None:
+        """The robot's last command when it was a `start`, else None."""
         coordinator = getattr(
             self._config_entry.runtime_data, "prime_status_coordinator", None
         )
@@ -1205,13 +1200,39 @@ class PrimeCleaningModeSelect(IRobotEntity, RestoreEntity, SelectEntity):
             roomba = getattr(self._config_entry.runtime_data, "roomba", None)
             state = roomba_reported_state(roomba) if roomba is not None else None
             if isinstance(state, dict):
-                # Classic keeps it top-level rather than under a shadow.
                 shadows = {"rw-software": {"lastCommand": state.get("lastCommand")}}
         if not isinstance(shadows, dict):
             return None
         software = shadows.get("rw-software")
         last = software.get("lastCommand") if isinstance(software, dict) else None
         if not isinstance(last, dict) or last.get("command") != "start":
+            return None
+        return last
+
+    def _start_marker(self) -> Any:
+        """What tells one start from the next: its `time`, or the whole
+        command when it has none. JSON-safe, for the restore data."""
+        last = self._last_start()
+        if last is None:
+            return None
+        if last.get("time") is not None:
+            return last.get("time")
+        import json  # noqa: PLC0415
+
+        return json.dumps(last, sort_keys=True, default=str)
+
+    def _mode_from_last_start(self) -> str | None:
+        """The mode of the robot's last START command, if it had one.
+
+        Reads the first region's params rather than checking every one:
+        a mixed-mode command is possible on paper, has never been seen,
+        and the app shows a single mode per mission.
+        """
+        # BOTH TIERS CARRY `lastCommand`, in different places: Prime in
+        # the `rw-software` named shadow, Classic in its ordinary state.
+        # _last_start() looks in both.
+        last = self._last_start()
+        if last is None:
             return None
         for region in last.get("regions") or []:
             if not isinstance(region, dict):
@@ -1228,12 +1249,28 @@ class PrimeCleaningModeSelect(IRobotEntity, RestoreEntity, SelectEntity):
 
     @property
     def current_option(self) -> str | None:
-        """What the robot last started with, or what the user chose.
+        """What the user chose since the robot's last start, else what
+        the robot last started with, else the restored pick.
 
-        The robot wins when it has something to say. A user who picks a
-        mode and then starts a different one from the app should see the
-        app's choice, because that is what the machine actually did.
+        THE USER'S PICK HOLDS UNTIL THE ROBOT STARTS AGAIN (4.5.3,
+        @ar2000ar). The robot used to win whenever its last start
+        carried a mode, which is nearly always: a pick showed for a
+        moment and snapped back to the last start's mode, and since a
+        clean started from Home Assistant reads the mode from this
+        entity, the pick was not used either. It "rarely worked" only
+        when the last command was not a start.
+
+        Now a pick is tied to the robot's last start at that moment. A
+        new start after it, from the app or from here, is what the
+        machine did, and shows. A pick restored without that tie (made
+        before 4.5.3) gives way to the robot, as before.
         """
+        if (
+            self._restored is not None
+            and self._has_choice_base
+            and self._choice_base == self._start_marker()
+        ):
+            return self._restored
         return self._mode_from_last_start() or self._restored
 
     async def async_select_option(self, option: str) -> None:
@@ -1256,7 +1293,16 @@ class PrimeCleaningModeSelect(IRobotEntity, RestoreEntity, SelectEntity):
                 f"It can: {', '.join(self.options)}", translation_domain=DOMAIN, translation_key="cleaning_mode_unsupported", translation_placeholders={"option": option.replace("_", " "), "supported": ", ".join(self.options)}
             )
         self._restored = option
+        self._choice_base = self._start_marker()
+        self._has_choice_base = True
         self.async_write_ha_state()
+
+    @property
+    def extra_restore_state_data(self) -> ExtraStoredData | None:
+        """The start a pick was made after, so it survives a restart."""
+        if not self._has_choice_base:
+            return None
+        return RestoredExtraData({"choice_base": self._choice_base})
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
@@ -1265,6 +1311,11 @@ class PrimeCleaningModeSelect(IRobotEntity, RestoreEntity, SelectEntity):
         last = await self.async_get_last_state()
         if last is not None and last.state in self.MODES:
             self._restored = last.state
+            extra = await self.async_get_last_extra_data()
+            data = extra.as_dict() if extra is not None else {}
+            if "choice_base" in data:
+                self._choice_base = data["choice_base"]
+                self._has_choice_base = True
 
 
 

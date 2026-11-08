@@ -919,6 +919,55 @@ class TestItReflectsTheRobotsLastStart:
         assert _select(_start(1024)).current_option is None
 
 
+class TestThePickHoldsUntilTheRobotStartsAgain:
+    """4.5.3, @ar2000ar: the pick snapped back to the last start's mode
+    at once, and a clean from Home Assistant then used that, not the
+    pick. It "rarely worked": only when the last command was no start."""
+
+    @staticmethod
+    def _timed_start(mode, at):
+        payload = _start(mode)
+        payload["time"] = at
+        return payload
+
+    @pytest.mark.asyncio
+    async def test_a_pick_after_a_start_shows(self):
+        select = _select(self._timed_start(2, 100))
+        await select.async_select_option("mop")
+        assert select.current_option == "mop"
+
+    @pytest.mark.asyncio
+    async def test_a_new_start_after_the_pick_is_what_the_robot_did(self):
+        select = _select(self._timed_start(2, 100))
+        await select.async_select_option("mop")
+        select._config_entry.runtime_data.prime_status_coordinator.data = {
+            "rw-software": {"lastCommand": self._timed_start(32, 200)}
+        }
+        assert select.current_option == "vacuum_and_mop"
+
+    @pytest.mark.asyncio
+    async def test_the_pick_survives_a_restart(self):
+        from unittest.mock import AsyncMock, MagicMock, patch  # noqa: PLC0415
+
+        select = _select(self._timed_start(2, 100))
+        await select.async_select_option("mop")
+        stored = select.extra_restore_state_data.as_dict()
+
+        again = _select(self._timed_start(2, 100))
+        last = MagicMock()
+        last.state = "mop"
+        extra = MagicMock()
+        extra.as_dict.return_value = stored
+        again.async_get_last_state = AsyncMock(return_value=last)
+        again.async_get_last_extra_data = AsyncMock(return_value=extra)
+        with patch(
+            "custom_components.roomba_plus.select_prime.IRobotEntity.async_added_to_hass",
+            AsyncMock(),
+        ):
+            await again.async_added_to_hass()
+        assert again.current_option == "mop"
+
+
 class TestOnlyAStartCounts:
     """`drypad` and `washpad` also carry regions and a mode, and neither
     is a cleaning choice. Reading them would make the select jump while

@@ -167,21 +167,25 @@ class TestReadinessStateDecoding:
 
 
 class TestWifiFloor:
-    """Amendment 8d — wlBars is a 5-element histogram, not a time-series."""
+    """Amendment 8d — wlBars is a 5-element histogram, not a time-series.
+
+    4.5.3: ordered STRONGEST FIRST, and the floor is returned in bars
+    (0 = none, 4 = full). The histograms were mirrored, so the expected
+    floors stay what they meant (@albertompinto)."""
 
     def test_returns_lowest_nonempty_bucket(self):
-        # [0, 35, 65, 0, 0]: bucket 1 is lowest non-zero → floor = 1
-        records = [{"wlBars": [0, 35, 65, 0, 0]}]
+        # [0, 0, 65, 35, 0]: weakest share at 1 bar → floor = 1
+        records = [{"wlBars": [0, 0, 65, 35, 0]}]
         assert _raw_wifi_floor(records) == 1
 
     def test_bucket_zero_populated(self):
-        # [5, 30, 65, 0, 0]: bucket 0 has readings → floor = 0
-        records = [{"wlBars": [5, 30, 65, 0, 0]}]
+        # [0, 0, 65, 30, 5]: some time at no bars → floor = 0
+        records = [{"wlBars": [0, 0, 65, 30, 5]}]
         assert _raw_wifi_floor(records) == 0
 
     def test_all_strong_signal(self):
-        # [0, 0, 0, 40, 60]: only buckets 3/4 → floor = 3
-        records = [{"wlBars": [0, 0, 0, 40, 60]}]
+        # [60, 40, 0, 0, 0]: only 4 and 3 bars → floor = 3
+        records = [{"wlBars": [60, 40, 0, 0, 0]}]
         assert _raw_wifi_floor(records) == 3
 
     def test_returns_none_on_empty_list(self):
@@ -194,13 +198,57 @@ class TestWifiFloor:
         assert _raw_wifi_floor([{"wlBars": [0, 0, 0, 0, 0]}]) is None
 
     def test_skips_records_without_wlbars(self):
-        records = [{"sqft": 100}, {"wlBars": [0, 0, 70, 30, 0]}]
+        records = [{"sqft": 100}, {"wlBars": [0, 30, 70, 0, 0]}]
         assert _raw_wifi_floor(records) == 2
 
     def test_must_be_exactly_5_elements(self):
         # Wrong length histogram — skipped
-        records = [{"wlBars": [70, 60, 80]}, {"wlBars": [0, 0, 0, 40, 60]}]
+        records = [{"wlBars": [70, 60, 80]}, {"wlBars": [60, 40, 0, 0, 0]}]
         assert _raw_wifi_floor(records) == 3
+
+
+class TestWlBarsIsOrderedStrongestFirst:
+    """4.5.3, @albertompinto: a j9+ at -54 dBm on average showed 3.5 %
+    Wi-Fi health. wlBars index i holds the time spent at 4 - i bars."""
+
+    _J9 = [
+        [91, 9, 0, 0, 0], [92, 8, 0, 0, 0], [80, 18, 2, 0, 0], [86, 14, 0, 0, 0],
+        [83, 16, 1, 0, 0], [38, 62, 0, 0, 0], [100, 0, 0, 0, 0], [94, 6, 0, 0, 0],
+        [81, 16, 3, 0, 0], [100, 0, 0, 0, 0], [92, 8, 0, 0, 0], [61, 39, 0, 0, 0],
+        [91, 9, 0, 0, 0], [79, 17, 4, 0, 0], [84, 16, 0, 0, 0],
+    ]
+
+    def test_his_missions_read_as_strong_wifi(self):
+        from custom_components.roomba_plus.sensor_helpers import _raw_wifi_quality_pct
+
+        value = _raw_wifi_quality_pct([{"wlBars": bars} for bars in self._J9])
+        assert value is not None and 95.0 <= value <= 97.0
+
+    def test_the_clouds_own_start_and_end_bars_agree(self):
+        """Every captured mission with a single bucket in wlBars sits at
+        the index 4 - bars of its `startEndWlBars`, when both ends agree."""
+        import json
+        import pathlib
+
+        checked = 0
+        for name in ("vendor_mission_history.json", "irobot_missionhistory_i3plus.json"):
+            data = json.loads(pathlib.Path("tests/fixtures", name).read_text(encoding="utf-8"))
+            stack = [data]
+            while stack:
+                node = stack.pop()
+                if isinstance(node, dict):
+                    ends, bars = node.get("startEndWlBars"), node.get("wlBars")
+                    if (
+                        isinstance(ends, list) and len(ends) == 2 and ends[0] == ends[1]
+                        and isinstance(bars, list) and len(bars) == 5
+                        and sorted(bars)[-2] == 0 and any(bars)
+                    ):
+                        assert bars.index(max(bars)) == 4 - ends[0], (ends, bars)
+                        checked += 1
+                    stack.extend(node.values())
+                elif isinstance(node, list):
+                    stack.extend(node)
+        assert checked >= 5
 
 
 class TestWifiStability:

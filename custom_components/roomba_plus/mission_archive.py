@@ -96,7 +96,11 @@ def _classify_result(record: dict[str, Any]) -> str:
 
 
 def _wl_floor(wl_bars: list[Any] | None) -> int | None:
-    """Return median signal bucket (0–4) from wlBars 5-element histogram."""
+    """Return the median wlBars INDEX (0–4) of a 5-element histogram.
+
+    The index, not bars: index 0 is the STRONGEST signal (4 bars), see
+    sensor_helpers.WL_BARS_MAX. Stored as it always was, so archived
+    records keep one meaning; nothing reads it as a quality."""
     if not isinstance(wl_bars, list) or len(wl_bars) < 5:
         return None
     total = sum(wl_bars)

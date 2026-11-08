@@ -1737,6 +1737,64 @@ class TestProblemZoneValue:
         assert _problem_zone_value(entity) is None
 
 
+class TestTheProblemZoneNeedsToKnowWhere:
+    """4.5.3, @albertompinto: "Cozinha -- stuck 4x" on a j9+ that never
+    got stuck in the kitchen. The zones are where a mission was sent."""
+
+    _make_entity = TestProblemZoneValue._make_entity
+
+    @staticmethod
+    def _stuck(i, zones, error_code=2):
+        rec = _make_record_v180_sensors(i, "stuck", zones=zones)
+        rec["error_code"] = error_code
+        return rec
+
+    @pytest.mark.asyncio
+    async def test_his_four_missions_name_no_room(self):
+        store = await _store_with(
+            self._stuck(0, ["Cozinha", "Sala de jantar", "Quarto"], 1008),
+            self._stuck(1, [], 18),
+            self._stuck(2, [], 2),
+            self._stuck(3, [], 18),
+        )
+        assert _problem_zone_value(self._make_entity(store)) is None
+
+    @pytest.mark.asyncio
+    async def test_a_room_counted_once_is_no_pattern(self):
+        store = await _store_with(self._stuck(0, ["Kitchen"]))
+        assert _problem_zone_value(self._make_entity(store)) is None
+
+    @pytest.mark.asyncio
+    async def test_a_tie_names_no_room(self):
+        store = await _store_with(
+            self._stuck(0, ["Kitchen"]), self._stuck(1, ["Kitchen"]),
+            self._stuck(2, ["Hall"]), self._stuck(3, ["Hall"]),
+        )
+        assert _problem_zone_value(self._make_entity(store)) is None
+
+    @pytest.mark.asyncio
+    async def test_a_docking_issue_is_not_the_rooms(self):
+        store = await _store_with(
+            self._stuck(0, ["Kitchen"], 18), self._stuck(1, ["Kitchen"], 18),
+        )
+        assert _problem_zone_value(self._make_entity(store)) is None
+
+    @pytest.mark.asyncio
+    async def test_missions_to_several_rooms_do_not_count(self):
+        store = await _store_with(
+            self._stuck(0, ["Kitchen", "Hall"]), self._stuck(1, ["Kitchen", "Hall"]),
+        )
+        assert _problem_zone_value(self._make_entity(store)) is None
+
+    @pytest.mark.asyncio
+    async def test_a_room_that_leads_is_named(self):
+        store = await _store_with(
+            self._stuck(0, ["Kitchen"]), self._stuck(1, ["Kitchen"]),
+            self._stuck(2, ["Hall"]), self._stuck(3, ["Kitchen", "Hall"]),
+        )
+        assert _problem_zone_value(self._make_entity(store)) == "Kitchen"
+
+
 class TestLastErrorCodeValue:
     def _make_entity(self, live_error=0, persisted_error=None):
         class _FakeData:

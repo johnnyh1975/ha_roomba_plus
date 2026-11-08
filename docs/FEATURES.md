@@ -1086,7 +1086,7 @@ source; one that is happy with an estimate carries on unchanged.
 | `last_error_at` | Timestamp of the last error or stuck event |
 | `last_error_zone` | Zone where the error occurred |
 | `stuck_count_30d` | Stuck events in the last 30 days |
-| `problem_zone` | Most frequently stuck zone over 30 days (VSLAM robots) |
+| `problem_zone` | The room the robot got stuck in most often over 30 days (VSLAM robots). Counts only missions sent to a single room, and not docking errors; empty unless one room leads with at least two (4.5.3) |
 
 #### Mission anomaly detection (v2.5+)
 
@@ -1120,7 +1120,7 @@ Groups adjacent stuck-event grid cells (two or more neighbouring cells independe
 |---|---|---|
 | `sensor.{name}_cleaning_performance` | Completion rate (%) | speed, trend, coverage_pct, clean_streak |
 | `sensor.{name}_cleaning_analytics_30d` | Cleaned area (m²) | time_h, dirt_density, recharge_pct |
-| `sensor.{name}_wifi_health` | Signal floor (%) | stability_pct |
+| `sensor.{name}_wifi_health` | Average Wi-Fi signal (%), from the bars over recent missions | `weakest_bucket_observed` (fewest bars seen, 0–4), `stability_pct` (spread in bars, not a percentage) |
 | `sensor.{name}_event_counts_30d` | Last error code | recharges, evacuations, dirt_events, error_time |
 
 The 15 individual `recent_*` sensors (e.g. `recent_cleaning_speed`, `recent_dirt_density`) are now **disabled by default** on fresh installs. They were permanently removed in v3.0.0. A one-time warning is logged when they are read to guide migration.

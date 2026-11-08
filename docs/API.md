@@ -198,7 +198,7 @@ Per-mission unified records. Source is cloud when credentials are configured and
 | `recharges` | int / null | `chrgs` | Always null |
 | `evacuations` | int / null | `evacs` | Always null |
 | `dirt_events` | int / null | `dirt` | null (populated from merge if credentials configured) |
-| `wifi_signal` | array / null | `wlBars` — 5-element histogram, index 0=weakest | null (populated from merge if credentials configured) |
+| `wifi_signal` | array / null | `wlBars` — 5-element histogram, share of the mission at 4, 3, 2, 1 and 0 bars (index 0 = strongest; read the other way round before 4.5.3) | null (populated from merge if credentials configured) |
 | `room_coverage` | object / null | Per-room fraction from timeline | null |
 | `alignment_confidence` | float / null | UmfAligner confidence 0.0–1.0 | null |
 | `source` | string | `"cloud"` | `"local"` |

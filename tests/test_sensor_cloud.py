@@ -891,23 +891,26 @@ def _make_archive(
 
 class TestWifiQualityPct:
     """v2.9.0 — replaces _raw_wifi_floor as RoombaWifiHealthSensor's primary
-    state. Weighted mean bucket index per mission (full histogram
-    distribution, not just whether the weakest bucket was ever touched),
-    averaged across records, scaled 0.0-4.0 to a genuine 0-100% percentage.
+    state. Weighted mean bars per mission (full histogram distribution,
+    not just whether the weakest bucket was ever touched), averaged
+    across records, scaled 0.0-4.0 to a genuine 0-100% percentage.
+
+    4.5.3: wlBars is ordered STRONGEST FIRST (index 0 = 4 bars). The
+    histograms below were mirrored when that was found (@albertompinto).
     """
 
     def test_all_strongest_bucket_is_100_percent(self):
-        # Every reading in bucket 4 (strongest) → weighted mean = 4.0 → 100%
-        records = [{"wlBars": [0, 0, 0, 0, 100]}]
+        # Every reading in index 0 (4 bars, strongest) → 100%
+        records = [{"wlBars": [100, 0, 0, 0, 0]}]
         assert _raw_wifi_quality_pct(records) == 100.0
 
     def test_all_weakest_bucket_is_0_percent(self):
-        # Every reading in bucket 0 (weakest) → weighted mean = 0.0 → 0%
-        records = [{"wlBars": [100, 0, 0, 0, 0]}]
+        # Every reading in index 4 (no bars, weakest) → 0%
+        records = [{"wlBars": [0, 0, 0, 0, 100]}]
         assert _raw_wifi_quality_pct(records) == 0.0
 
     def test_middle_bucket_is_50_percent(self):
-        # All in bucket 2 (middle of 0-4) → weighted mean = 2.0 → 50%
+        # All in index 2 (two bars) → 50%
         records = [{"wlBars": [0, 0, 100, 0, 0]}]
         assert _raw_wifi_quality_pct(records) == 50.0
 
@@ -916,8 +919,8 @@ class TestWifiQualityPct:
         weakest bucket during an otherwise excellent connection must NOT
         read as 0% — _raw_wifi_floor() would have returned 0 (bucket index)
         here, which the old code mislabelled as a percentage."""
-        # Mostly strong signal (bucket 4), one weak reading (bucket 0).
-        records = [{"wlBars": [1, 0, 0, 0, 99]}]
+        # Mostly strong signal (index 0), one weak reading (index 4).
+        records = [{"wlBars": [99, 0, 0, 0, 1]}]
         val = _raw_wifi_quality_pct(records)
         assert val is not None and val > 90.0, (
             "A single brief weak-signal blip must not collapse the "
@@ -928,8 +931,8 @@ class TestWifiQualityPct:
 
     def test_averages_across_multiple_missions(self):
         records = [
-            {"wlBars": [0, 0, 0, 0, 100]},  # mission 1: 100%
-            {"wlBars": [100, 0, 0, 0, 0]},  # mission 2: 0%
+            {"wlBars": [100, 0, 0, 0, 0]},  # mission 1: 100%
+            {"wlBars": [0, 0, 0, 0, 100]},  # mission 2: 0%
         ]
         # Average of per-mission weighted means: (4.0 + 0.0) / 2 = 2.0 -> 50%
         assert _raw_wifi_quality_pct(records) == 50.0
@@ -944,7 +947,7 @@ class TestWifiQualityPct:
     def test_skips_non_5element_histograms_but_uses_valid_ones(self):
         records = [
             {"wlBars": [70, 60, 80]},          # invalid — skipped
-            {"wlBars": [0, 0, 0, 0, 100]},      # valid — 100%
+            {"wlBars": [100, 0, 0, 0, 0]},      # valid — 100%
         ]
         assert _raw_wifi_quality_pct(records) == 100.0
 
@@ -953,19 +956,19 @@ class TestWifiQualityPct:
         must be skipped, not treated as a 0% mission."""
         records = [
             {"wlBars": [0, 0, 0, 0, 0]},        # no data — skipped
-            {"wlBars": [0, 0, 0, 0, 100]},      # valid — 100%
+            {"wlBars": [100, 0, 0, 0, 0]},      # valid — 100%
         ]
         assert _raw_wifi_quality_pct(records) == 100.0
 
     def test_result_is_rounded_to_1_decimal(self):
-        records = [{"wlBars": [10, 20, 30, 25, 15]}]
+        records = [{"wlBars": [15, 25, 30, 20, 10]}]
         result = _raw_wifi_quality_pct(records)
         assert result == round(result, 1)
 
     def test_single_record_with_one_mission_minimum(self):
         """Unlike stability (needs >=3 records), a single mission's
         quality estimate is still meaningful and must not return None."""
-        records = [{"wlBars": [0, 0, 0, 0, 100]}]
+        records = [{"wlBars": [100, 0, 0, 0, 0]}]
         assert _raw_wifi_quality_pct(records) is not None
 
 
@@ -978,7 +981,7 @@ class TestWifiHealthSensorUsesQualityPct:
 
         coordinator = MagicMock()
         # A single brief dip — floor would be 0, quality_pct should be high.
-        coordinator.raw_records = [{"wlBars": [1, 0, 0, 0, 99]}]
+        coordinator.raw_records = [{"wlBars": [99, 0, 0, 0, 1]}]
 
         sensor = RoombaWifiHealthSensor.__new__(RoombaWifiHealthSensor)
         sensor._coordinator = coordinator
@@ -993,7 +996,7 @@ class TestWifiHealthSensorUsesQualityPct:
         from custom_components.roomba_plus.sensor import RoombaWifiHealthSensor
 
         coordinator = MagicMock()
-        coordinator.raw_records = [{"wlBars": [1, 0, 0, 0, 99]}]
+        coordinator.raw_records = [{"wlBars": [99, 0, 0, 0, 1]}]
 
         sensor = RoombaWifiHealthSensor.__new__(RoombaWifiHealthSensor)
         sensor._coordinator = coordinator
@@ -1008,7 +1011,7 @@ class TestWifiHealthSensorUsesQualityPct:
         from custom_components.roomba_plus.sensor import RoombaWifiHealthSensor
 
         coordinator = MagicMock()
-        coordinator.raw_records = [{"wlBars": [0, 0, 0, 100, 0]}] * 3
+        coordinator.raw_records = [{"wlBars": [0, 100, 0, 0, 0]}] * 3
 
         sensor = RoombaWifiHealthSensor.__new__(RoombaWifiHealthSensor)
         sensor._coordinator = coordinator
