@@ -190,8 +190,35 @@ def prime_entry_to_record(entry: Any) -> dict[str, Any] | None:
     """
     mission_id = getattr(entry, "mission_id", None)
     ended_at = _as_iso(getattr(entry, "timestamp", None))
-    if not mission_id or not ended_at:
+    if not ended_at:
         return None
+
+    start_time = getattr(entry, "start_time", None)
+    if mission_id:
+        started_at = _as_iso(start_time)
+    else:
+        # Plus 416 history can omit missionId while retaining the mission
+        # counter. Include the start because the counter can be reused.
+        raw = getattr(entry, "raw", None)
+        number = raw.get("nMssn") if isinstance(raw, dict) else None
+        if (
+            isinstance(number, bool)
+            or not isinstance(number, int)
+            or number < 0
+            or isinstance(start_time, bool)
+        ):
+            return None
+        try:
+            start_iso = _as_iso(start_time)
+            if start_iso is None:
+                return None
+            start = datetime.fromisoformat(start_iso)
+            if start.tzinfo is None:
+                start = start.replace(tzinfo=timezone.utc)
+            started_at = start.astimezone(timezone.utc).isoformat()
+        except (OSError, OverflowError, ValueError):
+            return None
+        mission_id = f"nmssn_{number}_{started_at}"
 
     record: dict[str, Any] = {
         # Prefixed so a Prime record can never collide with a Classic
@@ -222,7 +249,6 @@ def prime_entry_to_record(entry: Any) -> dict[str, Any] | None:
     # Falling back to the end time is wrong by at most the mission's own
     # duration, which matters only for a mission spanning midnight.
     # A wrong day for one mission an evening beats a permanent zero.
-    started_at = _as_iso(getattr(entry, "start_time", None))
     record["started_at"] = started_at or ended_at
 
     # Each mapped one-for-one, and only when actually present. A missing
