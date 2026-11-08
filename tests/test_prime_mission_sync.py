@@ -308,6 +308,7 @@ class TestFallbackMissionIdentity:
             save.assert_awaited_once()
 
         record, = store.records
+        assert record["id"] == "p_nmssn_7_1786000000"
         assert record["duration_min"] == 40
         assert record["area_sqft"] == 300
         assert record["result"] == "completed"

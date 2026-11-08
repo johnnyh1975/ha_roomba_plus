@@ -216,9 +216,12 @@ def prime_entry_to_record(entry: Any) -> dict[str, Any] | None:
             if start.tzinfo is None:
                 start = start.replace(tzinfo=timezone.utc)
             started_at = start.astimezone(timezone.utc).isoformat()
+            start_epoch = int(start.timestamp())
         except (OSError, OverflowError, ValueError):
             return None
-        mission_id = f"nmssn_{number}_{started_at}"
+        # Store IDs also appear in API paths. Use an integer UTC timestamp
+        # here and keep the ISO timestamp in the record itself.
+        mission_id = f"nmssn_{number}_{start_epoch}"
 
     record: dict[str, Any] = {
         # Prefixed so a Prime record can never collide with a Classic
