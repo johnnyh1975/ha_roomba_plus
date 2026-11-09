@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -257,6 +257,102 @@ class TestReconciliation:
         entry.runtime_data.mission_store = None
 
         assert await async_sync_prime_missions(entry) == 0
+
+
+class TestFallbackMissionIdentity:
+    """Prime Plus 416 history supplies nMssn without missionId (#237)."""
+
+    @staticmethod
+    def _payload(**overrides):
+        return {
+            "nMssn": 7,
+            "startTime": 1786000000,
+            "timestamp": 1786002400,
+            "durationM": 40,
+            "sqft": 300,
+            "done": "ok",
+            **overrides,
+        }
+
+    @staticmethod
+    def _record(payload):
+        from roombapy_prime.models.mission_history import parse_mission_history
+
+        from custom_components.roomba_plus.prime_mission_sync import (
+            prime_entry_to_record,
+        )
+
+        return prime_entry_to_record(parse_mission_history([payload])[0])
+
+    async def test_raw_history_is_imported_once(self):
+        from custom_components.roomba_plus.mission_store import MissionStore
+        from custom_components.roomba_plus.prime_mission_sync import (
+            async_sync_prime_missions,
+        )
+
+        store = MissionStore()
+        entry = close_entry_tasks(MagicMock())
+        entry.runtime_data.mission_store = store
+        entry.runtime_data.robot_profile_store = None
+        entry.runtime_data.prime_robot.get_mission_history = AsyncMock(
+            return_value=[self._payload()]
+        )
+
+        with (
+            patch.object(store, "async_save", new_callable=AsyncMock) as save,
+            patch.object(store, "async_backfill_statistics", new_callable=AsyncMock),
+            patch("custom_components.roomba_plus.prime_mission_sync.async_dispatcher_send"),
+        ):
+            assert await async_sync_prime_missions(entry) == 1
+            assert await async_sync_prime_missions(entry) == 0
+            save.assert_awaited_once()
+
+        record, = store.records
+        assert record["id"] == "p_nmssn_7_1786000000"
+        assert record["duration_min"] == 40
+        assert record["area_sqft"] == 300
+        assert record["result"] == "completed"
+        assert record["started_at"] == datetime.fromtimestamp(
+            self._payload()["startTime"], tz=timezone.utc
+        ).isoformat()
+
+    def test_reused_counter_with_a_different_start_has_a_different_id(self):
+        first = self._record(self._payload())
+        second = self._record(
+            self._payload(startTime=1786003000, timestamp=1786005400)
+        )
+
+        assert first["id"] != second["id"]
+
+    def test_equivalent_start_times_have_the_same_id(self):
+        start = datetime.fromtimestamp(self._payload()["startTime"], tz=timezone.utc)
+        first = self._record(self._payload())
+        offset_start = start.astimezone(timezone(timedelta(hours=2)))
+        second = self._record(self._payload(startTime=offset_start.isoformat()))
+        third = self._record(
+            self._payload(startTime=start.replace(tzinfo=None).isoformat())
+        )
+
+        assert first["id"] == second["id"] == third["id"]
+
+    def test_native_mission_id_keeps_its_existing_format(self):
+        assert self._record(self._payload(missionId="native"))["id"] == "p_native"
+
+    @pytest.mark.parametrize(
+        "overrides",
+        [
+            {"nMssn": None},
+            {"nMssn": True},
+            {"nMssn": -1},
+            {"startTime": None},
+            {"startTime": True},
+            {"startTime": "invalid"},
+            {"startTime": 10**30},
+            {"timestamp": None},
+        ],
+    )
+    def test_incomplete_fallback_identity_is_rejected(self, overrides):
+        assert self._record(self._payload(**overrides)) is None
 
 
 class TestMissionSensorsExistForPrime:
