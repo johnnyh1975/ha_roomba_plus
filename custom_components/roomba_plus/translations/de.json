@@ -1882,6 +1882,9 @@
       "rooms_map": {
         "name": "Raumkarte"
       },
+      "floor_plan": {
+        "name": "Grundriss {map}"
+      },
       "cleaning_map": {
         "name": "Live-Reinigungskarte"
       },

@@ -1882,6 +1882,9 @@
       "rooms_map": {
         "name": "Carte des pièces"
       },
+      "floor_plan": {
+        "name": "Plan {map}"
+      },
       "cleaning_map": {
         "name": "Carte de nettoyage en direct"
       },

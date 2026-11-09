@@ -2692,6 +2692,41 @@ class TestUmfZoneShapes:
         assert '"umf_zone_shapes"' in inspect.getsource(diagnostics._cloud_diag)
 
 
+class TestTheFloorPlansMapIsReported:
+    """4.5.4: with more than one Smart Map the floor plan follows the last
+    command, so the download says which map it shows and why."""
+
+    def test_map_and_reason_next_to_the_active_map(self, hass) -> None:
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.cloud_coordinator import (
+            IrobotCloudCoordinator,
+        )
+        from custom_components.roomba_plus.diagnostics import _cloud_diag
+
+        cc = IrobotCloudCoordinator(
+            hass, MagicMock(), "0123456789ABCDEF", "user@example.com", "x",
+            has_pmaps=True,
+        )
+        cc.data = {
+            "pmaps": [
+                {"active_pmapv_details": {"active_pmapv": {
+                    "pmap_id": "old-map", "active_pmapv_id": "260101T080000"}}},
+                {"active_pmapv_details": {"active_pmapv": {
+                    "pmap_id": "new-map", "active_pmapv_id": "260601T080000"}}},
+            ],
+            "favorites": [],
+            "umf": {"pmap_id": "old-map"},
+        }
+        cc.displayed_map_source = "last_command"
+
+        result = _cloud_diag(SimpleNamespace(cloud_coordinator=cc))
+
+        assert result["active_pmap_id"] == "new-map"
+        assert result["floor_plan_pmap_id"] == "old-map"
+        assert result["floor_plan_map_source"] == "last_command"
+
+
 class TestLivePositionInThePositionChain:
     """4.3: the requested-position stream reports how it ran -- status and
     counts, no coordinates."""

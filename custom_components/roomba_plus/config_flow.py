@@ -3017,9 +3017,15 @@ class RoombaPlusOptionsFlow(OptionsFlow):
         if user_input is not None:
             new_labels = dict(options.get("smart_zone_labels") or {})
             new_zone_data: dict[str, Any] = dict(options.get("smart_zone_data") or {})
-            # THE MAP ON SCREEN. Every room asked about is on the active
-            # map -- that is the map the form showed.
-            pmap_id = str(getattr(coordinator, "active_pmap_id", "") or "")
+            # THE MAP ON SCREEN. Every room asked about is on the map the
+            # form showed: the floor plan's (4.5.4, displayed_pmap), which
+            # with one map is the active map. An aligner from before 4.5.4
+            # names no map; then the active one, as before.
+            shown = getattr(getattr(data, "umf_aligner", None), "pmap_id", None)
+            pmap_id = (
+                shown if isinstance(shown, str) and shown
+                else str(getattr(coordinator, "active_pmap_id", "") or "")
+            )
             for rid in unnamed:
                 label = str(user_input.get(f"Room {rid}", "")).strip()
                 if label:

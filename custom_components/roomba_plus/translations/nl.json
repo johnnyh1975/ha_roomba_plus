@@ -1882,6 +1882,9 @@
       "rooms_map": {
         "name": "Kamerkaart"
       },
+      "floor_plan": {
+        "name": "Plattegrond {map}"
+      },
       "cleaning_map": {
         "name": "Live schoonmaakkaart"
       },

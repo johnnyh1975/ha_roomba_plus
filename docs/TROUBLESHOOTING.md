@@ -444,48 +444,31 @@ On lewis-firmware robots (i7+/s9+), the robot occasionally reports a brief non-c
 
 ### The robot accepts a room clean, then sits on the dock
 
-The log shows the command was accepted and no mission started, with
-`error=224` — a localisation failure. The robot could not work out where
-it was on the map it was asked to clean.
-
-**If you have more than one map**, that is the usual cause: a robot can
-only clean the map it is standing on. Since v4.2.4 the room list follows
-the robot rather than merging every map, and v4.2.5 does the same for
-zones, so the rooms you are offered should be reachable ones.
-
-On a cloud-connected robot you also have a **Map** entity. Leave it on
-"follow robot" unless you deliberately want a different map — picking
-one explicitly overrides what the robot reports.
-
-**If you have one map**, 224 means the robot genuinely could not
-localise: it may have been moved while docked, or the map may need
-re-learning in the iRobot app.
-
-### Rooms from another floor appear in the list
-
-Fixed in v4.2.4 for rooms and v4.2.5 for zones. Before those, every map
-the robot knew was merged into one flat list, so rooms from a map the
-robot was not on could be selected — and produced the 224 above.
-
-### The robot accepts a room clean, then sits on the dock
-
 The log shows the command accepted and no mission started, with
 `error=224` — a localisation failure. The robot could not work out
 where it was on the map it was asked to clean.
 
 **If you have more than one map**, that is the usual cause: a robot can
-only clean the map it is standing on. Since v4.2.4 the room list
-follows the robot rather than merging every map, and v4.2.5 does the
-same for zones.
+only clean the map it is standing on. A room or zone command goes to the
+map the room belongs to, so a robot standing on another floor, or
+outside the area a map covers, answers with 224. Carry it there first.
+Roomba+ cannot check this beforehand on a Classic robot, which does not
+report the map it is on; the log names the map the robot was last sent
+to when the two differ.
 
-v4.2.6 fixed a related fault: where a room number existed on both maps,
-the room took its name from one map and its map assignment from the
-other, so the command went out with the right room and the wrong map.
-That one looked intermittent — the same room could work one day and
-fail the next.
+- **Classic:** every map has its own zone select. The one of a map that
+  is not the most recently edited is created disabled and named
+  "(inactive)"; enable it to pick rooms of that map. Since 4.5.4 the
+  rooms map shows the map of the last command.
+- **Prime:** the **Map** entity. Leave it on "follow robot" unless you
+  deliberately want a different map; picking one overrides what the
+  robot reports.
 
-On a cloud-connected robot you also have a **Map** entity. Leave it on
-"follow robot" unless you deliberately want a different map.
+Two related faults are fixed: v4.2.6 (a room number on both maps took
+its name from one map and its map from the other, so the same room could
+work one day and fail the next) and v4.2.13/4.2.14 (the map version sent
+with the command was not the one the robot accepts, which gave 224 on
+the right floor too).
 
 **If you have one map**, 224 means the robot genuinely could not
 localise: it may have been moved while docked, or the map may need

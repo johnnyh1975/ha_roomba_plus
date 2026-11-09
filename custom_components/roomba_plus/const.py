@@ -322,6 +322,20 @@ DEFAULT_MAP_ROTATION: Final = "0"
 DEFAULT_WALL_THICKNESS_CM: Final = 15
 DEFAULT_DOOR_WIDTH_CM: Final = 80
 
+
+def door_width_mm(options: Any) -> float:
+    """The door width the user set, in mm, for the map aligner (4.5.4).
+
+    Read once here so the setup, the rebuild after a new map version and
+    the bootstrap all use it; the last two used the built-in width. A
+    value that is not a number falls back to the default.
+    """
+    value = options.get(CONF_DOOR_WIDTH_CM) if isinstance(options, Mapping) else None
+    try:
+        return 10.0 * float(DEFAULT_DOOR_WIDTH_CM if value is None else value)
+    except (TypeError, ValueError):
+        return 10.0 * float(DEFAULT_DOOR_WIDTH_CM)
+
 # ── Replacement intervals when the cloud gives none (4.3.2) ─────────────────
 #
 # IROBOT'S OWN BUDGETS, NOT OURS. The cloud's part counters carry the

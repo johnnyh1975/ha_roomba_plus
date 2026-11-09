@@ -227,7 +227,7 @@ already worked before this table existed:
 | Attribute | Type | Notes |
 |---|---|---|
 | `region_icons` | `dict[str, str]` | Room name → MDI icon |
-| `region_areas_m2` | `dict[str, float]` | Room name → floor area in m² *(v2.9.1)*. Computed once from the same UMF geometry used for map rendering — doesn't update on its own; a map retrain reloads the config entry and recomputes it. Present only for whichever floor/map this integration's UMF aligner was built for (the active map at setup) — absent, not zero, on other floors. |
+| `region_areas_m2` | `dict[str, float]` | Room name → floor area in m² *(v2.9.1)*. Computed once from the same UMF geometry used for map rendering — doesn't update on its own; a map retrain reloads the config entry and recomputes it. Present only for the map the floor plan showed when it was computed (with more than one Smart Map, the map of the last command since 4.5.4) — absent, not zero, on other floors. |
 | `learning_percentage` | `int` | Map-learning progress for this floor |
 | `region_count` / `zone_count` | `int` | Counts for this map |
 | `is_active_map` | `bool` | Whether this is the robot's currently active map. **Informational only since v4.1.0** — it used to decide whether a selection on this map would be acted on at all, which silently discarded a room picked on any other map. A robot accepts a region command for any of its maps |
@@ -478,6 +478,19 @@ show_state: false
 #### Rooms map — Smart Map robots (v2.3+)
 
 `image.{name}_rooms_map` — static room layout from the UMF floor plan. Available once UmfAligner confidence ≥ 0.70 (typically after 2+ missions with door crossings). On robots without local pose data (lewis firmware 22.52.10+), alignment now bootstraps automatically from cloud traversal events — no action required. Each room renders in its own colour from a rotating 8-colour palette (v2.9.0) for easy visual distinction; rendering uses an embedded font for crisp labels (v2.9.0) and is cached per map version (v2.9.0) so it isn't re-rendered from scratch on every poll.
+
+**Which map, with more than one Smart Map** *(4.5.4)*. The floor plan shows the map the robot's last command went to: clean a room of another map, and once the mission's cloud update is in, the rooms map shows that map. Without such a command (a start that names no map, or after *Smart Map localization failed*), it shows the map edited most recently, the one the room list uses. A robot with one map always shows that map. This changes only what is shown: room and zone commands go to the map of their room, as before, and the iRobot account's own "active map" is not touched. The diagnostics name the map shown and why (`floor_plan_pmap_id`, `floor_plan_map_source`).
+
+#### Floor plan of each map — Smart Map robots with an iRobot account *(4.5.4)*
+
+`image.{name}_floor_plan_{map}` — one per Smart Map stored in the account, named after the map as the iRobot app names it ("Floor plan Upstairs"). **Created disabled**: enable the ones you want under the device's entities. Each shows its map's rooms with their names, walls and doors, drawn like the rooms map before it is aligned: in the map's own frame, without the robot, the cleaning path or obstacles, so it stays the same wherever the robot is. *Rotate the map picture*, wall thickness and door width apply as on the rooms map.
+
+- A map's floor plan is read from the iRobot cloud once per map version, and only while its image is enabled and shown. The map the rooms map shows costs no extra call.
+- Room names: the map's own name for the room, then a name typed into the naming notice for this map, then the room's number. Aliases are not used here: they are kept by room number, and room numbers repeat across maps.
+- A map deleted in the app makes its image unavailable; it is removed at the next start.
+- Attributes: `map_name`, `map_version`, `room_count`.
+
+**A new map version keeps the rooms** *(4.5.4)*. When a map got a new version (an edit in the iRobot app, or one the cloud makes itself), the rooms map was rebuilt without room outlines and stayed empty until Home Assistant restarted. It is now rebuilt from the same data as at startup, and with the door width you set.
 
 Both map entities expose `calibration_points` and `rooms` attributes for xiaomi-vacuum-map-card integration. See **[xiaomi-vacuum-map-card.md](xiaomi-vacuum-map-card.md)** for the full setup guide.
 

@@ -6886,3 +6886,226 @@ class TestPrimeBorderInteriorRendering:
         assert self._pixel(entity, png, 3, 4) == (90, 90, 90)
         assert self._pixel(entity, png, 15, 2) == (90, 90, 90)
         assert self._pixel(entity, png, 13, 2) == (30, 30, 30)
+
+
+# ── Floor plan of each stored map (4.5.4, @molnarpeterhu) ──────────────────
+
+_SQUARE_POINTS = [
+    {"id": f"p{i}", "coordinates": [x, y]}
+    for i, (x, y) in enumerate([(0, 0), (4, 0), (4, 4), (0, 4)])
+]
+
+
+def _plan(name="Kitchen", version="v1"):
+    return {
+        "points2d": list(_SQUARE_POINTS),
+        "regions": [{
+            "id": "1", "name": name,
+            "geometry": {"ids": [["p0", "p1", "p2", "p3"]]},
+        }],
+        "version_id": version,
+    }
+
+
+def _floor_plan(options=None, *, plan=None, version="v1", pmap_id="map-up"):
+    entry = MagicMock()
+    entry.options = dict(options or {})
+    cloud = MagicMock()
+    cloud.floor_plan_version = MagicMock(return_value=version)
+    cloud.async_floor_plan = AsyncMock(return_value=plan)
+    entry.runtime_data.cloud_coordinator = cloud
+    roomba = MagicMock(master_state={"state": {"reported": {}}})
+    entity = img.RoombaFloorPlanImage(
+        roomba, "0123456789ABCDEF", entry, pmap_id=pmap_id, map_name="Upstairs",
+    )
+    return entity, cloud
+
+
+class TestTheFloorPlanOfEachMap:
+
+    def test_created_disabled_with_its_map_in_id_and_name(self):
+        entity, _cloud = _floor_plan()
+        assert entity.entity_registry_enabled_default is False
+        assert entity.unique_id == "roomba_plus_0123456789ABCDEF_floor_plan_map-up"
+        assert entity.translation_key == "floor_plan"
+        assert entity.translation_placeholders == {"map": "Upstairs"}
+
+    def test_it_draws_the_rooms_of_its_map(self):
+        import io
+
+        from PIL import Image
+
+        entity, _cloud = _floor_plan()
+        png = entity._render(_plan())
+        picture = Image.open(io.BytesIO(png)).convert("RGB")
+        assert picture.size == (600, 600)
+        assert picture.getpixel((300, 300)) == img.ROOM_FILL_PALETTE[0]
+        assert entity.extra_state_attributes == {
+            "map_name": "Upstairs", "map_version": None, "room_count": 1,
+        }
+
+    def test_it_looks_like_the_rooms_map_of_the_same_map(self):
+        """One drawing for both: the floor plan of the map the rooms map
+        shows is the rooms map before alignment, with names on."""
+        from custom_components.roomba_plus.image import RoombaRoomsImage
+        from custom_components.roomba_plus.umf_aligner import UmfAligner
+
+        options = {"map_room_labels": True}
+        entity, _cloud = _floor_plan(options)
+        rooms = object.__new__(RoombaRoomsImage)
+        rooms._config_entry = entry_mock()
+        rooms._config_entry.options = options
+        aligner = UmfAligner(_plan()["points2d"], _plan()["regions"], MagicMock(door_markers=[]))
+        aligner._build_coord_lookup()
+        aligner._resolve_room_polygons()
+        rooms._config_entry.runtime_data.umf_aligner = aligner
+        rooms._room_render_cache_key = None
+        rooms._room_render_cache = None
+
+        assert entity._render(_plan()) == rooms._render_rooms_png()
+
+    def test_the_same_map_and_options_are_drawn_once(self):
+        entity, _cloud = _floor_plan()
+        first = entity._render(_plan())
+        with patch.object(img, "draw_room_layout_png") as draw:
+            assert entity._render(_plan()) == first
+        draw.assert_not_called()
+
+    def test_a_map_without_rooms_has_no_picture(self):
+        entity, _cloud = _floor_plan()
+        assert entity._render({"points2d": [], "regions": [], "version_id": "v1"}) is None
+
+    @pytest.mark.asyncio
+    async def test_nothing_to_fetch_is_no_picture(self, hass):
+        entity, cloud = _floor_plan(plan=None)
+        entity.hass = hass
+        assert await entity.async_image() is None
+        cloud.async_floor_plan.assert_awaited_once_with("map-up")
+
+    @pytest.mark.asyncio
+    async def test_the_picture_comes_from_its_own_map(self, hass):
+        entity, cloud = _floor_plan(plan=_plan())
+        entity.hass = hass
+        png = await entity.async_image()
+        assert png and png.startswith(b"\x89PNG")
+        cloud.async_floor_plan.assert_awaited_once_with("map-up")
+
+    def test_a_map_the_account_no_longer_has_is_unavailable(self):
+        entity, _cloud = _floor_plan(version=None)
+        assert entity.available is False
+        assert _floor_plan()[0].available is True
+
+    def test_a_new_version_of_the_map_is_a_new_picture(self):
+        entity, cloud = _floor_plan()
+        entity.async_write_ha_state = MagicMock()
+        entity._shown_version = "v1"
+        before = entity._attr_image_last_updated
+
+        entity._on_cloud_update()
+        entity.async_write_ha_state.assert_not_called()
+
+        cloud.floor_plan_version.return_value = "v2"
+        entity._on_cloud_update()
+        entity.async_write_ha_state.assert_called_once()
+        assert entity._shown_version == "v2"
+        assert entity._attr_image_last_updated >= before
+
+
+class TestTheFloorPlansNames:
+    """Room numbers repeat across maps, and aliases are kept by number."""
+
+    def test_the_maps_own_name_first(self):
+        assert img.floor_plan_label("1", "Kitchen", {}, "map-up") == "Kitchen"
+
+    def test_a_name_typed_for_this_map(self):
+        options = {"smart_zone_data": {"1": {"name": "Office", "pmap_id": "map-up"}}}
+        assert img.floor_plan_label("1", None, options, "map-up") == "Office"
+        assert img.floor_plan_label("1", "1", options, "map-up") == "Office"
+
+    def test_not_a_name_typed_for_another_map_nor_an_alias(self):
+        from custom_components.roomba_plus.const import CONF_SMART_ZONE_ALIASES
+
+        options = {
+            "smart_zone_data": {"1": {"name": "Office", "pmap_id": "map-down"}},
+            CONF_SMART_ZONE_ALIASES: {"1": "Den"},
+            "smart_zone_labels": {"1": "Hall"},
+        }
+        assert img.floor_plan_label("1", None, options, "map-up") == "1"
+
+
+class TestTheFloorPlansAreSetUp:
+
+    async def _run(self, hass, *, cap=MapCapability.SMART, cloud_data=None, has_cloud=True):
+        entry, _s = _entry()
+        data = entry.runtime_data
+        data.connection_type = ConnectionType.LOCAL_PUSH
+        data.map_capability = cap
+        data.grid_store = None
+        data.renderer = _renderer()
+        data.roomba = MagicMock(master_state={"state": {"reported": {}}})
+        data.blid = "0123456789ABCDEF"
+        data.has_cloud = has_cloud
+        data.cloud_coordinator = MagicMock(data=cloud_data)
+        added = []
+        with patch.object(img, "async_remove_deleted_floor_plans") as remove:
+            await img.async_setup_entry(hass, entry, lambda ents, *a, **k: added.extend(ents))
+        plans = [e for e in added if isinstance(e, img.RoombaFloorPlanImage)]
+        return plans, remove
+
+    _TWO_MAPS = {"pmaps": [
+        {"active_pmapv_details": {"active_pmapv": {"pmap_id": "map-down"},
+                                  "map_header": {"name": "Ground Floor"}}},
+        {"active_pmapv_details": {"active_pmapv": {"pmap_id": "map-up"},
+                                  "map_header": {"name": "Upstairs"}}},
+    ]}
+
+    @pytest.mark.asyncio
+    async def test_one_per_stored_map(self, hass):
+        plans, remove = await self._run(hass, cloud_data=self._TWO_MAPS)
+        assert [(p._pmap_id, p._map_name) for p in plans] == [
+            ("map-down", "Ground Floor"), ("map-up", "Upstairs"),
+        ]
+        assert remove.call_args.args[3] == {"map-down", "map-up"}
+
+    @pytest.mark.parametrize("kw", [
+        {"cloud_data": None},
+        {"has_cloud": False},
+        {"cap": MapCapability.EPHEMERAL},
+    ])
+    @pytest.mark.asyncio
+    async def test_none_without_the_accounts_maps(self, hass, kw):
+        """Without the map list nothing is known to be gone either, so
+        nothing is removed."""
+        kw.setdefault("cloud_data", self._TWO_MAPS)
+        plans, remove = await self._run(hass, **kw)
+        assert plans == []
+        remove.assert_not_called()
+
+
+class TestTheFloorPlansOfDeletedMaps:
+
+    def test_only_floor_plans_of_maps_no_longer_listed_are_removed(self):
+        from homeassistant.helpers import entity_registry as er
+
+        def _reg(domain, unique_id):
+            return SimpleNamespace(
+                domain=domain, unique_id=unique_id, entity_id=f"{domain}.{unique_id}",
+            )
+
+        prefix = "roomba_plus_0123456789ABCDEF_floor_plan_"
+        entries = [
+            _reg("image", prefix + "map-up"),
+            _reg("image", prefix + "map-gone"),
+            _reg("image", "roomba_plus_0123456789ABCDEF_rooms_map"),
+            _reg("select", "roomba_plus_0123456789ABCDEF_cloud_zone_map-gone"),
+            _reg("image", "roomba_plus_FEDCBA9876543210_floor_plan_map-gone"),
+        ]
+        registry = MagicMock()
+        entry = MagicMock(entry_id="e1")
+        with patch.object(er, "async_get", return_value=registry), \
+             patch.object(er, "async_entries_for_config_entry", return_value=entries):
+            removed = img.async_remove_deleted_floor_plans(
+                MagicMock(), entry, "0123456789ABCDEF", {"map-up"},
+            )
+        assert removed == 1
+        registry.async_remove.assert_called_once_with("image." + prefix + "map-gone")

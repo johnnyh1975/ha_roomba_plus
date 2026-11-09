@@ -2020,6 +2020,19 @@ class TestSmartZonesNamingStep:
             "3": {"name": "Kitchen", "pmap_id": "abc"}
         }
 
+    @pytest.mark.asyncio
+    async def test_names_are_saved_for_the_map_the_form_showed(self):
+        """4.5.4: with more than one Smart Map the floor plan can show
+        another map than the active one; the names belong to that map."""
+        flow = self._flow()
+        flow._config_entry.runtime_data.umf_aligner.pmap_id = "map-shown"
+
+        result = await flow.async_step_smart_zones({"Room 3": "Kitchen"})
+
+        assert result["data"]["smart_zone_data"] == {
+            "3": {"name": "Kitchen", "pmap_id": "map-shown"}
+        }
+
 
 class TestSmartZonesManualStep:
     """`async_step_smart_zones_manual` — the two-phase text entry for

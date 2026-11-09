@@ -799,6 +799,26 @@ class TestUmfVersionChanged:
         entry.runtime_data.umf_aligner = None
         assert self._fn()(coord, entry) is True
 
+    def test_another_map_with_an_equal_version_is_a_change(self):
+        """4.5.4: the floor plan can switch maps; a version is only a
+        timestamp, and two maps can share one."""
+        coord = MagicMock()
+        coord.umf_data = {"version_id": "v1", "pmap_id": "map-b"}
+        entry = MagicMock()
+        aligner = _make_aligner()
+        aligner.pmap_id = "map-a"
+        entry.runtime_data.umf_aligner = aligner
+        assert self._fn()(coord, entry) is True
+
+    def test_the_same_map_and_version_is_no_change(self):
+        coord = MagicMock()
+        coord.umf_data = {"version_id": "v1", "pmap_id": "map-a"}
+        entry = MagicMock()
+        aligner = _make_aligner()
+        aligner.pmap_id = "map-a"
+        entry.runtime_data.umf_aligner = aligner
+        assert self._fn()(coord, entry) is False
+
 
 class TestU1ValidateTransform:
     """U1: _validate_transform validates door candidates after transform."""
@@ -1070,3 +1090,18 @@ class TestTheDoorWidthSetBoundsTheDoorGaps:
         assert self._candidates(1.3, door_mm=1000.0) == 1
         assert self._candidates(0.7, door_mm=1000.0) == 0
         assert self._candidates(0.7) == 1
+
+
+class TestOneMapsLayoutWithoutAligning:
+    """4.5.4: the floor plan of a map the robot may not be on."""
+
+    def test_outlines_and_names_as_the_aligner_resolves_them(self):
+        from custom_components.roomba_plus.umf_aligner import umf_room_layout
+
+        polygons, names = umf_room_layout(
+            _square_points2d(), [_square_region("1"), {"id": "2"}],
+        )
+        assert set(polygons) == {"1"}
+        assert len(polygons["1"]) == 4
+        assert names == {"1": "Room 1", "2": "2"}
+

@@ -56,8 +56,13 @@ class UmfAligner:
         geometry_store: GeometryStore,
         pmap_version_id: str = "",
         door_mm: float | None = None,
+        pmap_id: str = "",
     ) -> None:
         self._points2d      = points2d
+        #: The map this geometry belongs to (4.5.4). With more than one
+        #: Smart Map, two maps can carry versions that compare equal, so
+        #: a change of map is told by the id, not by the version alone.
+        self.pmap_id = pmap_id
         # THE DOOR WIDTH THE USER SET (4.5.0): door candidates are gaps
         # from 20 cm narrower to 40 cm wider. 80 cm gives the window the
         # constants below always held.
@@ -529,6 +534,66 @@ class UmfAligner:
 
 
 # ── Module-level utilities ────────────────────────────────────────────────────
+
+def aligner_from_umf(
+    umf_data: dict[str, Any],
+    fallback_regions: list[dict[str, Any]],
+    geometry_store: GeometryStore | None,
+    *,
+    door_mm: float | None = None,
+) -> UmfAligner | None:
+    """The aligner for the map the cloud's UMF describes, not yet aligned.
+
+    ONE BUILDER FOR SETUP, REBUILD AND BOOTSTRAP (4.5.4). Setup built it
+    from the map's own regions, which carry the room outlines
+    (`geometry.ids`). The rebuild after a new map version used the room
+    LIST instead (`cloud_coordinator.regions`): names, no outlines. So
+    every new version of a map -- an edit in the app, or a version the
+    cloud makes itself -- left an aligner without a single room, and the
+    rooms map stayed empty until Home Assistant restarted. The rebuild
+    and the bootstrap also dropped the door width the user set.
+
+    The room list stays the fallback when the UMF has no regions, as it
+    always was at setup.
+
+    None when there is nothing to align: no wall points, no regions, or
+    no geometry store.
+    """
+    points2d = umf_data.get("points2d")
+    regions = umf_data.get("regions") or fallback_regions
+    if not points2d or not regions or geometry_store is None:
+        return None
+    return UmfAligner(
+        points2d=points2d,
+        regions=regions,
+        geometry_store=geometry_store,
+        pmap_version_id=str(umf_data.get("version_id") or ""),
+        door_mm=door_mm,
+        pmap_id=str(umf_data.get("pmap_id") or ""),
+    )
+
+
+class _NoEvidence:
+    """A geometry store with no door markers, for a layout that is only
+    drawn and never aligned (umf_room_layout)."""
+
+    door_markers: list[Any] = []
+
+
+def umf_room_layout(
+    points2d: list[dict[str, Any]], regions: list[dict[str, Any]]
+) -> tuple[dict[str, list[tuple[float, float]]], dict[str, str]]:
+    """Room outlines (UMF space, mm) and names of one map, without aligning.
+
+    The floor plan of each map (4.5.4) draws a map the robot may not be
+    on, so there is nothing to align it with: only the outlines, resolved
+    exactly as the aligner resolves them for the rooms map.
+    """
+    layout = UmfAligner(points2d, regions, _NoEvidence())  # type: ignore[arg-type]
+    layout._build_coord_lookup()
+    layout._resolve_room_polygons()
+    return layout.room_polygons_umf, layout.rid_to_name()
+
 
 def _polygon_area_m2(vertices_mm: list[tuple[float, float]]) -> float | None:
     """Return polygon area in m² via the shoelace formula.

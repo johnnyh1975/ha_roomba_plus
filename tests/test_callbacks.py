@@ -5355,6 +5355,36 @@ class TestRealign:
         await cb._async_realign(hass, entry, coordinator)
         assert entry.runtime_data.umf_aligner is fake
 
+    @pytest.mark.asyncio
+    async def test_the_room_outlines_survive_a_new_map_version(self, hass):
+        """A new map version rebuilt the aligner from the room LIST, which
+        has names and no outlines, so the rooms map lost every room until
+        Home Assistant restarted. Setup has always used the map's own
+        regions, which carry the outlines; the rebuild does the same now."""
+        corners = [(0, 0), (5, 0), (5, 5), (0, 5)]
+        entry, coordinator = _align_env(hass)
+        entry.options = {}
+        coordinator.umf_data = {
+            "points2d": [
+                {"id": f"p{i}", "coordinates": [x, y]}
+                for i, (x, y) in enumerate(corners)
+            ],
+            "regions": [{
+                "id": "1", "name": "Kitchen",
+                "geometry": {"ids": [["p0", "p1", "p2", "p3"]]},
+            }],
+            "pmap_id": "map-a",
+            "version_id": "v2",
+        }
+        coordinator.regions = [{"id": "1", "name": "Kitchen"}]
+
+        await cb._async_realign(hass, entry, coordinator)
+
+        aligner = entry.runtime_data.umf_aligner
+        assert set(aligner.room_polygons_umf) == {"1"}
+        assert aligner.pmap_version_id == "v2"
+        assert aligner.pmap_id == "map-a"
+
 
 class TestBootstrapAligner:
 

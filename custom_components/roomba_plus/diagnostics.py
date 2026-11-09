@@ -169,6 +169,12 @@ def _cloud_diag(data: Any) -> dict[str, Any]:
         result["pmap_count_total"] = len(cc.data.get("pmaps", []))   # all pmaps from API
         result["favorite_count"] = len(cc.data.get("favorites", []))
         result["active_pmap_id"] = cc.active_pmap_id
+        # THE FLOOR PLAN'S MAP AND WHY (4.5.4): with more than one Smart
+        # Map it follows the last command; "only_map", "last_command",
+        # "newest_version" or "first_listed" (cloud_coordinator.
+        # displayed_pmap). A map id, as active_pmap_id above.
+        result["floor_plan_pmap_id"] = (cc.data.get("umf") or {}).get("pmap_id")
+        result["floor_plan_map_source"] = getattr(cc, "displayed_map_source", None)
         result["region_count_active"] = len(cc.regions)   # active pmap only (post-filter)
         result["zone_count_active"] = len(cc.zones)       # active pmap only (post-filter)
         result["umf_zone_shapes"] = _umf_zone_shapes(cc)

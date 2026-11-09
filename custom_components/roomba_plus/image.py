@@ -95,7 +95,8 @@ from .const import (
 )
 from .entity import IRobotEntity
 from .geometry_utils import pose_point_to_map_mm
-from .cloud_coordinator import requested_position_turn
+from .cloud_coordinator import requested_position_turn, stored_maps
+from .umf_aligner import umf_room_layout
 from .position_room import (
     PathTurnLearner,
     PositionRoomTracker,
@@ -323,7 +324,55 @@ async def async_setup_entry(
             )
         )
 
+    # THE FLOOR PLAN OF EACH STORED MAP (4.5.4, @molnarpeterhu). Disabled
+    # until the user enables one: nothing new on a dashboard, and no
+    # cloud call for a picture nobody shows.
+    cloud = data.cloud_coordinator if data.has_cloud else None
+    cloud_data = getattr(cloud, "data", None) if cloud is not None else None
+    if data.map_capability == MapCapability.SMART and isinstance(cloud_data, dict):
+        maps = stored_maps(cloud_data)
+        entities.extend(
+            RoombaFloorPlanImage(
+                data.roomba, data.blid, config_entry,
+                pmap_id=pmap_id, map_name=map_name,
+            )
+            for pmap_id, map_name in maps
+        )
+        async_remove_deleted_floor_plans(
+            hass, config_entry, data.blid, {pmap_id for pmap_id, _ in maps}
+        )
+
     async_add_entities(entities)
+
+
+@callback
+def async_remove_deleted_floor_plans(
+    hass: HomeAssistant, config_entry: Any, blid: str, kept: set[str]
+) -> int:
+    """Remove the floor plan images of maps the account no longer has.
+
+    Only called with the account's map list in hand: an empty or missing
+    list says nothing about which maps are gone, so it removes nothing
+    (the caller does not call). Returns how many were removed.
+    """
+    from homeassistant.helpers import entity_registry as er  # noqa: PLC0415
+
+    prefix = f"roomba_plus_{blid}_floor_plan_"
+    registry = er.async_get(hass)
+    removed = 0
+    for entry in er.async_entries_for_config_entry(registry, config_entry.entry_id):
+        unique_id = entry.unique_id or ""
+        if entry.domain != "image" or not unique_id.startswith(prefix):
+            continue
+        if unique_id[len(prefix):] in kept:
+            continue
+        _LOGGER.info(
+            "roomba_plus: removing %s -- its map is no longer on the account",
+            entry.entity_id,
+        )
+        registry.async_remove(entry.entity_id)
+        removed += 1
+    return removed
 
 
 def _check_dock_drift(final_position_mm: tuple[float, float]) -> tuple[float, float]:
@@ -4321,6 +4370,249 @@ def _turn_px(px: int, py: int, size: int, turns: int) -> tuple[int, int]:
     return px, py
 
 
+def draw_room_layout_png(
+    polygons: Mapping[str, list[tuple[float, float]]],
+    resolve_poly: Callable[[list[tuple[float, float]]], list[tuple[float, float]] | None],
+    labels: Mapping[str, str],
+    to_px: Callable[[float, float], tuple[int, int]],
+    size: int,
+    scale: float,
+    wall_mm: float,
+    door_mm: float,
+) -> bytes:
+    """Rooms, their names, walls and doors on a dark canvas, as PNG.
+
+    THE DRAWING OF THE ROOMS MAP, shared since 4.5.4 with the floor plan
+    of each map, so the two look alike and cannot drift apart. The rooms
+    map's output is unchanged: the caller still works out the frame
+    (`to_px`, `size`, `scale`) and which polygons can be drawn.
+    """
+    from PIL import Image, ImageDraw
+    img  = Image.new("RGB", (size, size), (30, 30, 30))
+    draw = ImageDraw.Draw(img)
+
+    # ROOM-PALETTE (v2.9.0) — rotating per-room fill instead of a single
+    # uniform colour, so adjacent rooms are visually distinguishable even
+    # without the XVMC card's own room-name overlay. Outline stays fixed
+    # (matches existing card highlight colour); only fill rotates.
+    # Muted tones chosen to read clearly against the dark (30,30,30) canvas.
+    resolved_polys: dict[str, list[tuple[float, float]]] = {}
+    for idx, (rid, poly_umf) in enumerate(polygons.items()):
+        resolved = resolve_poly(poly_umf)
+        if not resolved:
+            continue
+        resolved_polys[str(rid)] = resolved
+        poly_px = [to_px(x, y) for x, y in resolved]
+        fill = ROOM_FILL_PALETTE[idx % len(ROOM_FILL_PALETTE)]
+        draw.polygon(poly_px, outline=(100, 149, 237), fill=fill)
+
+        # ROOM NAME, off by default. v2.7.3 removed these because the
+        # xiaomi-vacuum-map-card renders its own overlay from the
+        # `rooms` attribute, and drawing both doubles them up.
+        #
+        # The option restores them for everyone not using that card:
+        # a plain picture-entity shows an image and nothing else, so
+        # for those dashboards the names have to be in the picture or
+        # they do not exist. Same option as the Prime map uses --
+        # this is a preference about maps, not about robot
+        # generations.
+        #
+        # AN UNNAMED ROOM SHOWS ITS NUMBER, as on the Prime rooms map:
+        # the naming notice lists zones by number, and this is where
+        # you see which room a number is.
+        name = labels.get(str(rid))
+        if name:
+            from .map_renderer import LABEL_FONT  # noqa: PLC0415
+
+            cx = sum(x for x, _ in poly_px) / len(poly_px)
+            cy = sum(y for _, y in poly_px) / len(poly_px)
+            draw.text(
+                (cx, cy), name, fill=(230, 230, 230),
+                anchor="mm", font=label_font(name, LABEL_FONT),
+            )
+
+    # WALLS AND DOORS (4.5.0). The rooms are iRobot's; the walls
+    # between them and the doors are not in its map, and come from
+    # where the polygons touch (room_layout.polygon_walls).
+    _draw_polygon_walls(
+        draw, polygon_walls(resolved_polys, wall_mm, door_mm), to_px, scale,
+    )
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def floor_plan_label(
+    region_id: str, cloud_name: str | None, options: Mapping[str, Any], pmap_id: str
+) -> str:
+    """The text a floor plan writes into a room (4.5.4).
+
+    The map's own name for it; else a name typed into the naming notice
+    FOR THIS MAP; else its number. Aliases and older labels are keyed by
+    room number alone, and room numbers repeat across maps, so on a
+    floor plan of another map they could name the wrong room.
+    """
+    if cloud_name and cloud_name != region_id:
+        return cloud_name
+    zone_data = options.get("smart_zone_data") or {}
+    entry = zone_data.get(region_id) if isinstance(zone_data, dict) else None
+    if isinstance(entry, dict) and entry.get("pmap_id") == pmap_id and entry.get("name"):
+        return str(entry["name"])
+    return region_id
+
+
+class RoombaFloorPlanImage(IRobotEntity, ImageEntity):
+    """The floor plan of one stored Smart Map: rooms and names (4.5.4).
+
+    @molnarpeterhu (i7+, "Ground Floor" and "Upstairs") asked for each
+    map as its own lasting picture. The rooms map shows one map at a time
+    and moves with the robot; this one stays on its map.
+
+    Drawn as the rooms map draws before it is aligned: in the map's own
+    frame, without the robot, the cleaning path or obstacles, so nothing
+    on it depends on where the robot is. Created disabled.
+    """
+
+    _attr_content_type = "image/png"
+    _attr_translation_key = "floor_plan"
+    _attr_entity_category = None
+    _attr_entity_registry_enabled_default = False
+
+    def __init__(
+        self,
+        roomba: Any,
+        blid: str,
+        config_entry: RoombaConfigEntry,
+        *,
+        pmap_id: str,
+        map_name: str,
+    ) -> None:
+        IRobotEntity.__init__(self, roomba, blid)
+        self._cache = None
+        self.access_tokens: collections.deque[str] = collections.deque([], 2)
+        self._config_entry = config_entry
+        self._pmap_id = pmap_id
+        self._map_name = map_name
+        self._attr_unique_id = f"{self.robot_unique_id}_floor_plan_{pmap_id}"
+        self._attr_translation_placeholders = {"map": map_name}
+        self._attr_image_last_updated: dt_datetime = dt_util.now(datetime.timezone.utc)
+        self._shown_version: str | None = None
+        self._room_count: int | None = None
+        self._render_key: tuple[Any, ...] | None = None
+        self._render_png: bytes | None = None
+
+    def _cloud(self) -> Any:
+        runtime = getattr(self._config_entry, "runtime_data", None)
+        return getattr(runtime, "cloud_coordinator", None)
+
+    def _version(self) -> str | None:
+        cloud = self._cloud()
+        return cloud.floor_plan_version(self._pmap_id) if cloud is not None else None
+
+    async def async_added_to_hass(self) -> None:
+        await IRobotEntity.async_added_to_hass(self)
+        self.async_update_token()
+        self._shown_version = self._version()
+        cloud = self._cloud()
+        if cloud is not None:
+            self.async_on_remove(cloud.async_add_listener(self._on_cloud_update))
+
+        # Room names, rotation, walls and doors are options; a change of
+        # one has no reload behind it.
+        async def _on_options_updated(_hass: HomeAssistant, _entry: Any) -> None:
+            self._picture_changed()
+
+        self.async_on_remove(self._config_entry.add_update_listener(_on_options_updated))
+
+    @callback
+    def _picture_changed(self) -> None:
+        self._attr_image_last_updated = dt_util.now(datetime.timezone.utc)
+        self._cache = None
+        self.async_write_ha_state()
+
+    @callback
+    def _on_cloud_update(self) -> None:
+        """A new version of this map is a new picture; anything else in the
+        cloud's answer is not."""
+        version = self._version()
+        if version != self._shown_version:
+            self._shown_version = version
+            self._picture_changed()
+
+    def new_state_filter(self, new_state: dict[str, Any]) -> bool:
+        return False  # Cloud entity — no MQTT updates
+
+    @property
+    def available(self) -> bool:
+        """Unavailable once the account no longer lists the map; the entity
+        is removed at the next setup."""
+        return self._version() is not None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {
+            "map_name": self._map_name,
+            "map_version": self._shown_version,
+            "room_count": self._room_count,
+        }
+
+    async def async_image(self) -> bytes | None:
+        cloud = self._cloud()
+        if cloud is None:
+            return None
+        plan = await cloud.async_floor_plan(self._pmap_id)
+        if not plan:
+            return None
+        return await self.hass.async_add_executor_job(self._render, plan)
+
+    def _render(self, plan: dict[str, Any]) -> bytes | None:
+        """CPU-bound; runs in the executor."""
+        polygons, names = umf_room_layout(plan["points2d"], plan["regions"])
+        self._room_count = len(polygons)
+        if not polygons:
+            return None
+        options = self._config_entry.options
+        labels = {
+            str(rid): floor_plan_label(str(rid), names.get(rid), options, self._pmap_id)
+            for rid in polygons
+        }
+        turns = quarter_turns(options.get(CONF_MAP_ROTATION, DEFAULT_MAP_ROTATION))
+        wall_mm, door_mm = _wall_and_door_mm(options)
+        key = (
+            plan.get("version_id"), tuple(sorted(labels.items())), turns, wall_mm, door_mm,
+        )
+        if key == self._render_key and self._render_png is not None:
+            return self._render_png
+
+        # THE FRAME OF THE ROOMS MAP BEFORE ALIGNMENT: the map's own
+        # coordinates, a 50 mm margin, 600 px.
+        coords = [pt for poly in polygons.values() for pt in poly]
+        margin = 50.0
+        x_min = min(x for x, _ in coords) - margin
+        x_max = max(x for x, _ in coords) + margin
+        y_min = min(y for _, y in coords) - margin
+        y_max = max(y for _, y in coords) + margin
+        size = 600
+        scale = size / max(x_max - x_min, y_max - y_min, 1.0)
+
+        def to_px(x: float, y: float) -> tuple[int, int]:
+            return _turn_px(
+                int((x - x_min) * scale),
+                int(size - (y - y_min) * scale),  # y-flip: HA map convention
+                size, turns,
+            )
+
+        png = draw_room_layout_png(
+            polygons,
+            lambda poly: poly if len(poly) >= 3 else None,
+            labels, to_px, size, scale, wall_mm, door_mm,
+        )
+        self._render_key = key
+        self._render_png = png
+        return png
+
+
 class RoombaRoomsImage(IRobotEntity, ImageEntity):
     """Static room-layout image for xiaomi-vacuum-map-card room selection.
 
@@ -4580,60 +4872,9 @@ class RoombaRoomsImage(IRobotEntity, ImageEntity):
                 size, turns,
             )
 
-        from PIL import Image, ImageDraw
-        img  = Image.new("RGB", (size, size), (30, 30, 30))
-        draw = ImageDraw.Draw(img)
-
-        # ROOM-PALETTE (v2.9.0) — rotating per-room fill instead of a single
-        # uniform colour, so adjacent rooms are visually distinguishable even
-        # without the XVMC card's own room-name overlay. Outline stays fixed
-        # (matches existing card highlight colour); only fill rotates.
-        # Muted tones chosen to read clearly against the dark (30,30,30) canvas.
-        resolved_polys: dict[str, list[tuple[float, float]]] = {}
-        for idx, (rid, poly_umf) in enumerate(polygons_umf.items()):
-            resolved = resolve_poly(poly_umf)
-            if not resolved:
-                continue
-            resolved_polys[str(rid)] = resolved
-            poly_px = [to_px(x, y) for x, y in resolved]
-            fill = ROOM_FILL_PALETTE[idx % len(ROOM_FILL_PALETTE)]
-            draw.polygon(poly_px, outline=(100, 149, 237), fill=fill)
-
-            # ROOM NAME, off by default. v2.7.3 removed these because the
-            # xiaomi-vacuum-map-card renders its own overlay from the
-            # `rooms` attribute, and drawing both doubles them up.
-            #
-            # The option restores them for everyone not using that card:
-            # a plain picture-entity shows an image and nothing else, so
-            # for those dashboards the names have to be in the picture or
-            # they do not exist. Same option as the Prime map uses --
-            # this is a preference about maps, not about robot
-            # generations.
-            #
-            # AN UNNAMED ROOM SHOWS ITS NUMBER, as on the Prime rooms map:
-            # the naming notice lists zones by number, and this is where
-            # you see which room a number is.
-            name = labels.get(str(rid))
-            if name:
-                from .map_renderer import LABEL_FONT  # noqa: PLC0415
-
-                cx = sum(x for x, _ in poly_px) / len(poly_px)
-                cy = sum(y for _, y in poly_px) / len(poly_px)
-                draw.text(
-                    (cx, cy), name, fill=(230, 230, 230),
-                    anchor="mm", font=label_font(name, LABEL_FONT),
-                )
-
-        # WALLS AND DOORS (4.5.0). The rooms are iRobot's; the walls
-        # between them and the doors are not in its map, and come from
-        # where the polygons touch (room_layout.polygon_walls).
-        _draw_polygon_walls(
-            draw, polygon_walls(resolved_polys, wall_mm, door_mm), to_px, scale,
+        png_bytes = draw_room_layout_png(
+            polygons_umf, resolve_poly, labels, to_px, size, scale, wall_mm, door_mm,
         )
-
-        buf = io.BytesIO()
-        img.save(buf, format="PNG")
-        png_bytes = buf.getvalue()
 
         # ZONE-LAYER-CACHE (v2.9.0): store for the next call.
         self._room_render_cache_key = cache_key

@@ -2088,6 +2088,84 @@ class TestEveryRoomWasAlsoOfferedAsAZone:
         assert [s.group for s in segments] == ["Room"]
 
 
+class TestAdamvigsRoomsAndZones:
+    """4.5.4, @adamvig (j7+, one map, 12 rooms, 4 zones): zones 0 and 1
+    have no room with the same number and came through as ROOM segments
+    too, beside their own zone segments; and the change check never
+    matched the list, so "Vacuum segments have changed" kept coming back.
+    """
+
+    _MAP = "GcUjbFIeskvUIPeNO"
+    _ROOMS = {str(n): f"Room {n}" for n in (4, 5, 7, 8, 9, 11, 13, 14, 15, 16, 17, 18)}
+    _ZONES = {"4": "Dining room walkway", "0": "Front Door",
+              "5": "Living room rug", "1": "Back Door"}
+
+    def _cloud(self):
+        cloud = MagicMock()
+        cloud.active_pmap_id = self._MAP
+        # regions_by_pmap as it folds them: rooms first, zones fill gaps.
+        merged = dict(self._ROOMS)
+        for zid, name in self._ZONES.items():
+            merged.setdefault(zid, name)
+        cloud.regions_by_pmap = {self._MAP: merged}
+        cloud.region_names_by_type = {
+            self._MAP: {"rid": dict(self._ROOMS), "zid": dict(self._ZONES)},
+        }
+        cloud.regions = [{"id": k, "name": v} for k, v in self._ROOMS.items()]
+        cloud.zones = [
+            {"id": k, "name": v, "zone_type": "flooring"} for k, v in self._ZONES.items()
+        ]
+        return cloud
+
+    def _backend(self):
+        from custom_components.roomba_plus.room_cleaning import ClassicRoomCleaning
+
+        backend = ClassicRoomCleaning.__new__(ClassicRoomCleaning)
+        data = MagicMock()
+        data.blid = "0123456789ABCDEF"
+        data.has_cloud = True
+        data.cloud_coordinator = self._cloud()
+        backend._data = data
+        backend._config_entry = MagicMock()
+        backend._config_entry.options = {}
+        return backend
+
+    async def test_a_zone_is_offered_as_a_zone_only(self) -> None:
+        ids = {s.id for s in await self._backend().get_segments()}
+
+        assert f"{self._MAP}_0" not in ids
+        assert f"{self._MAP}_1" not in ids
+        assert {f"{self._MAP}_zid_{z}" for z in self._ZONES} <= ids
+        assert {f"{self._MAP}_{r}" for r in self._ROOMS} <= ids
+        assert len(ids) == 16
+
+    async def test_the_check_sees_the_list_home_assistant_shows(self) -> None:
+        from custom_components.roomba_plus.room_cleaning import classic_segment_ids
+
+        backend = self._backend()
+        shown = {s.id for s in await backend.get_segments()}
+
+        assert classic_segment_ids(backend._data.cloud_coordinator, shown) == shown
+
+    def test_a_mapping_of_another_floor_is_compared_with_that_floor(self) -> None:
+        """Which map's rooms are offered follows the robot; a mapping made
+        on one floor is not "changed" because the robot went upstairs."""
+        from custom_components.roomba_plus.room_cleaning import classic_segment_ids
+
+        cloud = self._cloud()
+        cloud.region_names_by_type["UP_MAP"] = {"rid": {"30": "Attic"}, "zid": {}}
+        saved = {"UP_MAP_30", *(f"{self._MAP}_zid_{z}" for z in self._ZONES)}
+
+        assert classic_segment_ids(cloud, saved) == saved
+
+    def test_nothing_to_compare_before_the_maps_are_read(self) -> None:
+        from custom_components.roomba_plus.room_cleaning import classic_segment_ids
+
+        cloud = self._cloud()
+        cloud.active_pmap_id = None
+        assert classic_segment_ids(cloud, {"x"}) is None
+
+
 class TestClassicOffersEveryMapToo:
     """Parity with Prime for Home Assistant's area mapping.
 
@@ -2115,6 +2193,11 @@ class TestClassicOffersEveryMapToo:
         cloud = MagicMock()
         cloud.active_pmap_id = active
         cloud.regions_by_pmap = by_map
+        # The segment list reads rooms from here since 4.5.4, apart from
+        # the zones (classic_room_segments).
+        cloud.region_names_by_type = {
+            pmap_id: {"rid": dict(rooms), "zid": {}} for pmap_id, rooms in by_map.items()
+        }
         cloud.regions = [
             {"id": rid, "name": name}
             for rid, name in (by_map.get(active) or {}).items()

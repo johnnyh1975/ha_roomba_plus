@@ -40,7 +40,8 @@ import contextlib
 
 import logging
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any
+from collections.abc import Iterable
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
@@ -197,6 +198,108 @@ def _region_params(
     if sl is not None:
         fields["suction_level"] = sl
     return params_cls(**fields)
+
+
+def classic_room_segments(
+    cloud: Any, maps: list[str], floor_label: str | None, segment: Any
+) -> list[Any]:
+    """The rooms of `maps` as Clean Area segments, `{pmap_id}_{region_id}`.
+
+    ROOMS ONLY (4.5.4, @adamvig). This read `regions_by_pmap`, which
+    folds a map's rooms and zones into one dict by id. A zone whose
+    number no room has -- his "Front Door" (0) and "Back Door" (1) --
+    came through as a ROOM segment, beside its own zone segment; mapped
+    to an area, it would have been sent as room 0. `region_names_by_type`
+    keeps the two apart.
+
+    A name is offered once, the first map listed winning: the caller
+    puts the map most likely right first.
+    """
+    by_type = getattr(cloud, "region_names_by_type", None)
+    by_type = by_type if isinstance(by_type, dict) else {}
+    seen_names: set[str] = set()
+    out: list[Any] = []
+    for pmap_id in maps:
+        rooms = (by_type.get(pmap_id) or {}).get("rid") or {}
+        for region_id, region_name in rooms.items():
+            if not region_id or region_name in seen_names:
+                continue
+            seen_names.add(region_name)
+            out.append(segment(
+                id=f"{pmap_id}_{region_id}",
+                name=region_name or region_id,
+                group=floor_label,
+            ))
+    return out
+
+
+def classic_zone_segments(cloud: Any, active_pmap_id: str, segment: Any) -> list[Any]:
+    """The active map's zones as Clean Area segments, `{pmap_id}_zid_{id}`
+    (IA74-ZONE full, v2.7.0); the zone type is the group in HA's dialog."""
+    zones = getattr(cloud, "zones", None)
+    out: list[Any] = []
+    for zone in zones if isinstance(zones, list) else []:
+        zid = zone.get("id")
+        if not zid:
+            continue
+        zone_type = zone.get("zone_type", "zone")
+        out.append(segment(
+            id=f"{active_pmap_id}_zid_{zid}",
+            name=zone.get("name") or f"Zone {zid}",
+            group=zone_type.replace("_", " ").capitalize() if zone_type else "Zone",
+        ))
+    return out
+
+
+class _SegmentId(NamedTuple):
+    id: str
+    name: str
+    group: str | None
+
+
+def classic_segment_ids(cloud: Any, saved_ids: Iterable[str]) -> set[str] | None:
+    """The segment ids a Classic robot offers now for the maps of
+    `saved_ids` -- what the change check compares the saved mapping with.
+
+    THE SAME LIST HOME ASSISTANT SHOWS (4.5.4, @adamvig). The check built
+    its ids from `regions` alone -- the active map's rooms -- while the
+    list it is compared with also has the zones (since v2.7.0) and rooms
+    of other maps (since 4.1). On any robot with zones the two never
+    matched, and "Vacuum segments have changed" came back every few days
+    with nothing to remap.
+
+    For the maps the saved mapping names, not for where the robot is
+    now: which map's rooms are offered follows the robot, and a mapping
+    made on one floor is not "changed" because the robot went to the
+    other. None while the account's maps are not read.
+    """
+    active = getattr(cloud, "active_pmap_id", None)
+    if not active:
+        return None
+    by_type = getattr(cloud, "region_names_by_type", None)
+    by_type = by_type if isinstance(by_type, dict) else {}
+    known = [active, *(m for m in by_type if m != active)]
+    room_maps: set[str] = set()
+    for saved in saved_ids:
+        if "_zid_" in saved:
+            continue
+        # The longest map id first: map ids may contain "_".
+        for pmap_id in sorted(known, key=len, reverse=True):
+            if saved.startswith(f"{pmap_id}_"):
+                room_maps.add(pmap_id)
+                break
+    maps = [m for m in known if m in room_maps] or [active]
+    ids = {s.id for s in classic_room_segments(cloud, maps, None, _SegmentId)}
+    if not ids:
+        # As get_segments(): without per-map names, the active map's list.
+        regions = getattr(cloud, "regions", None)
+        ids = {
+            f"{active}_{r['id']}"
+            for r in (regions if isinstance(regions, list) else [])
+            if r.get("id")
+        }
+    ids |= {s.id for s in classic_zone_segments(cloud, active, _SegmentId)}
+    return ids
 
 
 async def _maps_to_offer(backend: Any, all_map_ids: list[str]) -> list[str]:
@@ -2589,11 +2692,8 @@ class ClassicRoomCleaning(RoomCleaningBackend):
         # THE ACTIVE MAP GOES FIRST so its names win a duplicate --
         # "Hallway" upstairs and downstairs is ordinary, and the floor
         # the robot is on is the reading that is right more often.
-        by_map: dict[str, dict[str, str]] = dict(
-            getattr(self._cloud, "regions_by_pmap", None) or {}
-        )
-        seen_names: set[str] = set()
-        segments: list[Any] = []
+        _by_type = getattr(self._cloud, "region_names_by_type", None)
+        by_map: dict[str, Any] = dict(_by_type) if isinstance(_by_type, dict) else {}
         # SAME RULE AS THE ROOM LIST. This offers rooms and zones from
         # every map the cloud knows; a robot can only clean the one it
         # is standing on, and the rest produce error 224.
@@ -2604,18 +2704,12 @@ class ClassicRoomCleaning(RoomCleaningBackend):
         with contextlib.suppress(Exception):
             _offerable_maps = await _maps_to_offer(self, list(by_map))
 
-        for pmap_id in [active_pmap_id, *(m for m in by_map if m != active_pmap_id)]:
-            if _offerable_maps is not None and pmap_id not in _offerable_maps:
-                continue
-            for region_id, region_name in (by_map.get(pmap_id) or {}).items():
-                if not region_id or region_name in seen_names:
-                    continue
-                seen_names.add(region_name)
-                segments.append(Segment(
-                    id=f"{pmap_id}_{region_id}",
-                    name=region_name or region_id,
-                    group=floor_label,
-                ))
+        maps = [
+            pmap_id
+            for pmap_id in [active_pmap_id, *(m for m in by_map if m != active_pmap_id)]
+            if _offerable_maps is None or pmap_id in _offerable_maps
+        ]
+        segments = classic_room_segments(self._cloud, maps, floor_label, Segment)
         if not segments:
             # No per-map data yet: fall back to the active map's own
             # list, which is what this did before and is still right
@@ -2629,21 +2723,9 @@ class ClassicRoomCleaning(RoomCleaningBackend):
                 for region in self._cloud.regions
                 if region.get("id")
             ]
-        # IA74-ZONE full (v2.7.0): zone segments (zid).
-        # Zone segment IDs use the format "{pmap_id}_zid_{zone_id}" so
-        # async_clean_segments can distinguish them from room segments.
-        # Zone type is surfaced as the group label for HA's mapping UI.
-        for zone in self._cloud.zones:
-            zid = zone.get("id")
-            if not zid:
-                continue
-            zone_type = zone.get("zone_type", "zone")
-            zone_name = zone.get("name") or f"Zone {zid}"
-            segments.append(Segment(
-                id=f"{active_pmap_id}_zid_{zid}",
-                name=zone_name,
-                group=zone_type.replace("_", " ").capitalize() if zone_type else "Zone",
-            ))
+        # Zone segment ids carry "_zid_" so clean_segments can tell them
+        # from rooms (classic_zone_segments).
+        segments.extend(classic_zone_segments(self._cloud, active_pmap_id, Segment))
         return segments
 
     async def clean_segments(self, segment_ids: list[str]) -> None:

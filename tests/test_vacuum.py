@@ -570,6 +570,27 @@ class TestChangeDetection:
         assert v._segment_mismatch_streak == 1
         v.async_create_segments_issue.assert_not_called()
 
+    def test_zones_in_the_mapping_are_no_change(self):
+        """@adamvig: rooms and zones mapped, nothing changed, and the
+        check compared the mapping with the rooms alone."""
+        from homeassistant.components.vacuum import Segment
+        data = _make_smart_data()
+        data.cloud_coordinator.region_names_by_type = {
+            "MAP001": {"rid": {"19": "Living Room", "21": "Kitchen"}, "zid": {"0": "Door"}},
+        }
+        data.cloud_coordinator.zones = [{"id": "0", "name": "Door", "zone_type": "other"}]
+        v = _make_vacuum_entity(runtime_data=data)
+        v.last_seen_segments = [
+            Segment(id="MAP001_19", name="Living Room"),
+            Segment(id="MAP001_21", name="Kitchen"),
+            Segment(id="MAP001_zid_0", name="Door"),
+        ]
+        v.async_create_segments_issue = MagicMock()
+        for _ in range(v._SEGMENT_MISMATCH_DEBOUNCE + 1):
+            v._handle_coordinator_update()
+        v.async_create_segments_issue.assert_not_called()
+        assert v._segment_mismatch_streak == 0
+
     def test_no_issue_when_no_cloud(self):
         from homeassistant.components.vacuum import Segment
         data = _make_smart_data(has_data=False)

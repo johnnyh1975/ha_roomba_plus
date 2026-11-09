@@ -660,6 +660,9 @@
       "rooms_map": {
         "default": "mdi:floor-plan"
       },
+      "floor_plan": {
+        "default": "mdi:floor-plan"
+      },
       "raw_map": {
         "default": "mdi:map-outline"
       },

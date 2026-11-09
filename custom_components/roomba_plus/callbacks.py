@@ -27,6 +27,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_send
 
 from .position_room import PositionRoomTracker
 from .const import (
+    door_width_mm,
     lifetime_hours,
     IN_MISSION_COMMANDS,
     mission_command,
@@ -3428,12 +3429,24 @@ def _umf_version_changed(
     coordinator: Any,
     entry: "RoombaConfigEntry",
 ) -> bool:
-    """Return True when the active UMF version differs from the last aligned version."""
+    """True when the cloud's UMF is another map or another version than
+    the one the aligner was built from.
+
+    THE MAP COUNTS TOO (4.5.4). With more than one Smart Map the UMF can
+    switch maps (see `cloud_coordinator.displayed_pmap_id`); a version
+    is a timestamp, and two maps are not kept from having equal ones.
+    An aligner without a map id (built before 4.5.4) is compared by
+    version only, as before.
+    """
     current_version = coordinator.umf_data.get("version_id")
     if not current_version:
         return False
     aligner = entry.runtime_data.umf_aligner
     if aligner is None:
+        return True
+    current_map = coordinator.umf_data.get("pmap_id")
+    aligned_map = getattr(aligner, "pmap_id", "")
+    if isinstance(aligned_map, str) and aligned_map and current_map and aligned_map != current_map:
         return True
     return bool(aligner.pmap_version_id != current_version)
 
@@ -3443,19 +3456,22 @@ async def _async_realign(
     entry: "RoombaConfigEntry",
     coordinator: Any,
 ) -> None:
-    """Re-instantiate and run UmfAligner after a pmap version change."""
-    from .umf_aligner import UmfAligner
+    """Re-instantiate and run UmfAligner after a pmap version change.
+
+    Built like the one at setup (aligner_from_umf, 4.5.4): from the map's
+    own regions, which carry the room outlines. The room list it used
+    before has none, so a new map version emptied the rooms map.
+    """
+    from .umf_aligner import aligner_from_umf
     data = entry.runtime_data
-    if not coordinator.umf_data.get("points2d") or not coordinator.regions:
-        return
-    if data.geometry_store is None:
-        return
-    aligner = UmfAligner(
-        points2d=coordinator.umf_data["points2d"],
-        regions=coordinator.regions,
-        geometry_store=data.geometry_store,
-        pmap_version_id=coordinator.umf_data.get("version_id", ""),
+    aligner = aligner_from_umf(
+        coordinator.umf_data,
+        coordinator.regions,
+        data.geometry_store,
+        door_mm=door_width_mm(getattr(entry, "options", None)),
     )
+    if aligner is None:
+        return
     conf = await hass.async_add_executor_job(aligner.align)
     data.umf_aligner = aligner
     _LOGGER.info(
@@ -3621,23 +3637,21 @@ async def _async_bootstrap_umf_aligner(
     if aligner is None:
         if gs is None:
             return
-        points2d = coordinator.umf_data.get("points2d")
-        umf_regions = coordinator.umf_data.get("regions") or []
-        regions = umf_regions or coordinator.regions
-        if not points2d or not regions:
+        from .umf_aligner import aligner_from_umf
+        built = aligner_from_umf(
+            coordinator.umf_data,
+            coordinator.regions,
+            gs,
+            door_mm=door_width_mm(getattr(entry, "options", None)),
+        )
+        if built is None:
             _LOGGER.debug(
                 "GS-SMART-UMF: still no points2d/regions for %s — nothing "
                 "to bootstrap yet, will check again next refresh.",
                 entry.data.get(CONF_BLID, "unknown"),
             )
             return
-        from .umf_aligner import UmfAligner
-        aligner = UmfAligner(
-            points2d=points2d,
-            regions=regions,
-            geometry_store=gs,
-            pmap_version_id=coordinator.umf_data.get("version_id", ""),
-        )
+        aligner = built
         conf = await hass.async_add_executor_job(aligner.align)
         data.umf_aligner = aligner
         _LOGGER.info(

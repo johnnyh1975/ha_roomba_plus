@@ -1882,6 +1882,9 @@
       "rooms_map": {
         "name": "Room map"
       },
+      "floor_plan": {
+        "name": "Floor plan {map}"
+      },
       "cleaning_map": {
         "name": "Live cleaning map"
       },

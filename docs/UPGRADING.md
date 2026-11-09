@@ -9,6 +9,24 @@ note are listed — most releases need zero action beyond updating.
 
 ---
 
+## v4.5.4 — from v4.5.x
+
+Nothing to do. Two visible changes:
+
+- **With more than one Smart Map, the rooms map can show another map
+  than before.** It shows the map your last command went to; without
+  such a command, the map edited most recently. Before, it showed the
+  map the iRobot cloud listed first. A robot with one map shows the same
+  map as before. Commands and the room list are unchanged.
+- **New, disabled: a floor plan of each map** (`image.<robot>_floor_plan_<map>`).
+  Nothing appears and nothing is read from the cloud until you enable one.
+- **"Vacuum segments have changed" may appear once more** on a Classic
+  robot with zones: a zone whose number no room has was also offered as
+  a room, and that duplicate is gone. Open the repair and save. If you
+  had mapped such a duplicate to an area, map the zone entry instead.
+
+---
+
 ## v4.5.3 — from v4.5.x
 
 - **A 600-series Roomba added through the iRobot account** (SKU starting

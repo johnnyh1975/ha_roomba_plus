@@ -89,8 +89,7 @@ from .const import (
     CONF_MAP_ENABLED,
     CONF_MAP_ROTATION,
     CONF_MAP_SCALE,
-    CONF_DOOR_WIDTH_CM,
-    DEFAULT_DOOR_WIDTH_CM,
+    door_width_mm,
     CONF_MAP_SIZE_PX,
     CONF_PRESENCE_SCHEDULING_ENABLED,
     CONF_DEMAND_CLEANING_ENABLED,
@@ -1101,18 +1100,17 @@ async def _phase_cloud(ctx: _SetupContext) -> None:
                 config_entry.data[CONF_BLID],
             )
         else:
-            from .umf_aligner import UmfAligner
-            _aligner = UmfAligner(
-                points2d=_points2d,
-                regions=_regions,
-                geometry_store=ctx.geometry_store,
-                pmap_version_id=cloud_coordinator.umf_data.get("version_id", ""),
-                # The door width the user set (4.5.0) bounds the door
-                # gaps the alignment matches.
-                door_mm=10.0 * float(config_entry.options.get(
-                    CONF_DOOR_WIDTH_CM, DEFAULT_DOOR_WIDTH_CM
-                )),
+            from .umf_aligner import aligner_from_umf
+            # The door width the user set (4.5.0) bounds the door gaps the
+            # alignment matches. One builder for setup, rebuild and
+            # bootstrap (4.5.4): see aligner_from_umf().
+            _aligner = aligner_from_umf(
+                cloud_coordinator.umf_data,
+                cloud_coordinator.regions,
+                ctx.geometry_store,
+                door_mm=door_width_mm(config_entry.options),
             )
+            assert _aligner is not None  # noqa: S101 -- inputs checked above
             _conf = await hass.async_add_executor_job(_aligner.align)
             umf_aligner = _aligner
             _LOGGER.info(

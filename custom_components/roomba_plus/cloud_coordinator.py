@@ -452,6 +452,126 @@ def pmap_record_id(pmap: dict[str, Any]) -> str | None:
     return str(value) if value else None
 
 
+#: Smart Map localization failed: the robot could not place itself on the
+#: map a command named. The same value as room_cleaning's constant.
+_LOCALIZATION_FAILED = 224
+
+
+def newest_pmap_id(pmaps: list[dict[str, Any]]) -> str | None:
+    """The map with the newest version timestamp (PMAP-NEWEST, v2.7.4).
+
+    What `active_pmap_id` has always returned for cloud data, here as a
+    function of the list so the UMF fetch can use it before the first
+    refresh has set `data`. "Most recently edited", not where the robot
+    is: running a mission does not change it (@ScenicSystemsLLC).
+    """
+    best_pid: str | None = None
+    best_ts: str = ""
+    for pmap in pmaps:
+        if not isinstance(pmap, dict):
+            continue
+        details = pmap.get("active_pmapv_details") or {}
+        pmapv = details.get("active_pmapv") or {}
+        pid = pmapv.get("pmap_id")
+        if not pid:
+            continue
+        ts: str = (
+            pmapv.get("last_user_pmapv_id", "")   # Variant B — lewis 22.52.x
+            or pmapv.get("active_pmapv_id", "")   # Variant A
+            or pmap.get("active_pmapv_id", "")    # Variant C — root level (ia74 / older fw)
+        )
+        if ts > best_ts:
+            best_pid = pid
+            best_ts = ts
+    return best_pid
+
+
+def displayed_pmap(
+    pmaps: list[dict[str, Any]], robot_state: dict[str, Any] | None
+) -> tuple[str | None, str]:
+    """The map whose floor plan Roomba+ shows, and why (4.5.4).
+
+    ONE MAP: that map, whatever else is said. This is every robot with a
+    single Smart Map, and nothing about them changes.
+
+    MORE THAN ONE: the map the robot's last command went to
+    (`lastCommand.pmap_id`), because that is where it cleaned and where
+    it stands until someone carries it. @ScenicSystemsLLC keeps maps of
+    areas his robots are carried into; the floor plan stayed on the map
+    edited last, while the mission ran on another one, and nothing of it
+    showed. Not after "Smart Map localization failed" (224): then the
+    robot did not get onto that map. Otherwise the newest version, the
+    rule the room list uses; failing that, the first map listed, which is
+    what the fetch took before 4.5.4 -- and which did not have to be the
+    map the room names came from.
+
+    Only what is shown. Room and zone commands keep going to the map of
+    their room.
+    """
+    ids: list[str] = []
+    for pmap in pmaps:
+        pid = pmap_record_id(pmap) if isinstance(pmap, dict) else None
+        if pid and pid not in ids:
+            ids.append(pid)
+    if not ids:
+        return None, "none"
+    if len(ids) == 1:
+        return ids[0], "only_map"
+    state = robot_state if isinstance(robot_state, dict) else {}
+    last = state.get("lastCommand")
+    hint = last.get("pmap_id") if isinstance(last, dict) else None
+    if isinstance(hint, str) and hint in ids:
+        status = state.get("cleanMissionStatus")
+        error = status.get("error") if isinstance(status, dict) else None
+        if error != _LOCALIZATION_FAILED:
+            return hint, "last_command"
+    newest = newest_pmap_id(pmaps)
+    if newest in ids:
+        return newest, "newest_version"
+    return ids[0], "first_listed"
+
+
+#: A floor plan whose fetch failed is asked for again after this many
+#: seconds, not on every frontend refresh (4.5.4).
+FLOOR_PLAN_RETRY_SEC = 3600
+
+
+def stored_maps(cloud_data: Any) -> list[tuple[str, str]]:
+    """(pmap_id, name) of every Smart Map the account keeps, in the
+    cloud's order (4.5.4). The name is the one the iRobot app shows
+    (`map_header.name`); a map without one is named by its id."""
+    out: list[tuple[str, str]] = []
+    if not isinstance(cloud_data, dict):
+        return out
+    for pmap in cloud_data.get("pmaps") or []:
+        if not isinstance(pmap, dict):
+            continue
+        pid = pmap_record_id(pmap)
+        if not pid or any(pid == known for known, _ in out):
+            continue
+        header = (pmap.get("active_pmapv_details") or {}).get("map_header") or {}
+        name = header.get("name") if isinstance(header, dict) else None
+        out.append((pid, str(name) if name else pid))
+    return out
+
+
+def umf_rooms(umf_raw: Any) -> dict[str, Any]:
+    """Wall points and regions of a UMF response, across its maps[].
+
+    The two lists the floor plan of one map needs (4.5.4); the same
+    fields the active map's fetch collects.
+    """
+    points2d: list[Any] = []
+    regions: list[Any] = []
+    maps = umf_raw.get("maps") if isinstance(umf_raw, dict) else None
+    for m in maps or []:
+        if not isinstance(m, dict):
+            continue
+        points2d.extend(m.get("points2d") or [])
+        regions.extend(m.get("regions") or [])
+    return {"points2d": points2d, "regions": regions}
+
+
 def committed_pmapv_id(cloud_data: Any, pmap_id: str | None) -> str | None:
     """The committed version of the map `pmap_id`, from cloud data.
 
@@ -748,6 +868,18 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.daily_dirt_density: dict[str, float] = {}
         # IA74-PMAP: pmap_id seeded from local MQTT before first cloud fetch
         self._seeded_pmap_id: str | None = None
+        #: lastCommand and cleanMissionStatus as the robot reported them at
+        #: setup, for displayed_pmap() before runtime data exists (4.5.4).
+        self._seeded_state: dict[str, Any] = {}
+        #: Why the floor plan shows the map it shows (displayed_pmap); for
+        #: the diagnostics. None until the first fetch.
+        self.displayed_map_source: str | None = None
+        #: The floor plan of each map, by (pmap_id, version), fetched only
+        #: when an enabled floor plan image asks (4.5.4); in memory only.
+        self._floor_plans: dict[tuple[str, str], dict[str, Any]] = {}
+        #: When a floor plan fetch last failed, by (pmap_id, version).
+        self._floor_plan_failed: dict[tuple[str, str], float] = {}
+        self._floor_plan_lock = asyncio.Lock()
         #: The header angles of the robot's own map version, by
         #: (pmap_id, version_id); see _robot_version_orientation().
         self._robot_version_angles: dict[tuple[str, str], dict[str, Any] | None] = {}
@@ -1297,23 +1429,10 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         #
         # The robot's actual location, where it reports one, is
         # `cleanMissionStatus.p2mapId` -- see `where_the_robot_is()`.
-        best_pid: str | None = None
-        best_ts: str = ""
-        for pmap in self.data.get("pmaps", []):
-            details = pmap.get("active_pmapv_details") or {}
-            pmapv = details.get("active_pmapv") or {}
-            pid = pmapv.get("pmap_id")
-            if not pid:
-                continue
-            ts: str = (
-                pmapv.get("last_user_pmapv_id", "")   # Variant B — lewis 22.52.x
-                or pmapv.get("active_pmapv_id", "")   # Variant A
-                or pmap.get("active_pmapv_id", "")    # Variant C — root level (ia74 / older fw)
-            )
-            if ts > best_ts:
-                best_pid = pid
-                best_ts = ts
-        return best_pid or getattr(self, "_seeded_pmap_id", None)
+        return (
+            newest_pmap_id(self.data.get("pmaps", []))
+            or getattr(self, "_seeded_pmap_id", None)
+        )
 
     @property
     def active_user_pmapv_id(self) -> str | None:
@@ -1370,6 +1489,14 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         Args:
             reported_state: the reported section of the robot's MQTT state.
         """
+        # The robot's last command and mission status, for the map the
+        # floor plan shows (displayed_pmap, 4.5.4), until runtime data
+        # can be read. Kept even when cloud data is already there.
+        self._seeded_state = {
+            key: dict(reported_state[key])
+            for key in ("lastCommand", "cleanMissionStatus")
+            if isinstance(reported_state.get(key), dict)
+        }
         if self.data is not None:
             return   # cloud data already present — don't override
         pmaps: list[dict[str, Any]] = reported_state.get("pmaps", [])
@@ -1663,6 +1790,84 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 centroids.append({"x": cx, "y": cy, "space": "umf"})
         return centroids
 
+    def floor_plan_version(self, pmap_id: str) -> str | None:
+        """The version of `pmap_id` its floor plan is drawn from: the one a
+        room command carries (pmap_committed_version), as for the rooms
+        map. None when the account does not list the map."""
+        for pmap in (self.data or {}).get("pmaps") or []:
+            if isinstance(pmap, dict) and pmap_record_id(pmap) == pmap_id:
+                return pmap_committed_version(pmap)
+        return None
+
+    async def async_floor_plan(self, pmap_id: str) -> dict[str, Any] | None:
+        """Wall points, regions and version of one map's floor plan (4.5.4).
+
+        FOR ANY MAP, NOT ONLY THE ONE SHOWN. @molnarpeterhu wanted each of
+        his maps as its own picture. Fetched once per version and kept in
+        memory; nothing is read for a map nobody asks about, so a robot
+        whose floor plan images stay disabled -- the default -- costs no
+        call at all. The map the rooms map already shows is taken from
+        that fetch.
+
+        A failed fetch is kept to its map and tried again after
+        FLOOR_PLAN_RETRY_SEC. None when there is nothing to draw.
+        """
+        version = self.floor_plan_version(pmap_id)
+        if not version:
+            return None
+        key = (pmap_id, version)
+        async with self._floor_plan_lock:
+            if key in self._floor_plans:
+                return self._floor_plans[key]
+            failed = self._floor_plan_failed.get(key)
+            if failed is not None and dt_util.utcnow().timestamp() - failed < FLOOR_PLAN_RETRY_SEC:
+                return None
+            shown = (self.data or {}).get("umf") or {}
+            plan: dict[str, Any]
+            if shown.get("pmap_id") == pmap_id and shown.get("version_id") == version:
+                plan = {
+                    "points2d": list(shown.get("points2d") or []),
+                    "regions": list(shown.get("regions") or []),
+                }
+            else:
+                try:
+                    raw = await self.api.get_pmap_umf(self.blid, pmap_id, version)
+                except Exception as exc:  # noqa: BLE001 -- one map's picture
+                    self._floor_plan_failed[key] = dt_util.utcnow().timestamp()
+                    _LOGGER.debug(
+                        "iRobot cloud: floor plan of map %s (version %s) not read "
+                        "for %s -- %s: %s",
+                        pmap_id, version, self.blid, type(exc).__name__, exc,
+                    )
+                    return None
+                plan = umf_rooms(raw)
+            plan["version_id"] = version
+            # One version per map is enough: an older one is never drawn again.
+            for old in [k for k in self._floor_plans if k[0] == pmap_id]:
+                del self._floor_plans[old]
+            self._floor_plans[key] = plan
+            self._floor_plan_failed.pop(key, None)
+            return plan
+
+    def _robot_state(self) -> dict[str, Any]:
+        """The robot's reported state, for displayed_pmap() (4.5.4).
+
+        From the runtime data once the entry has it, otherwise what was
+        seeded at setup. Read defensively: on a cloud-only entry there is
+        no local state, and an empty dict is the honest answer.
+        """
+        runtime = getattr(self.config_entry, "runtime_data", None)
+        getter = getattr(runtime, "roomba_reported_state", None)
+        if callable(getter):
+            try:
+                state = getter()
+            except Exception:  # noqa: BLE001 -- a hint, never a failure
+                state = None
+            if isinstance(state, dict) and state:
+                return state
+        seeded = getattr(self, "_seeded_state", None)
+        return seeded if isinstance(seeded, dict) else {}
+
     async def _fetch_active_umf(
         self, pmaps: list[dict[str, Any]]
     ) -> dict[str, Any] | None:
@@ -1680,18 +1885,17 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         Returns None when no active pmap or UMF fetch fails.
         """
-        # Resolve active_pmap_id directly from the pmaps list passed in.
-        # Do NOT use self.active_pmap_id here — that reads self.data which is
-        # None during the first _async_update_data call (HA only sets self.data
-        # after a successful return). Using self.data would always return None
-        # on the first update, silently skipping the UMF fetch every startup.
-        active_id: str | None = None
-        for _p in pmaps:
-            _pmapv = (_p.get("active_pmapv_details") or {}).get("active_pmapv") or {}
-            _pid = _pmapv.get("pmap_id") or _p.get("pmap_id")
-            if _pid:
-                active_id = _pid
-                break
+        # Resolved from the pmaps list passed in, not from self.data: that
+        # is None during the first _async_update_data call (HA only sets
+        # self.data after a successful return), and the fetch would be
+        # skipped on every startup.
+        #
+        # WHICH MAP (4.5.4): displayed_pmap(). With one map it is that
+        # map, as before. With more, it was the first one listed, which
+        # need not be the map the room names come from (`regions`, the
+        # newest version) nor the one the robot cleaned on.
+        active_id, source = displayed_pmap(pmaps, self._robot_state())
+        self.displayed_map_source = source
 
         if not active_id:
             _LOGGER.debug(

@@ -1949,16 +1949,17 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         if last_seen is None:
             return  # never configured — suppress Repair Issue
 
-        active_pmap = data.cloud_coordinator.active_pmap_id
-        if not active_pmap:
+        # THE LIST HOME ASSISTANT SHOWS, for the maps the mapping names
+        # (4.5.4, @adamvig): rooms AND zones. Built from the active map's
+        # rooms alone, this never matched on a robot with zones.
+        from .room_cleaning import classic_segment_ids  # noqa: PLC0415
+
+        saved_ids = {seg.id for seg in last_seen}
+        current_ids = classic_segment_ids(data.cloud_coordinator, saved_ids)
+        if current_ids is None:
             # Coordinator not yet fetched — avoid false positive Repair Issue
             return
-        current_ids = {
-            f"{active_pmap}_{r['id']}"
-            for r in data.cloud_coordinator.regions
-            if r.get("id")
-        }
-        if current_ids != {seg.id for seg in last_seen}:
+        if current_ids != saved_ids:
             self._segment_mismatch_streak += 1
             if self._segment_mismatch_streak >= self._SEGMENT_MISMATCH_DEBOUNCE:
                 # Same as above: Home Assistant's, absent from the

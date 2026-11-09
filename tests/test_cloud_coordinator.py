@@ -1947,6 +1947,201 @@ class TestFetchActiveUmf:
         assert geo["observed_zones"] == [{"id": "o1", "space": "umf"}]
 
 
+def _versioned(pid, version):
+    """A pmap record as the cloud lists it, with its version timestamp."""
+    return {"active_pmapv_details": {"active_pmapv": {
+        "pmap_id": pid, "active_pmapv_id": version,
+    }}}
+
+
+class TestWhichMapTheFloorPlanShows:
+    """4.5.4, @ScenicSystemsLLC: with more than one Smart Map the floor
+    plan follows the map the last command went to. One map: that map,
+    whatever the robot says."""
+
+    _OLD = _versioned("old-map", "260101T080000")
+    _NEW = _versioned("new-map", "260601T080000")
+
+    def test_one_map_is_that_map_whatever_the_robot_says(self):
+        from custom_components.roomba_plus.cloud_coordinator import displayed_pmap
+
+        state = {"lastCommand": {"pmap_id": "elsewhere"},
+                 "cleanMissionStatus": {"error": 224}}
+        assert displayed_pmap([self._NEW], state) == ("new-map", "only_map")
+        assert displayed_pmap([{}, self._NEW], None) == ("new-map", "only_map")
+
+    def test_without_a_command_it_is_the_map_the_room_list_uses(self):
+        """Listed oldest first, the fetch took the old map while the room
+        names came from the newest one."""
+        from custom_components.roomba_plus.cloud_coordinator import (
+            displayed_pmap,
+            newest_pmap_id,
+        )
+
+        pmaps = [self._OLD, self._NEW]
+        assert displayed_pmap(pmaps, {}) == ("new-map", "newest_version")
+        assert newest_pmap_id(pmaps) == "new-map"
+
+    def test_the_last_command_decides(self):
+        from custom_components.roomba_plus.cloud_coordinator import displayed_pmap
+
+        state = {"lastCommand": {"pmap_id": "old-map"},
+                 "cleanMissionStatus": {"error": 0}}
+        assert displayed_pmap([self._OLD, self._NEW], state) == (
+            "old-map", "last_command",
+        )
+
+    @pytest.mark.parametrize("state", [
+        {"lastCommand": {"pmap_id": "old-map"}, "cleanMissionStatus": {"error": 224}},
+        {"lastCommand": {"pmap_id": "deleted-map"}},
+        {"lastCommand": {"command": "start"}},
+        {"lastCommand": None},
+    ])
+    def test_a_command_that_did_not_get_there_does_not_count(self, state):
+        """224: the robot could not place itself on that map. A map the
+        account no longer has, or a start that named none, says nothing."""
+        from custom_components.roomba_plus.cloud_coordinator import displayed_pmap
+
+        assert displayed_pmap([self._OLD, self._NEW], state) == (
+            "new-map", "newest_version",
+        )
+
+    def test_without_version_stamps_it_is_the_first_listed_as_before(self):
+        from custom_components.roomba_plus.cloud_coordinator import displayed_pmap
+
+        pmaps = [{"pmap_id": "a"}, {"pmap_id": "b"}]
+        assert displayed_pmap(pmaps, {}) == ("a", "first_listed")
+
+    @pytest.mark.asyncio
+    async def test_the_fetch_reads_the_map_of_the_last_command(self, hass):
+        c = _coordinator(hass, umf={"maps": []})
+        c.config_entry.runtime_data.roomba_reported_state = MagicMock(
+            return_value={"lastCommand": {"pmap_id": "old-map"}}
+        )
+        geo = await c._fetch_active_umf([self._NEW, self._OLD])
+        c.api.get_pmap_umf.assert_awaited_once_with(
+            "CLOUDBLID1", "old-map", "260101T080000"
+        )
+        assert geo["pmap_id"] == "old-map"
+        assert c.displayed_map_source == "last_command"
+
+    @pytest.mark.asyncio
+    async def test_before_runtime_data_the_state_seeded_at_setup_counts(self, hass):
+        c = _coordinator(hass, umf={"maps": []})
+        c.seed_pmap_id_from_local({"lastCommand": {"pmap_id": "old-map"}})
+        await c._fetch_active_umf([self._NEW, self._OLD])
+        assert c.api.get_pmap_umf.await_args.args[1] == "old-map"
+
+    @pytest.mark.asyncio
+    async def test_without_a_command_the_fetch_reads_the_newest_map(self, hass):
+        """The room names come from the newest map (`regions`); the
+        outlines came from whichever the cloud listed first."""
+        c = _coordinator(hass, umf={"maps": []})
+        await c._fetch_active_umf([self._OLD, self._NEW])
+        assert c.api.get_pmap_umf.await_args.args[1] == "new-map"
+        assert c.displayed_map_source == "newest_version"
+
+    def test_the_active_map_is_still_the_newest_version(self, hass):
+        """What the room list, the zone selects and commands use is not
+        moved by the floor plan."""
+        c = _coordinator(hass)
+        c.data = {"pmaps": [self._OLD, self._NEW]}
+        c.seed_pmap_id_from_local({"lastCommand": {"pmap_id": "old-map"}})
+        assert c.active_pmap_id == "new-map"
+
+
+class TestTheFloorPlanOfAnyMap:
+    """4.5.4, @molnarpeterhu: each map as its own picture, fetched only
+    when an enabled picture asks, once per version."""
+
+    _UP = {"active_pmapv_details": {
+        "active_pmapv": {"pmap_id": "map-up", "active_pmapv_id": "v1"},
+        "map_header": {"name": "Upstairs"},
+    }}
+    _DOWN = {"active_pmapv_details": {
+        "active_pmapv": {"pmap_id": "map-down", "active_pmapv_id": "w1"},
+    }}
+    _UMF = {"maps": [
+        {"points2d": [{"id": "a"}], "regions": [{"id": "1"}]},
+        "junk",
+        {"points2d": [{"id": "b"}]},
+    ]}
+
+    def test_the_stored_maps_with_their_app_names(self):
+        from custom_components.roomba_plus.cloud_coordinator import stored_maps
+
+        data = {"pmaps": [self._UP, self._DOWN, self._UP, "junk"]}
+        assert stored_maps(data) == [("map-up", "Upstairs"), ("map-down", "map-down")]
+        assert stored_maps(None) == []
+
+    @pytest.mark.asyncio
+    async def test_fetched_once_per_version(self, hass):
+        c = _coordinator(hass, umf=self._UMF)
+        c.data = {"pmaps": [self._UP, self._DOWN]}
+
+        first = await c.async_floor_plan("map-up")
+        again = await c.async_floor_plan("map-up")
+
+        c.api.get_pmap_umf.assert_awaited_once_with("CLOUDBLID1", "map-up", "v1")
+        assert first is again
+        assert first == {
+            "points2d": [{"id": "a"}, {"id": "b"}],
+            "regions": [{"id": "1"}],
+            "version_id": "v1",
+        }
+
+    @pytest.mark.asyncio
+    async def test_a_new_version_is_fetched_and_the_old_one_dropped(self, hass):
+        c = _coordinator(hass, umf=self._UMF)
+        c.data = {"pmaps": [self._UP]}
+        await c.async_floor_plan("map-up")
+        c.data = {"pmaps": [_versioned("map-up", "v2")]}
+        await c.async_floor_plan("map-up")
+        assert [call.args[2] for call in c.api.get_pmap_umf.await_args_list] == ["v1", "v2"]
+        assert list(c._floor_plans) == [("map-up", "v2")]
+
+    @pytest.mark.asyncio
+    async def test_the_map_the_rooms_map_shows_costs_no_call(self, hass):
+        c = _coordinator(hass)
+        c.data = {"pmaps": [self._UP], "umf": {
+            "pmap_id": "map-up", "version_id": "v1",
+            "points2d": [{"id": "a"}], "regions": [{"id": "1"}],
+        }}
+        plan = await c.async_floor_plan("map-up")
+        c.api.get_pmap_umf.assert_not_awaited()
+        assert plan["points2d"] == [{"id": "a"}]
+
+    @pytest.mark.asyncio
+    async def test_a_map_the_account_does_not_list_is_not_fetched(self, hass):
+        c = _coordinator(hass)
+        c.data = {"pmaps": [self._UP]}
+        assert await c.async_floor_plan("map-gone") is None
+        c.data = None
+        assert await c.async_floor_plan("map-up") is None
+        c.api.get_pmap_umf.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_failed_fetch_waits_before_the_next_try(self, hass):
+        from datetime import timedelta
+
+        from homeassistant.util import dt as dt_util
+
+        from custom_components.roomba_plus.cloud_coordinator import FLOOR_PLAN_RETRY_SEC
+
+        c = _coordinator(hass, error=RuntimeError("cloud"))
+        c.data = {"pmaps": [self._UP]}
+        now = dt_util.utcnow()
+        with patch.object(dt_util, "utcnow", return_value=now):
+            assert await c.async_floor_plan("map-up") is None
+            assert await c.async_floor_plan("map-up") is None
+        assert c.api.get_pmap_umf.await_count == 1
+        later = now + timedelta(seconds=FLOOR_PLAN_RETRY_SEC + 1)
+        c.api.get_pmap_umf = AsyncMock(return_value=self._UMF)
+        with patch.object(dt_util, "utcnow", return_value=later):
+            assert await c.async_floor_plan("map-up") is not None
+        assert ("map-up", "v1") not in c._floor_plan_failed
+
+
 def _header_umf(user, robot):
     return {"maps": [{"map_header": {
         "user_orientation_rad": user, "robot_orientation_rad": robot,
