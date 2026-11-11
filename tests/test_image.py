@@ -4341,6 +4341,118 @@ class TestPrimeRoomsRender:
         im = _decode(r._render_png())
         assert im.size[0] > 0
 
+    @staticmethod
+    def _mode_map(hass, bundle, *, positions=(), cycle=None, show_live=True):
+        entry = _real_entry(hass)
+        entry.runtime_data.prime_positions = list(positions)
+        entry.runtime_data.prime_status_coordinator = SimpleNamespace(data={
+            "ro-currentstate": {"cleanMissionStatus": {"cycle": cycle}},
+        })
+        entity = img.PrimeRoomsImage("synthetic", entry, hass)
+        entity._polygons = {"3": _square(0, 0, 12000)}
+        entity._floor_plan = PrimeFloorPlan(
+            room_names={}, room_polygons=entity._polygons, floor_plan=[],
+            borders=[], carpet=[], furniture=[], dock=None, p2map_id="synthetic-map",
+        )
+        entity._live_bundle = bundle
+        entity._show_live_overlay = show_live
+        image = _decode(entity._render_png()).convert("RGB")
+
+        def pixel(x, y):
+            position = entity._renderer._mm_to_px_fit(x * 1000, y * 1000)
+            return image.getpixel(tuple(map(round, position)))
+
+        return pixel
+
+    @staticmethod
+    def _mode_feature(kind, coordinates, modes):
+        return {
+            "type": "Feature",
+            "properties": {"operatingModes": modes},
+            "geometry": {"type": kind, "coordinates": coordinates},
+        }
+
+    @pytest.mark.parametrize(
+        ("modes", "area_color", "path_color"),
+        [
+            (["vacuuming"], (183, 225, 205), (54, 151, 100)),
+            (["mopping"], (207, 227, 252), (22, 128, 228)),
+            (["mopping", "vacuuming", "vacuuming"], (212, 239, 246), (41, 139, 168)),
+            (["traveling"], (30, 30, 30), (130, 139, 142)),
+            (None, (120, 190, 145), (80, 150, 235)),
+            ([], (120, 190, 145), (80, 150, 235)),
+            (["unrecognised"], (120, 190, 145), (80, 150, 235)),
+            ("mopping", (120, 190, 145), (80, 150, 235)),
+        ],
+    )
+    def test_map_colors_each_reported_mode(self, hass, modes, area_color, path_color):
+        pixel = self._mode_map(hass, {
+            "coverage": self._mode_feature("Polygon", [_square(1, 1, 2)], modes),
+            "trajectories": self._mode_feature("LineString", [[1, 4], [3, 4]], modes),
+        })
+        assert pixel(2, 2) == area_color
+        assert pixel(2, 4) == path_color
+
+    def test_mixed_coverage_preserves_holes_and_islands(self, hass):
+        combo = self._mode_feature(
+            "MultiPolygon", [[_square(4, 4, 1)], [_square(1, 1, 8), _square(3, 3, 4)]],
+            ["vacuuming", "mopping"],
+        )
+        vacuum = self._mode_feature("Polygon", [_square(1, 1, 5)], ["vacuuming"])
+        travel = self._mode_feature("Polygon", [_square(7, 7, 3)], ["traveling"])
+        pixel = self._mode_map(hass, {
+            "coverage": {"type": "FeatureCollection", "features": [combo, vacuum, travel]},
+        })
+        assert pixel(2, 2) == (212, 239, 246)  # Combo wins in overlap, irrespective of order.
+        assert pixel(3.5, 3.5) == (183, 225, 205)  # Hole reveals the vacuum layer.
+        assert pixel(4.5, 4.5) == (212, 239, 246)  # Island survives the surrounding hole.
+        assert pixel(6.5, 6.5) == (30, 30, 30)
+        assert pixel(9.5, 9.5) == (30, 30, 30)  # Travel never paints coverage.
+
+    def test_invalid_geometries_do_not_hide_valid_features(self, hass):
+        invalid_ring = [(1, 1), (2, float("nan")), (3, 3)]
+        pixel = self._mode_map(hass, {
+            "coverage": {"features": [
+                None, {"geometry": "invalid"},
+                self._mode_feature("MultiPolygon", [None, []], ["mopping"]),
+                self._mode_feature("Polygon", [invalid_ring, _square(1, 1, 3)], ["mopping"]),
+                self._mode_feature("Point", [1, 1], ["mopping"]),
+                self._mode_feature("Polygon", [_square(4, 4, 2), invalid_ring], ["vacuuming"]),
+            ]},
+            "trajectories": {"features": [
+                None, {"geometry": "invalid"},
+                self._mode_feature("LineString", [[1, 3], [float("inf"), 3]], ["mopping"]),
+                self._mode_feature("LineString", [[1, 3]], ["mopping"]),
+                self._mode_feature("Point", [1, 3], ["mopping"]),
+                self._mode_feature("MultiLineString", [None, [[1, 3], [4, 3]]], ["vacuuming"]),
+            ]},
+        })
+        assert pixel(2, 2) == (30, 30, 30)
+        assert pixel(5, 5) == (183, 225, 205)
+        assert pixel(2, 3) == (54, 151, 100)
+
+    @pytest.mark.parametrize(("show_live", "map_id"), [(False, "synthetic-map"), (True, "other-map")])
+    def test_map_ignores_layers_when_disabled_or_for_another_map(self, hass, show_live, map_id):
+        pixel = self._mode_map(hass, {
+            "manifest": {"pmap_id": map_id},
+            "coverage": self._mode_feature("Polygon", [_square(1, 1, 2)], ["mopping"]),
+            "trajectories": self._mode_feature("LineString", [[1, 4], [3, 4]], ["mopping"]),
+        }, show_live=show_live, positions=[(1000, 6000, 0), (1400, 6000, 0), (1800, 6000, 0)])
+        assert pixel(2, 2) == pixel(2, 4) == (30, 30, 30)
+        assert pixel(1.2, 6) == pixel(1.8, 6) == (30, 30, 30)
+
+    @pytest.mark.parametrize(
+        ("cycle", "modes", "show_bundle"),
+        [("clean", ["vacuuming"], False), (None, ["vacuuming"], False),
+         ("none", ["vacuuming"], True), ("none", None, False)],
+    )
+    def test_live_positions_keep_precedence_until_cycle_closes(self, hass, cycle, modes, show_bundle):
+        pixel = self._mode_map(hass, {
+            "trajectories": self._mode_feature("LineString", [[1, 2], [3, 2]], modes),
+        }, positions=[(1000, 1000, 0), (1400, 1000, 0), (1800, 1000, 0)], cycle=cycle)
+        assert pixel(2, 2) == ((54, 151, 100) if show_bundle else (30, 30, 30))
+        assert pixel(1.2, 1) == ((30, 30, 30) if show_bundle else (120, 200, 255))
+
     def test_without_a_floor_plan_the_rooms_still_render(self):
         im = _decode(_rooms_image(floor=False)._render_png())
         assert im.format == "PNG"

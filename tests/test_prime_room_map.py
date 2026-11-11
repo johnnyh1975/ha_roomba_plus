@@ -2100,56 +2100,6 @@ class TestTheDockIsLearnedWhileCharging:
         assert data.prime_observed_dock is None
 
 
-class TestTheBundleTrajectoriesFillAGap:
-    """They do not compete with the live trail.
-
-    Our own trail only exists while Home Assistant is watching -- a
-    restart mid-mission loses it, while the bundle has the whole path
-    because iRobot recorded it. That is what the layer is for.
-
-    But the bundle also carries the PREVIOUS mission until the robot
-    uploads a new one, which is why @chairstacker saw the old route
-    persist as a thin line under the new one and could only clear it by
-    reloading. Our trail had already been cleared; the bundle brought
-    the old path back.
-    """
-
-    def _source(self):
-        import inspect
-
-        from custom_components.roomba_plus.image import PrimeRoomsImage
-
-        return inspect.getsource(PrimeRoomsImage)
-
-    def test_the_layer_is_gated_on_having_our_own_points(self):
-        """A SOURCE ASSERTION ON PURPOSE, and worth saying why.
-
-        Observing this properly means rendering a PNG with a real bundle
-        and counting drawn lines. An attempt to fake it in the test
-        reimplemented the gate inside the test, which proves the test
-        rather than the renderer -- strictly worse than reading the
-        source.
-
-        So this stays a source check, and it checks a DECISION (the
-        renderer consults its own positions before drawing the bundle's
-        layer) rather than an expression's spelling.
-        """
-        source = self._source()
-        gate = source[source.index("have_own_trail"):]
-
-        assert "prime_positions" in gate[:200]
-        assert "trajectories" in source
-
-    def test_the_gate_reads_the_live_positions(self):
-        """The same list the trail is drawn from and that a new mission
-        clears -- so the layer returns by itself when there is nothing
-        of our own to show."""
-        source = self._source()
-        gate = source[source.index("have_own_trail = bool("):]
-
-        assert "prime_positions" in gate[:200]
-
-
 class TestZonesDoNotNeedARunningMission:
     """The live bundle arrives on a map-update message — only while a
     mission runs. @chairstacker ticked all three zone boxes, reloaded
@@ -2438,19 +2388,6 @@ class TestTheRobotIsDrawnOnlyOnItsOwnMap:
 
     def test_a_plan_without_an_id_counts_as_matching(self):
         assert self._image(None, "MAP_B")._live_position_belongs_here()
-
-    def test_the_trail_uses_the_same_gate(self):
-        """Positions and trail are drawn from one list — gating the list
-        gates both. A separate check for the trail would be a second
-        rule to keep in step."""
-        import inspect
-
-        from custom_components.roomba_plus import image
-
-        source = inspect.getsource(image)
-        idx = source.find("_live_position_belongs_here()")
-        assert idx > 0
-        assert "prime_positions" in source[max(0, idx - 400):idx]
 
 
 class TestZoneNamesReachTheRenderedMap:

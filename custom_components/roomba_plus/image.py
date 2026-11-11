@@ -164,6 +164,58 @@ _LIVE_BUNDLE_SAVE_DELAY_SECONDS = 5
 _LIVE_BUNDLE_LAYERS = ("coverage", "trajectories", "hazard")
 PARALLEL_UPDATES = 0
 
+# In paint order: more specific coverage wins where mode layers overlap.
+_PRIME_COVERAGE_COLORS = {
+    "unknown": (120, 190, 145),
+    "vacuuming": (183, 225, 205),
+    "mopping": (207, 227, 252),
+    "combo": (212, 239, 246),
+}
+_PRIME_TRAJECTORY_COLORS = {
+    "unknown": (80, 150, 235),
+    "traveling": (130, 139, 142),
+    "vacuuming": (54, 151, 100),
+    "mopping": (22, 128, 228),
+    "combo": (41, 139, 168),
+}
+
+
+def _prime_map_features(layer: Any) -> list[dict[str, Any]]:
+    """Accept a feature collection or a single GeoJSON feature."""
+    if not isinstance(layer, dict):
+        return []
+    if layer.get("type") == "Feature":
+        return [layer]
+    features = layer.get("features")
+    if not isinstance(features, list):
+        return []
+    return [feature for feature in features if isinstance(feature, dict)]
+
+
+def _prime_map_mode(feature: dict[str, Any]) -> str:
+    """Interpret the labels carried by each geometry, not the command mode."""
+    properties = feature.get("properties")
+    modes = properties.get("operatingModes") if isinstance(properties, dict) else None
+    if not isinstance(modes, list):
+        return "unknown"
+    if "vacuuming" in modes:
+        return "combo" if "mopping" in modes else "vacuuming"
+    if "mopping" in modes:
+        return "mopping"
+    return "traveling" if modes == ["traveling"] else "unknown"
+
+
+def _prime_map_points(
+    coordinates: Any, minimum: int, metres_to_mm: float,
+) -> list[tuple[float, float]]:
+    try:
+        points = [(float(x) * metres_to_mm, float(y) * metres_to_mm) for x, y in coordinates]
+    except (TypeError, ValueError, OverflowError):
+        return []
+    if len(points) < minimum or not all(math.isfinite(x) and math.isfinite(y) for x, y in points):
+        return []
+    return points
+
 # ROOM-PALETTE (v2.9.0) — rotating per-room fill colours for _render_rooms_png().
 # Muted/desaturated tones chosen to read clearly against the dark (30,30,30)
 # canvas background while staying visually distinct from each other and from
@@ -5524,7 +5576,7 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         from PIL import Image, ImageDraw  # noqa: PLC0415
 
         from .map_renderer import MapRenderer, RendererConfig  # noqa: PLC0415
-        from .prime_room_map import METRES_TO_MM, rings_mm  # noqa: PLC0415
+        from .prime_room_map import METRES_TO_MM  # noqa: PLC0415
 
         if self._renderer is None:
             self._renderer = MapRenderer(RendererConfig(), None, None)
@@ -5558,7 +5610,9 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         show_live = getattr(self, "_show_live_overlay", True)
         show_room_fills = getattr(self, "_include_live", True)
         live_bundle = self._live_bundle or {} if show_live else {}
-        live_coverage = rings_mm(live_bundle.get("coverage"))
+        # A known manifest mismatch rules out coverage and trajectories as
+        # well as live positions. Older bundles may not have a manifest.
+        mission_layers = live_bundle if self._live_position_belongs_here() else {}
 
         # LAYER ORDER MATTERS, bottom to top: rooms, coverage, structural
         # floor plan, then furniture and borders.
@@ -5588,8 +5642,41 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         # The live bundle is the data the app uses for cleaned coverage,
         # trajectories and hazards. Keep the static-map fit: these layers
         # share its coordinate frame and must not move the room layout.
-        for ring in live_coverage:
-            draw.polygon([to_px(x, y) for x, y in ring], fill=(120, 190, 145))
+        coverage_by_mode: dict[str, list[dict[str, Any]]] = {}
+        for feature in _prime_map_features(mission_layers.get("coverage")):
+            coverage_by_mode.setdefault(_prime_map_mode(feature), []).append(feature)
+        for mode, color in _PRIME_COVERAGE_COLORS.items():
+            for feature in coverage_by_mode.get(mode, []):
+                geometry = feature.get("geometry")
+                if not isinstance(geometry, dict):
+                    continue
+                coordinates = geometry.get("coordinates")
+                if not isinstance(coordinates, list):
+                    continue
+                kind = geometry.get("type")
+                if kind not in ("Polygon", "MultiPolygon"):
+                    continue
+                polygons = coordinates if kind == "MultiPolygon" else [coordinates]
+                for polygon in polygons:
+                    if not isinstance(polygon, list) or not polygon:
+                        continue
+                    exterior = _prime_map_points(polygon[0], 3, METRES_TO_MM)
+                    if not exterior:
+                        continue
+                    outline = [to_px(x, y) for x, y in exterior]
+                    if len(polygon) == 1:
+                        draw.polygon(outline, fill=color)
+                        continue
+                    # Mask each polygon separately so a hole cannot erase a
+                    # different polygon or an earlier coverage layer.
+                    mask = Image.new("1", img.size)
+                    mask_draw = ImageDraw.Draw(mask)
+                    mask_draw.polygon(outline, fill=1)
+                    for interior in polygon[1:]:
+                        hole = _prime_map_points(interior, 3, METRES_TO_MM)
+                        if hole:
+                            mask_draw.polygon([to_px(x, y) for x, y in hole], fill=0)
+                    img.paste(color, mask=mask)
 
         # Older bundles have room regions but no detailed floor plan.
         # Keep that static image useful without pretending it has walls.
@@ -5659,39 +5746,46 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
             # geometry without covering anything.
             draw.polygon([to_px(x, y) for x, y in ring], outline=(90, 90, 90))
 
-        # THE BUNDLE'S TRAJECTORIES FILL A GAP, they do not compete with
-        # the live trail.
-        #
-        # Our own trail only exists while Home Assistant is watching. A
-        # restart mid-mission loses it; the bundle has the whole path,
-        # because iRobot recorded it. That is what this layer is for.
-        #
-        # But it also carries the PREVIOUS mission until the robot
-        # uploads a new bundle, which is why @chairstacker saw the old
-        # route persist as a thin line under the new one and could only
-        # clear it by reloading. Our trail had already been cleared; the
-        # bundle brought the old path back.
-        #
-        # So: once we have points of our own, they are the better
-        # answer and this layer stands down. With none -- a fresh start,
-        # a restart mid-run -- the bundle fills in.
-        have_own_trail = bool(
-            getattr(self._config_entry.runtime_data, "prime_positions", None)
-        ) if show_live else False
-        for feature in (
-            [] if have_own_trail
-            else (live_bundle.get("trajectories") or {}).get("features") or []
-        ):
-            coords = (feature.get("geometry") or {}).get("coordinates") or []
-            try:
-                points = [
-                    to_px(float(x) * METRES_TO_MM, float(y) * METRES_TO_MM)
-                    for x, y in coords
-                ]
-            except (TypeError, ValueError):
+        # Position packets can be newer than the bundle, which can still
+        # describe the previous mission. Keep the live trail during a run.
+        # After the cycle closes, use the bundle if it has classified paths.
+        positions = (
+            getattr(self._config_entry.runtime_data, "prime_positions", None) or []
+            if show_live and self._live_position_belongs_here()
+            else []
+        )
+        bundle_paths: list[tuple[str, list[tuple[float, float]]]] = []
+        for feature in _prime_map_features(mission_layers.get("trajectories")):
+            geometry = feature.get("geometry")
+            if not isinstance(geometry, dict):
                 continue
-            if len(points) >= 2:
-                draw.line(points, fill=(80, 150, 235), width=2)
+            kind = geometry.get("type")
+            coordinates = geometry.get("coordinates")
+            if kind == "LineString" or kind is None:
+                paths = [coordinates]
+            elif kind == "MultiLineString" and isinstance(coordinates, list):
+                paths = coordinates
+            else:
+                continue
+            mode = _prime_map_mode(feature)
+            for path in paths:
+                points = _prime_map_points(path, 2, METRES_TO_MM)
+                if points:
+                    bundle_paths.append((mode, points))
+
+        draw_live_trail = bool(positions)
+        if draw_live_trail and any(
+            mode in ("vacuuming", "mopping", "combo") for mode, _ in bundle_paths
+        ):
+            coordinator = getattr(
+                self._config_entry.runtime_data, "prime_status_coordinator", None
+            )
+            current = (getattr(coordinator, "data", None) or {}).get("ro-currentstate") or {}
+            draw_live_trail = (current.get("cleanMissionStatus") or {}).get("cycle") != "none"
+        if not draw_live_trail:
+            for mode, points in bundle_paths:
+                draw.line([to_px(x, y) for x, y in points],
+                          fill=_PRIME_TRAJECTORY_COLORS[mode], width=2)
 
         # ZONES, EACH BEHIND ITS OWN TICK BOX and all off by default.
         #
@@ -5844,12 +5938,7 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         # Same rule as the zones, same fail-open contract: an unknown
         # map id counts as matching, because a single-map household must
         # not lose its live position to fix a multi-map one.
-        positions = (
-            getattr(self._config_entry.runtime_data, "prime_positions", None) or []
-            if show_live and self._live_position_belongs_here()
-            else []
-        )
-        if len(positions) >= 2:
+        if draw_live_trail and len(positions) >= 2:
             trail: list[tuple[float, float]] = []
             previous: tuple[float, float] | None = None
             for x_mm, y_mm, _deg in positions:
