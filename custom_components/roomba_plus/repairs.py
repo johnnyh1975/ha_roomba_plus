@@ -470,13 +470,45 @@ async def async_check_bbrun_reset(
 
 # ── F6 — Performance & Behavioral Repair Issues ───────────────────────────────
 
+def furniture_areas(candidates: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    """The candidate cells grouped into connected areas (8-neighbours),
+    each sorted, the area with the lowest cell first (4.5.4)."""
+    by_cell = {tuple(c["cell"]): c for c in candidates}
+    seen: set[tuple[int, int]] = set()
+    areas: list[list[dict[str, Any]]] = []
+    for start in sorted(by_cell):
+        if start in seen:
+            continue
+        seen.add(start)
+        stack, area = [start], []
+        while stack:
+            gx, gy = stack.pop()
+            area.append(by_cell[(gx, gy)])
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    near = (gx + dx, gy + dy)
+                    if near in by_cell and near not in seen:
+                        seen.add(near)
+                        stack.append(near)
+        areas.append(sorted(area, key=lambda c: tuple(c["cell"])))
+    return areas
+
+
 async def async_check_furniture_change(
     hass: HomeAssistant,
     entry: Any,
 ) -> None:
-    """v3.2.0 FURNITURE — one Repair Issue per candidate cell from
-    GridStore.furniture_candidates(), with real dismiss-aware 30-day
+    """v3.2.0 FURNITURE — one Repair Issue per AREA of candidate cells
+    from GridStore.furniture_candidates(), with real dismiss-aware 30-day
     suppression.
+
+    ONE PER AREA, NOT PER CELL (4.5.4). A cell is 15 cm; a moved sofa is
+    some sixty of them, and a run of room missions once made 598 at once
+    on a tester's i7 -- 598 repairs. Neighbouring cells now make one
+    issue, named after the area's lowest cell (`furniture_<gx>_<gy>`, the
+    id a single cell always had) and placed at the area's centre. Issues
+    whose cells are no longer candidates are removed: the comment below
+    promised that, and only the dismiss records were cleared.
 
     First Repair Issue in this codebase to actually check the user's
     dismiss action before re-firing (see the design discussion this was
@@ -486,7 +518,9 @@ async def async_check_furniture_change(
     skips calling async_create_issue entirely while within the 30-day
     window — deliberately not calling create-and-hope-it-stays-dismissed,
     since it's unconfirmed whether HA's own registry would treat a fresh
-    async_create_issue call as un-dismissing an issue.
+    async_create_issue call as un-dismissing an issue. A dismissal covers
+    every cell of the area it was shown for; an area that grows by new
+    cells is shown again.
 
     The companion binary_sensor.*_layout_change_detected is NOT affected
     by this suppression — it always reflects GridStore's true current
@@ -499,34 +533,43 @@ async def async_check_furniture_change(
 
     now_iso = dt_util.now().isoformat()
     candidates = gs.furniture_candidates()
-    candidate_cells = {c["cell"] for c in candidates}
+    candidate_cells = {tuple(c["cell"]) for c in candidates}
 
-    # Auto-resolve: delete issues for cells that are no longer candidates
-    # (dismiss-tracking for those cells is stale once resolved — clear it
-    # too, so a FUTURE recurrence at the same cell isn't pre-suppressed
-    # by an old dismissal of an unrelated, already-resolved event).
+    # Auto-resolve: dismiss-tracking for cells that are no longer
+    # candidates is stale once resolved — clear it, so a FUTURE
+    # recurrence at the same cell isn't pre-suppressed by an old
+    # dismissal of an unrelated, already-resolved event.
     for cell in gs.furniture_dismissed_cells():
         if cell not in candidate_cells:
             gs.clear_furniture_dismissed(cell)
 
     reg = ir.async_get(hass)
+    current: set[str] = set()
 
-    for c in candidates:
-        cell = c["cell"]
-        issue_id = f"furniture_{cell[0]}_{cell[1]}"
+    for area in furniture_areas(candidates):
+        cells = [tuple(c["cell"]) for c in area]
+        issue_id = f"furniture_{cells[0][0]}_{cells[0][1]}"
+        current.add(issue_id)
 
         existing = reg.async_get_issue(DOMAIN, issue_id)
-        if existing is not None and existing.dismissed_version is not None:
-            if not gs.is_furniture_dismissed(cell):
+        # A DISMISSAL SEEN FOR THE FIRST TIME covers the cells shown now.
+        # Seen before, it covers what it covered then: cells added since
+        # were never shown, and are not taken as dismissed.
+        if (
+            existing is not None
+            and existing.dismissed_version is not None
+            and not any(gs.is_furniture_dismissed(cell) for cell in cells)
+        ):
+            for cell in cells:
                 gs.record_furniture_dismissed(cell, now_iso)
 
-        if gs.furniture_dismiss_suppressed(cell, now_iso):
+        if all(gs.furniture_dismiss_suppressed(cell, now_iso) for cell in cells):
             continue  # still within the 30-day post-dismiss window
 
-        # Not suppressed — either never dismissed, or dismissed 30+ days
-        # ago. In the latter case, clear the now-stale record so a
-        # genuinely new recurrence isn't silently treated as a fresh
-        # notification with leftover state.
+        # Not suppressed — never dismissed, dismissed 30+ days ago, or
+        # grown by cells the dismissal did not cover. Clear the stale
+        # records so a genuinely new recurrence isn't silently treated
+        # as a fresh notification with leftover state.
         #
         # v3.2.0 bug-hunt fix — confirmed against HA's actual
         # IssueRegistry.async_get_or_create() source: when an issue
@@ -540,8 +583,10 @@ async def async_check_furniture_change(
         # to un-suppress it. Deleting first forces HA's async_get_or_create
         # down its "issue is None" branch, which does set
         # dismissed_version=None on the fresh entry.
-        if gs.is_furniture_dismissed(cell):
-            gs.clear_furniture_dismissed(cell)
+        dismissed = [cell for cell in cells if gs.is_furniture_dismissed(cell)]
+        if dismissed:
+            for cell in dismissed:
+                gs.clear_furniture_dismissed(cell)
             ir.async_delete_issue(hass, DOMAIN, issue_id)
 
         ir.async_create_issue(
@@ -553,10 +598,17 @@ async def async_check_furniture_change(
             severity=ir.IssueSeverity.WARNING,
             translation_key="layout_change_detected",
             translation_placeholders={
-                "x_mm": str(int(c["x_mm"])),
-                "y_mm": str(int(c["y_mm"])),
+                "x_mm": str(int(sum(c["x_mm"] for c in area) / len(area))),
+                "y_mm": str(int(sum(c["y_mm"] for c in area) / len(area))),
             },
         )
+
+    # What is no longer a candidate goes.
+    issues = getattr(reg, "issues", None)
+    if isinstance(issues, dict):
+        for domain, issue_id in list(issues):
+            if domain == DOMAIN and issue_id.startswith("furniture_") and issue_id not in current:
+                ir.async_delete_issue(hass, DOMAIN, issue_id)
 
 
 # F6f — battery contact / bus-communication anomaly thresholds.

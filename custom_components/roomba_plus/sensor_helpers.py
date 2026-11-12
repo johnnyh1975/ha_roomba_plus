@@ -400,7 +400,7 @@ def _consumable_wear_rate(entity: "IRobotEntity", role: str) -> float | None:
     maint = entity._config_entry.runtime_data.maintenance_store
     if mission_store is None or maint is None:
         return None
-    current_hr = lifetime_hours({"bbrun": entity.run_stats})
+    current_hr = maint.hours(lifetime_hours({"bbrun": entity.run_stats}))
     reset_hr, reset_at = maint.reset_baseline_for_role(role)
     return mission_store.wear_rate_since_reset(reset_hr, reset_at, current_hr)
 

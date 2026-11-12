@@ -1137,7 +1137,11 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         rooms = await backend.whole_home_room_ids()
         if not rooms:
             return False
-        await backend.clean_rooms(rooms, ordered=False, operating_mode=[mode])
+        # EVERY ROOM, NOT THE FIRST (@tar-gezed). The list is per room
+        # and positional: a one-element list set the mode on the first
+        # room and left the others to the robot, which mopped one room
+        # of a "vacuum and mop" start and vacuumed the rest.
+        await backend.clean_rooms(rooms, ordered=False, operating_mode=[mode] * len(rooms))
         return True
 
     def _prime_cycle_is_idle(self) -> bool:

@@ -1,7 +1,7 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
 [![HACS](https://img.shields.io/badge/HACS-Default-blue.svg)](https://github.com/hacs/default)
-[![Version](https://img.shields.io/badge/Version-4.5.4b1-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-4.5.4b2-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2025.5%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Platinum-blueviolet.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
@@ -24,7 +24,7 @@ Roomba+ is a Platinum-quality Home Assistant custom integration for iRobot Roomb
 | **Any supported robot** | **v4.5.3** (stable) — the default in HACS | One line for both generations, and one iRobot login for all the robots of an account. No beta channel needed. |
 | **Roomba Max · Combo/Plus 400-series** and other newer cloud robots | **v4.5.3** | Lines before 4.0 **cannot connect to your robot at all** |
 | Still on the 4.1 or 4.2 line | **v4.5.3** | Everything fixed through 4.2.22 is in it. 4.2.22 was the last 4.2 release; that line has ended, as has 4.1 |
-| Willing to test a beta | **v4.5.4b1** — needs *Show beta versions* in HACS | With more than one Smart Map, the rooms map shows the map you just cleaned. A floor plan of each map, off until you enable it. The rooms map keeps its rooms after a new map version. No more "Vacuum segments have changed" on robots with zones. Mission history on the Roomba Plus 416 |
+| Willing to test a beta | **v4.5.4b2** — needs *Show beta versions* in HACS | With more than one Smart Map, the rooms map shows the map you just cleaned. A floor plan of each map, off until you enable it. The rooms map keeps its rooms after a new map version. No more "Vacuum segments have changed" on robots with zones. Mission history on the Roomba Plus 416. Two Prime robots on one account no longer knock each other off. *Vacuum and mop* reaches every room of a Prime start. Room cleans no longer flood Repairs with layout changes. Maintenance figures survive a restart on a 600, and a part replaced early no longer teaches a life of a few hours |
 | Not sure | Check your model number against the [supported hardware](#supported-hardware--capability-matrix) table below | |
 
 > ⚠️ If HACS shows you only `main` and downloading it hangs, see
@@ -397,7 +397,7 @@ harm, but it is not needed.
 > 4.0.0 on is a normal one and HACS offers it by default. Leaving the setting
 > on is harmless — it simply also offers pre-releases when one exists.
 >
-> **One is running now: `4.5.4b1`** (see the table at the top). The stable
+> **One is running now: `4.5.4b2`** (see the table at the top). The stable
 > line stays 4.5.3 until 4.5.4 is released.
 >
 > If HACS offers you only **`main`** and downloading it hangs, you are on a

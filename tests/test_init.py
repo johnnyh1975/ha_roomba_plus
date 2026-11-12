@@ -2730,6 +2730,7 @@ class TestPhaseDataSeedsAndWiresManagers:
         store = ctx.maintenance_store
         assert store.filter_reset_hr == 400
         assert store.filter_baseline_seeded is True
+        assert store.last_known_hr == 400
 
     @pytest.mark.asyncio
     async def test_the_series_intervals_come_from_the_sku(self, hass: Any) -> None:

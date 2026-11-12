@@ -56,6 +56,10 @@ PAYLOAD_VERSION    = 1
 #: How many "marked done" records the store keeps (4.5.0).
 MAINTENANCE_LOG_SIZE = 30
 
+#: The shortest gap between two resets that is learned as a part's life,
+#: as a share of its series interval (4.5.4, `_learned_hours`).
+LEARNED_MIN_SHARE = 0.25
+
 
 def _parse(value: Any) -> datetime | None:
     """An ISO timestamp from the store as an aware datetime, or None."""
@@ -195,6 +199,12 @@ class MaintenanceStore:
     # polls instead of standing still until the next one.
     cloud_parts_hydrated_hr: int | None = None
 
+    # 4.5.4 -- the robot's hour meter as last seen, kept across restarts
+    # (`hours()`). A 600 does not send its hours again after Home
+    # Assistant reconnects; until its next mission every part read as
+    # new (@tankdeer).
+    last_known_hr: int = 0
+
     # 4.5.0 -- per maintenance entry (maintenance_model.py), keyed by its
     # id: `due_since` (when it was first seen due; "overdue" counts from
     # there), `snoozed_until`, and `notified` (the level last announced,
@@ -285,6 +295,7 @@ class MaintenanceStore:
             self.care_since = data.get("care_since")
             raw_hr = data.get("cloud_parts_hydrated_hr")
             self.cloud_parts_hydrated_hr = int(raw_hr) if raw_hr is not None else None
+            self.last_known_hr = int(data.get("last_known_hr") or 0)
             raw_state = data.get("maintenance_state")
             self.maintenance_state = (
                 {str(k): dict(v) for k, v in raw_state.items() if isinstance(v, Mapping)}
@@ -338,6 +349,7 @@ class MaintenanceStore:
             "cliff_sensors_cleaned_at": self.cliff_sensors_cleaned_at,
             "care_since": self.care_since,
             "cloud_parts_hydrated_hr": self.cloud_parts_hydrated_hr,
+            "last_known_hr": self.last_known_hr,
             "maintenance_state": self.maintenance_state,
             "maintenance_log": self.maintenance_log,
         })
@@ -351,6 +363,7 @@ class MaintenanceStore:
         `{slot}_reset_hr`, so the interval between the previous and this
         reset stays computable for the learned-lifespan median.
         """
+        current_hr = self.hours(current_hr)
         getattr(self, f"{slot}_reset_history").append(current_hr)
         setattr(self, f"{slot}_reset_hr", current_hr)
         setattr(self, f"{slot}_reset_at", dt_util.now().isoformat())
@@ -388,7 +401,7 @@ class MaintenanceStore:
         (record_estcap_if_needed). Both the button and the reset action
         come through here.
         """
-        self.battery_reset_hr = current_hr
+        self.battery_reset_hr = self.hours(current_hr)
         self.battery_reset_at = dt_util.now().isoformat()
         self.baseline_estcap = None
         _LOGGER.info("MaintenanceStore: battery reset at %dh", current_hr)
@@ -564,6 +577,40 @@ class MaintenanceStore:
         since = max(0, int(current_hr) - self.cloud_parts_hydrated_hr) * 60
         return float(minutes[0] + since), float(minutes[1] - since)
 
+    def hours(self, current_hr: int) -> int:
+        """The hour meter to count with: the robot's own reading, else
+        the last one seen (4.5.4).
+
+        0 IS NOT A READING. The robot sends its hours in `bbrun` or
+        `runtimeStats`; until one arrives `lifetime_hours()` says 0, and
+        every reader took that for the meter. A part then counted
+        `max(0, 0 - reset_hr)` hours used and read as new: a 600's
+        filter showed 60 h left the day after it ran down to 59, because
+        a 600 does not send its hours again after Home Assistant
+        reconnects (@tankdeer), and a reset pressed in that window was
+        recorded at hour 0, so the next reading made the new part as old
+        as the robot. A real reading is used as it is, even when it is
+        lower than the last one: that is a firmware resetting the meter,
+        and `async_check_bbrun_reset` says so.
+        """
+        try:
+            hr = int(current_hr)
+        except (TypeError, ValueError):
+            hr = 0
+        return hr if hr > 0 else self.last_known_hr
+
+    def note_hours(self, current_hr: int) -> bool:
+        """Remember a reading of the hour meter. True when it changed,
+        so the caller saves: once per runtime hour at most."""
+        try:
+            hr = int(current_hr)
+        except (TypeError, ValueError):
+            return False
+        if hr <= 0 or hr == self.last_known_hr:
+            return False
+        self.last_known_hr = hr
+        return True
+
     def used_hours(self, role: str, current_hr: int) -> float:
         """Runtime hours a role's part has served, live (4.5.0).
 
@@ -572,6 +619,7 @@ class MaintenanceStore:
         since the counter was read; otherwise from the local reset
         baseline.
         """
+        current_hr = self.hours(current_hr)
         live = self._live_cloud_minutes(role, current_hr)
         if live is not None:
             return max(0.0, live[0]) / 60
@@ -591,6 +639,7 @@ class MaintenanceStore:
         A cloud counter decides by what it has LEFT, as the app does:
         a counter at zero is used up whatever its total says.
         """
+        current_hr = self.hours(current_hr)
         interval, source = self.interval_hours(role, options)
         live = self._live_cloud_minutes(role, current_hr)
         if live is not None:
@@ -652,6 +701,7 @@ class MaintenanceStore:
         Returns True when anything changed, so the caller knows whether a
         save is needed.
         """
+        current_hr = self.hours(current_hr)
         changed = False
         for entry in parts:
             part_id = entry.get("part_id")
@@ -890,14 +940,35 @@ class MaintenanceStore:
         is one interval on a robot whose part was really replaced at hour
         0; learning there starts one replacement later, on the configured
         threshold until then.
+
+        NOR IS ONE SHORTER THAN A QUARTER OF THE SERIES INTERVAL (4.5.4,
+        @rodelero1). Resets an hour apart -- a second press, a test --
+        taught an i7's filter a life of 1 h. The new filter read due
+        after 4 h, he replaced it, and that reset made the median 2.5 h:
+        2 h left on a filter fitted that day, due again soon after, each
+        early replacement teaching the next. A part swapped that early
+        was not worn out, so the interval says nothing about its life.
+        Read-side too, so stored histories are corrected without a
+        rewrite. The bound is the series interval or the global default,
+        not an hour option, so configuring one does not move it: 13 h
+        for a 52 h filter.
         """
         history = getattr(self, f"{slot}_reset_history")
+        shortest = self._expected_hours(slot) * LEARNED_MIN_SHARE
         intervals = [
             end - start
             for start, end in zip(history, history[1:])
-            if start > 0 and end > start
+            if start > 0 and end > start and end - start >= shortest
         ]
         return statistics.median(intervals) if intervals else None
+
+    def _expected_hours(self, slot: str) -> float:
+        """A slot's interval before any learning: the series profile,
+        else the global default."""
+        for role, spec in CONSUMABLE_ROLES.items():
+            if spec.slot == slot:
+                return float(self.profile_hours.get(role, spec.default_hours))
+        return 0.0
 
     def forget_learned(self, role: str) -> bool:
         """Forget a role's learned replacement interval (4.5.0, @msva17).
@@ -995,6 +1066,7 @@ class MaintenanceStore:
         until the next restart re-read the cloud. `threshold` is the
         local threshold for a robot without a counter.
         """
+        current_hr = self.hours(current_hr)
         live = self._live_cloud_minutes(role, current_hr)
         if live is not None:
             return live[1] <= 0
@@ -1017,7 +1089,9 @@ class MaintenanceStore:
         """Hours remaining until replacement for any of the four
         maintenance roles, local-only (no cloud counter) — see
         _local_remaining()."""
-        return self._local_remaining(CONSUMABLE_ROLES[role].slot, current_hr, threshold)
+        return self._local_remaining(
+            CONSUMABLE_ROLES[role].slot, self.hours(current_hr), threshold
+        )
 
     def filter_remaining(self, current_hr: int, threshold: int) -> int:
         """Hours remaining until next filter replacement, local-only (no

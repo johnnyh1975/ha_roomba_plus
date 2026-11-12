@@ -215,6 +215,71 @@ class TestFurnitureChange:
             assert args[0][2] == "furniture_1_2"
 
     @pytest.mark.asyncio
+    async def test_one_issue_per_area_not_per_cell(self):
+        """4.5.4: 598 cells made 598 repairs. Neighbouring cells are one
+        area and one issue, named after its lowest cell and placed at its
+        centre; a cell apart is an area of its own."""
+        hass = _make_hass()
+        entry, gs = self._entry_with_candidates([
+            {"cell": (1, 2), "x_mm": 150.0, "y_mm": 300.0},
+            {"cell": (2, 3), "x_mm": 300.0, "y_mm": 450.0},
+            {"cell": (3, 3), "x_mm": 450.0, "y_mm": 450.0},
+            {"cell": (9, 9), "x_mm": 1350.0, "y_mm": 1350.0},
+        ])
+        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
+            mock_ir.async_get.return_value.async_get_issue.return_value = None
+            await async_check_furniture_change(hass, entry)
+        created = {c.args[2]: c.kwargs["translation_placeholders"]
+                   for c in mock_ir.async_create_issue.call_args_list}
+        assert created == {
+            "furniture_1_2": {"x_mm": "300", "y_mm": "400"},
+            "furniture_9_9": {"x_mm": "1350", "y_mm": "1350"},
+        }
+
+    @pytest.mark.asyncio
+    async def test_an_issue_whose_cells_are_no_longer_candidates_goes(self):
+        hass = _make_hass()
+        entry, gs = self._entry_with_candidates([
+            {"cell": (1, 2), "x_mm": 150.0, "y_mm": 300.0},
+        ])
+        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
+            reg = mock_ir.async_get.return_value
+            reg.async_get_issue.return_value = None
+            reg.issues = {
+                ("roomba_plus", "furniture_1_2"): MagicMock(),
+                ("roomba_plus", "furniture_5_5"): MagicMock(),
+                ("roomba_plus", "mqtt_watchdog_x"): MagicMock(),
+                ("other", "furniture_7_7"): MagicMock(),
+            }
+            await async_check_furniture_change(hass, entry)
+            mock_ir.async_delete_issue.assert_called_once_with(
+                hass, "roomba_plus", "furniture_5_5"
+            )
+
+    @pytest.mark.asyncio
+    async def test_a_dismissal_covers_the_area_and_a_grown_area_is_shown_again(self):
+        hass = _make_hass()
+        entry, gs = self._entry_with_candidates([
+            {"cell": (1, 2), "x_mm": 150.0, "y_mm": 300.0},
+            {"cell": (1, 3), "x_mm": 150.0, "y_mm": 450.0},
+        ])
+        gs.furniture_dismiss_suppressed = MagicMock(
+            side_effect=lambda cell, _now: cell in gs._furniture_dismissed_at
+        )
+        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
+            dismissed = MagicMock(dismissed_version=1)
+            mock_ir.async_get.return_value.async_get_issue.return_value = dismissed
+            await async_check_furniture_change(hass, entry)
+            assert set(gs._furniture_dismissed_at) == {(1, 2), (1, 3)}
+            mock_ir.async_create_issue.assert_not_called()
+
+            gs.furniture_candidates.return_value.append(
+                {"cell": (1, 4), "x_mm": 150.0, "y_mm": 600.0}
+            )
+            await async_check_furniture_change(hass, entry)
+            mock_ir.async_create_issue.assert_called_once()
+
+    @pytest.mark.asyncio
     async def test_suppressed_within_30_days_skips_create(self):
         hass = _make_hass()
         entry, gs = self._entry_with_candidates([

@@ -421,6 +421,7 @@ class GridStore:
         stuck_wh: tuple[int, int] | None = None,
         robot_radius_mm: float | None = None,
         breaks: set[int] | None = None,
+        whole_home: bool = True,
     ) -> None:
         """Apply EMA decay to all cells, then add visit increments for this mission.
 
@@ -430,6 +431,10 @@ class GridStore:
             stuck_wh:     Optional (weekday, hour) of mission start in HA local time.
                           Passed by the caller (image.py) which already has dt_util;
                           grid_store.py remains HA-free per its design contract.
+            whole_home:   4.5.4 — False for a mission sent to rooms or zones.
+                          It still feeds the coverage grid, but not the
+                          FURNITURE history, which would count every cell
+                          it was not sent to as missed.
             robot_radius_mm: v2.9.0 (DISK-FILL) — when given, each pose point marks
                           every cell within this radius of the point as visited,
                           not just the single cell containing the exact point.
@@ -500,16 +505,18 @@ class GridStore:
             )
 
         # v3.2.0 FURNITURE — shift every tracked cell's coverage-history
-        # bitmask by one mission, same "applies to every tracked cell
-        # regardless of whether THIS mission went anywhere near it"
-        # characteristic as the EMA decay above (step 1) — a partial-home
-        # clean will shift in a 0 for untouched rooms' cells exactly like
-        # it already decays their EMA score. Known trade-off: a robot
-        # doing frequent single-room quick-cleans could reach the
-        # "3 consecutive misses" threshold for other rooms sooner than a
-        # robot doing mostly full-home cleans. Not specially guarded
-        # against here, matching the existing EMA precedent.
-        self._update_coverage_history(touched)
+        # bitmask by one mission.
+        #
+        # WHOLE-HOME MISSIONS ONLY (4.5.4). A mission sent to
+        # rooms or zones shifted in a 0 for every cell it was never asked
+        # to visit, and three of them in a row made the rest of the house
+        # "reliably cleaned, now missed": 598 layout-change repairs at
+        # once on a tester's i7, for a floor nothing had changed on. The comment
+        # here called that a trade-off that would come "sooner"; it came
+        # every time. The history now counts the missions that were sent
+        # everywhere -- the only ones whose misses mean anything.
+        if whole_home:
+            self._update_coverage_history(touched)
 
         # 3. Record stuck events with optional time context
         for x_mm, y_mm in stuck_points:

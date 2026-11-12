@@ -640,7 +640,7 @@ class RoombaMaintenanceDue(IRobotEntity, BinarySensorEntity):
         else:
             store = self._entry.runtime_data.maintenance_store
             if store and due:
-                current_hr = lifetime_hours(self.vacuum_state)
+                current_hr = store.hours(lifetime_hours(self.vacuum_state))
                 is_mop_device = is_mop(self.vacuum_state)
                 for role, spec in CONSUMABLE_ROLES.items():
                     part = (

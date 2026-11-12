@@ -3020,3 +3020,4 @@ class TestMaintenanceReport:
         assert report["items"] is None
         assert report["parts"]["35"]["role"] == "filter"
         assert report["cloud_parts_hydrated_hr"] == 10
+        assert report["last_known_hr"] == 0, "nothing noted: hydration does not note"

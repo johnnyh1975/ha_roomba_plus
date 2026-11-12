@@ -652,8 +652,9 @@ async def _async_clean_rooms_via_backend(
 
     await backend.clean_rooms(
         room_ids, ordered=ordered, two_pass=two_pass,
-        # A single value applied to every room -- _per_room() spreads a
-        # one-element list across the whole call.
+        # One entry per room: _per_room_or_global() writes the call-level
+        # value into every room without one of its own. _per_room() does
+        # not spread a short list.
         operating_mode=_per_room_or_global(ATTR_CLEANING_MODE, caller_mode),
         smart_scrub=_per_room_or_global(ATTR_SMART_SCRUB, _scrub),
         pad_wetness=_per_room_or_global(ATTR_RUN_PAD_WETNESS, _wetness),
@@ -893,16 +894,19 @@ async def async_handle_clean_zone(call: ServiceCall) -> None:
         # The same watch as clean_room (4.5.2): a zone start is the same
         # region-targeted command, and is swallowed the same ways.
         _before = _mission_snapshot(config_entry)
+        # ONE VALUE FOR EVERY ZONE, written out per zone. The lists are
+        # positional, and a one-element list reached the first zone only
+        # -- the same fault @tar-gezed found in vacuum.start, here for
+        # two zones or more.
+        def _each(value: Any) -> list[Any] | None:
+            return [value] * len(prefixed) if value is not None else None
+
         await backend.clean_rooms(
             prefixed,
-            # One value spread across every requested zone, same as
-            # clean_room does.
-            operating_mode=[caller_mode] if caller_mode is not None else None,
-            smart_scrub=[scrub] if scrub is not None else None,
-            pad_wetness=[wetness] if wetness is not None else None,
-            two_pass=(
-                [bool(_two_pass_raw)] if _two_pass_raw is not None else None
-            ),
+            operating_mode=_each(caller_mode),
+            smart_scrub=_each(scrub),
+            pad_wetness=_each(wetness),
+            two_pass=_each(bool(_two_pass_raw) if _two_pass_raw is not None else None),
         )
         watch_for_swallowed_command(hass, config_entry, "clean_zone", _before)
 

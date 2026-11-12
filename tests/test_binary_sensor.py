@@ -1217,6 +1217,15 @@ class TestRoombaMaintenanceDueRequiredActions:
         }
         assert set(attrs["overdue_by_hours"]) == {"filter", "brush", "side_brush", "clean_base_bag"}
 
+    def test_overdue_hours_count_with_the_remembered_meter(self):
+        """@tankdeer: no hours since the reconnect is not hour 0."""
+        from custom_components.roomba_plus.maintenance_store import MaintenanceStore
+
+        store = MaintenanceStore(filter_reset_hr=100)
+        store.note_hours(130)
+        entity = _make_maintenance_due(store, options={"filter_threshold_hours": 10}, hr=0)
+        assert entity.extra_state_attributes["overdue_by_hours"]["filter"] == 20
+
     def test_empty_when_nothing_due(self):
         from custom_components.roomba_plus.maintenance_store import MaintenanceStore
 

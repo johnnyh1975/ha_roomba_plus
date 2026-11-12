@@ -3878,10 +3878,12 @@ class TestAPlainStartCarriesTheSelectedMode:
 
     @pytest.mark.asyncio
     async def test_prime_sends_every_room_with_the_mode(self, monkeypatch):
+        """Every room, not the first (@tar-gezed: "vacuum and mop" mopped
+        one room of seven and vacuumed the rest)."""
         v, backend = self._prime(monkeypatch)
         await v.async_start()
         backend.clean_rooms.assert_awaited_once_with(
-            ["M/1", "M/2"], ordered=False, operating_mode=[4]
+            ["M/1", "M/2"], ordered=False, operating_mode=[4, 4]
         )
         v._prime_robot.send_simple_command.assert_not_called()
 

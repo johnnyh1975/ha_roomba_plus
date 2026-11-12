@@ -1080,6 +1080,16 @@ class TestConsumableHelpers:
         assert sh._consumable_wear_rate(e, "filter") is None
         assert sh._consumable_max_hours(e, "filter") is None
 
+    def test_the_wear_rate_counts_with_the_remembered_meter(self):
+        """@tankdeer: no hours since the reconnect is not hour 0."""
+        from custom_components.roomba_plus.maintenance_store import MaintenanceStore
+
+        maint = MaintenanceStore(filter_reset_hr=290)
+        maint.note_hours(300)
+        store = MagicMock()
+        sh._consumable_wear_rate(_ent(mission_store=store, maintenance_store=maint, hr=0), "filter")
+        assert store.wear_rate_since_reset.call_args.args[2] == 300
+
     def test_days_until_due_falls_back_to_local_hours(self):
         """Without a cloud figure the local remaining hours decide."""
         maint = MagicMock()

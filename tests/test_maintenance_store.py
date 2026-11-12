@@ -3076,6 +3076,65 @@ class TestForgetALearnedInterval:
             await tracker.async_forget_learned(["replace.battery"])
 
 
+class TestRodelerosFilter:
+    """@rodelero1, i7: resets an hour apart taught the filter a life of
+    1 h, and the filter fitted after it read 2 h left and due soon after."""
+
+    def test_his_history_learns_nothing(self):
+        store = MaintenanceStore()
+        for hours in (300, 301, 305):
+            store.reset_filter(hours)
+        assert store.learned_filter_hours is None
+        assert store.role_usage("filter", 305, {})[1:] == (52.0, 52.0, "irobot_budget")
+
+    def test_a_short_gap_does_not_hide_the_real_ones(self):
+        store = MaintenanceStore()
+        for hours in (300, 301, 360, 421):
+            store.reset_filter(hours)
+        assert store.learned_filter_hours == 60
+
+    def test_the_bound_follows_the_series(self):
+        store = MaintenanceStore()
+        store.profile_hours = {"filter": 60}
+        store.filter_reset_history = [100, 114]
+        assert store.learned_filter_hours is None
+        store.filter_reset_history = [100, 115]
+        assert store.learned_filter_hours == 15
+
+
+class TestTankdeersRestart:
+    """@tankdeer, 600: the filter ran down to 59 h and read 60 again after
+    a restart, because the robot does not send its hours again after a
+    reconnect and 0 was counted as the meter."""
+
+    async def test_the_last_reading_survives_a_restart(self, hass):
+        store = MaintenanceStore(filter_reset_hr=290, filter_baseline_seeded=True)
+        store.profile_hours = {"filter": 60}
+        assert store.note_hours(291) is True
+        assert store.note_hours(291) is False, "the same reading saves nothing"
+        await store.async_save(hass, "e1")
+
+        after = MaintenanceStore()
+        await after.async_load(hass, "e1")
+        after.profile_hours = {"filter": 60}
+        assert after.role_remaining_hours("filter", 0, {}) == 59
+        assert after.role_usage("filter", 0, {})[0] == pytest.approx(1 / 60)
+        assert after.role_remaining_hours("filter", 292, {}) == 58
+
+    def test_a_reset_without_a_reading_is_not_recorded_at_hour_0(self):
+        store = MaintenanceStore(filter_reset_hr=200)
+        store.note_hours(291)
+        store.reset_filter(0)
+        assert store.filter_reset_hr == 291
+        assert store.filter_reset_history == [291]
+
+    def test_a_lower_reading_is_used_as_it_is(self):
+        """A firmware that resets the meter; the repair names it."""
+        store = MaintenanceStore()
+        store.note_hours(291)
+        assert store.hours(5) == 5
+
+
 class TestCareGuidesOnTheEntries:
     """4.5.0, a4: every entry names its care guide, the event carries
     the signed link, and the robot's error recomputes at once."""

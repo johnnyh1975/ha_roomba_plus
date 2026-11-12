@@ -23,6 +23,7 @@ from custom_components.roomba_plus.callbacks import make_mission_callback
 from custom_components.roomba_plus.callbacks import make_mission_complete_callback
 from custom_components.roomba_plus.const import CLEANING_PHASES
 from custom_components.roomba_plus.const import MISSION_END_PHASES
+from custom_components.roomba_plus.maintenance_store import MaintenanceStore
 from tests.conftest import TEST_CONFIG_DIR, hass_mock, entry_mock
 
 
@@ -3506,8 +3507,29 @@ class TestGsSmartCoverageDispatchFunction:
         assert stuck_points == [(10.0, 20.0)]  # only start_stuck, start_evade excluded
         assert kwargs["stuck_wh"] == (5, 10)  # 2026-07-04 is a Saturday, 10:00 local
         assert kwargs["robot_radius_mm"] == ROBOT_DIAMETER_MM_ISJ_SERIES / 2
+        assert kwargs["whole_home"] is True, "no scope recorded: as before"
         gs.record_processed_nmssn.assert_called_once_with(5)
         gs.async_save.assert_awaited_once_with(hass, "test_entry")
+
+    @pytest.mark.asyncio
+    async def test_a_room_mission_does_not_age_the_rest_of_the_house(self):
+        """4.5.4: a pose-less i7 feeds the grid from here, and three
+        single-room cleans made 598 layout-change repairs."""
+        from custom_components.roomba_plus.callbacks import (
+            _async_update_gs_smart_coverage,
+        )
+        hass, entry, data, gs, aligner, ms = _gs_coverage_env()
+        ms.records = [
+            {"id": "m_1", "nMssn": 5, "scope": "rooms",
+             "pmaps_info": [{"pmap_id": "p", "pmapv_id": "v"}],
+             "started_at": "2026-07-04T10:00:00+00:00"},
+        ]
+        with patch(
+            "custom_components.roomba_plus.callbacks.async_fetch_mission_map",
+            AsyncMock(return_value={"coverage_mm": [[100.0, 200.0]], "escape_events": []}),
+        ):
+            await _async_update_gs_smart_coverage(hass, entry, MagicMock())
+        assert gs.update_from_mission.call_args.kwargs["whole_home"] is False
 
     @pytest.mark.asyncio
     async def test_no_candidates_does_not_call_async_save(self):
@@ -5299,7 +5321,10 @@ class TestSeedMaintenanceBaselines:
     runtime, so remaining life is not computed from zero hours."""
 
     def _store(self, **seeded):
-        s = SimpleNamespace(async_save=MagicMock(return_value="save"))   # handed to a mock hass, never awaited
+        s = SimpleNamespace(
+            async_save=MagicMock(return_value="save"),   # handed to a mock hass, never awaited
+            note_hours=MagicMock(return_value=False),
+        )
         for slot in ("filter", "brush", "side_brush", "clean_base_bag"):
             setattr(s, f"{slot}_baseline_seeded", seeded.get(slot, False))
             setattr(s, f"{slot}_reset_history", None)
@@ -5334,6 +5359,20 @@ class TestSeedMaintenanceBaselines:
         entry, reported = _seed_entry(store)
         cb._seed_maintenance_baselines(entry, reported)
         entry.runtime_data.hass_ref.async_create_task.assert_not_called()
+
+    def test_a_new_hour_on_the_meter_is_remembered_and_saved(self):
+        """@tankdeer: a 600 does not send its hours again after a reconnect."""
+        store = MaintenanceStore(
+            filter_baseline_seeded=True, brush_baseline_seeded=True,
+            side_brush_baseline_seeded=True, clean_base_bag_baseline_seeded=True,
+        )
+        store.async_save = MagicMock(return_value="save")   # handed to a mock, never awaited
+        entry, reported = _seed_entry(store, hr=291)
+        cb._seed_maintenance_baselines(entry, reported)
+        assert store.last_known_hr == 291
+        entry.async_create_task.assert_called_once()
+        cb._seed_maintenance_baselines(entry, reported)
+        entry.async_create_task.assert_called_once()
 
 
 class TestRealign:

@@ -33,6 +33,7 @@ from .const import (
     mission_command,
     mission_command_regions,
     mission_scope,
+    MISSION_SCOPE_ROOMS,
     ROOM_EVENT_CLOSED_AT_END_STATUSES,
     ROOM_EVENT_DONE_STATUSES,
     recovered_after_stuck,
@@ -1250,6 +1251,12 @@ def _seed_maintenance_baselines(
     if current_hr <= 0:
         return
 
+    # THE METER, REMEMBERED (4.5.4): a 600 does not send its hours again
+    # after a reconnect, and without them every part read as new until
+    # its next mission (@tankdeer). Saved when it changes: once per
+    # runtime hour.
+    noted = store.note_hours(current_hr)
+
     seeded_now: list[str] = []
     for slot in ("filter", "brush", "side_brush", "clean_base_bag"):
         if getattr(store, f"{slot}_baseline_seeded", True):
@@ -1260,14 +1267,15 @@ def _seed_maintenance_baselines(
         setattr(store, f"{slot}_baseline_seeded", True)
         seeded_now.append(slot)
 
-    if not seeded_now:
+    if not seeded_now and not noted:
         return
 
-    _LOGGER.debug(
-        "MaintenanceStore: seeded %s at %dh, on the first message "
-        "carrying runtime hours (setup ran before MQTT had any)",
-        ", ".join(seeded_now), current_hr,
-    )
+    if seeded_now:
+        _LOGGER.debug(
+            "MaintenanceStore: seeded %s at %dh, on the first message "
+            "carrying runtime hours (setup ran before MQTT had any)",
+            ", ".join(seeded_now), current_hr,
+        )
     if hass is not None:
         entry.async_create_task(
             hass,
@@ -3909,6 +3917,9 @@ async def _async_update_gs_smart_coverage(
             pose_points, stuck_points,
             stuck_wh=stuck_wh,
             robot_radius_mm=ROBOT_DIAMETER_MM_ISJ_SERIES / 2,
+            # A room or zone mission is no evidence about the rest of the
+            # house (4.5.4); the record says what it was sent to.
+            whole_home=record.get("scope") != MISSION_SCOPE_ROOMS,
         )
         gs.record_processed_nmssn(record_nmssn)
         changed = True

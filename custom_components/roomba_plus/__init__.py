@@ -730,6 +730,10 @@ async def _phase_data(ctx: _SetupContext) -> None:
     # Care reminders count from the setup that switched them on (4.3.2).
     if maintenance_store.seed_care(care_reminders_enabled(config_entry.options)):
         _seeded_this_load = True
+    # The meter as last seen, for when the robot does not send it again
+    # after this reconnect (4.5.4, MaintenanceStore.hours).
+    if maintenance_store.note_hours(_current_hr):
+        _seeded_this_load = True
     if _seeded_this_load:
         await maintenance_store.async_save(hass, config_entry.entry_id)
 

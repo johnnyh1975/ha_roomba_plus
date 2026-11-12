@@ -1121,6 +1121,12 @@ class TestRoomCoverageHealth:
         """Perfectly regular intervals (stdev=0) fall back to a
         multiplier-based threshold (1.5x mean) rather than dividing by
         zero or never triggering "overdue" at all."""
+        # THE FOUR RECORDS IN ONE ROW OF _make_record's minutes: its
+        # offset wraps every 90 records, and a wrap between two of these
+        # made one interval 445 minutes shorter -- a spread, and
+        # "overdue" -- whenever the tests before it in the same worker
+        # happened to end on the wrap.
+        globals()["_make_record_counter"] = 0
         store = MissionStore()
         for days_ago in (40, 30, 20, 10):
             rec = _make_record(days_ago=days_ago)

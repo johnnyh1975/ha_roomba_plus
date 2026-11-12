@@ -4138,7 +4138,29 @@ class TestGridAtMissionEnd:
         m._handle_mission_end("charge")
         args, kwargs = grid.update_from_mission.call_args
         assert args[1] == [(100.0, 0.0)] and kwargs["stuck_wh"] is not None
+        assert "whole_home" in kwargs, "the mission's scope goes to the grid (4.5.4)"
         grid.record_processed_nmssn.assert_called_once_with(7)
+
+    @pytest.mark.parametrize(
+        ("capability", "command", "whole_home"),
+        [
+            (MapCapability.SMART, {"command": "start", "regions": [{"region_id": "3"}]}, False),
+            (MapCapability.SMART, {"command": "start"}, True),
+            (MapCapability.EPHEMERAL, {"command": "start", "regions": [{"region_id": "3"}]}, True),
+        ],
+    )
+    def test_a_room_mission_is_not_a_whole_home_one(self, capability, command, whole_home):
+        """4.5.4: room missions do not age the layout-change history."""
+        from types import SimpleNamespace
+
+        data = SimpleNamespace(
+            map_capability=capability,
+            mission_command=None,
+            roomba_reported_state=lambda: {
+                "cleanMissionStatus": {"initiator": "localApp"}, "lastCommand": command,
+            },
+        )
+        assert img._mission_was_whole_home(data) is whole_home
 
     def test_the_segmentation_is_scheduled_not_run_in_the_mission_end(self, monkeypatch):
         """4.5.0: it blocked the event loop for up to 1.5 s."""

@@ -20,6 +20,26 @@ Nothing to do. Two visible changes:
   map as before. Commands and the room list are unchanged.
 - **New, disabled: a floor plan of each map** (`image.<robot>_floor_plan_<map>`).
   Nothing appears and nothing is read from the cloud until you enable one.
+
+**Layout-change repairs come one per area now**, and only missions sent
+everywhere count towards them. Repairs left over from room cleans go at
+the next check or restart.
+
+**Two or more Prime robots on one account share one connection now**
+(roombapy-prime 0.9.0). Before, they dropped each other every few
+seconds. Nothing to do.
+
+Two maintenance fixes take effect by themselves:
+
+- **A learned replacement interval can change.** A gap between two part
+  resets shorter than a quarter of the part's series interval (13 h for a
+  52 h filter) is no longer learned. If a reset pressed twice, or a part
+  swapped early, had taught a part a life of a few hours, its interval
+  goes back to the series value with the update.
+- **The hour meter is kept across restarts.** The maintenance figures
+  count with the last reading Roomba+ saw until the robot sends a new
+  one. It is first kept from the first message that carries the hours
+  after the update; on a 600, that is its next mission.
 - **"Vacuum segments have changed" may appear once more** on a Classic
   robot with zones: a zone whose number no room has was also offered as
   a room, and that duplicate is gone. Open the repair and save. If you

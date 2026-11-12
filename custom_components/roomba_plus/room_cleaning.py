@@ -178,7 +178,8 @@ def _region_params(
     sl = _per_room(suction_level, index)
     # PER ROOM LIKE THE OTHER TWO. A caller that wants one room mopped
     # and the rest vacuumed can say so; one that wants the same
-    # everywhere passes a single value and gets it applied throughout.
+    # everywhere passes it once PER ROOM. A one-element list reaches the
+    # first room only (@tar-gezed: "vacuum and mop" mopped one room).
     om = _per_room(operating_mode, index)
     # SMARTSCRUB PER REGION (4.5.0b5, @gunzxz, Plus 405 Combo). The wire
     # key is `swScrub` in the region's params, read from real Prime

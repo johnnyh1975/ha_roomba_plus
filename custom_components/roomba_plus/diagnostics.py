@@ -295,6 +295,9 @@ def _maintenance_report(data: Any) -> dict[str, Any]:
         **(tracker.diagnostics() if tracker is not None else {"items": None}),
         "parts": parts,
         "cloud_parts_hydrated_hr": getattr(store, "cloud_parts_hydrated_hr", None),
+        # The hour meter the parts count with when the robot has not
+        # sent its own since the reconnect (4.5.4).
+        "last_known_hr": getattr(store, "last_known_hr", None),
         "catalogue": {
             str(part_id): {
                 "part_name": entry.get("part_name"),

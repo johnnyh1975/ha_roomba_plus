@@ -225,6 +225,24 @@ class TestFurnitureCandidates:
         cells = [c["cell"] for c in candidates]
         assert _mm_to_cell(*cell_point) in cells
 
+    def test_room_missions_say_nothing_about_the_rest_of_the_house(self):
+        """4.5.4: three single-room cleans made every other cell of an
+        i7's floor a candidate -- 598 repairs, nothing moved. A mission
+        sent to rooms or zones does not age the history."""
+        gs = GridStore()
+        cell_point = (75, 75)
+        other_point = (10000, 10000)
+        for _ in range(23):
+            gs.update_from_mission([cell_point], [])
+        for _ in range(3):
+            gs.update_from_mission([other_point], [], whole_home=False)
+        assert gs.furniture_candidates() == []
+        assert _mm_to_cell(*other_point) in gs._cells, "the coverage grid still learns"
+
+        for _ in range(3):
+            gs.update_from_mission([other_point], [])
+        assert _mm_to_cell(*cell_point) in [c["cell"] for c in gs.furniture_candidates()]
+
     def test_not_a_candidate_below_min_hits(self):
         """Established window needs >= 18/20 hits — 15/20 doesn't qualify."""
         gs = GridStore()

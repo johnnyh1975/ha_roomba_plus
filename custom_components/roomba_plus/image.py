@@ -58,6 +58,8 @@ from homeassistant.util import dt as dt_util
 from .zone_naming import map_room_label, room_display_name
 from . import roomba_reported_state
 from .const import (
+    MISSION_SCOPE_ROOMS,
+    mission_scope,
     LIVE_PATH_TURN_CHOICES,
     CONF_MAP_SCALE,
     CONF_MAP_SIZE_PX,
@@ -642,6 +644,20 @@ def _anchored_runs(
     last = segments[-1]
     out.append((last.start, last.end, 0.0, 0.0))
     return out
+
+
+def _mission_was_whole_home(data: Any) -> bool:
+    """False for a mission sent to rooms or zones (4.5.4): read at its
+    end from the robot's state, the way the mission record reads it at
+    its start (const.mission_scope)."""
+    reported = data.roomba_reported_state() if hasattr(data, "roomba_reported_state") else {}
+    reported = reported if isinstance(reported, dict) else {}
+    return mission_scope(
+        getattr(data, "map_capability", None) == MapCapability.SMART,
+        reported.get("cleanMissionStatus"),
+        reported.get("lastCommand"),
+        getattr(data, "mission_command", None),
+    ) != MISSION_SCOPE_ROOMS
 
 
 def _without_ranges(
@@ -3560,6 +3576,9 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                     # Where stretches were left out or anchored apart
                     # (4.5.0), each learned stretch starts a new run.
                     breaks=_grid_breaks,
+                    # A room or zone mission is no evidence about the
+                    # rest of the house (4.5.4).
+                    whole_home=_mission_was_whole_home(_gdata),
                 )
             if _gdata.grid_store is not None:
                 # v3.4.0 GS-SMART-COVERAGE — stamp this mission's nMssn as

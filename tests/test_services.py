@@ -2301,6 +2301,31 @@ class TestCleanZoneService:
         assert backend.clean_rooms.await_args.args[0] == ["zid_100", "zid_101"]
 
     @pytest.mark.asyncio
+    async def test_the_run_settings_reach_every_zone(self):
+        """The lists are per zone: one value reached the first of two
+        zones only (the fault @tar-gezed found in vacuum.start)."""
+        from custom_components.roomba_plus.services import async_handle_clean_zone
+
+        hass, backend = self._setup()
+        with patch(
+            "custom_components.roomba_plus.services.async_get_room_cleaning_backend",
+            return_value=backend,
+        ), patch("custom_components.roomba_plus.services.er.async_get"), patch(
+            "custom_components.roomba_plus.services._modes_for_backend",
+            return_value={"vacuum_and_mop": 32},
+        ):
+            await async_handle_clean_zone(self._call(
+                hass, zone_id=["100", "101"], cleaning_mode="vacuum_and_mop",
+                smart_scrub=True, pad_wetness="2", two_pass=False,
+            ))
+
+        kwargs = backend.clean_rooms.await_args.kwargs
+        assert kwargs["operating_mode"] == [32, 32]
+        assert kwargs["smart_scrub"] == [True, True]
+        assert kwargs["pad_wetness"] == [2, 2]
+        assert kwargs["two_pass"] == [False, False]
+
+    @pytest.mark.asyncio
     async def test_a_name_resolves_to_its_id(self):
         """Names come from the bundle's cleanZones layer -- where
         @chairstacker's turned out to live after five rounds."""

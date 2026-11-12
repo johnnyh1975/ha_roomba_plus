@@ -981,10 +981,16 @@ class TestClassicShapedReadsOnPrime:
         #
         # DECIDED: read only when the entry has no Prime robot; a Prime
         # entry takes the Prime app's text, which has no SKU variants.
-        assert count == 38, (
-            f"{count} call sites, expected 38 — a new one needs a decision "
+        # 39 with image._mission_was_whole_home() (4.5.4): whether the
+        # mission that just ended was sent to rooms, for the grid.
+        #
+        # DECIDED: no Prime entry reaches it. It runs only where the
+        # entry has a GridStore, and the pose-derived stores are not
+        # created for Prime.
+        assert count == 39, (
+            f"{count} call sites, expected 39 — a new one needs a decision "
             "about whether a Prime entry reaches it, and a Prime fallback "
-            "if it does. Four of the 38 are inside the fallback helpers "
+            "if it does. Four of the 39 are inside the fallback helpers "
             "themselves, which read Classic first on purpose."
         )
 
