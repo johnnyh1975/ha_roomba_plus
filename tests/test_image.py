@@ -3978,6 +3978,7 @@ def _real_entry(hass, **runtime):
     d.umf_aligner = None
     d.room_seg_store = None
     d.prime_positions = []
+    d.prime_trail_started_at = None
     d.map_capability = MapCapability.EPHEMERAL
     return entry
 
@@ -4205,6 +4206,28 @@ class TestPrimeLiveMap:
         assert stats["trail_points_added"] == 1
         assert stats["trail_skipped_no_point"] == 1 and stats["trail_skipped_no_xy"] == 2
 
+    def test_trail_receipt_time_survives_trimming_and_restarts_on_clear(self, hass, monkeypatch):
+        stream, entry = _prime_map(hass, monkeypatch, [])
+        data = entry.runtime_data
+        data.prime_trail_started_at = None
+        clock = SimpleNamespace(monotonic=MagicMock(return_value=10.0))
+        monkeypatch.setattr(img, "_time_mod", clock)
+        monkeypatch.setattr(img, "_MAX_PRIME_POSITIONS", 2)
+
+        stream._feed_trail(_position(None, (None, 2), ("invalid", 2)))
+        assert data.prime_trail_started_at is None
+        stream._feed_trail(_position((1, 1), (2, 2)))
+        assert data.prime_trail_started_at == 10.0
+
+        clock.monotonic.return_value = 20.0
+        stream._feed_trail(_position((3, 3), (4, 4)))
+        assert len(data.prime_positions) == 2
+        assert data.prime_trail_started_at == 10.0
+
+        data.prime_positions.clear()
+        stream._feed_trail(_position((5, 5)))
+        assert data.prime_trail_started_at == 20.0
+
     @pytest.mark.asyncio
     async def test_a_raw_map_becomes_the_image(self, hass, monkeypatch):
         msg = MapUpdateMessage(livemap_url=None, livemap_url_raw="https://x/raw", timestamp=0)
@@ -4356,6 +4379,10 @@ class TestPrimeRoomsRender:
         )
         entity._live_bundle = bundle
         entity._show_live_overlay = show_live
+        return TestPrimeRoomsRender._mode_pixels(entity)
+
+    @staticmethod
+    def _mode_pixels(entity):
         image = _decode(entity._render_png()).convert("RGB")
 
         def pixel(x, y):
@@ -4446,12 +4473,91 @@ class TestPrimeRoomsRender:
         [("clean", ["vacuuming"], False), (None, ["vacuuming"], False),
          ("none", ["vacuuming"], True), ("none", None, False)],
     )
-    def test_live_positions_keep_precedence_until_cycle_closes(self, hass, cycle, modes, show_bundle):
-        pixel = self._mode_map(hass, {
+    def test_fresh_bundle_only_replaces_positions_after_close(
+        self, hass, monkeypatch, cycle, modes, show_bundle,
+    ):
+        entry = _real_entry(hass)
+        mission = {"cycle": cycle}
+        entry.runtime_data.prime_status_coordinator = SimpleNamespace(data={
+            "ro-currentstate": {"cleanMissionStatus": mission},
+        })
+        entity = img.PrimeRoomsImage("PB", entry, hass)
+        entity.async_write_ha_state = MagicMock()
+        entity._polygons = {"3": _square(0, 0, 12000)}
+        entity._floor_plan = PrimeFloorPlan(
+            room_names={}, room_polygons=entity._polygons, floor_plan=[],
+            borders=[], carpet=[], furniture=[], dock=None,
+        )
+        clock = SimpleNamespace(monotonic=MagicMock(return_value=0.0))
+        monkeypatch.setattr(img, "_time_mod", clock)
+        stream = img.PrimeMapImage(MagicMock(), "PB", entry)
+        stream._feed_trail(_position((1, 1), (1.4, 1), (1.8, 1)))
+        clock.monotonic.return_value = 1.0
+        entity._on_live_bundle({
             "trajectories": self._mode_feature("LineString", [[1, 2], [3, 2]], modes),
-        }, positions=[(1000, 1000, 0), (1400, 1000, 0), (1800, 1000, 0)], cycle=cycle)
+        })
+        pixel = self._mode_pixels(entity)
         assert pixel(2, 2) == ((54, 151, 100) if show_bundle else (30, 30, 30))
         assert pixel(1.2, 1) == ((30, 30, 30) if show_bundle else (120, 200, 255))
+
+        if cycle == "clean":
+            # Closing the cycle can be the last push. Publish even if
+            # the last ordinary image update was within the throttle window.
+            entity._last_live_state_write = clock.monotonic()
+            entity._live_dirty = False
+            entity._async_refresh_rooms = AsyncMock()
+            entity.async_write_ha_state.reset_mock()
+            mission["cycle"] = "none"
+            entity._on_live_status()
+            entity._on_live_status()
+            assert entity._live_dirty
+            entity.async_write_ha_state.assert_called_once_with()
+            entity._async_refresh_rooms.assert_not_called()
+            assert self._mode_pixels(entity)(2, 2) == (54, 151, 100)
+
+            # The trail buffer is cleared on the next mission number.
+            # The old bundle cannot take over a second time.
+            entry.runtime_data.prime_positions.clear()
+            clock.monotonic.return_value = 2.0
+            stream._feed_trail(_position((1, 1), (1.4, 1), (1.8, 1)))
+            entity._on_live_position()
+            assert self._mode_pixels(entity)(1.2, 1) == (120, 200, 255)
+            assert not entity._prefer_closed_bundle
+
+    @pytest.mark.parametrize("restored", [True, False], ids=["restored", "previous-run"])
+    async def test_short_run_keeps_its_trail_when_no_new_bundle_arrives(
+        self, hass, monkeypatch, restored,
+    ):
+        entity, _ = _prime_rooms(
+            hass, monkeypatch, map_ids=["m1"], current="m1",
+            polygons={"3": _square(0, 0, 12000)},
+        )
+        del entity._render_png
+        entity.async_write_ha_state = MagicMock()
+        entry = entity._config_entry
+        mission = {"cycle": "clean"}
+        entry.runtime_data.prime_status_coordinator = SimpleNamespace(data={
+            "ro-currentstate": {"cleanMissionStatus": mission},
+        })
+        clock = SimpleNamespace(monotonic=MagicMock(return_value=10.0))
+        monkeypatch.setattr(img, "_time_mod", clock)
+        bundle = {
+            "trajectories": self._mode_feature("LineString", [[1, 2], [3, 2]], ["vacuuming"]),
+        }
+        if restored:
+            entity._stored_live_bundle = {"map_id": "m1", "bundle": bundle}
+        else:
+            entity._on_live_bundle(bundle)
+        await entity._async_refresh_rooms()
+        assert entity._live_bundle is bundle
+
+        clock.monotonic.return_value = 20.0
+        stream = img.PrimeMapImage(MagicMock(), "PB", entry)
+        stream._feed_trail(_position((1, 1), (1.4, 1), (1.8, 1)))
+        mission["cycle"] = "none"
+        pixel = self._mode_pixels(entity)
+        assert pixel(2, 2) == (30, 30, 30)
+        assert pixel(1.2, 1) == (120, 200, 255)
 
     def test_without_a_floor_plan_the_rooms_still_render(self):
         im = _decode(_rooms_image(floor=False)._render_png())
@@ -4873,6 +4979,27 @@ class TestImageDelivery:
         r._render_png = MagicMock(return_value=b"fresh")
         assert await r.async_image() == b"fresh"
         assert r._live_dirty is False
+
+    @pytest.mark.parametrize("fails", [False, True])
+    async def test_prime_rooms_keep_pending_redraws(self, hass, monkeypatch, fails):
+        entity, _ = _prime_rooms(hass, monkeypatch, map_ids=["m1"], current="m1")
+        entity._polygons = {"3": _square(0, 0)}
+        entity._async_refresh_if_map_changed = AsyncMock()
+        entity._live_dirty = True
+
+        async def render(_render_png):
+            if fails:
+                raise OSError("renderer unavailable")
+            entity._live_dirty = True
+            return b"image"
+
+        monkeypatch.setattr(hass, "async_add_executor_job", render)
+        if fails:
+            with pytest.raises(OSError, match="renderer unavailable"):
+                await entity.async_image()
+        else:
+            assert await entity.async_image() == b"image"
+        assert entity._live_dirty
 
     @pytest.mark.parametrize("rendered,expected", [(None, b"blank"), (b"heat", b"heat")])
     @pytest.mark.asyncio

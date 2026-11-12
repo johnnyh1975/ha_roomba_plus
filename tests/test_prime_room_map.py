@@ -342,17 +342,6 @@ class TestTheRoomMapIsRefreshedOnlyWhenItChanges:
 
         entity._async_refresh_rooms.assert_awaited_once()
 
-    def test_no_coordinator_subscription_is_registered(self):
-        """Guards the decision. A subscription reads as the obvious
-        improvement and would reintroduce a cloud call per shadow
-        update."""
-        import inspect
-
-        from custom_components.roomba_plus.image import PrimeRoomsImage
-
-        source = inspect.getsource(PrimeRoomsImage)
-
-        assert "async_add_listener" not in source
 
     @pytest.mark.asyncio
     async def test_empty_post_mission_refresh_keeps_the_last_map(self):
@@ -1116,13 +1105,16 @@ class TestLiveBundleUpdatesTheRoomsMap:
 
         assert "async_on_remove" in source
 
-    def test_live_updates_mark_the_image_dirty_without_rendering(self):
+    def test_live_updates_mark_the_image_dirty_without_rendering(self, hass):
         """The dispatcher path must not spend CPU when nobody is viewing."""
         from unittest.mock import MagicMock
 
         from custom_components.roomba_plus.image import PrimeRoomsImage
 
-        entity = object.__new__(PrimeRoomsImage)
+        entry = MagicMock()
+        entry.runtime_data.prime_positions = []
+        entry.runtime_data.prime_trail_started_at = None
+        entity = PrimeRoomsImage("PB", entry, hass)
         entity._live_dirty = False
         entity._last_live_state_write = float("inf")
         entity.async_write_ha_state = MagicMock()

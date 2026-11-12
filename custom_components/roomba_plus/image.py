@@ -1063,6 +1063,8 @@ class PrimeMapImage(IRobotEntity, ImageEntity):
                     float(y_m) * METRES_TO_MM,
                     math.degrees(float(orientation_rad)),
                 ))
+                if len(data.prime_positions) == 1:
+                    data.prime_trail_started_at = _time_mod.monotonic()
             # Bounded. A mission produced 904 points on one tester's
             # robot; a robot left running for a day would otherwise grow
             # this without limit. The oldest go first, because a trail
@@ -5261,6 +5263,8 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         self._names: dict[str, str] = {}
         self._floor_plan: Any = None
         self._live_bundle: Any = None
+        self._live_bundle_received_at: float | None = None
+        self._prefer_closed_bundle = False
         self._preferences: dict[str, Any] = {}
         self._renderer: Any = None
         self._png: bytes | None = None
@@ -5338,7 +5342,13 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
                 )
             )
 
-        # NO SUBSCRIPTION, and no re-render per image request.
+            coordinator = getattr(
+                self._config_entry.runtime_data, "prime_status_coordinator", None
+            )
+            if coordinator is not None:
+                self.async_on_remove(coordinator.async_add_listener(self._on_live_status))
+
+        # NO MAP REFRESH ON SHADOW UPDATES, and no re-render per image request.
         #
         # Both were tried and both are wrong for this entity.
         #
@@ -5400,6 +5410,7 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
             and isinstance(saved_bundle.get("bundle"), dict)
         ):
             self._live_bundle = saved_bundle["bundle"]
+            self._live_bundle_received_at = None
 
         #  is Optional and both builders want a str. An
         # entity with no map id has nothing to build, so this returns
@@ -5748,7 +5759,7 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
 
         # Position packets can be newer than the bundle, which can still
         # describe the previous mission. Keep the live trail during a run.
-        # After the cycle closes, use the bundle if it has classified paths.
+        # After the cycle closes, only a fresh bundle can take over.
         positions = (
             getattr(self._config_entry.runtime_data, "prime_positions", None) or []
             if show_live and self._live_position_belongs_here()
@@ -5774,14 +5785,10 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
                     bundle_paths.append((mode, points))
 
         draw_live_trail = bool(positions)
-        if draw_live_trail and any(
-            mode in ("vacuuming", "mopping", "combo") for mode, _ in bundle_paths
-        ):
-            coordinator = getattr(
-                self._config_entry.runtime_data, "prime_status_coordinator", None
+        if draw_live_trail and self._closed_with_fresh_bundle():
+            draw_live_trail = not any(
+                mode in ("vacuuming", "mopping", "combo") for mode, _ in bundle_paths
             )
-            current = (getattr(coordinator, "data", None) or {}).get("ro-currentstate") or {}
-            draw_live_trail = (current.get("cleanMissionStatus") or {}).get("cycle") != "none"
         if not draw_live_trail:
             for mode, points in bundle_paths:
                 draw.line([to_px(x, y) for x, y in points],
@@ -6125,8 +6132,13 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         """
         await self._async_refresh_if_map_changed()
         if getattr(self, "_show_live_overlay", True) and self._live_dirty and self._polygons:
-            self._png = await self.hass.async_add_executor_job(self._render_png)
+            # Keep any invalidation raised while the executor is rendering.
             self._live_dirty = False
+            try:
+                self._png = await self.hass.async_add_executor_job(self._render_png)
+            except (Exception, asyncio.CancelledError):
+                self._live_dirty = True
+                raise
         return self._png
 
     async def _async_refresh_if_map_changed(self) -> None:
@@ -6263,6 +6275,32 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
             attrs["calibration_points"] = cal
         return attrs
 
+    def _closed_with_fresh_bundle(self) -> bool:
+        """A restored bundle cannot replace a live trail from this process."""
+        data = self._config_entry.runtime_data
+        received = getattr(self, "_live_bundle_received_at", None)
+        started = getattr(data, "prime_trail_started_at", None)
+        if (
+            received is None or started is None or received <= started
+            or not getattr(data, "prime_positions", None)
+        ):
+            return False
+        coordinator = getattr(data, "prime_status_coordinator", None)
+        current = (getattr(coordinator, "data", None) or {}).get("ro-currentstate") or {}
+        return (current.get("cleanMissionStatus") or {}).get("cycle") == "none"
+
+    def _bundle_just_became_preferred(self) -> bool:
+        preferred = self._closed_with_fresh_bundle()
+        changed = preferred and not getattr(self, "_prefer_closed_bundle", False)
+        self._prefer_closed_bundle = preferred
+        return changed
+
+    @callback
+    def _on_live_status(self) -> None:
+        """Publish the final trail when docking produces no further map push."""
+        if self._bundle_just_became_preferred():
+            self._mark_live_dirty(force=True)
+
     @callback
     def _on_live_bundle(self, bundle: Any) -> None:
         """Marks the Rooms Map dirty when a new live bundle arrives.
@@ -6280,6 +6318,7 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
         will never display.
         """
         self._live_bundle = bundle
+        self._live_bundle_received_at = _time_mod.monotonic()
         live_bundle_store = getattr(self, "_live_bundle_store", None)
         current_map_id = getattr(self, "_current_map_id", None)
         if live_bundle_store is not None and current_map_id is not None:
@@ -6287,7 +6326,7 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
                 self._live_bundle_save_payload,
                 _LIVE_BUNDLE_SAVE_DELAY_SECONDS,
             )
-        self._mark_live_dirty()
+        self._mark_live_dirty(force=self._bundle_just_became_preferred())
 
     def _live_bundle_save_payload(self) -> dict[str, Any]:
         """Persist only the rendered live layers for the current map."""
@@ -6304,15 +6343,17 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
     @callback
     def _on_live_position(self) -> None:
         """Marks the Rooms Map dirty when a live position arrives."""
+        if getattr(self, "_prefer_closed_bundle", False):
+            self._prefer_closed_bundle = self._closed_with_fresh_bundle()
         self._mark_live_dirty()
 
     @callback
-    def _mark_live_dirty(self) -> None:
+    def _mark_live_dirty(self, *, force: bool = False) -> None:
         """Advertise new live data at a bounded frontend update rate."""
         self._live_dirty = True
         now = _time_mod.monotonic()
         if (
-            now - getattr(self, "_last_live_state_write", 0.0)
+            force or now - getattr(self, "_last_live_state_write", 0.0)
             >= _LIVE_MAP_STATE_UPDATE_INTERVAL
         ):
             self._last_live_state_write = now
