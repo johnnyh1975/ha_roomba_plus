@@ -142,6 +142,9 @@ class RoombaData:
     #: Bounded, because a long mission would otherwise grow without
     #: limit -- a tester's single run produced 904 points.
     prime_positions: list[tuple[float, float, float]] = field(default_factory=list)
+    #: Monotonic receipt time of the first accepted point in the current
+    #: trail. Independent of the rolling limit on prime_positions.
+    prime_trail_started_at: float | None = None
     #: The last `/v1/p2maps/clean-score` response, kept whole.
     #:
     #: Two readers want it: demand cleaning uses the scores, the mission
