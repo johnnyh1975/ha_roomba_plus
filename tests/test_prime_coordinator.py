@@ -1706,3 +1706,53 @@ class TestNotePrimeFirmware:
             data = self._data(shadows)
             note_prime_firmware(data)
             assert data.last_firmware_version is None
+
+
+class TestStuckEventOnPrime:
+    """4.6.0, parity P2: `roomba_plus_stuck` on Prime, from `phase: stuck`."""
+
+    @staticmethod
+    def _update(phase):
+        return ShadowResponse(
+            topic="$aws/things/BLID123/shadow/name/ro-currentstate/update/accepted",
+            payload={"state": {"reported": {"cleanMissionStatus": {"phase": phase}}}},
+        )
+
+    async def _run(self, phases):
+        from custom_components.roomba_plus.const import EVENT_STUCK
+
+        coordinator, config_entry, prime_robot = _make_status_coordinator()
+        config_entry.entry_id = "E1"
+        config_entry.title = "Upstairs"
+        config_entry.runtime_data.mission_timer_store.current_room = "Hall"
+
+        async def fake_watch():
+            for phase in phases:
+                yield self._update(phase)
+            raise asyncio.CancelledError
+
+        prime_robot.watch_named_shadows_updates = fake_watch
+        with pytest.raises(asyncio.CancelledError):
+            await coordinator._async_watch_status_updates()
+        return [
+            c.args[1] for c in coordinator.hass.bus.async_fire.call_args_list
+            if c.args[0] == EVENT_STUCK
+        ]
+
+    @pytest.mark.asyncio
+    async def test_fires_once_on_the_transition(self):
+        fired = await self._run(["run", "stuck", "stuck", "run", "stuck"])
+        assert len(fired) == 2
+        assert fired[0] == {
+            "entry_id": "E1", "name": "Upstairs", "last_room": "Hall",
+            "phase": "stuck", "stuck_count": None, "minutes_stuck": None,
+            "last_known_position": None,
+        }
+
+    @pytest.mark.asyncio
+    async def test_not_for_a_robot_already_stuck_at_setup(self):
+        assert await self._run(["stuck", "stuck"]) == []
+
+    @pytest.mark.asyncio
+    async def test_other_phases_fire_nothing(self):
+        assert await self._run(["run", "hmPostMsn", "charge"]) == []

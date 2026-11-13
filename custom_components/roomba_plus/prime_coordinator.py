@@ -57,7 +57,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from . import cloud_errors
 from .command_watch import note_prime_shadows
-from .const import DOMAIN, EVENT_ROOM_COMPLETED
+from .const import DOMAIN, EVENT_ROOM_COMPLETED, EVENT_STUCK
 
 from roombapy_prime import (
     PrimeRobot,
@@ -770,6 +770,9 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         #: the mission timer store's on_phase_run. Found by @utkjmitch
         #: from overnight debug logs, hourly, on every install.
         self._trail_mission_id: str | None = None
+        #: The phase of the previous shadow update, for the stuck event
+        #: (4.6.0). None until the first one.
+        self._previous_phase: str | None = None
 
     async def async_start(self) -> None:
         """Seeds initial data by fetching ALL eight named shadows once,
@@ -880,6 +883,7 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                     updated[shadow_name] = _deep_merge_reported(updated.get(shadow_name) or {}, reported)
                     self.entry.runtime_data.last_mqtt_message_ts = _time.time()
                     self._note_phase_for_timer(updated)
+                    self._note_stuck(updated)
                     # "Running" while the battery charges (4.6.0).
                     with contextlib.suppress(Exception):
                         note_prime_shadows(self.hass, self.entry, updated)
@@ -1004,6 +1008,37 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
             data.prime_observed_dock = (float(last[0]), float(last[1]))
         except (TypeError, ValueError):
             return
+
+    def _note_stuck(self, shadows: dict[str, Any]) -> None:
+        """Fire `roomba_plus_stuck` when the robot reports `phase: stuck` (4.6.0).
+
+        A Prime robot says so: `stuck` is one of its phases (seen live on
+        a Y351020). Classic infers it from the robot going quiet during a
+        mission, because a stuck Classic robot often does; the event and
+        its fields are the same, with nothing filled in that Prime does
+        not report -- no stuck counter, no position, no silence.
+
+        Once per transition into `stuck`, and not for the first update
+        after setup: a robot already stuck then was stuck before Home
+        Assistant could tell anyone.
+        """
+        status = (shadows.get("ro-currentstate") or {}).get("cleanMissionStatus") or {}
+        phase = status.get("phase")
+        if not isinstance(phase, str):
+            return
+        previous, self._previous_phase = self._previous_phase, phase
+        if phase != "stuck" or previous in (None, "stuck"):
+            return
+        timer = getattr(self.entry.runtime_data, "mission_timer_store", None)
+        self.hass.bus.async_fire(EVENT_STUCK, {
+            "entry_id": self.entry.entry_id,
+            "name": self.entry.title,
+            "last_room": getattr(timer, "current_room", None),
+            "phase": phase,
+            "stuck_count": None,
+            "minutes_stuck": None,
+            "last_known_position": None,
+        })
 
     def _note_phase_for_timer(self, shadows: dict[str, Any]) -> None:
         """Feeds phase transitions to MissionTimerStore.

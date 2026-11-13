@@ -46,9 +46,13 @@ class TestWhichEntitiesExist:
         assert set(created) == {"mission_completed", "room_completed", "stuck", "command", "mission_result"}
 
     @pytest.mark.asyncio
-    async def test_prime_gets_no_stuck_entity_it_could_never_fire(self):
+    async def test_prime_gets_the_same_moments(self):
+        """`stuck` too since 4.6.0: a Prime robot reports the phase, and
+        PrimeStatusCoordinator fires the event (test_prime_coordinator)."""
         created = await _created(_entry(ConnectionType.CLOUD_ONLY))
-        assert set(created) == {"mission_completed", "room_completed", "command", "mission_result"}
+        assert set(created) == {
+            "mission_completed", "room_completed", "stuck", "command", "mission_result",
+        }
 
     @pytest.mark.asyncio
     async def test_ids_and_types(self):

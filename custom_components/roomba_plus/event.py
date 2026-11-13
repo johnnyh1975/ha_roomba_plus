@@ -53,8 +53,11 @@ _MOMENTS: tuple[tuple[str, str, str], ...] = (
     ("stuck", EVENT_STUCK, "stuck"),
 )
 
-#: Moments a Prime robot never reports.
-_CLASSIC_ONLY = frozenset({"stuck"})
+#: Moments a Prime robot never reports. Empty since 4.6.0: `stuck`
+#: fires on Prime when the robot reports the phase
+#: (PrimeStatusCoordinator._note_stuck). Kept so the next moment of one
+#: generation only has a place to go.
+_CLASSIC_ONLY: frozenset[str] = frozenset()
 
 #: ONE ENTITY, SEVERAL KINDS (4.6.0). Where the kinds answer one question
 #: a card or an automation asks -- "did the robot do what it was told?"
