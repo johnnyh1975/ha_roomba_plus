@@ -1476,6 +1476,12 @@
           "due": "Due",
           "overdue": "Overdue"
         }
+      },
+      "current_room": {
+        "name": "Current room"
+      },
+      "estimated_end_time": {
+        "name": "Estimated end"
       }
     },
     "device_tracker": {

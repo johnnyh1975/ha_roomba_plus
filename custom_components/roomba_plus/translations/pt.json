@@ -1476,6 +1476,12 @@
           "due": "Pendente",
           "overdue": "Atrasado"
         }
+      },
+      "current_room": {
+        "name": "Divisão atual"
+      },
+      "estimated_end_time": {
+        "name": "Fim estimado"
       }
     },
     "binary_sensor": {

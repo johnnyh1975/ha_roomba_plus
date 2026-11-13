@@ -11,9 +11,11 @@ change vs. v3.3.1.
 from __future__ import annotations
 
 from typing import Any
+import datetime
 import logging
 
 from homeassistant.components.sensor import (
+    SensorDeviceClass,
     SensorEntity,
     SensorEntityDescription,
     SensorStateClass,
@@ -26,6 +28,7 @@ from homeassistant.helpers.typing import StateType
 
 from homeassistant.util import dt as dt_util
 
+from .area_resolver import async_room_area_fields
 from .const import CONF_ROOM_SCHEDULE, mission_command, mission_command_regions
 from .entity import IRobotEntity
 from .prime_room_map import SIGNAL_PRIME_ROOM_NAMES
@@ -1359,6 +1362,150 @@ class RoombaMissionProgress(IRobotEntity, SensorEntity):
         return "cleanMissionStatus" in new_state
 
 
+
+
+# ── B5 (4.6.0) — current room, estimated end, room states ─────────────────────
+
+#: Matter's per-room progress states (ServiceArea), the vocabulary a
+#: card or an automation already knows (C79 of the review).
+ROOM_PENDING = "pending"
+ROOM_OPERATING = "operating"
+ROOM_SKIPPED = "skipped"
+ROOM_COMPLETED = "completed"
+
+
+def mission_room_states(config_entry: Any) -> list[dict[str, str]]:
+    """Each room of the running mission with its Matter progress state.
+
+    From the same resolution `current_room` comes from
+    (`_resolve_smart_tier_room_state`), so the two never disagree: the
+    rooms before the current one are `completed`, the current one
+    `operating`, the rest `pending`, and a room skipped by command
+    `skipped` wherever it is. As good as `current_room` is -- where that
+    is an estimate (`current_room_source`), so is this.
+
+    Empty without a running mission or a room sequence.
+    """
+    state = _resolve_smart_tier_room_state(config_entry)
+    rooms = [str(r) for r in state.get("room_sequence") or []]
+    if not rooms:
+        return []
+    mts = getattr(config_entry.runtime_data, "mission_timer_store", None)
+    skipped = {str(r) for r in getattr(mts, "skipped_rooms", None) or []}
+    current = state.get("current_room")
+    here = rooms.index(current) if current in rooms else -1
+    out: list[dict[str, str]] = []
+    for i, room in enumerate(rooms):
+        if room in skipped:
+            kind = ROOM_SKIPPED
+        elif i < here:
+            kind = ROOM_COMPLETED
+        elif i == here:
+            kind = ROOM_OPERATING
+        else:
+            kind = ROOM_PENDING
+        out.append({"room": room, "state": kind})
+    return out
+
+
+class _RunningMissionSensor(IRobotEntity, SensorEntity):
+    """A figure of the running mission, refreshed like mission_progress.
+
+    Both generations, created where `mission_progress` is (sensor.py).
+    A 30 s tick, because lewis firmware reports the mission only on state
+    changes, and every mission status message.
+    """
+
+    _live_state = True
+    _key = ""
+
+    def __init__(self, roomba: Any, blid: str, config_entry: Any) -> None:
+        super().__init__(roomba, blid, config_entry)
+        self._config_entry = config_entry
+        self._attr_unique_id = f"{self.robot_unique_id}_{self._key}"
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        self.async_on_remove(
+            async_track_time_interval(
+                self.hass,
+                callback(lambda _: self.async_schedule_update_ha_state()),
+                datetime.timedelta(seconds=30),
+            )
+        )
+
+    def new_state_filter(self, new_state: dict[str, Any]) -> bool:
+        return "cleanMissionStatus" in new_state
+
+
+class RoombaCurrentRoomSensor(_RunningMissionSensor):
+    """The room the running mission is in (4.6.0, B5).
+
+    Was only the `current_room` attribute of `mission_progress`; as a
+    state it can trigger an automation ("robot is in the kitchen") and
+    show in history. Unknown without a running mission. The attributes
+    say how it was arrived at and where the rest of the run stands.
+    """
+
+    _key = "current_room"
+    entity_description = SensorEntityDescription(
+        key="current_room", translation_key="current_room",
+    )
+
+    @property
+    def native_value(self) -> StateType:
+        room = _resolve_smart_tier_room_state(self._config_entry).get("current_room")
+        return str(room) if room else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        state = _resolve_smart_tier_room_state(self._config_entry)
+        room = state.get("current_room")
+        attrs: dict[str, Any] = {
+            "current_room_source": state.get("current_room_source"),
+            "room_progress_observed": state.get("room_progress_observed"),
+            "next_room": state.get("next_room"),
+            "room_states": mission_room_states(self._config_entry),
+        }
+        if self.hass is not None and room:
+            attrs.update(async_room_area_fields(self.hass, self._config_entry, room))
+        else:
+            attrs.update({"area_id": None, "area_name": None})
+        return attrs
+
+
+class RoombaEstimatedEndSensor(_RunningMissionSensor):
+    """When the running mission is expected to end (4.6.0, B5).
+
+    `estimated_remaining_min` of `mission_progress` from now, to the
+    minute. Moves only when the estimate moves by more than a minute,
+    so the 30 s tick does not write a new time every time. Unknown
+    without a running mission or an estimate.
+    """
+
+    _key = "estimated_end_time"
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+    entity_description = SensorEntityDescription(
+        key="estimated_end_time", translation_key="estimated_end_time",
+    )
+    _last_end: Any = None
+
+    @property
+    def native_value(self) -> Any:
+        remaining = _resolve_smart_tier_room_state(self._config_entry).get(
+            "estimated_remaining_min"
+        )
+        if not isinstance(remaining, (int, float)) or isinstance(remaining, bool):
+            self._last_end = None
+            return None
+        end = (dt_util.utcnow() + datetime.timedelta(minutes=float(remaining))).replace(
+            second=0, microsecond=0,
+        )
+        last = self._last_end
+        if last is not None and abs((end - last).total_seconds()) <= 60:
+            return last
+        self._last_end = end
+        return end
 
 
 # ── IA74-LP — Map Learning Percentage sensor ───────────────────────────────────

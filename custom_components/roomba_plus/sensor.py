@@ -175,6 +175,8 @@ from .sensor_rooms import (
     RoombaLastMissionSummarySensor,
     RoombaLearningPercentageSensor,
     RoombaMissionProgress,
+    RoombaCurrentRoomSensor,
+    RoombaEstimatedEndSensor,
     RoombaRelocalisationRateSensor,
     RoombaRoomAccessibilityScoresSensor,
     RoombaRoomAreasSensor,
@@ -602,6 +604,9 @@ async def async_setup_entry(
         and data.mission_timer_store is not None
     ):
         entities.append(RoombaMissionProgress(roomba, blid, config_entry))
+        # B5 (4.6.0): the room and the end of the running mission as states.
+        entities.append(RoombaCurrentRoomSensor(roomba, blid, config_entry))
+        entities.append(RoombaEstimatedEndSensor(roomba, blid, config_entry))
 
     # SC1 (v2.7.0) — consolidated analytics sensors (cloud credentials required)
     cc = data.cloud_coordinator
@@ -920,6 +925,8 @@ def _add_prime_mission_sensors(
         from .sensor_rooms import RoombaMissionProgress  # noqa: PLC0415
 
         entities.append(RoombaMissionProgress(None, data.blid, config_entry))
+        entities.append(RoombaCurrentRoomSensor(None, data.blid, config_entry))
+        entities.append(RoombaEstimatedEndSensor(None, data.blid, config_entry))
 
     if entities:
         async_add_entities(entities)

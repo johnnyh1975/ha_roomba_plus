@@ -2066,3 +2066,97 @@ class TestLastMissionSummaryOnPrime:
         assert sensor.native_value == "completed"
         assert sensor.extra_state_attributes["cleaned_rooms"] == ["Kitchen"]
         assert store.latest_cleaned_rooms.call_args.args[0] == {"10": "Kitchen", "11": "Hall"}
+
+
+class TestTheRunningMissionAsStates:
+    """B5 (4.6.0): current room and estimated end as their own sensors,
+    with Matter's per-room states, both generations."""
+
+    @staticmethod
+    def _entry(skipped=()):
+        from unittest.mock import MagicMock
+
+        entry = MagicMock()
+        entry.runtime_data.mission_timer_store.skipped_rooms = list(skipped)
+        return entry
+
+    @staticmethod
+    def _state(monkeypatch, state):
+        from custom_components.roomba_plus import sensor_rooms as sr
+
+        monkeypatch.setattr(sr, "_resolve_smart_tier_room_state", lambda _e: dict(state))
+        return sr
+
+    def test_room_states_follow_the_current_room(self, monkeypatch):
+        sr = self._state(monkeypatch, {
+            "room_sequence": ["Hall", "Kitchen", "Bath", "Office"],
+            "current_room": "Bath",
+        })
+        assert sr.mission_room_states(self._entry(skipped=["Kitchen"])) == [
+            {"room": "Hall", "state": "completed"},
+            {"room": "Kitchen", "state": "skipped"},
+            {"room": "Bath", "state": "operating"},
+            {"room": "Office", "state": "pending"},
+        ]
+
+    def test_no_sequence_no_states(self, monkeypatch):
+        sr = self._state(monkeypatch, {})
+        assert sr.mission_room_states(self._entry()) == []
+
+    def test_an_unknown_current_room_leaves_all_pending(self, monkeypatch):
+        sr = self._state(monkeypatch, {"room_sequence": ["A", "B"], "current_room": "Z"})
+        assert [r["state"] for r in sr.mission_room_states(self._entry())] == ["pending", "pending"]
+
+    def test_the_current_room_sensor(self, monkeypatch):
+        sr = self._state(monkeypatch, {
+            "room_sequence": ["Hall", "Kitchen"], "current_room": "Kitchen",
+            "current_room_source": "position", "room_progress_observed": True,
+            "next_room": None,
+        })
+        sensor = sr.RoombaCurrentRoomSensor(None, "BLID", self._entry())
+        assert sensor.unique_id.endswith("_current_room")
+        assert sensor.native_value == "Kitchen"
+        attrs = sensor.extra_state_attributes
+        assert attrs["current_room_source"] == "position"
+        assert attrs["room_states"][1] == {"room": "Kitchen", "state": "operating"}
+        assert (attrs["area_id"], attrs["area_name"]) == (None, None)
+
+    def test_the_current_room_sensor_names_the_area(self, monkeypatch):
+        from unittest.mock import MagicMock
+
+        sr = self._state(monkeypatch, {"room_sequence": ["K"], "current_room": "K"})
+        monkeypatch.setattr(
+            sr, "async_room_area_fields",
+            lambda _h, _e, room: {"area_id": "kitchen", "area_name": "Kitchen"},
+        )
+        sensor = sr.RoombaCurrentRoomSensor(None, "BLID", self._entry())
+        sensor.hass = MagicMock()
+        assert sensor.extra_state_attributes["area_id"] == "kitchen"
+
+    def test_no_mission_no_room(self, monkeypatch):
+        sr = self._state(monkeypatch, {})
+        assert sr.RoombaCurrentRoomSensor(None, "BLID", self._entry()).native_value is None
+
+    def test_the_estimated_end(self, monkeypatch):
+        import datetime
+
+        from homeassistant.util import dt as dt_util
+
+        sr = self._state(monkeypatch, {"estimated_remaining_min": 30})
+        now = datetime.datetime(2026, 11, 13, 20, 0, 10, tzinfo=datetime.timezone.utc)
+        monkeypatch.setattr(dt_util, "utcnow", lambda: now)
+        sensor = sr.RoombaEstimatedEndSensor(None, "BLID", self._entry())
+        assert sensor.device_class == "timestamp"
+        first = sensor.native_value
+        assert first == datetime.datetime(2026, 11, 13, 20, 30, tzinfo=datetime.timezone.utc)
+        # Under a minute of drift keeps the time.
+        now = now + datetime.timedelta(seconds=50)
+        monkeypatch.setattr(dt_util, "utcnow", lambda: now)
+        assert sensor.native_value == first
+        # The estimate moving does move it.
+        self._state(monkeypatch, {"estimated_remaining_min": 10})
+        assert sensor.native_value == datetime.datetime(2026, 11, 13, 20, 11, tzinfo=datetime.timezone.utc)
+
+    def test_no_estimate_no_end(self, monkeypatch):
+        sr = self._state(monkeypatch, {"estimated_remaining_min": None})
+        assert sr.RoombaEstimatedEndSensor(None, "BLID", self._entry()).native_value is None

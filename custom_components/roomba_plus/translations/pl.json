@@ -1476,6 +1476,12 @@
           "due": "Do zrobienia",
           "overdue": "Zaległe"
         }
+      },
+      "current_room": {
+        "name": "Bieżące pomieszczenie"
+      },
+      "estimated_end_time": {
+        "name": "Szacowany koniec"
       }
     },
     "binary_sensor": {

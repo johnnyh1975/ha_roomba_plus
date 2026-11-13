@@ -1476,6 +1476,12 @@
           "due": "Nodig",
           "overdue": "Te laat"
         }
+      },
+      "current_room": {
+        "name": "Huidige ruimte"
+      },
+      "estimated_end_time": {
+        "name": "Verwacht einde"
       }
     },
     "binary_sensor": {

@@ -1476,6 +1476,12 @@
           "due": "Da fare",
           "overdue": "In ritardo"
         }
+      },
+      "current_room": {
+        "name": "Stanza attuale"
+      },
+      "estimated_end_time": {
+        "name": "Fine stimata"
       }
     },
     "binary_sensor": {
