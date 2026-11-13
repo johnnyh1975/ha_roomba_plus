@@ -119,6 +119,7 @@ from .live_position import LivePositionStream
 from .room_cleaning import region_names_across_maps
 from .segment_anchoring import anchor_segment
 from .trajectory_segments import split_into_segments
+from .prime_room_map import SIGNAL_PRIME_ROOM_NAMES
 from .structural_failures import record_failure, record_success
 from .grid_store import GridStore, CELL_SIZE_MM, DECAY, VISIT_INCREMENT
 from .map_renderer import (
@@ -334,6 +335,9 @@ async def async_setup_entry(
                     hass=hass,
                     include_live=True,
                 ),
+                # THE FLOOR PLAN OF EACH STORED MAP (4.6.0), as Classic
+                # has since 4.5.4. Disabled until the user enables one.
+                *await _async_prime_floor_plans(hass, config_entry),
             ])
         return
 
@@ -4657,30 +4661,245 @@ class RoombaFloorPlanImage(IRobotEntity, ImageEntity):
         )
         if key == self._render_key and self._render_png is not None:
             return self._render_png
+        png = render_floor_plan_png(polygons, labels, options)
+        self._render_key = key
+        self._render_png = png
+        return png
 
-        # THE FRAME OF THE ROOMS MAP BEFORE ALIGNMENT: the map's own
-        # coordinates, a 50 mm margin, 600 px.
-        coords = [pt for poly in polygons.values() for pt in poly]
-        margin = 50.0
-        x_min = min(x for x, _ in coords) - margin
-        x_max = max(x for x, _ in coords) + margin
-        y_min = min(y for _, y in coords) - margin
-        y_max = max(y for _, y in coords) + margin
-        size = 600
-        scale = size / max(x_max - x_min, y_max - y_min, 1.0)
 
-        def to_px(x: float, y: float) -> tuple[int, int]:
-            return _turn_px(
-                int((x - x_min) * scale),
-                int(size - (y - y_min) * scale),  # y-flip: HA map convention
-                size, turns,
-            )
+def render_floor_plan_png(
+    polygons: Mapping[str, list[tuple[float, float]]],
+    labels: Mapping[str, str],
+    options: Mapping[str, Any],
+) -> bytes:
+    """One map's floor plan: rooms and names in the map's own frame.
 
-        png = draw_room_layout_png(
-            polygons,
-            lambda poly: poly if len(poly) >= 3 else None,
-            labels, to_px, size, scale, wall_mm, door_mm,
+    THE FRAME OF THE ROOMS MAP BEFORE ALIGNMENT: the map's own
+    coordinates, a 50 mm margin, 600 px. Shared by the Classic (4.5.4)
+    and the Prime (4.6.0) floor plan, so the two look alike.
+    """
+    turns = quarter_turns(options.get(CONF_MAP_ROTATION, DEFAULT_MAP_ROTATION))
+    wall_mm, door_mm = _wall_and_door_mm(options)
+    coords = [pt for poly in polygons.values() for pt in poly]
+    margin = 50.0
+    x_min = min(x for x, _ in coords) - margin
+    x_max = max(x for x, _ in coords) + margin
+    y_min = min(y for _, y in coords) - margin
+    y_max = max(y for _, y in coords) + margin
+    size = 600
+    scale = size / max(x_max - x_min, y_max - y_min, 1.0)
+
+    def to_px(x: float, y: float) -> tuple[int, int]:
+        return _turn_px(
+            int((x - x_min) * scale),
+            int(size - (y - y_min) * scale),  # y-flip: HA map convention
+            size, turns,
         )
+
+    return draw_room_layout_png(
+        polygons,
+        lambda poly: poly if len(poly) >= 3 else None,
+        labels, to_px, size, scale, wall_mm, door_mm,
+    )
+
+
+#: How long the image platform waits for the list of a Prime account's
+#: maps before it sets up without their floor plans (4.6.0).
+_PRIME_MAP_LIST_TIMEOUT_S = 10.0
+
+
+async def _async_prime_floor_plans(
+    hass: HomeAssistant, config_entry: RoombaConfigEntry
+) -> list[Any]:
+    """A floor plan for each map of a Prime account (4.6.0, A7 d).
+
+    The same list the map select offers. Without an answer (the cloud
+    is slow or fails) there are none this setup, and none are removed:
+    a missing list says nothing about which maps are gone.
+    """
+    data = config_entry.runtime_data
+    robot = getattr(data, "prime_robot", None)
+    if robot is None:
+        return []
+    try:
+        async with asyncio.timeout(_PRIME_MAP_LIST_TIMEOUT_S):
+            versions = await robot.get_active_map_versions()
+        record_success("map list read (floor plans)")
+    except Exception:  # noqa: BLE001 -- an unreachable cloud costs only the floor plans
+        record_failure("map list read (floor plans)", "listing maps for the floor plans")
+        _LOGGER.debug("roomba_plus: no map list for the Prime floor plans", exc_info=True)
+        return []
+    maps: list[tuple[str, str, str]] = []
+    for entry in versions or []:
+        if isinstance(entry, dict) and entry.get("p2map_id"):
+            map_id = str(entry["p2map_id"])
+            maps.append((
+                map_id, str(entry.get("name") or map_id),
+                str(entry.get("active_p2mapv_id") or ""),
+            ))
+    if not maps:
+        return []
+    with contextlib.suppress(Exception):
+        data.prime_map_versions = {
+            **(getattr(data, "prime_map_versions", None) or {}),
+            **{map_id: version for map_id, _name, version in maps if version},
+        }
+    async_remove_deleted_floor_plans(
+        hass, config_entry, data.blid, {map_id for map_id, _n, _v in maps}
+    )
+    return [
+        PrimeFloorPlanImage(
+            data.blid, config_entry, p2map_id=map_id, map_name=name, version=version,
+        )
+        for map_id, name, version in maps
+    ]
+
+
+class PrimeFloorPlanImage(IRobotEntity, ImageEntity):
+    """The floor plan of one stored Prime map: rooms and names (4.6.0).
+
+    The Classic floor plan (4.5.4) for Prime, which had the map choice
+    but only a picture of the chosen map. Rooms come from the map's
+    metadata and, where it has no outline, from its bundle -- as on the
+    rooms map. Drawn in the map's own frame, without robot or path.
+    Created disabled, so no cloud call is made for a picture nobody
+    shows.
+    """
+
+    _attr_content_type = "image/png"
+    _attr_translation_key = "floor_plan"
+    _attr_entity_category = None
+    _attr_entity_registry_enabled_default = False
+
+    def __init__(
+        self,
+        blid: str,
+        config_entry: RoombaConfigEntry,
+        *,
+        p2map_id: str,
+        map_name: str,
+        version: str,
+    ) -> None:
+        IRobotEntity.__init__(self, None, blid, config_entry)
+        self._cache = None
+        self.access_tokens: collections.deque[str] = collections.deque([], 2)
+        self._config_entry = config_entry
+        self._p2map_id = p2map_id
+        self._map_name = map_name
+        self._listed_version = version
+        self._attr_unique_id = f"{self.robot_unique_id}_floor_plan_{p2map_id}"
+        self._attr_translation_placeholders = {"map": map_name}
+        self._attr_image_last_updated: dt_datetime = dt_util.now(datetime.timezone.utc)
+        self._shown_version: str | None = None
+        self._room_count: int | None = None
+        #: The rooms of the version last read: (version, polygons, names).
+        self._rooms: tuple[str, dict[str, list[tuple[float, float]]], dict[str, str]] | None = None
+        self._render_key: tuple[Any, ...] | None = None
+        self._render_png: bytes | None = None
+
+    def _version(self) -> str | None:
+        versions = getattr(self._config_entry.runtime_data, "prime_map_versions", None)
+        current = versions.get(self._p2map_id) if isinstance(versions, dict) else None
+        return current or self._listed_version or None
+
+    async def async_added_to_hass(self) -> None:
+        await IRobotEntity.async_added_to_hass(self)
+        self.async_update_token()
+        self._shown_version = self._version()
+        # The rooms map reads the versions again with each refresh and
+        # sends this signal when names arrive; a new version of this map
+        # is a new picture.
+        self.async_on_remove(async_dispatcher_connect(
+            self.hass,
+            SIGNAL_PRIME_ROOM_NAMES.format(self._config_entry.entry_id),
+            self._on_map_refresh,
+        ))
+
+        async def _on_options_updated(_hass: HomeAssistant, _entry: Any) -> None:
+            self._picture_changed()
+
+        self.async_on_remove(self._config_entry.add_update_listener(_on_options_updated))
+
+    @callback
+    def _picture_changed(self) -> None:
+        self._attr_image_last_updated = dt_util.now(datetime.timezone.utc)
+        self._cache = None
+        self.async_write_ha_state()
+
+    @callback
+    def _on_map_refresh(self) -> None:
+        version = self._version()
+        if version != self._shown_version:
+            self._shown_version = version
+            self._picture_changed()
+
+    def new_state_filter(self, new_state: dict[str, Any]) -> bool:
+        return False  # Cloud entity -- no MQTT updates
+
+    @property
+    def available(self) -> bool:
+        return self._version() is not None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {
+            "map_name": self._map_name,
+            "map_version": self._shown_version,
+            "room_count": self._room_count,
+        }
+
+    async def _async_rooms(
+        self, version: str
+    ) -> tuple[dict[str, list[tuple[float, float]]], dict[str, str]]:
+        """The rooms of `version`, read once per version."""
+        if self._rooms is not None and self._rooms[0] == version:
+            return self._rooms[1], self._rooms[2]
+        from .prime_room_map import (  # noqa: PLC0415
+            async_build_prime_floor_plan,
+            async_build_prime_room_polygons,
+        )
+
+        polygons, names, _preferences = await async_build_prime_room_polygons(
+            self._config_entry, self._p2map_id
+        )
+        plan = await async_build_prime_floor_plan(self._config_entry, self._p2map_id, version)
+        # As on the rooms map: bundle names win, bundle outlines fill in.
+        for room_id, name in (plan.room_names or {}).items():
+            if room_id in names:
+                names[room_id] = name
+        for room_id, ring in (plan.room_polygons or {}).items():
+            polygons.setdefault(room_id, ring)
+            names.setdefault(room_id, (plan.room_names or {}).get(room_id) or room_id)
+        self._rooms = (version, polygons, names)
+        return polygons, names
+
+    async def async_image(self) -> bytes | None:
+        version = self._version()
+        if not version:
+            return None
+        polygons, names = await self._async_rooms(version)
+        return await self.hass.async_add_executor_job(self._render, version, polygons, names)
+
+    def _render(
+        self,
+        version: str,
+        polygons: dict[str, list[tuple[float, float]]],
+        names: dict[str, str],
+    ) -> bytes | None:
+        """CPU-bound; runs in the executor."""
+        drawable = {rid: ring for rid, ring in polygons.items() if len(ring) >= 3}
+        self._room_count = len(drawable)
+        if not drawable:
+            return None
+        options = self._config_entry.options
+        labels = {rid: names.get(rid) or rid for rid in drawable}
+        key = (
+            version, tuple(sorted(labels.items())),
+            options.get(CONF_MAP_ROTATION, DEFAULT_MAP_ROTATION), _wall_and_door_mm(options),
+        )
+        if key == self._render_key and self._render_png is not None:
+            return self._render_png
+        png = render_floor_plan_png(drawable, labels, options)
         self._render_key = key
         self._render_png = png
         return png

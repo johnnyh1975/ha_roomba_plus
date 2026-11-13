@@ -7370,3 +7370,121 @@ class TestTheFloorPlansOfDeletedMaps:
             )
         assert removed == 1
         registry.async_remove.assert_called_once_with("image." + prefix + "map-gone")
+
+
+class TestTheFloorPlanOfEachPrimeMap:
+    """4.6.0, A7 (d): a floor plan per stored map on Prime as well."""
+
+    SQUARE = [(0.0, 0.0), (4000.0, 0.0), (4000.0, 3000.0), (0.0, 3000.0)]
+
+    @staticmethod
+    def _entry(versions):
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.models import ConnectionType
+
+        entry = entry_mock()
+        entry.entry_id = "E1"
+        entry.options = {}
+        data = entry.runtime_data
+        data.connection_type = ConnectionType.CLOUD_ONLY
+        data.blid = "0123456789ABCDEF"
+        data.prime_map_versions = {}
+        data.prime_robot = SimpleNamespace(
+            get_active_map_versions=AsyncMock(side_effect=versions)
+            if isinstance(versions, Exception)
+            else AsyncMock(return_value=versions),
+        )
+        return entry
+
+    async def _setup(self, entry, hass=None):
+        created: list = []
+        with patch.object(img, "async_remove_deleted_floor_plans") as removed:
+            plans = await img._async_prime_floor_plans(hass or MagicMock(), entry)
+        created.extend(plans)
+        return created, removed
+
+    @pytest.mark.asyncio
+    async def test_one_per_map_disabled(self):
+        entry = self._entry([
+            {"p2map_id": "MAP-1", "name": "Ground floor", "active_p2mapv_id": "V1"},
+            {"p2map_id": "MAP-2", "active_p2mapv_id": "V7"},
+        ])
+        created, removed = await self._setup(entry)
+        assert [type(e).__name__ for e in created] == ["PrimeFloorPlanImage"] * 2
+        first, second = created
+        assert first.unique_id == "roomba_plus_0123456789ABCDEF_floor_plan_MAP-1"
+        assert first.entity_registry_enabled_default is False
+        assert first.translation_placeholders == {"map": "Ground floor"}
+        assert second.translation_placeholders == {"map": "MAP-2"}
+        assert removed.call_args.args[3] == {"MAP-1", "MAP-2"}
+        assert entry.runtime_data.prime_map_versions == {"MAP-1": "V1", "MAP-2": "V7"}
+
+    @pytest.mark.asyncio
+    async def test_no_list_no_plans_and_nothing_removed(self):
+        for versions in (RuntimeError("cloud down"), []):
+            created, removed = await self._setup(self._entry(versions))
+            assert created == []
+            removed.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_it_draws_the_rooms_once_per_version(self):
+        import io
+
+        from PIL import Image
+
+        from custom_components.roomba_plus import prime_room_map
+        from custom_components.roomba_plus.prime_room_map import PrimeFloorPlan
+
+        entry = self._entry([{"p2map_id": "MAP-1", "name": "Ground floor", "active_p2mapv_id": "V1"}])
+        (entity,), _ = await self._setup(entry)
+        hass = MagicMock()
+        hass.async_add_executor_job = AsyncMock(side_effect=lambda fn, *a: fn(*a))
+        entity.hass = hass
+        rooms = AsyncMock(return_value=({"10": list(self.SQUARE)}, {"10": "Kitchen"}, {}))
+        bundle = AsyncMock(return_value=PrimeFloorPlan(
+            room_names={"10": "Küche", "11": "Hall"},
+            room_polygons={"11": [(4000.0, 0.0), (6000.0, 0.0), (6000.0, 3000.0)]},
+            floor_plan=[], borders=[], carpet=[], furniture=[], dock=None,
+        ))
+        with patch.object(prime_room_map, "async_build_prime_room_polygons", rooms), \
+                patch.object(prime_room_map, "async_build_prime_floor_plan", bundle):
+            png = await entity.async_image()
+            again = await entity.async_image()
+            entry.runtime_data.prime_map_versions = {"MAP-1": "V2"}
+            await entity.async_image()
+        picture = Image.open(io.BytesIO(png)).convert("RGB")
+        assert picture.size == (600, 600)
+        assert again == png
+        assert rooms.await_count == 2
+        assert bundle.await_args_list[0].args[2] == "V1"
+        assert bundle.await_args_list[1].args[2] == "V2"
+        assert entity.extra_state_attributes["room_count"] == 2
+        # Bundle names win, bundle outlines fill in.
+        assert entity._rooms[2] == {"10": "Küche", "11": "Hall"}
+
+    @pytest.mark.asyncio
+    async def test_a_new_version_is_a_new_picture(self):
+        entry = self._entry([{"p2map_id": "MAP-1", "active_p2mapv_id": "V1"}])
+        (entity,), _ = await self._setup(entry)
+        entity._shown_version = "V1"
+        entity.async_write_ha_state = MagicMock()
+        before = entity._attr_image_last_updated
+        entity._on_map_refresh()
+        entity.async_write_ha_state.assert_not_called()
+        entry.runtime_data.prime_map_versions = {"MAP-1": "V2"}
+        entity._on_map_refresh()
+        entity.async_write_ha_state.assert_called_once()
+        assert entity._shown_version == "V2"
+        assert entity._attr_image_last_updated >= before
+        assert entity.available is True
+
+    @pytest.mark.asyncio
+    async def test_built_by_the_prime_image_platform(self):
+        from custom_components.roomba_plus.image import PrimeFloorPlanImage
+
+        entry = self._entry([{"p2map_id": "MAP-1", "active_p2mapv_id": "V1"}])
+        created: list = []
+        with patch.object(img, "async_remove_deleted_floor_plans"):
+            await img.async_setup_entry(MagicMock(), entry, created.extend)
+        assert any(isinstance(e, PrimeFloorPlanImage) for e in created)
