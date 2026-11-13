@@ -1747,6 +1747,65 @@ class PrimeScheduleCoordinator(DataUpdateCoordinator[list[tuple[str, list[Any]]]
         return containers
 
 
+def prime_reported_state(data: Any) -> dict[str, Any]:
+    """A reported-state-shaped dict, assembled from the named shadows.
+
+    THE CLOUD-ONLY DUMP WAS NOT MISSING DATA, IT WAS MISSING A
+    TRANSLATION. Every field the local sections read lives in the
+    shadows this robot already publishes, just split across documents:
+
+        ro-currentstate  batPct, bin, dock, tankPresent, runtimeStats,
+                         cleanMissionStatus, p2maps
+        ro-stats         bbchg, bbchg3, bbmssn, bbsys
+        ro-configinfo    hwPartsRev
+        classic          cap, sku
+
+    Merged, that is the same shape a locally connected robot reports --
+    so the sections written against `state` work unchanged.
+
+    WHY THIS EXISTS AT ALL: the previous attempt to close the gap used
+    "does the helper need only runtime data" as the test. That is a
+    question about function signatures, not about what the robot can
+    tell us, and it left every state-derived section local-only while
+    the state sat in the dump three keys away.
+
+    Later documents win on a key collision, and nothing here is
+    invented: absent stays absent.
+
+    MOVED HERE FROM diagnostics.py IN 4.6.0: the shared sensors read
+    the same translation on Prime (sensor.PrimeSharedSensor), not only
+    the diagnostics.
+    """
+    coordinator = getattr(data, "prime_status_coordinator", None)
+    shadows = getattr(coordinator, "data", None)
+    if not isinstance(shadows, dict):
+        return {}
+
+    merged: dict[str, Any] = {}
+    for name in ("classic", "ro-configinfo", "ro-stats", "ro-currentstate"):
+        document = shadows.get(name)
+        if isinstance(document, dict):
+            merged.update(document)
+    # CREDENTIALS OUT, BY NAME AND BY SHAPE.
+    #
+    # `ro-configinfo` carries `passwordHash`, and merging documents is
+    # exactly how something like that reaches a place nobody reviewed.
+    # The existing redaction covers the dump's own top level; this dict
+    # is built here and would not pass through it.
+    #
+    # A password in a debug line already cost this project a release
+    # (@ScenicSystemsLLC found it), so the sweep is by substring rather
+    # than an exact list: a field added upstream tomorrow is caught too.
+    for key in list(merged):
+        low = key.lower()
+        if any(
+            mark in low
+            for mark in ("password", "passwd", "secret", "token", "svcendpoints")
+        ):
+            merged.pop(key, None)
+    return merged
+
+
 def prime_current_state(data: Any) -> Any | None:
     """The parsed `ro-currentstate` shadow, or None if there is none.
 

@@ -37,8 +37,11 @@ CURRENT_STATE: dict[str, Any] = {
     # and is not modelled.
     "dock": {"known": True, "state": 301, "pwState": 601, "pdState": 701,
              "tankLvl": 90, "cap": {"evac": 1, "pd": 3, "pw": 1, "pwo": 1}},
+    # mssnStrtTm and missionId: both live in the chairstacker capture,
+    # and the shared mission sensors (4.6.0) are built from them.
     "cleanMissionStatus": {"phase": "charge", "cycle": "none", "mssnM": 0,
-                           "expireM": 0},
+                           "expireM": 0, "mssnStrtTm": 1700000000,
+                           "missionId": "01HZZZZZZZZZZZZZZZZZZZZZZZ"},
     "bin": {"present": True, "full": False},
     "tankPresent": True,
     "tankLvl": 80,

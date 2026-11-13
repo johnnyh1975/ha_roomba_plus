@@ -413,7 +413,11 @@ class TestAsyncSetupEntryCloudOnlyBranch:
         # Prime had no equivalent of. The per-region entities are NOT
         # counted here -- they are opt-in on both tiers.
         # 38 since the maintenance status (4.5.0), on both generations.
-        assert len(created) == 38, (
+        # 41 since 4.6.0: missions_last_30d, completion_rate_30d and
+        # last_mission_area read only the mission store, which Prime
+        # fills. (The shared shadow sensors are added later, when their
+        # field arrives, and are not counted here.)
+        assert len(created) == 41, (
             "rooms-overdue was added for Prime: it reads the mission "
             "store and cloud regions, both of which Prime has, and it "
             "was missing only because of the order things were built in"

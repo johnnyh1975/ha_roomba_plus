@@ -2679,3 +2679,104 @@ class TestMaintenanceStatusSensor:
         sensor = self._sensor(None)
         assert sensor.native_value is None
         assert sensor.extra_state_attributes == {}
+
+
+class TestSharedSensorsOnPrime:
+    """4.6.0, parity inventory P1: Classic descriptions whose fields a
+    Prime robot reports in its shadows, read from there, and created only
+    once the field is there."""
+
+    @staticmethod
+    def _entry(shadows):
+        from unittest.mock import MagicMock
+
+        entry = MagicMock()
+        entry.runtime_data.blid = "B"
+        entry.runtime_data.prime_status_coordinator.data = shadows
+        return entry
+
+    def _created(self, shadows):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.sensor import _add_prime_shared_sensors
+
+        entry = self._entry(shadows)
+        added = MagicMock()
+        _add_prime_shared_sensors(entry, added)
+        created = {}
+        for call in added.call_args_list:
+            created.update({e.entity_description.key: e for e in call.args[0]})
+        return created, entry, added
+
+    FULL = {
+        "ro-currentstate": {"cleanMissionStatus": {
+            "cycle": "clean", "phase": "charge", "missionId": "M7", "mssnStrtTm": 1784470000,
+            "rechrgTm": 1784480000, "expireTm": 1784490000,
+        }},
+        "ro-stats": {
+            "bbmssn": {"nMssn": 276, "nMssnOk": 247, "aMssnM": 54},
+            "bbchg": {"nChatters": 3, "nKnockoffs": 1},
+        },
+    }
+
+    def test_every_key_is_a_real_description(self):
+        from custom_components.roomba_plus.sensor import _PRIME_SHADOW_SENSOR_KEYS
+        from custom_components.roomba_plus.sensor_core import SENSORS
+
+        assert _PRIME_SHADOW_SENSOR_KEYS <= {d.key for d in SENSORS}
+
+    def test_values_come_from_the_shadows(self):
+        from custom_components.roomba_plus.sensor import _PRIME_SHADOW_SENSOR_KEYS
+
+        created, _, _ = self._created(self.FULL)
+        assert set(created) == _PRIME_SHADOW_SENSOR_KEYS
+        assert created["mission_id"].native_value == "M7"
+        assert created["average_mission_time"].native_value == 54
+        assert created["lifetime_completion_rate"].native_value == round(247 / 276 * 100, 1)
+        assert created["dock_contact_chatters"].native_value == 3
+        assert created["dock_knockoffs"].native_value == 1
+        assert created["mission_recharge_time"].native_value.timestamp() == 1784480000
+
+    def test_only_fields_that_arrived_and_more_as_they_come(self):
+        """The Prime app declares `rechrgTm` and `aMssnM`; nobody has seen
+        a robot send them. A sensor waiting for ever is worse than none."""
+        created, entry, added = self._created({
+            "ro-currentstate": {"cleanMissionStatus": {"phase": "charge", "missionId": "M1"}},
+            "ro-stats": {"bbmssn": {"nMssn": 3, "nMssnOk": 3}},
+        })
+        assert set(created) == {"mission_id", "lifetime_completion_rate"}
+        coordinator = entry.runtime_data.prime_status_coordinator
+        listener = coordinator.async_add_listener.call_args.args[0]
+        coordinator.data = self.FULL
+        listener()
+        later = {e.entity_description.key for e in added.call_args.args[0]}
+        assert "mission_recharge_time" in later and "mission_id" not in later
+
+    def test_no_shadows_yet_makes_nothing(self):
+        created, _, _ = self._created(None)
+        assert created == {}
+
+    async def test_it_follows_the_coordinator(self):
+        from unittest.mock import MagicMock, patch
+
+        from custom_components.roomba_plus import sensor_core
+
+        created, _, _ = self._created(self.FULL)
+        sensor = created["average_mission_time"]
+        sensor.hass = MagicMock()
+        sensor.async_on_remove = MagicMock()
+        with patch.object(sensor_core.RoombaSensor, "async_added_to_hass", return_value=None):
+            await sensor.async_added_to_hass()
+        coordinator = sensor._config_entry.runtime_data.prime_status_coordinator
+        coordinator.async_add_listener.assert_called_with(sensor.async_write_ha_state)
+
+    def test_without_a_status_coordinator_none_are_made(self):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.sensor import _add_prime_shared_sensors
+
+        entry = self._entry({})
+        entry.runtime_data.prime_status_coordinator = None
+        added = MagicMock()
+        _add_prime_shared_sensors(entry, added)
+        added.assert_not_called()

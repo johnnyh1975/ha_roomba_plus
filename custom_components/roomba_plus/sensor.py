@@ -102,6 +102,7 @@ from .sensor_prime import (
     PrimeTotalMissionsSensor,
 )
 
+from .prime_coordinator import add_prime_entities_when_available, prime_reported_state
 from .sensor_core import (
     RoombaSensor,
     RoombaSensorDescription,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
@@ -526,6 +527,7 @@ async def async_setup_entry(
         # self-emptying base.
         _add_discovered_parts(hass, data, config_entry, async_add_entities)
         _add_prime_mission_sensors(data, config_entry, async_add_entities)
+        _add_prime_shared_sensors(config_entry, async_add_entities)
         return
 
     roomba = config_entry.runtime_data.roomba
@@ -713,7 +715,96 @@ _PRIME_MISSION_SENSOR_KEYS: frozenset[str] = frozenset({
     "last_mission_duration",
     "clean_streak",
     "consecutive_mission_anomalies",
+    # 4.6.0 (parity inventory P1): read only the mission store, which
+    # Prime fills from its cloud history.
+    "missions_last_30d",
+    "completion_rate_30d",
+    "last_mission_area",
 })
+
+#: SHARED SENSORS FROM THE PRIME SHADOWS (4.6.0, parity inventory P1).
+#:
+#: Their value functions read the Classic state (`cleanMissionStatus`,
+#: `bbmssn`, `bbchg`), and a Prime robot reports these fields under the
+#: same names in its named shadows. `PrimeSharedSensor` hands them the
+#: shadows in the Classic shape (prime_coordinator.prime_reported_state),
+#: so the description, the unit and the translation are Classic's.
+#:
+#: CREATED WHEN THE FIELD ARRIVES, never before. Of these, only
+#: `cleanMissionStatus` and `bbmssn`'s counters have been seen with real
+#: values on a Prime robot (chairstacker); `expireTm`, `rechrgTm`,
+#: `aMssnM`, `nChatters` and `nKnockoffs` are declared by the Prime app
+#: and not yet seen. A sensor that would read "unknown" for ever is
+#: worse than none, so each is added the first time its field is in a
+#: shadow, and stays (add-only, like the dock entities).
+#:
+#: Each key with the field that has to be present, as (block, field).
+#: Deliberately absent, see claude/PARITAET_CLASSIC_PRIME.md:
+#:   - `dock_charge_aborts`: Classic reads `bbchg.nAborts`, the Prime app
+#:     declares `bbchg.aborts`; same thing or not is unknown;
+#:   - `bbrun`, `bbnav`, `mssnNavStats`, `bbchg3.estCap`, `batInfo`
+#:     sensors: their meaning on Prime is unconfirmed beyond the name;
+#:   - `stuck_count_30d`, `last_error_code`, `last_error_at`: see the
+#:     inventory (no stuck result on Prime; Classic-only source).
+_PRIME_SHADOW_SENSOR_FIELDS: dict[str, tuple[str, str]] = {
+    "mission_start_time": ("cleanMissionStatus", "mssnStrtTm"),
+    "mission_elapsed_time": ("cleanMissionStatus", "mssnStrtTm"),
+    "mission_recharge_time": ("cleanMissionStatus", "rechrgTm"),
+    "mission_recharge_minutes": ("cleanMissionStatus", "rechrgTm"),
+    "mission_expire_time": ("cleanMissionStatus", "expireTm"),
+    "mission_expire_minutes": ("cleanMissionStatus", "expireTm"),
+    "mission_id": ("cleanMissionStatus", "missionId"),
+    "lifetime_completion_rate": ("bbmssn", "nMssnOk"),
+    "average_mission_time": ("bbmssn", "aMssnM"),
+    "dock_contact_chatters": ("bbchg", "nChatters"),
+    "dock_knockoffs": ("bbchg", "nKnockoffs"),
+}
+_PRIME_SHADOW_SENSOR_KEYS: frozenset[str] = frozenset(_PRIME_SHADOW_SENSOR_FIELDS)
+
+
+def _add_prime_shared_sensors(
+    config_entry: RoombaConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
+) -> None:
+    """The shared descriptions whose field a Prime shadow carries (4.6.0)."""
+    data = config_entry.runtime_data
+    if getattr(data, "prime_status_coordinator", None) is None:
+        return
+
+    def _build() -> list[Any]:
+        state = prime_reported_state(data)
+        return [
+            PrimeSharedSensor(None, data.blid, description, config_entry)
+            for description in SENSORS
+            if (fields := _PRIME_SHADOW_SENSOR_FIELDS.get(description.key)) is not None
+            and isinstance(state.get(fields[0]), dict)
+            and fields[1] in state[fields[0]]
+        ]
+
+    add_prime_entities_when_available(config_entry, async_add_entities, _build)
+
+
+class PrimeSharedSensor(RoombaSensor):
+    """A shared sensor description, read from the Prime shadows (4.6.0)."""
+
+    @property
+    def vacuum_state(self) -> dict[str, Any]:
+        return prime_reported_state(self._config_entry.runtime_data)
+
+    @vacuum_state.setter
+    def vacuum_state(self, _value: dict[str, Any]) -> None:
+        """The base class assigns the local state; Prime has none."""
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        coordinator = getattr(
+            self._config_entry.runtime_data, "prime_status_coordinator", None
+        )
+        if coordinator is not None:
+            self.async_on_remove(
+                coordinator.async_add_listener(self.async_write_ha_state)
+            )
+
 
 #: Maintenance-date sensors that work for Prime robots.
 #:

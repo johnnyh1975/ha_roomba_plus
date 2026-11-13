@@ -376,6 +376,10 @@ class TestMissionSensorsExistForPrime:
         "last_mission_duration",
         "clean_streak",
         "consecutive_mission_anomalies",
+        # 4.6.0, parity inventory P1
+        "missions_last_30d",
+        "completion_rate_30d",
+        "last_mission_area",
     }
 
     def test_the_expected_keys_are_wired(self):
@@ -423,7 +427,8 @@ class TestMissionSensorsExistForPrime:
         from custom_components.roomba_plus.sensor import _add_prime_mission_sensors
 
         data = MagicMock(
-            mission_store=None, maintenance_store=None, mission_timer_store=None
+            mission_store=None, maintenance_store=None, mission_timer_store=None,
+            prime_status_coordinator=None,
         )
         added = MagicMock()
 
@@ -445,6 +450,7 @@ class TestMissionSensorsExistForPrime:
             mission_store=None,
             maintenance_store=MagicMock(),
             mission_timer_store=None,
+            prime_status_coordinator=None,
             blid="B",
         )
         added = MagicMock()
@@ -466,6 +472,7 @@ class TestMissionSensorsExistForPrime:
             mission_store=None,
             maintenance_store=None,
             mission_timer_store=MagicMock(),
+            prime_status_coordinator=None,
             blid="B",
         )
         added = MagicMock()
