@@ -689,53 +689,15 @@ class RoombaDeviceTracker(IRobotEntity, TrackerEntity):
         fallback for the many setups where HA areas and robot rooms are
         simply named the same and nobody opened the mapping dialog.
         """
-        from .area_resolver import (  # noqa: PLC0415
-            async_area_for_room_name,
-            async_area_for_segment,
+        from .area_resolver import async_area_for_room  # noqa: PLC0415
+
+        # One resolver for the tracker, the room events and the area
+        # sensors (4.6.0, area_resolver.async_area_for_room). The tracker
+        # passes its own Prime room cache, `{name: "<p2map_id>/<room_id>"}`.
+        return async_area_for_room(
+            self.hass, self._config_entry, room,
+            getattr(self, "_prime_rooms", None),
         )
-
-        try:
-            data = self._config_entry.runtime_data
-
-            # PRIME: the segment id is built from the room-name cache,
-            # whose values are already "<p2map_id>/<room_id>" -- the same
-            # qualified form async_get_segments() encodes. Without this
-            # branch the mapping lookup found nothing and it fell through
-            # to the name match silently, which works but throws away the
-            # explicit mapping the user configured.
-            if data.connection_type is ConnectionType.CLOUD_ONLY:
-                qualified = self._prime_rooms.get(room)
-                if qualified and "/" in str(qualified):
-                    _map, _, rid = str(qualified).partition("/")
-                    area = async_area_for_segment(
-                        self.hass, self._config_entry, f"rid_{rid}"
-                    )
-                    if area:
-                        return area
-                return async_area_for_room_name(
-                    self.hass, self._config_entry, room
-                )
-
-            regions = getattr(
-                getattr(data, "cloud_coordinator", None), "regions", None
-            ) or []
-            for region in regions:
-                if str(region.get("name") or "") != room:
-                    continue
-                pmap = region.get("pmap_id") or ""
-                rid = region.get("id") or ""
-                area = async_area_for_segment(
-                    self.hass, self._config_entry, f"{pmap}_rid_{rid}"
-                )
-                if area:
-                    return area
-            return async_area_for_room_name(self.hass, self._config_entry, room)
-        except Exception:  # noqa: BLE001
-            # NOT INSTRUMENTED: an installation with no Home Assistant
-            # areas defined resolves nothing, and that is a normal
-            # configuration rather than a defect.
-            _LOGGER.debug("roomba_plus: area resolution failed", exc_info=True)
-            return None
 
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:
         return "cleanMissionStatus" in new_state or "pose" in new_state

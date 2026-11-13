@@ -1899,6 +1899,9 @@ class TestRoomCompletedEvent:
             "name": entry.title,
             "room_name": "Kitchen",
             "room_idx": 0,
+            # B4 (4.6.0): always there, None without an area.
+            "area_id": None,
+            "area_name": None,
         }
 
     def test_no_event_when_already_on_last_room(self):
@@ -5001,6 +5004,52 @@ class TestHandleMissionStartDemandOverride:
         ergebnis, original, _entry = self._call(demand_ts=None)
 
         assert ergebnis is original
+
+
+class TestTheStartIsAnEvent:
+    """B2 (4.6.0): `_handle_mission_start` fires
+    `roomba_plus_mission_started`, after the demand override, with the
+    mission's scope and rooms."""
+
+    def test_fires_once_with_the_demand_initiator(self):
+        import time
+
+        from custom_components.roomba_plus.callbacks import (
+            _handle_mission_start,
+            _MissionState,
+        )
+        from custom_components.roomba_plus.const import EVENT_MISSION_STARTED
+
+        hass, entry, _, _ = _make_callback_env()
+        entry.runtime_data.demand_triggered_ts = time.monotonic() - 5.0
+        entry.runtime_data.presence_manager = None
+        entry.options = {}
+        mission = {"phase": "run", "initiator": "schedule", "cycle": "clean",
+                   "mssnStrtTm": 1700000000, "nMssn": 42}
+        reported = {"cleanMissionStatus": mission, "bbrun": {"nStuck": 0}}
+        ms = _MissionState()
+        _handle_mission_start(
+            ms, hass, entry,
+            phase="run", reported=reported, mission=mission,
+            candidate_cycle="clean", candidate_mission_start_ts=1700000000,
+        )
+        # A second message of the same mission is no new start.
+        _handle_mission_start(
+            ms, hass, entry,
+            phase="run", reported=reported, mission=mission,
+            candidate_cycle="clean", candidate_mission_start_ts=1700000000,
+        )
+        payloads = [
+            c.args[1] for c in hass.bus.async_fire.call_args_list
+            if c.args and c.args[0] == EVENT_MISSION_STARTED
+        ]
+        assert len(payloads) == 1
+        payload = payloads[0]
+        assert payload["entry_id"] == entry.entry_id
+        assert payload["initiator"] == "demand"
+        assert payload["scope"] == ms.current_mission_scope
+        assert payload["rooms"] == list(ms.current_mission_zones)
+        assert payload["mission_number"] == 42
 
 
 class TestEndGateRoomChecksDirectly:

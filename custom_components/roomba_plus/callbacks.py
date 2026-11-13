@@ -41,6 +41,8 @@ from .const import (
     ROOMS_REQUESTED,
     mission_store_changed_signal,
 )
+from .area_resolver import async_room_area_fields
+from .mission_started import fire_mission_started
 from .const import CLEANING_PHASES, CONF_BLID, CONF_CORRELATION_ENTITIES, CONF_SMART_ZONE_DATA, END_SIGNAL_DEBOUNCE_COUNT, END_SIGNAL_MIN_HOLD_SECONDS, EVENT_MAP_RETRAIN_COMPLETED, EVENT_MAP_RETRAIN_STARTED, EVENT_MISSION_COMPLETED, EVENT_MISSION_REASSESSED, EVENT_ROOM_COMPLETED, POSE_POINT_CM_TO_MM, ROOM_TRANSITION_CANDIDATE_PHASES, UNVISITED_ROOMS_MAX_SUPPRESSION_SECONDS, active_charge_cycles, estcap_to_mah
 from .map_renderer import ROBOT_DIAMETER_MM_ISJ_SERIES
 from .room_times import (
@@ -1575,6 +1577,16 @@ def _handle_mission_start(
                 mission["initiator"] = "demand"
                 entry.runtime_data.demand_triggered_ts = None
                 _LOGGER.info("MissionStore: mission initiator overridden → demand")
+
+        # B2 (4.6.0): the start as an event, after the demand override so
+        # a demand clean says so.
+        fire_mission_started(
+            hass, entry,
+            initiator=mission.get("initiator"),
+            scope=ms.current_mission_scope,
+            rooms=list(ms.current_mission_zones),
+            mission_number=mission.get("nMssn"),
+        )
     return mission
 
 
@@ -2116,6 +2128,8 @@ def _apply_position_room(
                 mts.planned_rooms.index(left) if left in mts.planned_rooms else None
             ),
             "duration_sec": round(seconds) if seconds > 0 else None,
+            # B4 (4.6.0): the Home Assistant area of the room.
+            **async_room_area_fields(hass, entry, left),
         },
     )
 
@@ -2289,6 +2303,8 @@ def _advance_room_on_drive_end(
                             and _measured > 0
                             else None
                         ),
+                        # B4 (4.6.0): the Home Assistant area of the room.
+                        **async_room_area_fields(hass, entry, _completed_room),
                     },
                 )
 

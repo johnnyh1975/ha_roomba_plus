@@ -1863,3 +1863,32 @@ class TestMissionStartForPresence:
     @pytest.mark.asyncio
     async def test_without_presence_nothing_happens(self):
         assert await self._run(["none", "clean"], manager=False) is None
+
+
+class TestMissionStartedOnPrime:
+    """B2 (4.6.0): a Prime start fires `roomba_plus_mission_started`, once,
+    with or without a presence manager, and not for a mission already
+    running at setup."""
+
+    async def _fired(self, cycles, *, manager=False):
+        from custom_components.roomba_plus import prime_coordinator as pc
+
+        with patch.object(pc, "fire_mission_started") as fire, patch.object(
+            pc, "prime_start_details", return_value=("rmtApp", "rooms", ["Küche"]),
+        ):
+            await TestMissionStartForPresence()._run(cycles, manager=manager)
+        return fire
+
+    @pytest.mark.asyncio
+    async def test_once_per_start(self):
+        fire = await self._fired(["none", "clean", "clean", "none", "evac", "none", "quick"])
+        assert fire.call_count == 2
+        kwargs = fire.call_args.kwargs
+        assert (kwargs["initiator"], kwargs["scope"], kwargs["rooms"]) == (
+            "rmtApp", "rooms", ["Küche"],
+        )
+
+    @pytest.mark.asyncio
+    async def test_not_for_a_mission_running_at_setup(self):
+        fire = await self._fired(["clean", "clean"])
+        fire.assert_not_called()

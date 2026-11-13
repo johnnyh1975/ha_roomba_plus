@@ -43,7 +43,10 @@ class TestWhichEntitiesExist:
     @pytest.mark.asyncio
     async def test_classic_gets_all_three(self):
         created = await _created(_entry())
-        assert set(created) == {"mission_completed", "room_completed", "stuck", "command", "mission_result"}
+        assert set(created) == {
+            "mission_started", "mission_completed", "room_completed", "stuck",
+            "command", "mission_result",
+        }
 
     @pytest.mark.asyncio
     async def test_prime_gets_the_same_moments(self):
@@ -51,7 +54,8 @@ class TestWhichEntitiesExist:
         PrimeStatusCoordinator fires the event (test_prime_coordinator)."""
         created = await _created(_entry(ConnectionType.CLOUD_ONLY))
         assert set(created) == {
-            "mission_completed", "room_completed", "stuck", "command", "mission_result",
+            "mission_started", "mission_completed", "room_completed", "stuck",
+            "command", "mission_result",
         }
 
     @pytest.mark.asyncio

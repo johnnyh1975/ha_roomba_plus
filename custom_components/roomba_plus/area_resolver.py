@@ -50,6 +50,8 @@ from typing import TYPE_CHECKING, Any
 
 from homeassistant.helpers import entity_registry as er
 
+from .models import ConnectionType
+
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
@@ -152,3 +154,104 @@ def async_area_for_room_name(
             if str(alias).casefold().strip() == wanted:
                 return area.id
     return None
+
+
+def async_area_for_room(
+    hass: HomeAssistant,
+    config_entry: RoombaConfigEntry,
+    room: str,
+    prime_rooms: dict[str, str] | None = None,
+) -> str | None:
+    """The HA area for a robot room name, mapping first and name second.
+
+    One place for what the device tracker did on its own (4.6.0): the
+    room-completed event, the mission-started event and the area sensors
+    ask the same question and must get the same answer.
+
+    The configured segment mapping wins: it is the user's own statement
+    of which robot room is which area. Name matching is the fallback for
+    the many setups where HA areas and robot rooms are simply named the
+    same and nobody opened the mapping dialog.
+
+    PRIME: the segment id is `rid_<id>`, the form async_get_segments()
+    encodes. The region id comes from `prime_rooms` ({name:
+    "<p2map_id>/<room_id>"}, the device tracker's cache) when given, else
+    from `prime_room_names` ({region_id: name}).
+    CLASSIC: `<pmap>_rid_<id>` from the cloud coordinator's regions.
+
+    Never raises: no areas defined is a normal configuration.
+    """
+    if not room:
+        return None
+    try:
+        data = config_entry.runtime_data
+        if data.connection_type is ConnectionType.CLOUD_ONLY:
+            rid: str | None = None
+            qualified = (prime_rooms or {}).get(room)
+            if qualified and "/" in str(qualified):
+                rid = str(qualified).partition("/")[2]
+            else:
+                names = getattr(data, "prime_room_names", None) or {}
+                rid = next(
+                    (str(k) for k, v in names.items() if str(v) == room), None
+                )
+            if rid:
+                area = async_area_for_segment(hass, config_entry, f"rid_{rid}")
+                if area:
+                    return area
+            return async_area_for_room_name(hass, config_entry, room)
+
+        regions = getattr(
+            getattr(data, "cloud_coordinator", None), "regions", None
+        ) or []
+        for region in regions:
+            if str(region.get("name") or "") != room:
+                continue
+            area = async_area_for_segment(
+                hass, config_entry,
+                f"{region.get('pmap_id') or ''}_rid_{region.get('id') or ''}",
+            )
+            if area:
+                return area
+        return async_area_for_room_name(hass, config_entry, room)
+    except Exception:  # noqa: BLE001
+        _LOGGER.debug("roomba_plus: area resolution failed", exc_info=True)
+        return None
+
+
+def async_area_name(hass: HomeAssistant, area_id: str | None) -> str | None:
+    """The display name of an HA area, or None."""
+    if not area_id:
+        return None
+    from homeassistant.helpers import area_registry as ar  # noqa: PLC0415
+
+    area = ar.async_get(hass).async_get_area(area_id)
+    return area.name if area is not None else None
+
+
+def async_room_area_fields(
+    hass: HomeAssistant,
+    config_entry: RoombaConfigEntry,
+    room: Any,
+    region_id: Any = None,
+) -> dict[str, str | None]:
+    """`area_id` and `area_name` of a room, for an event's payload (4.6.0, B4).
+
+    `region_id` is the Prime region the timeline named: its mapping is
+    looked up first, so a room the robot reports by id needs no name.
+    Both None for a room without an area, or no room: the fields are
+    always there, so a template never has to guard against a missing key.
+    """
+    area_id: str | None = None
+    if region_id:
+        try:
+            area_id = async_area_for_segment(hass, config_entry, f"rid_{region_id}")
+        except Exception:  # noqa: BLE001
+            area_id = None
+    if area_id is None and room:
+        area_id = async_area_for_room(hass, config_entry, str(room))
+    try:
+        name = async_area_name(hass, area_id)
+    except Exception:  # noqa: BLE001
+        name = None
+    return {"area_id": area_id, "area_name": name}

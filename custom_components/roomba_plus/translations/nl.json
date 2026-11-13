@@ -1982,6 +1982,16 @@
             }
           }
         }
+      },
+      "mission_started": {
+        "name": "Missie gestart",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "mission_started": "Missie gestart"
+            }
+          }
+        }
       }
     }
   },

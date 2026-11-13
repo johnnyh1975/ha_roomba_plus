@@ -277,3 +277,92 @@ class TestAreaForSegment:
         vacuum = SimpleNamespace(domain="vacuum",
                                  options={"vacuum": {"segment_area_mapping": {"3": "kitchen"}}})
         assert self._run(monkeypatch, [vacuum], "9") is None
+
+
+class TestAreaForRoom:
+    """One resolver for the tracker, the room events and the area
+    sensors (4.6.0): the mapping by segment first, the name second."""
+
+    def _entry(self, prime, **data):
+        from custom_components.roomba_plus.models import ConnectionType
+
+        runtime = SimpleNamespace(
+            connection_type=ConnectionType.CLOUD_ONLY if prime else ConnectionType.LOCAL_PUSH,
+            **data,
+        )
+        return SimpleNamespace(entry_id="e1", runtime_data=runtime)
+
+    def _mapped(self, monkeypatch, mapping):
+        from custom_components.roomba_plus import area_resolver as ar
+
+        vacuum = SimpleNamespace(
+            domain="vacuum", options={"vacuum": {"segment_area_mapping": mapping}},
+        )
+        monkeypatch.setattr(ar.er, "async_get", lambda _h: MagicMock())
+        monkeypatch.setattr(ar.er, "async_entries_for_config_entry", lambda _r, _e: [vacuum])
+        monkeypatch.setattr(ar, "async_area_for_room_name", lambda *_a: "by_name")
+        return ar
+
+    def test_prime_finds_the_region_by_its_name(self, monkeypatch):
+        ar = self._mapped(monkeypatch, {"rid_7": "kitchen"})
+        entry = self._entry(True, prime_room_names={"7": "Küche"})
+        assert ar.async_area_for_room(MagicMock(), entry, "Küche") == "kitchen"
+
+    def test_prime_takes_the_trackers_cache_first(self, monkeypatch):
+        ar = self._mapped(monkeypatch, {"rid_9": "hall"})
+        entry = self._entry(True, prime_room_names={"7": "Flur"})
+        assert ar.async_area_for_room(
+            MagicMock(), entry, "Flur", {"Flur": "MAP/9"},
+        ) == "hall"
+
+    def test_classic_reads_the_map_and_region(self, monkeypatch):
+        ar = self._mapped(monkeypatch, {"P1_rid_3": "bath"})
+        cloud = SimpleNamespace(regions=[{"name": "Bad", "pmap_id": "P1", "id": "3"}])
+        entry = self._entry(False, cloud_coordinator=cloud)
+        assert ar.async_area_for_room(MagicMock(), entry, "Bad") == "bath"
+
+    def test_an_unmapped_room_falls_back_to_the_name(self, monkeypatch):
+        ar = self._mapped(monkeypatch, {})
+        entry = self._entry(False, cloud_coordinator=None)
+        assert ar.async_area_for_room(MagicMock(), entry, "Bad") == "by_name"
+
+    def test_a_failure_is_no_area(self, monkeypatch):
+        from custom_components.roomba_plus import area_resolver as ar
+
+        assert ar.async_area_for_room(MagicMock(), SimpleNamespace(), "Bad") is None
+        assert ar.async_area_for_room(MagicMock(), SimpleNamespace(), "") is None
+
+
+class TestRoomAreaFields:
+    """The two fields the room and start events carry (4.6.0, B4)."""
+
+    def test_the_area_and_its_name(self, monkeypatch):
+        from custom_components.roomba_plus import area_resolver as ar
+
+        monkeypatch.setattr(ar, "async_area_for_room", lambda *_a: "kitchen")
+        registry = MagicMock()
+        area = MagicMock()
+        area.name = "Kitchen"
+        registry.async_get_area = MagicMock(return_value=area)
+        with patch("homeassistant.helpers.area_registry.async_get", return_value=registry):
+            assert ar.async_room_area_fields(MagicMock(), MagicMock(), "Küche") == {
+                "area_id": "kitchen", "area_name": "Kitchen",
+            }
+
+    def test_a_prime_region_is_looked_up_by_its_id(self, monkeypatch):
+        from custom_components.roomba_plus import area_resolver as ar
+
+        seen = []
+        monkeypatch.setattr(ar, "async_area_for_segment", lambda _h, _e, seg: seen.append(seg) or "hall")
+        monkeypatch.setattr(ar, "async_area_name", lambda _h, _a: "Hall")
+        assert ar.async_room_area_fields(MagicMock(), MagicMock(), "Zone 4", "4") == {
+            "area_id": "hall", "area_name": "Hall",
+        }
+        assert seen == ["rid_4"]
+
+    def test_no_room_is_no_area_but_both_fields(self):
+        from custom_components.roomba_plus import area_resolver as ar
+
+        assert ar.async_room_area_fields(MagicMock(), MagicMock(), None) == {
+            "area_id": None, "area_name": None,
+        }

@@ -37,6 +37,7 @@ from .const import (
     EVENT_START_TIMEOUT,
     EVENT_MISSION_COMPLETED,
     EVENT_MISSION_RESULT,
+    EVENT_MISSION_STARTED,
     EVENT_ROOM_COMPLETED,
     EVENT_STATE_FROZEN,
     EVENT_STUCK,
@@ -50,6 +51,8 @@ from .models import ConnectionType, RoombaConfigEntry
 #: (unique-id key, bus event, event type). The key doubles as the
 #: translation key and the entity id suffix.
 _MOMENTS: tuple[tuple[str, str, str], ...] = (
+    # B2 (4.6.0): who started a mission and where (mission_started.py).
+    ("mission_started", EVENT_MISSION_STARTED, "mission_started"),
     ("mission_completed", EVENT_MISSION_COMPLETED, "mission_completed"),
     ("room_completed", EVENT_ROOM_COMPLETED, "room_completed"),
     ("stuck", EVENT_STUCK, "stuck"),

@@ -306,6 +306,9 @@ EVENT_MISSION_RESULT: Final = f"{DOMAIN}_mission_result"
 #: Fired by the blocking manager (moved here in 4.6.0 for the event entity).
 EVENT_START_BLOCKED: Final = f"{DOMAIN}_start_blocked"
 EVENT_START_TIMEOUT: Final = f"{DOMAIN}_start_timeout"
+#: 4.6.0 (B2) -- a mission began, with who started it and where
+#: (mission_started.py).
+EVENT_MISSION_STARTED: Final = f"{DOMAIN}_mission_started"
 #: Send a command the robot took and ignored once more (4.6.0, A3). On by
 #: default: it only acts when nothing explains the refusal, and only once.
 CONF_RESEND_SWALLOWED: Final = "resend_swallowed_command"

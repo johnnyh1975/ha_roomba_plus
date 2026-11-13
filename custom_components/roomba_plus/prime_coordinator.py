@@ -57,7 +57,9 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from homeassistant.util import dt as dt_util
 
 from . import cloud_errors
+from .area_resolver import async_room_area_fields
 from .command_watch import note_prime_shadows
+from .mission_started import fire_mission_started, prime_start_details
 from .const import DOMAIN, EVENT_ROOM_COMPLETED, EVENT_STUCK
 
 from roombapy_prime import (
@@ -465,6 +467,10 @@ class PrimeCoordinator(DataUpdateCoordinator[MissionTimelineReport]):
                 "room_name": self._room_name(previous),
                 "mission_id": getattr(report, "mission_id", None),
                 "duration_sec": duration_sec,
+                # B4 (4.6.0): the Home Assistant area of the room.
+                **async_room_area_fields(
+                    self.hass, self.entry, self._room_name(previous), previous,
+                ),
             },
         )
 
@@ -1062,6 +1068,14 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         previous, self._previous_cycle = self._previous_cycle, cycle
         if previous != "none" or cycle in ("none", "evac", ""):
             return
+        # B2 (4.6.0): the start as an event. Who and where come from the
+        # last command, and only from a recent one (mission_started.py).
+        initiator, scope, rooms = prime_start_details(self.entry.runtime_data)
+        fire_mission_started(
+            self.hass, self.entry,
+            initiator=initiator, scope=scope, rooms=rooms,
+            mission_number=status.get("nMssn"),
+        )
         manager = getattr(self.entry.runtime_data, "presence_manager", None)
         if manager is None:
             return
