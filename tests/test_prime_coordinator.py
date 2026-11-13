@@ -1756,3 +1756,71 @@ class TestStuckEventOnPrime:
     @pytest.mark.asyncio
     async def test_other_phases_fire_nothing(self):
         assert await self._run(["run", "hmPostMsn", "charge"]) == []
+
+
+class TestPlanFromTheTimeline:
+    """4.6.0, parity P4 (C78): a mission Home Assistant did not start has
+    no plan; the rooms the timeline names become one, in order."""
+
+    @staticmethod
+    def _coordinator(store):
+        from custom_components.roomba_plus.prime_coordinator import PrimeCoordinator
+
+        config_entry = MagicMock(entry_id="E1", title="Robot")
+        config_entry.runtime_data.prime_room_names = {"10": "Kitchen", "11": "Hall"}
+        config_entry.runtime_data.mission_timer_store = store
+        return PrimeCoordinator(MagicMock(), config_entry, "BLID123", MagicMock())
+
+    @staticmethod
+    def _store(planned=None):
+        from custom_components.roomba_plus.mission_timer_store import MissionTimerStore
+
+        store = MissionTimerStore()
+        store.mission_id = "BLID123_1"
+        store.schedule_save = MagicMock()
+        store._schedule_save = MagicMock()
+        if planned:
+            store.planned_rooms = list(planned)
+        return store
+
+    @staticmethod
+    def _report(region_id, *, room=True):
+        report = MagicMock(mission_id="M1")
+        event = MagicMock(start_time=1000)
+        if room:
+            event.room = MagicMock(region_id=region_id)
+        else:
+            event.room = None
+            event.travel = MagicMock(region_id=region_id)
+        report.event = [event]
+        return report
+
+    def test_app_mission_gets_the_rooms_it_enters(self):
+        store = self._store()
+        c = self._coordinator(store)
+        c._fire_room_completed_if_changed(self._report("10"))
+        c._fire_room_completed_if_changed(self._report("10"))
+        c._fire_room_completed_if_changed(self._report("11", room=False))
+        assert store.planned_rooms == ["Kitchen"]
+        c._fire_room_completed_if_changed(self._report("11"))
+        assert store.planned_rooms == ["Kitchen", "Hall"]
+        assert store.current_room == "Hall"
+        assert store.rooms_from_positions is True
+        assert store.visited_rooms == [0, 1]
+
+    def test_a_plan_from_home_assistant_is_left_alone(self):
+        store = self._store(planned=["Hall", "Kitchen"])
+        c = self._coordinator(store)
+        c._fire_room_completed_if_changed(self._report("10"))
+        assert store.planned_rooms == ["Hall", "Kitchen"]
+        assert store.current_room == "Hall"
+        assert store.rooms_from_positions is False
+
+    def test_an_unnamed_region_or_no_mission_changes_nothing(self):
+        store = self._store()
+        c = self._coordinator(store)
+        c._fire_room_completed_if_changed(self._report("99"))
+        assert store.planned_rooms == []
+        store.mission_id = None
+        c._fire_room_completed_if_changed(self._report("10"))
+        assert store.planned_rooms == []

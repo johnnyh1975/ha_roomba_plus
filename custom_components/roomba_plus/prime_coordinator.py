@@ -408,6 +408,11 @@ class PrimeCoordinator(DataUpdateCoordinator[MissionTimelineReport]):
             self._last_room_since = event_ts if is_room_event else None
         elif previous_since is None and is_room_event and event_ts is not None:
             self._last_room_since = event_ts
+        # A MISSION HOME ASSISTANT DID NOT START (4.6.0, C78): no plan,
+        # so the rooms the timeline names become one, in the order the
+        # robot enters them -- current room, rooms visited, time per room.
+        if is_room_event and current_id is not None:
+            self._note_room_without_plan(current_id)
         # Nothing to announce on the first report of a mission, or when
         # the robot is between rooms with nothing finished behind it.
         if previous is None or previous == current_id:
@@ -461,6 +466,33 @@ class PrimeCoordinator(DataUpdateCoordinator[MissionTimelineReport]):
                 "duration_sec": duration_sec,
             },
         )
+
+    def _note_room_without_plan(self, region_id: str) -> None:
+        """The room the timeline reports, for a mission without a plan.
+
+        Started in the app, by a schedule or on the robot, a mission has
+        no plan here: only a start from Home Assistant writes one
+        (room_cleaning._note_mission_plan). The timeline names each room
+        as the robot enters it, which is what `enter_room` takes -- the
+        whole-home form Classic uses for positions (4.4.0): the list is
+        the rooms entered, in that order, not a forecast.
+
+        A mission with a plan from Home Assistant is left alone; its
+        display moves by `_advance_display_if_next`. A region without a
+        name is left out rather than shown as a number.
+        """
+        try:
+            store = getattr(self.entry.runtime_data, "mission_timer_store", None)
+            if store is None or getattr(store, "mission_id", None) is None:
+                return
+            if store.planned_rooms and not store.rooms_from_positions:
+                return
+            name = self._room_name(region_id)
+            if not name:
+                return
+            store.enter_room(name, self.hass, self.entry.entry_id)
+        except Exception:  # noqa: BLE001 -- room progress must not stop the stream
+            _LOGGER.debug("Prime timeline: could not note the room", exc_info=True)
 
     def _advance_display_if_next(self, finished_id: str | None) -> None:
         """Move the room display on, when the robot confirms the move.
