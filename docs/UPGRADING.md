@@ -51,6 +51,24 @@ Nothing to do. What you will notice:
 - **New actions**: `roomba_plus.retry_missed_rooms`, and
   `roomba_plus.debug_capture_start` / `_stop` / `_get` for a redacted debug log
   without editing `configuration.yaml`.
+- **Response actions** `get_rooms`, `get_missions`, `get_mission` and
+  `plan_clean`, on both generations. See
+  [Missions for scripts and Assist](FEATURES.md#missions-for-scripts-and-assist-460).
+- **`event.<robot>_mission_started`** and the bus event
+  `roomba_plus_mission_started`, both generations.
+- **`roomba_plus_room_completed` has two more fields**, `area_id` and
+  `area_name`. A template comparing the whole payload sees them; one reading
+  single fields does not.
+- **New sensors on both generations**: `current_room` and
+  `estimated_end_time` beside mission progress, and, off by default, an
+  *area last vacuumed / mopped* pair per mapped HA area. On Prime, four cloud
+  stream sensors, off by default.
+- **The last mission summary shows the battery** the mission used. Its
+  `battery_start_pct` and `battery_end_pct` existed before and were always
+  empty; missions stored before 4.6.0 stay without them.
+- **Blueprints appear under `blueprints/automation/roomba_plus/`** after the
+  first start. If you imported them before, nothing is doubled.
+- **A new option**, *Send home after a pause*, off by default.
 
 ---
 

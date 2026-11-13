@@ -68,6 +68,11 @@ protocol does not give the data. Where that is so, the reason is in
 | Pad wash and dry, pad wetness, per-room preferences, quiet hours, robot's start-blocking codes | not recorded on Classic | ✓ |
 | Braava / mop sensors | ✓ | tank present |
 | Events and device triggers | ✓ | ✓ (map retrain: Classic) |
+| Mission started, areas on room events, current room and estimated end, room states | ✓ | ✓ (who and where from the last command only) |
+| `get_rooms`, `get_missions`, `get_mission`, `plan_clean` | ✓ | ✓ |
+| Learning reasons, estimate quality, battery per mission | ✓ | ✓ (battery only for missions seen running) |
+| Area last vacuumed / mopped, pause timeout, shipped blueprints | ✓ | ✓ |
+| Cloud stream times | — (one local connection, `mqtt_stale`) | ✓ |
 
 
 ---
@@ -143,6 +148,10 @@ protocol does not give the data. Where that is so, the reason is in
 | `roomba_plus.explain_mission` | All | Plain-language reason for a flagged mission anomaly (v3.2.0) |
 | `roomba_plus.retry_missed_rooms` | SMART + cloud, Prime | Clean the rooms the latest mission (or the one `mission_id` names) skipped or did not reach, in the order it asked for them (4.6.0). "Not reached" is known only where the rooms were observed during the run |
 | `roomba_plus.debug_capture_start` · `_stop` · `_get` | All | A debug log without `configuration.yaml` or a restart (4.6.0) — see [Debug capture](#debug-capture-460) |
+| `roomba_plus.get_rooms` | SMART + cloud, Prime | Response: the rooms and zones the robot knows, with id, map, HA area, time estimate and its quality (4.6.0) — see [Missions for scripts](#missions-for-scripts-and-assist-460) |
+| `roomba_plus.get_missions` | All | Response: the newest stored missions, newest first (`limit`, `days`) (4.6.0) |
+| `roomba_plus.get_mission` | All | Response: one mission in full, with battery use and why each room's time was or was not learned (4.6.0) |
+| `roomba_plus.plan_clean` | SMART + cloud, Prime | Response: what a clean started now would take, without starting it; `end_by` says whether it fits (4.6.0) |
 
 **Device triggers** for automations:
 
@@ -184,6 +193,133 @@ not something a filter can know.
 Three config-category switches, each created only on models that report the underlying preference: **Child lock** (`childLock`) disables the robot's physical onboard buttons — useful for households with kids or pets that might otherwise trigger a clean by accident. **Eco charge** (`ecoCharge`) toggles the robot's reduced-power charging mode. **Gentle mode** (`gentle`, v3.4.3) reduces vacuum/brush aggressiveness for quieter, gentler cleaning — useful for a sleeping baby or a nervous pet. `sensor.*_dock_firmware_version` (diagnostic, disabled by default) exposes the dock's own firmware version separately from the robot's.
 
 ---
+
+#### Missions for scripts and Assist *(4.6.0)*
+
+Four response actions answer from what Roomba+ already holds; none of them
+asks the iRobot cloud, so a call is cheap and works with the account offline.
+Call them with `response_variable:` in a script.
+
+- **`get_rooms`**: `rooms`, each with `id`, `name`, `map_id`, `type` (the
+  cloud's region type on Classic, None on Prime), `area_id`, `area_name`,
+  `estimate_sec` and `estimate_quality`.
+- **`get_missions`**: `missions`, newest first, each with when, `result` and
+  `type` (as `event.<robot>_mission_result`), `initiator`, `scope`, the rooms
+  requested, cleaned, skipped and not reached by name, `area_sqft`,
+  `battery_used_pct` and `estimated_duration_min`.
+- **`get_mission`**: one mission (`mission_id`, else the latest) with all of
+  the above, the battery fields and `room_learning`.
+- **`plan_clean`**: the rooms in the order given (`room_name`, a name or a
+  list), each with its estimate and quality, `total_sec`, `start`, `end`, and
+  with `end_by` whether it `fits`. Without rooms, the robot's mean mission
+  length. Travel and recharges are not in the room estimates; `past_error`
+  (`missions`, `median_error_pct`) says how far recent missions' estimates
+  were off, which is that gap, measured. A room without an estimate leaves
+  `total_sec` empty rather than a total that silently leaves it out.
+
+```yaml
+- action: roomba_plus.plan_clean
+  data:
+    entity_id: vacuum.robbie
+    room_name: [Kitchen, Hall]
+    end_by: "{{ today_at('17:00') }}"
+  response_variable: plan
+- if: "{{ plan.fits }}"
+  then:
+    - action: roomba_plus.clean_room
+      target: {entity_id: vacuum.robbie}
+      data: {room_name: [Kitchen, Hall]}
+```
+
+**Why a room taught nothing** (`room_learning`): each room of the mission
+with `seconds`, `accepted` and `reason`: `passage` (reached into, not
+cleaned), `not_finished`, `too_short` (under 30 s), `too_long` (over 3 h),
+`skipped` (by command), or the mission's own `stuck`, `error`, `cancelled`,
+`paused`, which keep every room of it out. The learned figures go through
+the same rule, so this is what was learned. `room_learning_source` is
+`timeline` (the cloud's room events: Classic with an account, every Prime
+mission) or `room_tracking` (Classic without an account, which takes every
+room it measures). Missions stored before 4.6.0 have the timeline form where
+their timeline is kept, nothing otherwise.
+
+**Estimate quality** (`estimate_quality`): `runs` (measurements in the
+room's mean), `spread_sec` (their standard deviation) and `rating`: `high`
+from five runs within 15 % of the mean, `medium` from three within 30 %,
+`low` otherwise, `none` without a measurement of our own. The spread counts
+the runs since 4.6.0; a figure learned before keeps its mean and count and
+starts its spread with the next run.
+
+**Battery per mission**: `battery_start_pct`, `battery_end_pct`,
+`battery_used_pct`, `battery_used_pct_per_m2` and `battery_recharged` on the
+stored mission and on `sensor.<robot>_last_mission`. The robots report a
+percentage, not energy, so the use is the drop in points. A mission that
+recharged on the way has no figure (`battery_recharged: true`): its end
+level says nothing about what it used. A mission that began before Home
+Assistant started has no start level. On Prime the figures exist for
+missions Home Assistant saw run; they are attached when the history sync
+stores the mission.
+
+#### Mission started, rooms and areas *(4.6.0)*
+
+- **`roomba_plus_mission_started`** fires once per mission, mirrored by
+  `event.<robot>_mission_started`: `initiator`, `scope` (`rooms`,
+  `whole_home`), `rooms`, `areas` (the HA area of each room, or None),
+  `mission_number`, `started_at`. Classic reads who and where from the
+  mission; Prime from the last command, and only when it is under five
+  minutes old: a schedule start issues no command, so an older one would
+  describe some other start. Not for a mission already running when Home
+  Assistant started.
+- **`roomba_plus_room_completed`** carries `area_id` and `area_name`, None
+  for a room without an area.
+- **`sensor.<robot>_current_room`** and **`sensor.<robot>_estimated_end_time`**,
+  created with mission progress: the room as a state (attributes
+  `current_room_source`, `room_progress_observed`, `next_room`, `area_id`,
+  `area_name`, `room_states`) and the expected end, to the minute.
+  `room_states` lists each room of the run as `pending`, `operating`,
+  `skipped` or `completed`, Matter's words, from the same resolution as the
+  room; where the room is an estimate, so are they.
+
+The area of a room is the vacuum's segment mapping first and the area name
+second, one rule for these events, the sensors and the device tracker.
+
+#### When each area was last vacuumed and mopped *(4.6.0)*
+
+`sensor.<robot>_<area>_last_vacuumed` and `_last_mopped`, off by default,
+one pair for each HA area the robot's rooms map to. **The value is the
+household's**: the newest mission of that kind among all loaded Roomba+
+robots, with `robot` and `room` saying which. A kitchen the Roomba vacuums
+and the Braava mops has both times on either robot's pair. Vacuum or mop is
+the mission's cleaning mode; a vacuum-and-mop mission counts for both, and a
+robot that reports no mode is a vacuum, a Braava a mop. An area mapped later
+gets its pair at the robot's next mission end.
+
+#### Send home after a pause *(4.6.0, opt-in)*
+
+Configure → Settings → *Send home after a pause (minutes)*. A robot that
+stands paused that long is sent back to its base through
+`vacuum.return_to_base`. 0, the default, turns it off. By the vacuum's state,
+so both generations behave the same; the timer restarts on every change of
+state and the state is read again before the robot is sent.
+
+#### Cloud stream times — Prime *(4.6.0)*
+
+Four diagnostic sensors, off by default: when the state shadows, the mission
+timeline, the live map and the refusals stream last delivered a message, to
+the minute. A stream can stop delivering without raising an error, and the
+connection health sensor only sees errors. The diagnostics carry the same as
+`streams_seconds_ago` under the push freshness. A quiet stream is not a
+fault by itself: the refusals stream is silent unless the robot refuses
+something, the live map unless it runs.
+
+#### Blueprints *(4.6.0)*
+
+The blueprints ship with the integration and are copied to
+`blueprints/automation/roomba_plus/` when Home Assistant starts. A file that
+exists is never overwritten, a blueprint copied once is not copied again (so
+one you delete stays deleted), and one you imported through its link before
+is not copied beside it. A newer version of a shipped blueprint does not
+replace your copy; the release notes say when one changed, and importing it
+from its link again updates it.
 
 ## Room cleaning, zones & maps
 
@@ -1786,8 +1922,9 @@ for Prime users, with no error to explain it.
 | Event | Fires when | Payload |
 |---|---|---|
 | `roomba_plus_mission_completed` | A mission ends (any result) | `entry_id`, `name`, `rooms_cleaned`, `area_sqft`, `stuck_count`, `result` — plus (v3.2.0) `is_anomalous`, `anomaly_reason`, `recommended_action`, `robot_lifted`, always present (`null`/`false` for ordinary missions), so a notification automation gets the anomaly reason without calling any service — plus (4.2.19) `mission_id` and `missions_added`. **The same fields on Prime robots since 4.2.19** (before, Prime sent `entry_id` only); there `stuck_count` is `null`, and a sync that imports several missions at once — the first one after setup imports the history — fires once, describing the newest, with `missions_added` saying how many |
+| `roomba_plus_mission_started` (4.6.0) | Roomba+ recognises a mission's start, both generations; not for one already running at setup | `entry_id`, `name`, `initiator`, `scope`, `rooms`, `areas`, `mission_number`, `started_at` — see [Mission started, rooms and areas](#mission-started-rooms-and-areas-460) |
 | `roomba_plus_mission_reassessed` (4.5.0) | Classic with the iRobot login: the cloud's numbers for a mission of the last 24 h arrive (minutes after it ended) and make it unusual for another reason than at its end -- typically `dirt_spike`, which a Classic robot's own report cannot show. Once per mission | `entry_id`, `name`, `mission_id`, `ended_at`, `is_anomalous` (`true`), `anomaly_reason`, `recommended_action`, `anomaly_reason_before` (the verdict without the cloud's numbers, `null` if ordinary) |
-| `roomba_plus_room_completed` | A room finished — Classic: room tracking moved on; Prime: the timeline moved to the next region | `entry_id`, `name`, `room_name`, `duration_sec` (4.2.21; Classic: what room tracking measured, Prime: from the room event's start in the timeline to the next event's, `null` when the timeline gave no start for the room); Classic `room_idx`, Prime `room_id`, `mission_id` |
+| `roomba_plus_room_completed` | A room finished — Classic: room tracking moved on; Prime: the timeline moved to the next region | `entry_id`, `name`, `room_name`, `duration_sec` (4.2.21; Classic: what room tracking measured, Prime: from the room event's start in the timeline to the next event's, `null` when the timeline gave no start for the room); Classic `room_idx`, Prime `room_id`, `mission_id` — plus (4.6.0) `area_id`, `area_name` (None without an area) |
 | `roomba_plus_health_change` | `sensor.*_integration_health` crosses a band (healthy/degraded/critical) | `entry_id`, `name`, `score`, `previous_score`, `band`, `previous_band` |
 | `roomba_plus_map_retrain_started` / `_completed` | Cloud detects a Smart Map change and syncs | `entry_id`, `name`, `pmap_id` |
 | `roomba_plus_maintenance_reset` | Filter/brush/battery/pad/wheel/contact/bin reset — button or service | `entry_id`, `name`, `component`, `hours` (`null` for calendar-based resets) |
