@@ -521,6 +521,38 @@ class MissionStore:
             return True
         return False
 
+    #: The command fields a Prime record gained in 4.6.0.
+    COMMAND_KEYS: tuple[str, ...] = ("initiator", "requested_region_ids", "scope")
+
+    def add_missing_command_data(self, record: dict[str, Any]) -> bool:
+        """Give a stored Prime record the command fields of 4.6.0.
+
+        Before, the initiator held the repr of the whole command record
+        (robot and map ids included) and the rooms asked for were not kept.
+        A stored record whose initiator is that repr, or that has no
+        `scope`, takes the fields of the same mission read again. Returns
+        whether it changed.
+        """
+        record_id = record.get("id")
+        if not record_id:
+            return False
+        for existing in self._records:
+            if existing.get("id") != record_id:
+                continue
+            broken = str(existing.get("initiator") or "").startswith("MissionCommandRecord(")
+            if not broken and "scope" in existing:
+                return False
+            changed = False
+            if broken:
+                existing.pop("initiator", None)
+                changed = True
+            for key in self.COMMAND_KEYS:
+                if key in record and existing.get(key) != record[key]:
+                    existing[key] = record[key]
+                    changed = True
+            return changed
+        return False
+
     async def async_append(self, record: dict[str, Any]) -> bool:
         """Append a record and trim to MAX_RECORDS FIFO.
 

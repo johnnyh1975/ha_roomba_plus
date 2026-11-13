@@ -5647,3 +5647,39 @@ class TestWhereTheLatestRoomsComeFrom:
         assert store.store_rooms_from_timelines({"3": "Bathroom", "6": "Office"}) == 1
         assert rec["last_cleaned_rooms"] == ["Office"]
         assert rec["rooms_source"] == "cloud"
+
+
+class TestMissingCommandData:
+    """4.6.0: Prime records stored with the command record's repr as their
+    initiator, and without the rooms asked for, are repaired on re-read."""
+
+    def test_repaired_once(self):
+        from custom_components.roomba_plus.mission_store import MissionStore
+
+        store = MissionStore()
+        store._records = [{
+            "id": "p_m1", "initiator": "MissionCommandRecord(clean_all=None, robot_id='X')",
+        }]
+        fresh = {"id": "p_m1", "initiator": "rmtApp", "scope": "rooms",
+                 "requested_region_ids": ["10"]}
+        assert store.add_missing_command_data(fresh) is True
+        assert store._records[0] == fresh
+        assert store.add_missing_command_data(fresh) is False
+
+    def test_a_good_record_and_an_unknown_id_are_left(self):
+        from custom_components.roomba_plus.mission_store import MissionStore
+
+        store = MissionStore()
+        store._records = [{"id": "p_m1", "initiator": "schedule", "scope": "whole_home"}]
+        assert store.add_missing_command_data({"id": "p_m1", "initiator": "x", "scope": "rooms"}) is False
+        assert store.add_missing_command_data({"id": "p_m2", "scope": "rooms"}) is False
+        assert store.add_missing_command_data({"scope": "rooms"}) is False
+        assert store._records[0]["initiator"] == "schedule"
+
+    def test_a_record_without_scope_gains_it(self):
+        from custom_components.roomba_plus.mission_store import MissionStore
+
+        store = MissionStore()
+        store._records = [{"id": "p_m1", "initiator": "schedule"}]
+        assert store.add_missing_command_data({"id": "p_m1", "initiator": "schedule", "scope": "whole_home"})
+        assert store._records[0]["scope"] == "whole_home"

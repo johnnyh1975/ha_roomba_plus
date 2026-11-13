@@ -180,3 +180,37 @@ class TestLastError:
         data.mission_store.records = [{"result": "completed"}]
         note_last_error(data)
         assert (data.last_error_code, data.last_error_at) == (3, "T1")
+
+
+class TestPrimeRoomsLeftOut:
+    """4.6.0, A5 on Prime: the requested region ids against the regions the
+    timeline cleaned, named from the maps for the event and the retry."""
+
+    RECORD = {
+        "id": "p_m1", "result": "completed", "scope": "rooms",
+        "requested_region_ids": ["10", "11", "12"], "rooms_cleaned": ["10"],
+    }
+
+    def test_missed_regions(self):
+        from custom_components.roomba_plus.mission_result import mission_outcome, rooms_to_retry
+
+        outcome = mission_outcome(self.RECORD)
+        assert outcome["type"] == "completed_with_skips"
+        assert outcome["missed_rooms"] == ["11", "12"]
+        assert rooms_to_retry(self.RECORD) == ["11", "12"]
+
+    def test_named_from_the_maps(self):
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.mission_result import named_rooms
+
+        data = SimpleNamespace(prime_room_names={"11": "Hall"})
+        assert named_rooms(data, self.RECORD, ["11", "12"]) == ["Hall", "12"]
+        classic = {"zones": ["Kitchen"], "result": "completed"}
+        assert named_rooms(data, classic, ["Kitchen"]) == ["Kitchen"]
+
+    def test_whole_home_prime_has_nothing_missed(self):
+        from custom_components.roomba_plus.mission_result import mission_outcome
+
+        outcome = mission_outcome({"result": "completed", "scope": "whole_home", "rooms_cleaned": ["10"]})
+        assert outcome["type"] == "completed"

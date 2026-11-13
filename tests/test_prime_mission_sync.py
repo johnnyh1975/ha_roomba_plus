@@ -221,6 +221,21 @@ class TestReconciliation:
         assert entry.runtime_data.last_error_at == store.records[-1]["ended_at"]
 
     @pytest.mark.asyncio
+    async def test_a_stored_mission_gets_its_command_fields(self):
+        """4.6.0: a mission read again repairs the command fields stored
+        before (initiator repr, no rooms asked for)."""
+        from custom_components.roomba_plus.prime_mission_sync import (
+            async_sync_prime_missions,
+        )
+
+        entry, store = self._config_entry([self._hist("a", 27)], existing=["p_a"])
+        store.add_missing_room_data = MagicMock(return_value=False)
+        store.add_missing_command_data = MagicMock(return_value=True)
+        store.async_save = AsyncMock()
+        await async_sync_prime_missions(entry)
+        assert store.add_missing_command_data.call_args.args[0]["id"] == "p_a"
+
+    @pytest.mark.asyncio
     async def test_already_stored_missions_are_skipped(self):
         """The whole reason this is a reconciliation. Without it every
         poll would duplicate the history."""
@@ -1889,3 +1904,39 @@ class TestPresenceSensorsFromPrimeRecords:
         assert values["presence_clean_opportunities_7d"] == 3
         assert values["presence_clean_utilisation_7d"] == 100.0
         assert values["next_likely_clean_window"] is not None
+
+
+class TestTheCommandOfAPrimeMission:
+    """4.6.0: the history's `cmd` is a MissionCommandRecord. Its initiator
+    is the word, its regions the rooms asked for (A5)."""
+
+    @staticmethod
+    def _record(cmd):
+        from roombapy_prime.models.mission_history import MissionCommandRecord
+
+        from custom_components.roomba_plus.prime_mission_sync import prime_entry_to_record
+
+        return prime_entry_to_record(_entry(
+            mission_id="m1", timestamp=datetime(2026, 7, 28, tzinfo=timezone.utc),
+            command=MissionCommandRecord.from_json(cmd),
+        ))
+
+    def test_the_initiator_is_the_word_not_the_record(self):
+        record = self._record({
+            "command": "start", "initiator": "rmtApp", "robot_id": "0123456789ABCDEF",
+        })
+        assert record["initiator"] == "rmtApp"
+        assert "0123456789ABCDEF" not in str(record)
+
+    def test_rooms_asked_for(self):
+        record = self._record({
+            "command": "start", "initiator": "rmtApp", "p2map_id": "M1",
+            "regions": [{"region_id": "10", "type": "rid"}, {"region_id": "11", "type": "rid"}],
+        })
+        assert record["requested_region_ids"] == ["10", "11"]
+        assert record["scope"] == "rooms"
+
+    def test_a_whole_home_start(self):
+        record = self._record({"command": "start", "initiator": "schedule"})
+        assert record["scope"] == "whole_home"
+        assert "requested_region_ids" not in record

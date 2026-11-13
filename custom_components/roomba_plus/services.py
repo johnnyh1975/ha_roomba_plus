@@ -93,7 +93,7 @@ from . import command_watch
 from .debug_capture import DEFAULT_MINUTES as DEBUG_DEFAULT_MINUTES
 from .debug_capture import MAX_MINUTES as DEBUG_MAX_MINUTES
 from .debug_capture import get_capture as get_debug_capture
-from .mission_result import rooms_to_retry
+from .mission_result import named_rooms, rooms_to_retry
 from .models import ConnectionType, RoombaConfigEntry, RoombaData
 from .prime_coordinator import prime_current_state
 
@@ -1889,7 +1889,9 @@ async def async_handle_retry_missed_rooms(call: ServiceCall) -> None:
                 "entity_id": str(entity_id), "mission_id": str(mission_id or "-"),
             },
         )
-    rooms = rooms_to_retry(record)
+    rooms = named_rooms(
+        getattr(config_entry, "runtime_data", None), record, rooms_to_retry(record)
+    )
     if not rooms:
         raise ServiceValidationError(
             f"retry_missed_rooms: the mission left no room out ({entity_id})",

@@ -63,8 +63,14 @@ def mission_outcome(record: dict[str, Any] | None) -> dict[str, Any] | None:
         return None
     result = record.get("result")
     skipped = [str(r) for r in record.get("skipped_rooms") or []]
-    requested = [str(r) for r in record.get("zones") or []]
-    cleaned = {str(r) for r in record.get("last_cleaned_rooms") or []}
+    # PRIME (4.6.0): the regions of the start and the regions the
+    # timeline cleaned, both as region ids; Classic keeps room names.
+    requested = [
+        str(r) for r in (record.get("zones") or record.get("requested_region_ids") or [])
+    ]
+    cleaned = {
+        str(r) for r in (record.get("last_cleaned_rooms") or record.get("rooms_cleaned") or [])
+    }
     observed = record.get("rooms_source") not in _GUESSED_ROOMS
     missed: list[str] = []
     if observed and record.get("scope") == "rooms" and cleaned:
@@ -123,6 +129,21 @@ def note_last_error(data: Any) -> None:
     data.last_error_code, data.last_error_at = found
 
 
+def named_rooms(data: Any, record: dict[str, Any] | None, rooms: list[str]) -> list[str]:
+    """Room names for the rooms of `record`, as Classic records carry them.
+
+    A Prime record keeps region ids (4.6.0); they are named from the
+    maps (`prime_room_names`), and an id without a name stays an id.
+    Classic records are returned as they are.
+    """
+    if not isinstance(record, dict) or record.get("zones") or not record.get("requested_region_ids"):
+        return list(rooms)
+    names = getattr(data, "prime_room_names", None)
+    if not isinstance(names, dict):
+        return list(rooms)
+    return [str(names.get(r) or names.get(str(r)) or r) for r in rooms]
+
+
 def rooms_to_retry(record: dict[str, Any] | None) -> list[str]:
     """Rooms a mission skipped or did not reach, in the order requested."""
     outcome = mission_outcome(record)
@@ -158,6 +179,9 @@ def async_setup_mission_result(hass: HomeAssistant, entry: Any) -> None:
         outcome = mission_outcome(record)
         if outcome is None:
             return
+        runtime = getattr(entry, "runtime_data", None)
+        for key in ("skipped_rooms", "missed_rooms", "requested_rooms"):
+            outcome[key] = named_rooms(runtime, record, outcome[key])
         hass.bus.async_fire(EVENT_MISSION_RESULT, {
             "entry_id": entry.entry_id,
             "name": getattr(entry, "title", None),

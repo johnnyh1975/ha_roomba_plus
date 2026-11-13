@@ -41,6 +41,11 @@ Nothing to do. What you will notice:
 - **`roomba_plus_start_blocked` and `roomba_plus_start_timeout` name the robot**
   (`entry_id`, `name`) and show on `event.<robot>_command`. An automation that
   listened to them still works; it can now filter by robot.
+- **Prime: the mission's initiator is a word again.** It held the text of the
+  whole command (with the robot's and the map's ids) in the last mission
+  summary, the REST history and the diagnostics. Stored missions are
+  repaired at the next history sync, which also adds the rooms each
+  mission was asked to clean.
 - **New actions**: `roomba_plus.retry_missed_rooms`, and
   `roomba_plus.debug_capture_start` / `_stop` / `_get` for a redacted debug log
   without editing `configuration.yaml`.

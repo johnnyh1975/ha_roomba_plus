@@ -300,8 +300,30 @@ def prime_entry_to_record(entry: Any) -> dict[str, Any] | None:
     # the Classic key because that is what consumers look for, and noted
     # here so the mapping is findable.
     command = getattr(entry, "command", None)
-    if command:
-        record["initiator"] = str(command)
+    # THE COMMAND IS A RECORD, NOT A WORD (found 4.6.0). roombapy-prime
+    # parses `cmd` into a MissionCommandRecord, and `str()` of it put the
+    # whole dataclass repr -- robot id and map ids included -- into the
+    # initiator, where the summary sensor, the REST history and the
+    # diagnostics showed it. Its `initiator` field is the word.
+    if isinstance(command, str):
+        if command:
+            record["initiator"] = command
+    elif command is not None:
+        initiator = getattr(command, "initiator", None)
+        if initiator:
+            record["initiator"] = str(initiator)
+        # THE ROOMS ASKED FOR (4.6.0, A5): the regions of the start, in
+        # the ids the timeline reports. With them a Prime mission knows
+        # what it left out, as a Classic one does from its zones.
+        region_ids = [
+            str(rid) for region in (getattr(command, "regions", None) or [])
+            if (rid := getattr(region, "region_id", None)) not in (None, "")
+        ]
+        if region_ids:
+            record["requested_region_ids"] = region_ids
+            record["scope"] = "rooms"
+        elif getattr(command, "command", None) == "start":
+            record["scope"] = "whole_home"
 
     # PER ROOM AND ZONE, from the mission's own timeline (4.2.21).
     #
@@ -570,6 +592,9 @@ async def _async_sync_locked(
             # A MISSION STORED WITHOUT ITS ROOMS (before 4.2.21) gets them
             # now, from the same history entry read again.
             if store.add_missing_room_data(record):
+                backfilled += 1
+            # AND THE COMMAND FIELDS OF 4.6.0, the same way.
+            if store.add_missing_command_data(record):
                 backfilled += 1
             continue
         known.add(record["id"])
