@@ -58,6 +58,7 @@ from homeassistant.helpers.trigger import TriggerActionType, TriggerInfo
 from homeassistant.helpers.typing import ConfigType
 
 from .const import (
+    CONF_CONNECTION_TYPE,
     DOMAIN,
     EVENT_HEALTH_CHANGE,
     EVENT_MAP_RETRAIN_COMPLETED,
@@ -66,6 +67,7 @@ from .const import (
     HEALTH_BAND_RANK,
     PHASE_LABELS,
 )
+from .models import ConnectionType
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -160,6 +162,72 @@ def _find_entity(
     return None
 
 
+#: THE ENTITY EACH STATE-BASED TRIGGER WATCHES, by translation key (4.6.0).
+#:
+#: Every trigger was offered to every robot, and one whose entity the
+#: robot does not have attached to nothing: the automation saved, loaded
+#: and never fired. On a Prime robot five of the thirteen were like that
+#: (no bin-full, maintenance-due, firmware or health entity, and the
+#: map-retrain events are Classic's). `start_blocked` looked only for the
+#: Prime sensor, so on Classic it never fired at all.
+#:
+#: Offered now only where one of these exists, and `start_blocked` takes
+#: both: the robot refusing a start (Prime, `prime_start_blocked`) and a
+#: start held back by the blocking sensors of `smart_start`
+#: (`start_blocked`, either generation).
+_TRIGGER_ENTITY_KEYS: dict[str, tuple[str, ...]] = {
+    TRIGGER_CLEANING_STARTED: ("phase",),
+    TRIGGER_CLEANING_FINISHED: ("phase",),
+    TRIGGER_STUCK: ("phase",),
+    TRIGGER_DOCKED: ("phase",),
+    TRIGGER_ERROR: ("error",),
+    TRIGGER_BIN_FULL: ("bin_full",),
+    TRIGGER_START_BLOCKED: ("prime_start_blocked", "start_blocked"),
+    TRIGGER_MAINTENANCE_DUE: ("maintenance_due",),
+    TRIGGER_FIRMWARE_UPDATED: ("firmware_updated",),
+    # `roomba_plus_health_change` comes from the integration-health
+    # sensor; without it the event is never fired for this robot.
+    TRIGGER_HEALTH_SCORE_DROP: ("integration_health",),
+}
+
+#: Bus events only the local connection produces (Smart Map retraining,
+#: `callbacks.py`). A Prime robot never sends them.
+_CLASSIC_ONLY_EVENT_TRIGGERS = frozenset({
+    TRIGGER_MAP_RETRAIN_STARTED,
+    TRIGGER_MAP_RETRAIN_COMPLETED,
+})
+
+
+def _find_entities(
+    hass: HomeAssistant, device_id: str, translation_keys: tuple[str, ...]
+) -> list[str]:
+    """Every Roomba+ entity of the device with one of `translation_keys`."""
+    found = (_find_entity(hass, device_id, key) for key in translation_keys)
+    return [entity_id for entity_id in found if entity_id]
+
+
+def _device_is_classic(hass: HomeAssistant, device_id: str) -> bool:
+    """Whether the device's entry uses the local (Classic) connection.
+
+    Read from the entry's data, which exists before and after setup; an
+    entry that cannot be found counts as Classic, the older behaviour."""
+    entry_id = _entry_id_for_device(hass, device_id)
+    entry = hass.config_entries.async_get_entry(entry_id) if entry_id else None
+    if entry is None:
+        return True
+    return entry.data.get(CONF_CONNECTION_TYPE) != ConnectionType.CLOUD_ONLY.value
+
+
+def _trigger_can_fire(hass: HomeAssistant, device_id: str, trigger_type: str) -> bool:
+    """Whether a trigger of this type has anything to fire on for the device."""
+    keys = _TRIGGER_ENTITY_KEYS.get(trigger_type)
+    if keys is not None:
+        return bool(_find_entities(hass, device_id, keys))
+    if trigger_type in _CLASSIC_ONLY_EVENT_TRIGGERS:
+        return _device_is_classic(hass, device_id)
+    return True
+
+
 def _entry_id_for_device(hass: HomeAssistant, device_id: str) -> str | None:
     """Return the config_entry_id for a Roomba+ device.
 
@@ -199,20 +267,28 @@ async def async_get_triggers(
         CONF_DOMAIN: DOMAIN,
         CONF_DEVICE_ID: device_id,
     }
+    offered = (
+        TRIGGER_CLEANING_STARTED,
+        TRIGGER_CLEANING_FINISHED,
+        TRIGGER_STUCK,
+        TRIGGER_BIN_FULL,
+        TRIGGER_START_BLOCKED,
+        TRIGGER_DOCKED,
+        TRIGGER_ERROR,
+        TRIGGER_ROOM_COMPLETED,
+        TRIGGER_MAINTENANCE_DUE,
+        TRIGGER_HEALTH_SCORE_DROP,
+        TRIGGER_MAP_RETRAIN_STARTED,
+        TRIGGER_MAP_RETRAIN_COMPLETED,
+        TRIGGER_FIRMWARE_UPDATED,
+    )
+    # ONLY WHAT CAN FIRE FOR THIS ROBOT (4.6.0): see _TRIGGER_ENTITY_KEYS.
+    # An automation stored with a trigger no longer offered still attaches
+    # as before; this only stops the editor offering a dead one.
     return [
-        {**base, CONF_TYPE: TRIGGER_CLEANING_STARTED},
-        {**base, CONF_TYPE: TRIGGER_CLEANING_FINISHED},
-        {**base, CONF_TYPE: TRIGGER_STUCK},
-        {**base, CONF_TYPE: TRIGGER_BIN_FULL},
-        {**base, CONF_TYPE: TRIGGER_START_BLOCKED},
-        {**base, CONF_TYPE: TRIGGER_DOCKED},
-        {**base, CONF_TYPE: TRIGGER_ERROR},
-        {**base, CONF_TYPE: TRIGGER_ROOM_COMPLETED},
-        {**base, CONF_TYPE: TRIGGER_MAINTENANCE_DUE},
-        {**base, CONF_TYPE: TRIGGER_HEALTH_SCORE_DROP},
-        {**base, CONF_TYPE: TRIGGER_MAP_RETRAIN_STARTED},
-        {**base, CONF_TYPE: TRIGGER_MAP_RETRAIN_COMPLETED},
-        {**base, CONF_TYPE: TRIGGER_FIRMWARE_UPDATED},
+        {**base, CONF_TYPE: trigger_type}
+        for trigger_type in offered
+        if _trigger_can_fire(hass, device_id, trigger_type)
     ]
 
 
@@ -290,13 +366,21 @@ async def async_attach_trigger(
         # `blocked_reason` and `available_modes` as attributes, so an
         # automation can say what to do instead rather than only that
         # something is wrong.
-        entity_id = _find_entity(hass, device_id, "prime_start_blocked")
-        if not entity_id:
+        #
+        # BOTH KINDS OF HELD-BACK START (4.6.0). This looked only for the
+        # Prime sensor, so on Classic it attached to nothing. A start held
+        # back by the blocking sensors of `smart_start` is the other kind,
+        # on either generation (@ar2000ar, #241: "failing to start a job
+        # should ... trigger an event").
+        entity_ids = _find_entities(
+            hass, device_id, _TRIGGER_ENTITY_KEYS[TRIGGER_START_BLOCKED]
+        )
+        if not entity_ids:
             return lambda: None
         state_config = state_trigger.TRIGGER_STATE_SCHEMA(
             {
                 CONF_PLATFORM: "state",
-                CONF_ENTITY_ID: entity_id,
+                CONF_ENTITY_ID: entity_ids,
                 "to": "on",
             }
         )

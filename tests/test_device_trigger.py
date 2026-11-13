@@ -99,6 +99,9 @@ class TestAsyncGetTriggers:
         with patch(
             "custom_components.roomba_plus.device_trigger.dr.async_get",
             return_value=dev_reg,
+        ), patch(
+            "custom_components.roomba_plus.device_trigger._trigger_can_fire",
+            return_value=True,
         ):
             triggers = await async_get_triggers(MagicMock(), "dev1")
         types = {t["type"] for t in triggers}
@@ -642,3 +645,75 @@ class TestTheStateTriggersFireOnTheSensorsValues:
 
         labels = set(PHASE_LABELS.values())
         assert dt._CLEANING_PHASES | dt._ACTIVE_PHASES | {dt._DOCKED_PHASE, dt._STUCK_PHASE} <= labels
+
+
+class TestOnlyTriggersThatCanFireAreOffered:
+    """4.6.0, parity inventory. Every trigger was offered to every robot,
+    and one whose entity the robot lacks attached to nothing: the
+    automation saved and never fired. Five of thirteen on a Prime robot;
+    `start_blocked` on every Classic robot, because it looked only for the
+    Prime sensor. Here with Home Assistant's own registries and a real
+    automation."""
+
+    async def _device(self, hass, *, prime, keys):
+        from homeassistant.helpers import device_registry as dr, entity_registry as er
+        from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+        entry = MockConfigEntry(
+            domain=DOMAIN, title="Robo",
+            data={"connection_type": "cloud_only" if prime else "local_push"},
+        )
+        entry.add_to_hass(hass)
+        device = dr.async_get(hass).async_get_or_create(
+            config_entry_id=entry.entry_id, identifiers={(DOMAIN, "blid1")},
+        )
+        ids = {}
+        for platform, key in keys:
+            ent = er.async_get(hass).async_get_or_create(
+                platform, DOMAIN, f"blid1_{key}", config_entry=entry,
+                device_id=device.id, translation_key=key,
+                suggested_object_id=f"robo_{key}",
+            )
+            ids[key] = ent.entity_id
+        return device, ids
+
+    async def test_a_prime_robot_is_offered_only_live_triggers(self, hass):
+        device, _ = await self._device(hass, prime=True, keys=[
+            ("sensor", "phase"), ("sensor", "error"),
+            ("binary_sensor", "prime_start_blocked"),
+        ])
+        types = {t["type"] for t in await async_get_triggers(hass, device.id)}
+        assert types == {
+            "cleaning_started", "cleaning_finished", "stuck", "docked",
+            "error", "start_blocked", "room_completed",
+        }
+
+    async def test_a_classic_robot_keeps_its_triggers(self, hass):
+        device, _ = await self._device(hass, prime=False, keys=[
+            ("sensor", "phase"), ("sensor", "error"),
+            ("binary_sensor", "bin_full"), ("binary_sensor", "maintenance_due"),
+            ("binary_sensor", "firmware_updated"),
+            ("sensor", "integration_health"),
+        ])
+        types = {t["type"] for t in await async_get_triggers(hass, device.id)}
+        assert types == TRIGGER_TYPES - {"start_blocked"}
+
+    async def test_start_blocked_fires_on_classic(self, hass, enable_custom_integrations):
+        from homeassistant.setup import async_setup_component
+        from pytest_homeassistant_custom_component.common import async_mock_service
+
+        device, ids = await self._device(hass, prime=False, keys=[
+            ("binary_sensor", "start_blocked"),
+        ])
+        entity_id = ids["start_blocked"]
+        hass.states.async_set(entity_id, "off")
+        calls = async_mock_service(hass, "test", "fired")
+        assert await async_setup_component(hass, "automation", {"automation": {
+            "trigger": {"platform": "device", "domain": DOMAIN,
+                        "device_id": device.id, "type": "start_blocked"},
+            "action": {"service": "test.fired"},
+        }})
+        await hass.async_block_till_done()
+        hass.states.async_set(entity_id, "on")
+        await hass.async_block_till_done()
+        assert len(calls) == 1
