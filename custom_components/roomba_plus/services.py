@@ -159,6 +159,8 @@ _BACKUP_STORES: tuple[tuple[str, str], ...] = (
     # and the turn of the path learned per map. A backup moved to a new
     # Home Assistant left both behind.
     ("mission_archive", "roomba_plus_mission_archive"),
+    # Prime's own (4.6.0): the missions beyond the mission store's cap.
+    ("prime_mission_archive", "roomba_plus_prime_mission_archive"),
     ("path_turn", "roomba_plus_path_turn"),
 )
 

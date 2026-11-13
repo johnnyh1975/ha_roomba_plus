@@ -1248,3 +1248,49 @@ class TestDemandCleaningIsBuiltOnPrime:
         data, load = await self._setup({})
         assert data.dirt_threshold_manager is None
         load.assert_not_awaited()
+
+
+class TestThePrimeMissionArchiveAtSetup:
+    """4.6.0, A4: the archive is created, loaded and seeded from the store."""
+
+    @pytest.mark.asyncio
+    async def test_seeded_from_the_store(self) -> None:
+        from custom_components.roomba_plus import mission_store as ms_mod
+
+        hass, config_entry = _make_hass_and_entry()
+        fake_prime_robot = MagicMock()
+        fake_prime_robot.connect = AsyncMock()
+        fake_prime_robot.get_named_shadow = AsyncMock(
+            return_value=MagicMock(payload={"state": {"reported": {}}})
+        )
+        fake_prime_robot.get_state = AsyncMock(
+            return_value=MagicMock(payload={"state": {"reported": {}}})
+        )
+        fake_prime_robot.get_household_id = AsyncMock(return_value="hh1")
+        fake_prime_robot.get_serial_number_data = AsyncMock(return_value=None)
+
+        async def _empty():
+            return
+            yield  # pragma: no cover
+
+        fake_prime_robot.watch_named_shadows_updates = _empty
+        hass.data = {}
+        stored = [{"id": "p_1", "nMssn": 1, "ended_at": "2026-01-01T00:00:00+00:00"}]
+
+        async def _load(self, _hass, _entry_id):
+            self._records = list(stored)
+
+        from custom_components.roomba_plus import prime_mission_archive as pma
+
+        saved = AsyncMock()
+        with patch.object(
+            _CURRENT["account"], "prime_robot", new=AsyncMock(return_value=fake_prime_robot),
+        ), patch.object(ms_mod.MissionStore, "async_load", _load), patch.object(
+            pma.PrimeMissionArchive, "async_load", AsyncMock(),
+        ), patch.object(pma.PrimeMissionArchive, "async_save", saved):
+            assert await _async_setup_entry_prime(hass, config_entry) is True
+        saved.assert_awaited_once()
+
+        archive = config_entry.runtime_data.prime_mission_archive
+        assert archive is not None
+        assert [r["id"] for r in archive.records] == ["p_1"]

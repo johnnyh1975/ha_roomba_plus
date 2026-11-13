@@ -1918,6 +1918,7 @@ class TestMissionPathView:
         hass, entry = _make_hass_with_entry(records=[])
         data = entry.runtime_data
         data.mission_archive = None
+        data.prime_mission_archive = None
         data.connection_type = ConnectionType.CLOUD_ONLY
         data.mission_store = MagicMock()
         data.mission_store.records = [
@@ -1935,6 +1936,28 @@ class TestMissionPathView:
         assert [p["room"] for p in body["path"]] == ["Kitchen", "Hallway"]
         resp = await view.get(self._make_request(hass), "abc123", "555")
         assert resp.status == 404
+
+    @pytest.mark.asyncio
+    async def test_a_prime_mission_older_than_the_store_comes_from_the_archive(self):
+        """4.6.0 (A4): the Prime archive keeps missions the store dropped."""
+        from custom_components.roomba_plus.api_views import MissionPathView
+        from custom_components.roomba_plus.models import ConnectionType
+        from custom_components.roomba_plus.prime_mission_archive import PrimeMissionArchive
+
+        hass, entry = _make_hass_with_entry(records=[])
+        data = entry.runtime_data
+        data.mission_archive = None
+        data.connection_type = ConnectionType.CLOUD_ONLY
+        data.mission_store = MagicMock()
+        data.mission_store.records = []
+        archive = PrimeMissionArchive()
+        archive.add([{"id": "p_old", "nMssn": 7, "ended_at": "2025-01-01T00:00:00+00:00",
+                      "room_visits": [{"rid": "3", "ts": 1}]}])
+        data.prime_mission_archive = archive
+        data.prime_room_names = {"3": "Kitchen"}
+        resp = await MissionPathView().get(self._make_request(hass), "abc123", "7")
+        assert resp.status == 200
+        assert [p["room"] for p in json.loads(resp.body)["path"]] == ["Kitchen"]
 
     @pytest.mark.asyncio
     async def test_timeline_falls_back_to_rid_when_unnamed(self):

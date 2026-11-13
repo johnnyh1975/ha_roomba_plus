@@ -894,8 +894,12 @@ class MissionPathView(RoombaPlusView):
         except ValueError:
             return self.json_message("Invalid mission number", status_code=400)
 
+        prime_archive = getattr(data, "prime_mission_archive", None) if prime_store is not None else None
         if archive is not None:
             record = archive.find_by_nMssn(n_mssn_int)
+        elif prime_archive is not None and (found := prime_archive.find_by_nMssn(n_mssn_int)):
+            # The archive holds the older missions too (4.6.0, A4).
+            record = found
         else:
             record = next(
                 (

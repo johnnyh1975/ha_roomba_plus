@@ -576,6 +576,8 @@ async def _async_sync_locked(
     # as duplicates when recent, APPENDED a second time when older than
     # the five records `async_append` compares against.
     known = {rec.get("id") for rec in store.records}
+    #: Every record the history gave, for the archive (4.6.0, A4).
+    read: list[dict[str, Any]] = []
     added = 0
     backfilled = 0
     newest: dict[str, Any] | None = None
@@ -588,6 +590,7 @@ async def _async_sync_locked(
         record = prime_entry_to_record(entry)
         if record is None:
             continue
+        read.append(record)
         if record["id"] in known:
             # A MISSION STORED WITHOUT ITS ROOMS (before 4.2.21) gets them
             # now, from the same history entry read again.
@@ -633,6 +636,14 @@ async def _async_sync_locked(
             "roomba_plus: added room data to %d stored mission record(s)",
             backfilled,
         )
+    # THE ARCHIVE KEEPS WHAT THE STORE DROPS (4.6.0, A4).
+    archive = getattr(getattr(config_entry, "runtime_data", None), "prime_mission_archive", None)
+    if archive is not None and read:
+        try:
+            if archive.add(read):
+                await archive.async_save(_hass_of(config_entry), config_entry.entry_id)
+        except Exception:  # noqa: BLE001 -- history, not a reason to stop the sync
+            _LOGGER.debug("roomba_plus: could not update the mission archive", exc_info=True)
     if added:
         # THE LAST ERROR (4.6.0), before the entities re-read below.
         with contextlib.suppress(Exception):

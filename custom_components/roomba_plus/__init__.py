@@ -119,6 +119,7 @@ from .grid_store import GridStore
 from .room_seg_store import RoomSegStore
 from .mission_store import MissionStore
 from .mission_result import async_setup_mission_result, note_last_error
+from .prime_mission_archive import PrimeMissionArchive
 from .mission_archive import MissionArchive  # v2.8.0 ARC1
 from .presence_manager import PresenceManager
 from .cloud_coordinator import IrobotCloudCoordinator
@@ -2079,6 +2080,17 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
         )
     )
 
+    # THE MISSION ARCHIVE FOR PRIME (4.6.0, A4): seeded from the mission
+    # store the first time, filled by each history sync after.
+    _archive = PrimeMissionArchive()
+    try:
+        await _archive.async_load(hass, config_entry.entry_id)
+        if not _archive.record_count and _archive.add(prime_mission_store.records):
+            await _archive.async_save(hass, config_entry.entry_id)
+        config_entry.runtime_data.prime_mission_archive = _archive
+    except Exception:  # noqa: BLE001 -- the archive is history, not a reason to fail setup
+        _LOGGER.debug("Roomba+ Prime: mission archive not available", exc_info=True)
+
     # THE ROOM NAMES FROM THE LAST RUN, before any platform reads them
     # (4.2.22). Without them the history showed region numbers and the
     # per-room sensors waited for the map to be read (@mrsnyds).
@@ -2691,6 +2703,8 @@ _STORAGE_KEYS_TO_REMOVE: Final[list[tuple[str, str]]] = [
     ("legacy_zone_migration", "roomba_plus_zones_{entry_id}"),
     ("maintenance_store", "roomba_plus_maintenance_{entry_id}"),
     ("mission_archive", "roomba_plus_mission_archive_{entry_id}"),
+    # The Prime mission archive (4.6.0).
+    ("prime mission archive", "roomba_plus_prime_mission_archive_{entry_id}"),
     ("mission_store", "roomba_plus_missions_{entry_id}"),
     ("mission_timer_store", "roomba_plus_mission_timer_{entry_id}"),
     ("mission_trajectory_store", "roomba_plus_trajectories_{entry_id}"),

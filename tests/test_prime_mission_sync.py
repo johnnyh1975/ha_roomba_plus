@@ -1940,3 +1940,24 @@ class TestTheCommandOfAPrimeMission:
         record = self._record({"command": "start", "initiator": "schedule"})
         assert record["scope"] == "whole_home"
         assert "requested_region_ids" not in record
+
+
+class TestTheArchiveFollowsTheSync:
+    """4.6.0, A4: every record the history gives goes to the archive."""
+
+    @pytest.mark.asyncio
+    async def test_records_reach_the_archive(self):
+        from custom_components.roomba_plus.prime_mission_archive import PrimeMissionArchive
+        from custom_components.roomba_plus.prime_mission_sync import async_sync_prime_missions
+
+        cases = TestReconciliation()
+        entry, store = cases._config_entry([cases._hist("a", 27), cases._hist("b", 28)], existing=["p_a"])
+        store.add_missing_room_data = MagicMock(return_value=False)
+        store.add_missing_command_data = MagicMock(return_value=False)
+        store.async_save = AsyncMock()
+        archive = PrimeMissionArchive()
+        archive.async_save = AsyncMock()
+        entry.runtime_data.prime_mission_archive = archive
+        await async_sync_prime_missions(entry)
+        assert [r["id"] for r in archive.records] == ["p_a", "p_b"]
+        archive.async_save.assert_awaited_once()

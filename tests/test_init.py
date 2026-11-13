@@ -828,8 +828,10 @@ class TestStorageKeyRegistry:
         the entry deliberately rather than making a test pass.
 
         19 (4.5.0b3): the turns of requested positions learned per map,
-        `roomba_plus_path_turn_<entry>` -- map ids and counts."""
-        assert len(_STORAGE_KEYS_TO_REMOVE) == 19
+        `roomba_plus_path_turn_<entry>` -- map ids and counts.
+        20 (4.6.0): the Prime mission archive,
+        `roomba_plus_prime_mission_archive_<entry>`."""
+        assert len(_STORAGE_KEYS_TO_REMOVE) == 20
 
     def test_no_duplicate_keys(self):
         templates = [k for _, k in _STORAGE_KEYS_TO_REMOVE]

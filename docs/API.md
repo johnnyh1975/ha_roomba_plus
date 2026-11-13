@@ -565,7 +565,7 @@ GET /api/roomba_plus/{entry_id}/mission/{n_mssn}/path
 | `room` | string | Never — falls back to the raw region id | Resolved from cloud region names (SMART) or RoomSegStore names (EPHEMERAL) |
 | `time` | string | Never | ISO timestamp of arrival in that room |
 
-**Gate:** Classic requires `mission_archive` (cloud enrichment). **Prime (4.6.0)** answers from the mission history Roomba+ keeps for it; rooms are named as on the map. Returns `404` if `n_mssn` doesn't match any mission, or if neither source is available.
+**Gate:** Classic requires `mission_archive` (cloud enrichment). **Prime (4.6.0)** answers from its own mission archive (up to 800 missions, filled from the cloud history at each sync) and the mission store; rooms are named as on the map. Returns `404` if `n_mssn` doesn't match any mission, or if neither source is available.
 
 ```bash
 curl -H "Authorization: Bearer <token>" \

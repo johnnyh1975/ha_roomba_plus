@@ -4253,3 +4253,14 @@ class TestALateStartIsMeasured:
         await svc._async_warn_if_swallowed(MagicMock(), entry, "start", None, None)
         assert [w["outcome"] for w in entry.runtime_data.command_watches] == ["not_delivered"]
         assert len(calls) < 100
+
+
+class TestThePrimeArchiveIsInTheBackup:
+    """4.6.0, A4: the Prime mission archive goes into a backup and comes
+    back with a restore, as the Classic archive does since 4.5.2."""
+
+    def test_listed(self):
+        from custom_components.roomba_plus.prime_mission_archive import STORAGE_KEY_PREFIX
+        from custom_components.roomba_plus.services import _BACKUP_STORES
+
+        assert ("prime_mission_archive", STORAGE_KEY_PREFIX) in _BACKUP_STORES

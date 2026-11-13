@@ -46,6 +46,8 @@ Nothing to do. What you will notice:
   summary, the REST history and the diagnostics. Stored missions are
   repaired at the next history sync, which also adds the rooms each
   mission was asked to clean.
+- **Prime keeps a mission archive** of up to 800 missions, seeded from the
+  stored missions at the first start and in the backup.
 - **New actions**: `roomba_plus.retry_missed_rooms`, and
   `roomba_plus.debug_capture_start` / `_stop` / `_get` for a redacted debug log
   without editing `configuration.yaml`.

@@ -17,6 +17,7 @@ from .position_room import PathTurnLearner, PositionRoomTracker
 
 if TYPE_CHECKING:
     from .mission_archive import MissionArchive
+    from .prime_mission_archive import PrimeMissionArchive
     from roombapy import RoombaClient
     from roombapy_prime import PrimeRobot
     from roombapy_prime.models import RobotSerialInfo
@@ -441,6 +442,9 @@ class RoombaData:
     mission_timer_store: "MissionTimerStore | None" = None
     # v2.8.0 ARC1 — CloudMissionArchive (cloud + any map_capability)
     mission_archive: "MissionArchive | None" = None  # noqa: F821 — TYPE_CHECKING forward reference, pyflakes/ruff scope limitation
+    #: Prime's own archive (4.6.0, A4): mission records beyond the mission
+    #: store's cap, for the mission path and the backup.
+    prime_mission_archive: "PrimeMissionArchive | None" = None  # noqa: F821
     # v2.2.0 — user-assigned floor name for household REST endpoint (F10a)
     floor_label: str = ""
 

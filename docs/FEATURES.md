@@ -1545,8 +1545,12 @@ the order the robot enters them: the current room, the rooms visited and the tim
 each. There is no forecast of the rooms still to come, and so no remaining time; a start
 from Home Assistant has both, as before.
 
-**Mission path** — `GET /mission/{n_mssn}/path` answers on Prime from the mission
-history, with the rooms named as on the map.
+**Mission archive and path** — Prime keeps its own mission archive: up to 800 missions
+from the cloud history (the mission store keeps 365), filled at each history sync, in
+the backup (`create_backup`/`restore_backup`) and removed with the entry.
+`GET /mission/{n_mssn}/path` answers from it, with the rooms named as on the map. It is
+not the Classic archive: that one derives signals from Classic fields (Wi-Fi, charging)
+a Prime history does not have.
 
 **Floor plan of each map** — see [Floor plan of each map](#floor-plan-of-each-map--smart-map-robots-with-an-irobot-account-454).
 
