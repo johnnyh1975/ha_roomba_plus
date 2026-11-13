@@ -419,7 +419,8 @@ class TestAsyncSetupEntryCloudOnlyBranch:
         # field arrives, and are not counted here.)
         # 43 with the raw-state sensor and the optimal clean window (a
         # MagicMock entry has a presence manager).
-        assert len(created) == 43, (
+        # 46 with last error code and time and the last mission summary.
+        assert len(created) == 46, (
             "rooms-overdue was added for Prime: it reads the mission "
             "store and cloud regions, both of which Prime has, and it "
             "was missing only because of the order things were built in"

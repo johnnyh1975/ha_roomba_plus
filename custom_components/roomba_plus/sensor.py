@@ -531,6 +531,8 @@ async def async_setup_entry(
         # 4.6.0, parity: the debug view of the robot's state, from the
         # shadows; and the presence window, where presence is on.
         shared: list[SensorEntity] = [PrimeRawStateSensor(data.blid, config_entry)]
+        if getattr(data, "mission_store", None) is not None:
+            shared.append(RoombaLastMissionSummarySensor(None, data.blid, config_entry))
         if getattr(data, "presence_manager", None) is not None:
             shared.append(RoombaOptimalCleanWindow(None, data.blid, config_entry))
         async_add_entities(shared)
@@ -724,6 +726,10 @@ _PRIME_MISSION_SENSOR_KEYS: frozenset[str] = frozenset({
     # 4.6.0 (parity inventory P1): read only the mission store, which
     # Prime fills from its cloud history.
     "missions_last_30d",
+    # 4.6.0: the newest mission that ended in error, kept by
+    # mission_result.note_last_error at setup and after each sync.
+    "last_error_code",
+    "last_error_at",
     "completion_rate_30d",
     "last_mission_area",
 })

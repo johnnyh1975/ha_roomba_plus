@@ -90,6 +90,39 @@ def mission_outcome(record: dict[str, Any] | None) -> dict[str, Any] | None:
     }
 
 
+#: The result types that make a mission the robot's last error.
+_ERROR_TYPES = frozenset({"error", "stuck_abandoned"})
+
+
+def last_error(records: Any) -> tuple[Any, str | None] | None:
+    """(error code, end time) of the newest mission that ended in error.
+
+    The Prime source of `last_error_code` and `last_error_at` (4.6.0).
+    Classic keeps both from its own mission end (callbacks.py), by the
+    stored result; a Prime record has no `error` or `stuck` result, only
+    `unknown` with the error the timeline raised, which `mission_outcome`
+    already reads as an error. None when no mission ended that way.
+    """
+    for record in reversed(list(records or [])):
+        outcome = mission_outcome(record)
+        if outcome is not None and outcome["type"] in _ERROR_TYPES:
+            return outcome["error_code"], record.get("ended_at")
+    return None
+
+
+def note_last_error(data: Any) -> None:
+    """Set `last_error_code`/`last_error_at` from the stored missions.
+
+    Leaves them as they are when no stored mission ended in error: the
+    last error stays until there is a newer one, as on Classic.
+    """
+    store = getattr(data, "mission_store", None)
+    found = last_error(getattr(store, "records", None))
+    if found is None:
+        return
+    data.last_error_code, data.last_error_at = found
+
+
 def rooms_to_retry(record: dict[str, Any] | None) -> list[str]:
     """Rooms a mission skipped or did not reach, in the order requested."""
     outcome = mission_outcome(record)

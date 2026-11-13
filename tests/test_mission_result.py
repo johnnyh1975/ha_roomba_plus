@@ -147,3 +147,36 @@ class TestTheEventFollowsTheMissionEnd:
         await hass.async_block_till_done()
         assert seen == []
         unloads[0]()
+
+
+class TestLastError:
+    """4.6.0: `last_error_code`/`last_error_at` on Prime, from the records."""
+
+    def test_the_newest_mission_that_ended_in_error(self):
+        from custom_components.roomba_plus.mission_result import last_error
+
+        records = [
+            {"result": "unknown", "error_code": 48, "ended_at": "2026-11-01T10:00:00+00:00"},
+            {"result": "completed", "error_code": 17, "ended_at": "2026-11-02T10:00:00+00:00"},
+            {"result": "cancelled", "ended_at": "2026-11-03T10:00:00+00:00"},
+        ]
+        assert last_error(records) == (48, "2026-11-01T10:00:00+00:00")
+        assert last_error([{"result": "completed"}]) is None
+        assert last_error(None) is None
+
+    def test_noted_on_the_runtime_data_and_kept_without_a_newer_one(self):
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.mission_result import note_last_error
+
+        data = SimpleNamespace(
+            mission_store=SimpleNamespace(records=[
+                {"result": "error", "error_code": 3, "ended_at": "T1"},
+            ]),
+            last_error_code=None, last_error_at=None,
+        )
+        note_last_error(data)
+        assert (data.last_error_code, data.last_error_at) == (3, "T1")
+        data.mission_store.records = [{"result": "completed"}]
+        note_last_error(data)
+        assert (data.last_error_code, data.last_error_at) == (3, "T1")

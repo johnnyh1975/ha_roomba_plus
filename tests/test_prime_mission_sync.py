@@ -202,6 +202,25 @@ class TestReconciliation:
         assert store.async_append.await_count == 2
 
     @pytest.mark.asyncio
+    async def test_the_last_error_follows_the_sync(self):
+        """4.6.0: a newly synced mission that ended in error is the robot's
+        last error, before the entities re-read their stores."""
+        from custom_components.roomba_plus.prime_mission_sync import (
+            async_sync_prime_missions,
+        )
+
+        failed = _entry(
+            mission_id="a", timestamp=datetime(2026, 7, 27, tzinfo=timezone.utc),
+            done_code="stuck", error_code=48,
+        )
+        entry, store = self._config_entry([failed])
+        store.async_append.side_effect = lambda record, *a, **k: store.records.append(record) or True
+        entry.runtime_data.last_error_code = None
+        assert await async_sync_prime_missions(entry) == 1
+        assert entry.runtime_data.last_error_code == 48
+        assert entry.runtime_data.last_error_at == store.records[-1]["ended_at"]
+
+    @pytest.mark.asyncio
     async def test_already_stored_missions_are_skipped(self):
         """The whole reason this is a reconciliation. Without it every
         poll would duplicate the history."""
@@ -380,6 +399,8 @@ class TestMissionSensorsExistForPrime:
         "missions_last_30d",
         "completion_rate_30d",
         "last_mission_area",
+        "last_error_code",
+        "last_error_at",
     }
 
     def test_the_expected_keys_are_wired(self):
@@ -505,6 +526,8 @@ class TestMissionSensorsExistForPrime:
         entry = MagicMock()
         entry.runtime_data.mission_store = store
         entry.runtime_data.roomba = None
+        entry.runtime_data.last_error_code = None
+        entry.runtime_data.last_error_at = None
 
         for description in SENSORS:
             if description.key not in _PRIME_MISSION_SENSOR_KEYS:

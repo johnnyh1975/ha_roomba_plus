@@ -118,7 +118,7 @@ from .parts_catalog import async_load_into as _load_parts_catalogue
 from .grid_store import GridStore
 from .room_seg_store import RoomSegStore
 from .mission_store import MissionStore
-from .mission_result import async_setup_mission_result
+from .mission_result import async_setup_mission_result, note_last_error
 from .mission_archive import MissionArchive  # v2.8.0 ARC1
 from .presence_manager import PresenceManager
 from .cloud_coordinator import IrobotCloudCoordinator
@@ -2065,6 +2065,10 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
         blocking_manager=blocking_manager,
         hass_ref=hass,
     )
+
+    # THE LAST ERROR, for `last_error_code`/`last_error_at` on Prime
+    # (4.6.0), from the stored missions as Classic restores its own.
+    note_last_error(config_entry.runtime_data)
 
     # THE FIRMWARE VERSION, for `firmware_updated` on Prime (4.6.0):
     # the baseline now, every change from the status coordinator after.

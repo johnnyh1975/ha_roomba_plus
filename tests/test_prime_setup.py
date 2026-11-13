@@ -187,11 +187,15 @@ class TestAsyncSetupEntryPrime:
         fake_prime_robot.watch_named_shadows_updates = _empty_named_shadows_updates
         hass.data = {}
 
+        import custom_components.roomba_plus as pkg
+
         with patch.object(
             _CURRENT["account"], "prime_robot",
             new=AsyncMock(return_value=fake_prime_robot),
-        ):
+        ), patch.object(pkg, "note_last_error") as noted:
             assert await _async_setup_entry_prime(hass, config_entry) is True
+        # The last error from the stored missions, at setup (4.6.0).
+        noted.assert_called_once_with(config_entry.runtime_data)
 
         data = config_entry.runtime_data
         assert data.last_firmware_version == "v1"

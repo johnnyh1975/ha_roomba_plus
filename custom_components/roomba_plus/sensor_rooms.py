@@ -1682,7 +1682,7 @@ class RoombaLastMissionSummarySensor(IRobotEntity, SensorEntity):
     _attr_has_entity_name = True
 
     def __init__(self, roomba: Any, blid: str, config_entry: RoombaConfigEntry) -> None:
-        super().__init__(roomba, blid)
+        super().__init__(roomba, blid, config_entry)
         self._entry = config_entry
         self._attr_unique_id = f"{self.robot_unique_id}_last_mission_summary"
 
@@ -1715,6 +1715,11 @@ class RoombaLastMissionSummarySensor(IRobotEntity, SensorEntity):
         region_map: dict[str, str] = {}
         if data.has_cloud and data.cloud_coordinator is not None:
             region_map = region_names_across_maps(data.cloud_coordinator)
+        # PRIME (4.6.0): the names its maps give, the same the room
+        # history uses. A Prime entry has no Classic cloud or aligner.
+        prime_names = getattr(data, "prime_room_names", None)
+        if not region_map and isinstance(prime_names, dict) and prime_names:
+            region_map = {str(k): str(v) for k, v in prime_names.items()}
         umf_regions: dict[str, str] | None = None
         if not region_map and data.umf_aligner and data.umf_aligner.aligned:
             umf_regions = data.umf_aligner.rid_to_name()

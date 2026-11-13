@@ -2041,3 +2041,28 @@ def test_the_planned_order_names_a_zone_as_a_zone_on_the_commands_map():
                            mission_timer_store=None)
     # Zone 21 exists only on MAP_A: found there after the command's map.
     assert _get_planned_room_order(data) == ["Master Bedroom", "Couch"]
+
+
+class TestLastMissionSummaryOnPrime:
+    """4.6.0: the summary names a Prime mission's rooms from the maps."""
+
+    def test_rooms_from_the_prime_names(self):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.sensor_rooms import RoombaLastMissionSummarySensor
+
+        entry = MagicMock()
+        entry.runtime_data.has_cloud = False
+        entry.runtime_data.cloud_coordinator = None
+        entry.runtime_data.umf_aligner = None
+        entry.runtime_data.prime_room_names = {"10": "Kitchen", "11": "Hall"}
+        store = MagicMock()
+        store.latest.return_value = {"result": "completed", "id": "p_1"}
+        store.latest_cleaned_rooms.side_effect = lambda region_map, umf=None: [region_map["10"]]
+        store.latest_room_coverage.return_value = None
+        store.latest_rooms_source.return_value = "cloud"
+        entry.runtime_data.mission_store = store
+        sensor = RoombaLastMissionSummarySensor(None, "BLID", entry)
+        assert sensor.native_value == "completed"
+        assert sensor.extra_state_attributes["cleaned_rooms"] == ["Kitchen"]
+        assert store.latest_cleaned_rooms.call_args.args[0] == {"10": "Kitchen", "11": "Hall"}

@@ -37,6 +37,7 @@ in what they report.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 
 from homeassistant.helpers.dispatcher import async_dispatcher_send
@@ -49,6 +50,7 @@ if TYPE_CHECKING:
     from .models import RoombaConfigEntry
 
 from .const import EVENT_MISSION_COMPLETED, mission_store_changed_signal
+from .mission_result import note_last_error
 from .room_times import MIN_ROOM_SECONDS, region_visits
 from .structural_failures import record_failure, record_success
 
@@ -606,6 +608,10 @@ async def _async_sync_locked(
             "roomba_plus: added room data to %d stored mission record(s)",
             backfilled,
         )
+    if added:
+        # THE LAST ERROR (4.6.0), before the entities re-read below.
+        with contextlib.suppress(Exception):
+            note_last_error(getattr(config_entry, "runtime_data", None))
     if added or backfilled:
         # EVERY ENTITY RE-READS ITS STORES on this signal (entity.py), as
         # it does after a Classic cloud merge. The per-room sensors
