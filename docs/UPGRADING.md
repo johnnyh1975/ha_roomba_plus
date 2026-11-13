@@ -17,15 +17,18 @@ Nothing to do. What you will notice:
   mission (start, elapsed, id, recharge and expiry), the lifetime mission figures
   and the dock counters, each appearing once the robot reports its field; binary
   sensors for mission active, mid-mission recharge, firmware updated, maintenance
-  due and, where configured, start blocked and demand clean blocked; the stuck
-  event entity; a disabled floor plan of each map. See
+  due and, where configured, start blocked and demand clean blocked; the last
+  error, the last mission summary and the presence sensors; the stuck event
+  entity; a disabled floor plan of each map. See
   [Prime robots: what Classic already had](FEATURES.md#prime-robots-what-classic-already-had-460).
 - **Three new event entities on both generations**: `event.<robot>_mission_result`,
   `event.<robot>_command` (command not delivered, state frozen) and, on Prime,
   `event.<robot>_stuck`.
 - **A command the robot ignores is sent once more**, when the robot is idle and
   reports no reason for refusing it. The option *Send an ignored command once more*
-  turns this off. Prime is watched as well now, with 60 s instead of 20 s.
+  turns this off. Prime is watched as well now, with 60 s instead of 20 s, and
+  every start path is: `vacuum.clean_area`, `run_favorite`, the zone and
+  favourite buttons and *Repeat last mission* too.
 - **Fewer device triggers in the picker.** Triggers that could never fire for a
   robot are no longer offered: on Prime `bin_full`, `health_score_drop` and the map
   retrain triggers, and `start_blocked`, `maintenance_due` or `firmware_updated`
