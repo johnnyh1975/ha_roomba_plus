@@ -38,6 +38,7 @@ from .const import (
 from .entity import IRobotEntity
 from .structural_failures import record_failure, record_success
 from .prime_commands import _send_confirmed
+from .services import async_send_watched
 from .prime_coordinator import _dock_reports_itself, get_prime_capability_flags
 # Re-exported: the favourites list lives in prime_favorites (4.5.0), which
 # imports nothing that imports prime_coordinator.
@@ -130,7 +131,10 @@ class PrimeFavoriteButton(IRobotEntity, ButtonEntity):
         Shares the service's implementation, so a button press and a
         run_favorite call cannot diverge.
         """
-        if not await async_run_favorite(self._config_entry, self._favorite_id):
+        if not await async_send_watched(
+            self.hass, self._config_entry, "favorite",
+            lambda: async_run_favorite(self._config_entry, self._favorite_id),
+        ):
             _LOGGER.warning(
                 "roomba_plus: favorite %s could not be run -- deleted in the "
                 "iRobot app, or carrying no commands",
@@ -758,4 +762,7 @@ class PrimeZoneCleanButton(IRobotEntity, ButtonEntity):
             "PrimeZoneCleanButton: cleaning segment %s on %s",
             segment_id, self._blid,
         )
-        await backend.clean_segments([segment_id])
+        await async_send_watched(
+            self.hass, self._config_entry, "zone_button",
+            lambda: backend.clean_segments([segment_id]),
+        )

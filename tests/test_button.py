@@ -86,6 +86,18 @@ class TestZoneCleanButtonNoRooms:
 
 
 class TestZoneCleanButtonStartsClean:
+
+    @pytest.fixture(autouse=True)
+    def _no_command_watch(self, monkeypatch):
+        """These tests are about what is sent; the watch after it (4.6.0)
+        is tested in test_services and would leave a coroutine behind on
+        a MagicMock entry."""
+        from unittest.mock import MagicMock as _MagicMock
+
+        from custom_components.roomba_plus import services as _services
+
+        monkeypatch.setattr(_services, "watch_for_swallowed_command", _MagicMock())
+
     @pytest.mark.asyncio
     async def test_confirmed_room_present_sends_start_command(self, monkeypatch):
         rss = RoomSegStore()
@@ -349,6 +361,18 @@ def _fav_button(favorite):
 
 
 class TestFavoriteButton:
+
+    @pytest.fixture(autouse=True)
+    def _no_command_watch(self, monkeypatch):
+        """These tests are about what is sent; the watch after it (4.6.0)
+        is tested in test_services and would leave a coroutine behind on
+        a MagicMock entry."""
+        from unittest.mock import MagicMock as _MagicMock
+
+        from custom_components.roomba_plus import services as _services
+
+        monkeypatch.setattr(_services, "watch_for_swallowed_command", _MagicMock())
+
     def test_name_from_favorite(self):
         btn = _fav_button({"favorite_id": "f1", "name": "Morning clean", "commanddefs": []})
         assert btn._attr_name == "Morning clean"
@@ -1425,3 +1449,53 @@ class TestPadButtonOnlyWithAPad:
         )
         await self._names(hass, "R980020")
         assert registry.async_get_entity_id("button", DOMAIN, "roomba_plus_PADB_reset_pad") is None
+
+
+class TestStartButtonsAreWatched:
+    """4.6.0: the zone, favourite and repeat buttons start missions and get
+    the command watch."""
+
+    @pytest.mark.asyncio
+    async def test_favorite_and_repeat(self, monkeypatch):
+        from custom_components.roomba_plus import services as svc
+        from custom_components.roomba_plus.button import RepeatLastMissionButton
+
+        watched = AsyncMock(side_effect=_through)
+        monkeypatch.setattr(svc, "async_send_watched", watched)
+
+        entry = _make_config_entry(has_cloud=True)
+        fav = {"favorite_id": "f1", "name": "Morning", "commanddefs": [{"command": "start"}]}
+        btn = FavoriteButton(_make_roomba(), "test_blid", entry, fav)
+        btn.hass = MagicMock()
+        await btn.async_press()
+        assert watched.await_args.args[2] == "favorite"
+        btn.vacuum.send_command.assert_awaited_once()
+
+        repeat = RepeatLastMissionButton(_make_roomba(), "test_blid", entry)
+        repeat.hass = MagicMock()
+        repeat.vacuum_state = {"lastCommand": {"command": "start"}}
+        await repeat.async_press()
+        assert watched.await_args.args[2] == "repeat_last_mission"
+        repeat.vacuum.send_command.assert_awaited()
+
+    @pytest.mark.asyncio
+    async def test_zone_button(self, monkeypatch):
+        from custom_components.roomba_plus import services as svc
+
+        watched = AsyncMock(side_effect=_through)
+        monkeypatch.setattr(svc, "async_send_watched", watched)
+        rss = RoomSegStore()
+        rss.rooms = {"room_1": SegRoom(id="room_1", name="Kitchen", confirmed=True,
+                                       cells={(0, 0), (1, 0), (0, 1), (1, 1)})}
+        entity, fake_ent_reg, _button_mod = _make_button(rss)
+        monkeypatch.setattr(
+            "homeassistant.helpers.entity_registry.async_get", lambda hass: fake_ent_reg,
+        )
+        await entity.async_press()
+        assert watched.await_args.args[2] == "zone_button"
+        entity.vacuum.send_command.assert_called_once_with("start")
+
+
+async def _through(hass, entry, what, send):
+    """An `async_send_watched` that only sends."""
+    return await send()

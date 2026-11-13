@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import contextlib
+import functools
 import logging
 import zipfile
 from datetime import datetime, timezone
@@ -481,6 +482,25 @@ def watch_for_swallowed_command(
         _async_warn_if_swallowed(hass, entry, what, before, resend),
         name=f"roomba_plus_swallow_watch_{entry.entry_id}",
     )
+
+
+async def async_send_watched(
+    hass: HomeAssistant, entry: Any, what: str, send: Callable[[], Awaitable[Any]],
+) -> Any:
+    """Send a command that should start a mission, and watch that it does.
+
+    One place for every start path besides the three that keep their own
+    snapshot (start, room clean, zone clean): `vacuum.clean_area`, the zone
+    and favourite buttons, `run_favorite` and *Repeat last mission*
+    (4.6.0). Watched only from a closed cycle, as the others: a start into
+    an open mission resumes it, and whether the robot took that cannot be
+    told from the state. Returns what `send` returns.
+    """
+    before = _mission_snapshot(entry) if entry is not None else None
+    result = await send()
+    if before is not None and not _in_open_cycle(before) and result is not False:
+        watch_for_swallowed_command(hass, entry, what, before, send)
+    return result
 
 
 def _record_open_cycle_start(
@@ -2690,7 +2710,10 @@ async def async_handle_run_favorite(call: ServiceCall) -> None:
         if config_entry.runtime_data.connection_type is ConnectionType.CLOUD_ONLY:
             from .button_prime import async_run_favorite  # noqa: PLC0415
 
-            sent = await async_run_favorite(config_entry, favorite_id)
+            sent = await async_send_watched(
+                hass, config_entry, "run_favorite",
+                functools.partial(async_run_favorite, config_entry, favorite_id),
+            )
         else:
             if not config_entry.runtime_data.has_cloud:
                 raise ServiceValidationError(
@@ -2702,8 +2725,11 @@ async def async_handle_run_favorite(call: ServiceCall) -> None:
                 )
             from .button import async_run_classic_favorite  # noqa: PLC0415
 
-            sent = await async_run_classic_favorite(
-                hass, config_entry, favorite_id
+            sent = await async_send_watched(
+                hass, config_entry, "run_favorite",
+                functools.partial(
+                    async_run_classic_favorite, hass, config_entry, favorite_id
+                ),
             )
 
         if not sent:

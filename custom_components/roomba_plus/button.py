@@ -954,7 +954,12 @@ class ZoneCleanButton(_MaintenanceResetButton):
         )
         # 900-series: send plain start — robot navigates using its own logic.
         # The room parameter is noted in the log but cannot be passed to the robot.
-        await self.vacuum.send_command("start")
+        from .services import async_send_watched  # noqa: PLC0415
+
+        await async_send_watched(
+            self.hass, self._config_entry, "zone_button",
+            lambda: self.vacuum.send_command("start"),
+        )
 
 
 class RepeatLastMissionButton(IRobotEntity, ButtonEntity):
@@ -1016,7 +1021,12 @@ class RepeatLastMissionButton(IRobotEntity, ButtonEntity):
         _LOGGER.info(
             "RepeatLastMission: sending %s params=%s", command, params or "(none)"
         )
-        await self.vacuum.send_command(command, params or {})
+        from .services import async_send_watched  # noqa: PLC0415
+
+        await async_send_watched(
+            self.hass, self._config_entry, "repeat_last_mission",
+            lambda: self.vacuum.send_command(command, params or {}),
+        )
 
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:
         return "lastCommand" in new_state
@@ -1426,7 +1436,12 @@ class FavoriteButton(IRobotEntity, ButtonEntity):
             "FavoriteButton: firing favorite '%s' → %s params=%s",
             self._attr_name, command, params or "(none)",
         )
-        await self.vacuum.send_command(command, params)
+        from .services import async_send_watched  # noqa: PLC0415
+
+        await async_send_watched(
+            self.hass, self._config_entry, "favorite",
+            lambda: self.vacuum.send_command(command, params),
+        )
 
 
 def _remove_pad_button(hass: HomeAssistant, config_entry: RoombaConfigEntry, blid: str) -> None:

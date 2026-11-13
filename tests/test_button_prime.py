@@ -85,6 +85,18 @@ class TestFavouriteButtons:
     A button rather than a select entry, because there is no state to
     hold: a select would imply the robot is currently "on" one of them."""
 
+    @pytest.fixture(autouse=True)
+    def _no_command_watch(self, monkeypatch):
+        """These tests are about what is sent; the watch after it (4.6.0)
+        is tested in test_services and would leave a coroutine behind on
+        a MagicMock entry."""
+        from unittest.mock import MagicMock as _MagicMock
+
+        from custom_components.roomba_plus import services as _services
+
+        monkeypatch.setattr(_services, "watch_for_swallowed_command", _MagicMock())
+
+
     @pytest.mark.asyncio
     async def test_one_button_per_favourite_plus_locate(self):
         from custom_components.roomba_plus.button_prime import (
@@ -1110,6 +1122,18 @@ class TestDockButtonLifecycle:
 
 class TestZoneCleanButton:
 
+    @pytest.fixture(autouse=True)
+    def _no_command_watch(self, monkeypatch):
+        """These tests are about what is sent; the watch after it (4.6.0)
+        is tested in test_services and would leave a coroutine behind on
+        a MagicMock entry."""
+        from unittest.mock import MagicMock as _MagicMock
+
+        from custom_components.roomba_plus import services as _services
+
+        monkeypatch.setattr(_services, "watch_for_swallowed_command", _MagicMock())
+
+
     def _button(self, monkeypatch, selected):
         from homeassistant.helpers import entity_platform as ep
 
@@ -1183,3 +1207,39 @@ class TestFavoritesAndLocate:
         robot.get_favorites = AsyncMock(side_effect=RuntimeError("cloud down"))
         entry = SimpleNamespace(runtime_data=SimpleNamespace(prime_robot=robot))
         assert await async_run_favorite(entry, "Kitchen") is False
+
+
+class TestPrimeStartButtonsAreWatched:
+    """4.6.0: the Prime zone and favourite buttons get the command watch."""
+
+    @pytest.mark.asyncio
+    async def test_favourite(self, monkeypatch):
+        from custom_components.roomba_plus import button_prime
+        from custom_components.roomba_plus.button_prime import async_build_prime_buttons
+
+        watched = AsyncMock(side_effect=_through)
+        monkeypatch.setattr(button_prime, "async_send_watched", watched)
+        entry = _entry([_favorite("f1", commands=[MagicMock(name="cmd")])])
+        buttons = await async_build_prime_buttons(entry)
+        button = next(b for b in buttons if hasattr(b, "_favorite_id"))
+        button.hass = MagicMock()
+        await button.async_press()
+        assert watched.await_args.args[2] == "favorite"
+        entry.runtime_data.prime_robot.send_routine_command_via_cmd_topic.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_zone(self, monkeypatch):
+        from custom_components.roomba_plus import button_prime, room_cleaning
+
+        watched = AsyncMock(side_effect=_through)
+        monkeypatch.setattr(button_prime, "async_send_watched", watched)
+        backend = MagicMock(clean_segments=AsyncMock())
+        monkeypatch.setattr(room_cleaning, "async_get_room_cleaning_backend", lambda *_a: backend)
+        await TestZoneCleanButton._button(TestZoneCleanButton(), monkeypatch, "map1/3").async_press()
+        assert watched.await_args.args[2] == "zone_button"
+        backend.clean_segments.assert_awaited_once_with(["map1/3"])
+
+
+async def _through(hass, entry, what, send):
+    """An `async_send_watched` that only sends."""
+    return await send()

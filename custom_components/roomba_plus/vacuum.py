@@ -82,6 +82,7 @@ from .position_room import PositionRoomTracker
 from .services import (
     _in_open_cycle,
     _mission_snapshot,
+    async_send_watched,
     watch_for_swallowed_command,
 )
 from .room_cleaning import (
@@ -1923,7 +1924,11 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         backend = _get_backend(self._config_entry, self.hass)
         if backend is None:
             return
-        await backend.clean_segments(segment_ids)
+        # Watched like a room clean (4.6.0): `vacuum.clean_area` lands here.
+        await async_send_watched(
+            self.hass, self._config_entry, "clean_area",
+            lambda: backend.clean_segments(segment_ids),
+        )
 
     # v3.5.0 — SEGMENT-DEBOUNCE (dixi83 field report): the number of
     # consecutive coordinator refreshes a segment mismatch must persist

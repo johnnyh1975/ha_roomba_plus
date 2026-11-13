@@ -4067,3 +4067,73 @@ class TestRetryMissedRooms:
         with pytest.raises(HAServiceValidationError) as err:
             await self._run(call, reg_entry)
         assert err.value.translation_key == "no_mission_history"
+
+
+class TestSendWatched:
+    """4.6.0: every other start path is watched like start, room and zone."""
+
+    @staticmethod
+    def _closed():
+        return {"cycle": "none", "phase": "charge"}
+
+    @pytest.mark.asyncio
+    async def test_a_start_from_a_closed_cycle_is_watched(self, monkeypatch):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from custom_components.roomba_plus import services as svc
+
+        watch = MagicMock()
+        monkeypatch.setattr(svc, "watch_for_swallowed_command", watch)
+        monkeypatch.setattr(svc, "_mission_snapshot", lambda _e: self._closed())
+        send = AsyncMock(return_value=True)
+        hass, entry = MagicMock(), MagicMock()
+        assert await svc.async_send_watched(hass, entry, "favorite", send) is True
+        send.assert_awaited_once()
+        assert watch.call_args.args == (hass, entry, "favorite", self._closed(), send)
+
+    @pytest.mark.asyncio
+    async def test_not_into_an_open_mission_not_when_nothing_was_sent(self, monkeypatch):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from custom_components.roomba_plus import services as svc
+
+        watch = MagicMock()
+        monkeypatch.setattr(svc, "watch_for_swallowed_command", watch)
+        monkeypatch.setattr(
+            svc, "_mission_snapshot", lambda _e: {"cycle": "clean", "phase": "run"}
+        )
+        await svc.async_send_watched(MagicMock(), MagicMock(), "x", AsyncMock())
+        monkeypatch.setattr(svc, "_mission_snapshot", lambda _e: self._closed())
+        assert await svc.async_send_watched(
+            MagicMock(), MagicMock(), "x", AsyncMock(return_value=False)
+        ) is False
+        send = AsyncMock()
+        await svc.async_send_watched(MagicMock(), None, "x", send)
+        send.assert_awaited_once()
+        watch.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_run_favorite_is_watched_on_both_generations(self, monkeypatch):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from custom_components.roomba_plus import button, button_prime
+        from custom_components.roomba_plus import services as svc
+        from custom_components.roomba_plus.models import ConnectionType
+
+        watched = AsyncMock(return_value=True)
+        monkeypatch.setattr(svc, "async_send_watched", watched)
+        monkeypatch.setattr(button_prime, "async_run_favorite", AsyncMock(return_value=True))
+        monkeypatch.setattr(button, "async_run_classic_favorite", AsyncMock(return_value=True))
+        for connection in (ConnectionType.CLOUD_ONLY, ConnectionType.LOCAL_PUSH):
+            config_entry = MagicMock()
+            config_entry.runtime_data.connection_type = connection
+            config_entry.runtime_data.has_cloud = True
+            call = MagicMock()
+            call.data = {"favorite_id": "f1", "entity_id": ["vacuum.r"]}
+            call.hass.config_entries.async_get_entry.return_value = config_entry
+            reg = MagicMock()
+            reg.async_get.return_value = MagicMock(config_entry_id="E1")
+            monkeypatch.setattr(svc.er, "async_get", lambda _h, reg=reg: reg)
+            await svc.async_handle_run_favorite(call)
+            assert watched.await_args.args[2] == "run_favorite"
+        assert watched.await_count == 2

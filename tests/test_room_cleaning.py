@@ -4404,6 +4404,18 @@ class TestOneVersionForEveryRoomCommand:
     robot's own `pmaps`. All of them go through resolve_user_pmapv_id now.
     """
 
+    @pytest.fixture(autouse=True)
+    def _no_command_watch(self, monkeypatch):
+        """These tests are about what is sent; the watch after it (4.6.0)
+        is tested in test_services and would leave a coroutine behind on
+        a MagicMock entry."""
+        from unittest.mock import MagicMock as _MagicMock
+
+        from custom_components.roomba_plus import services as _services
+
+        monkeypatch.setattr(_services, "watch_for_swallowed_command", _MagicMock())
+
+
     _MAP = "ejhUEjqiTK2h2KedgFwzqQ"
     _GOOD = "250610T143229"
     _BAD = "260913T011853"

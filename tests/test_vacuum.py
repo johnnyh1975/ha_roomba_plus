@@ -968,6 +968,18 @@ class TestGetSegmentsZones:
 
 class TestCleanSegmentsZones:
 
+    @pytest.fixture(autouse=True)
+    def _no_command_watch(self, monkeypatch):
+        """These tests are about what is sent; the watch after it (4.6.0)
+        is tested in test_services and would leave a coroutine behind on
+        a MagicMock entry."""
+        from unittest.mock import MagicMock as _MagicMock
+
+        from custom_components.roomba_plus import services as _services
+
+        monkeypatch.setattr(_services, "watch_for_swallowed_command", _MagicMock())
+
+
     async def _call_clean(self, entity, segment_ids):
         from homeassistant.exceptions import ServiceValidationError
         try:
@@ -3973,3 +3985,28 @@ class TestTheErrorsCareTask:
     def test_nothing_without_such_an_error(self):
         attrs = self._vacuum(None).extra_state_attributes
         assert "care_task" not in attrs and "care_guide" not in attrs
+
+
+class TestCleanAreaIsWatched:
+    """4.6.0: `vacuum.clean_area` (through `async_clean_segments`) gets the
+    same watch as a room clean."""
+
+    @pytest.mark.asyncio
+    async def test_it_goes_through_the_watch(self, monkeypatch):
+        from custom_components.roomba_plus import room_cleaning
+        from custom_components.roomba_plus import vacuum as vac
+
+        backend = MagicMock(clean_segments=AsyncMock())
+        monkeypatch.setattr(room_cleaning, "async_get_room_cleaning_backend", lambda *_a: backend)
+        watched = AsyncMock(side_effect=_through)
+        monkeypatch.setattr(vac, "async_send_watched", watched)
+        cc = _make_coordinator(regions=[{"id": "19", "name": "Kitchen"}])
+        entity = _make_vacuum_entity_v270_ia74_zone(cc)
+        await entity.async_clean_segments(["PMAP1_19"])
+        assert watched.await_args.args[2] == "clean_area"
+        backend.clean_segments.assert_awaited_once_with(["PMAP1_19"])
+
+
+async def _through(hass, entry, what, send):
+    """An `async_send_watched` that only sends."""
+    return await send()
