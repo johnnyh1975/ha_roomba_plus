@@ -65,7 +65,7 @@ from roombapy_prime import (
     ShadowError,
     ShadowSSLError,
 )
-from roombapy_prime.models import MissionTimelineReport
+from roombapy_prime.models import MissionTimelineReport, SoftwareStatusShadow
 
 from .structural_failures import record_failure, record_success
 from .prime_favorites import async_favorites_attribute
@@ -1927,3 +1927,31 @@ def prime_last_command(data: Any) -> dict[str, Any]:
         return {}
     last = reported.get("lastCommand")
     return last if isinstance(last, dict) else {}
+
+
+def note_prime_firmware(data: Any) -> None:
+    """The firmware version from `rw-software`, for `firmware_updated` (4.6.0).
+
+    The same bookkeeping the Classic message callback does with
+    `softwareVer`: the first version seen is the baseline, a different
+    one later stamps the time of the update. Called on every update of
+    the status coordinator and once at setup, so the baseline comes from
+    the first read and not from the first push, which on Prime may be
+    the update itself.
+    """
+    coordinator = getattr(data, "prime_status_coordinator", None)
+    shadows = getattr(coordinator, "data", None)
+    if not isinstance(shadows, dict):
+        return
+    raw = shadows.get("rw-software")
+    if not isinstance(raw, dict):
+        return
+    version = SoftwareStatusShadow.from_json(raw).software_version
+    if not version:
+        return
+    version = str(version)
+    previous = data.last_firmware_version
+    if previous is not None and version != previous:
+        data.firmware_updated_at = _time.time()
+        _LOGGER.info("Roomba+: firmware updated %s → %s", previous, version)
+    data.last_firmware_version = version

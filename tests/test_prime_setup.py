@@ -165,6 +165,45 @@ class TestAsyncSetupEntryPrime:
         assert "DailyDigestView" in registered
 
     @pytest.mark.asyncio
+    async def test_firmware_baseline_at_setup_and_changes_after(self) -> None:
+        """`firmware_updated` on Prime (4.6.0): the version read at setup
+        is the baseline, a different one pushed later is the update."""
+        hass, config_entry = _make_hass_and_entry()
+        fake_prime_robot = MagicMock()
+        fake_prime_robot.connect = AsyncMock()
+        fake_prime_robot.get_named_shadow = AsyncMock(
+            return_value=MagicMock(payload={"state": {"reported": {"softwareVer": "v1"}}})
+        )
+        fake_prime_robot.get_state = AsyncMock(
+            return_value=MagicMock(payload={"state": {"reported": {}}})
+        )
+        fake_prime_robot.get_household_id = AsyncMock(return_value="hh1")
+        fake_prime_robot.get_serial_number_data = AsyncMock(return_value=None)
+
+        async def _empty_named_shadows_updates():
+            return
+            yield  # pragma: no cover -- makes this an async generator
+
+        fake_prime_robot.watch_named_shadows_updates = _empty_named_shadows_updates
+        hass.data = {}
+
+        with patch.object(
+            _CURRENT["account"], "prime_robot",
+            new=AsyncMock(return_value=fake_prime_robot),
+        ):
+            assert await _async_setup_entry_prime(hass, config_entry) is True
+
+        data = config_entry.runtime_data
+        assert data.last_firmware_version == "v1"
+        assert data.firmware_updated_at is None
+        coordinator = data.prime_status_coordinator
+        coordinator.async_set_updated_data(
+            {**coordinator.data, "rw-software": {"softwareVer": "v2"}}
+        )
+        assert data.last_firmware_version == "v2"
+        assert data.firmware_updated_at is not None
+
+    @pytest.mark.asyncio
     async def test_serial_info_failure_does_not_block_setup(self) -> None:
         """Same reasoning as test_household_id_failure_does_not_block_setup
         above -- a device page missing model/serial is a far better

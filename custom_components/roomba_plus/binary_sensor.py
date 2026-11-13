@@ -46,6 +46,7 @@ from .const import (
 )
 from .entity import IRobotEntity, mission_in_progress
 from .models import ConnectionType, RoombaConfigEntry
+from .prime_coordinator import prime_reported_state
 from .sensor_prime import _blocking_faults, get_localized_error_entry
 from .prime_schedule_switch import quiet_hours_windows
 
@@ -167,6 +168,7 @@ async def async_setup_entry(
             # has none reports an empty list and the sensor sits `off`
             # rather than being withheld.
             entities.append(PrimeQuietHoursSensor(data.blid, config_entry))
+            entities.extend(_shared_on_prime(config_entry))
             async_add_entities(entities)
         return
 
@@ -222,10 +224,10 @@ async def async_setup_entry(
         entities.append(RoombaMopTankPresentDirect(roomba, blid))
 
     # v1.9.3 — Mid-mission recharge sensor (all robots)
-    entities.append(RoombaMidMissionRecharge(roomba, blid))
+    entities.append(RoombaMidMissionRecharge(roomba, blid, config_entry))
 
     # v2.2.0 — Mission active sensor (all robots) — card fix C1
-    entities.append(RoombaMissionActive(roomba, blid))
+    entities.append(RoombaMissionActive(roomba, blid, config_entry))
 
     # F11 — demand clean blocked sensor (SMART + cloud + demand enabled)
     data = config_entry.runtime_data
@@ -247,6 +249,62 @@ async def async_setup_entry(
     entities.append(RoombaFirmwareUpdated(roomba, blid, config_entry))
 
     async_add_entities(entities)
+
+
+def _shared_on_prime(config_entry: RoombaConfigEntry) -> list[BinarySensorEntity]:
+    """The shared binary sensors whose source a Prime robot has (4.6.0).
+
+    Each reads something Prime has always had -- the maintenance
+    entries, the blocking and demand-cleaning managers, the mission
+    status in `ro-currentstate`, the software shadow -- and was missing
+    only because the Prime branch above returns before the shared part.
+    The gates are the Classic ones.
+    """
+    data = config_entry.runtime_data
+    blid = data.blid
+    entities: list[BinarySensorEntity] = [
+        RoombaMidMissionRecharge(None, blid, config_entry),
+        RoombaMissionActive(None, blid, config_entry),
+        RoombaFirmwareUpdated(None, blid, config_entry),
+    ]
+    if data.maintenance_store is not None:
+        entities.append(RoombaMaintenanceDue(None, blid, config_entry))
+    if config_entry.options.get(CONF_BLOCKING_SENSORS):
+        entities.append(RoombaStartBlocked(None, blid, config_entry))
+    if data.dirt_threshold_manager is not None:
+        entities.append(RoombaDemandCleanBlocked(None, blid, config_entry))
+    return entities
+
+
+def _reported(entity: IRobotEntity) -> dict[str, Any]:
+    """The robot's state in the local shape, on either generation."""
+    if entity.vacuum is None:
+        return prime_reported_state(entity._config_entry.runtime_data)
+    return roomba_reported_state(entity.vacuum)
+
+
+class _FollowsPrimeShadows(IRobotEntity):
+    """A shared entity re-renders on every Prime shadow update.
+
+    On Classic the robot's messages drive it (`new_state_filter`); a
+    Prime robot sends none of those, so without this the state would
+    change only when something else wrote it.
+    """
+
+    def __init__(self, roomba: Any, blid: str, config_entry: RoombaConfigEntry) -> None:
+        super().__init__(roomba, blid, config_entry)
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        if self.vacuum is not None:
+            return
+        coordinator = getattr(
+            self._config_entry.runtime_data, "prime_status_coordinator", None
+        )
+        if coordinator is not None:
+            self.async_on_remove(
+                coordinator.async_add_listener(self.async_write_ha_state)
+            )
 
 
 class RoombaBinStatus(IRobotEntity, BinarySensorEntity):
@@ -605,7 +663,7 @@ class RoombaMaintenanceDue(IRobotEntity, BinarySensorEntity):
     }
 
     def __init__(self, roomba: Any, blid: str, config_entry: RoombaConfigEntry) -> None:
-        super().__init__(roomba, blid)
+        super().__init__(roomba, blid, config_entry)
         self._entry = config_entry
         self._attr_unique_id = f"{self.robot_unique_id}_maintenance_due"
 
@@ -699,7 +757,7 @@ class RoombaStartBlocked(IRobotEntity, BinarySensorEntity):
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, roomba: Any, blid: str, config_entry: RoombaConfigEntry) -> None:
-        super().__init__(roomba, blid)
+        super().__init__(roomba, blid, config_entry)
         self._entry = config_entry
         self._attr_unique_id = f"{self.robot_unique_id}_start_blocked"
 
@@ -866,7 +924,7 @@ class RoombaMopTankPresentDirect(IRobotEntity, BinarySensorEntity):
         return "tankPresent" in new_state
 
 
-class RoombaMidMissionRecharge(IRobotEntity, BinarySensorEntity):
+class RoombaMidMissionRecharge(_FollowsPrimeShadows, BinarySensorEntity):
     """Binary sensor: ON when the robot is recharging mid-mission.
 
     Distinguishes two states that the standard VacuumActivity.PAUSED covers:
@@ -888,13 +946,13 @@ class RoombaMidMissionRecharge(IRobotEntity, BinarySensorEntity):
     _attr_device_class = BinarySensorDeviceClass.BATTERY_CHARGING
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
-    def __init__(self, roomba: Any, blid: str) -> None:
-        super().__init__(roomba, blid)
+    def __init__(self, roomba: Any, blid: str, config_entry: RoombaConfigEntry) -> None:
+        super().__init__(roomba, blid, config_entry)
         self._attr_unique_id = f"{self.robot_unique_id}_mid_mission_recharge"
 
     @property
     def is_on(self) -> bool:
-        status = roomba_reported_state(self.vacuum).get("cleanMissionStatus", {})
+        status = _reported(self).get("cleanMissionStatus") or {}
         return bool(
             status.get("phase") == "charge"
             and status.get("cycle", "none") != "none"
@@ -904,7 +962,7 @@ class RoombaMidMissionRecharge(IRobotEntity, BinarySensorEntity):
         return "cleanMissionStatus" in new_state
 
 
-class RoombaMissionActive(IRobotEntity, BinarySensorEntity):
+class RoombaMissionActive(_FollowsPrimeShadows, BinarySensorEntity):
     """ON whenever a mission is in progress — including mid-mission recharge.
 
     Card fix C1 — binary_sensor.*_mission_active.
@@ -933,22 +991,20 @@ class RoombaMissionActive(IRobotEntity, BinarySensorEntity):
     _attr_device_class = BinarySensorDeviceClass.RUNNING
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
-    def __init__(self, roomba: Any, blid: str) -> None:
-        super().__init__(roomba, blid)
+    def __init__(self, roomba: Any, blid: str, config_entry: RoombaConfigEntry) -> None:
+        super().__init__(roomba, blid, config_entry)
         self._attr_unique_id = f"{self.robot_unique_id}_mission_active"
 
     @property
     def is_on(self) -> bool:
         # Mid-mission recharge (charge with the cycle still set) stays ON.
-        return mission_in_progress(
-            roomba_reported_state(self.vacuum).get("cleanMissionStatus", {})
-        )
+        return mission_in_progress(_reported(self).get("cleanMissionStatus") or {})
 
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:
         return "cleanMissionStatus" in new_state
 
 
-class RoombaDemandCleanBlocked(IRobotEntity, BinarySensorEntity):
+class RoombaDemandCleanBlocked(_FollowsPrimeShadows, BinarySensorEntity):
     """ON when a demand clean was evaluated but blocked by presence or scheduling.
 
     F11 (v2.4.0) — diagnostic entity. Shows users why demand cleaning
@@ -1296,7 +1352,7 @@ class RoombaMqttStale(IRobotEntity, BinarySensorEntity):
         return "cleanMissionStatus" in new_state
 
 
-class RoombaFirmwareUpdated(IRobotEntity, BinarySensorEntity):
+class RoombaFirmwareUpdated(_FollowsPrimeShadows, BinarySensorEntity):
     """FW-SENSOR (v2.8.3) — firmware update indicator.
 
     ON for 24 h after softwareVer changes (detected by callbacks.py comparing
@@ -1319,7 +1375,7 @@ class RoombaFirmwareUpdated(IRobotEntity, BinarySensorEntity):
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, roomba: Any, blid: str, config_entry: RoombaConfigEntry) -> None:
-        super().__init__(roomba, blid)
+        super().__init__(roomba, blid, config_entry)
         self._entry = config_entry
         self._attr_unique_id = f"{self.robot_unique_id}_firmware_updated"
 

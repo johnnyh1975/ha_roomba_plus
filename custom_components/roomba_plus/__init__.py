@@ -155,6 +155,7 @@ from .prime_coordinator import (
     PrimePartsCoordinator,
     PrimeScheduleCoordinator,
     PrimeStatusCoordinator,
+    note_prime_firmware,
 )
 from . import cloud_errors
 from .cloud_account import async_acquire, async_release
@@ -2063,6 +2064,15 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
         prime_serial_info=serial_info,
         blocking_manager=blocking_manager,
         hass_ref=hass,
+    )
+
+    # THE FIRMWARE VERSION, for `firmware_updated` on Prime (4.6.0):
+    # the baseline now, every change from the status coordinator after.
+    note_prime_firmware(config_entry.runtime_data)
+    config_entry.async_on_unload(
+        status_coordinator.async_add_listener(
+            lambda: note_prime_firmware(config_entry.runtime_data)
+        )
     )
 
     # THE ROOM NAMES FROM THE LAST RUN, before any platform reads them

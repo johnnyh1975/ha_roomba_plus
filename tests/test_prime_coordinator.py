@@ -1664,3 +1664,45 @@ class TestNoCycleThroughTheButtons:
             if isinstance(node, ast.ImportFrom) and node.module
         }
         assert not imported & {"button_prime", "prime_coordinator"}, imported
+
+
+class TestNotePrimeFirmware:
+    """4.6.0: the `rw-software` version feeds `firmware_updated` on Prime."""
+
+    @staticmethod
+    def _data(shadows):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            prime_status_coordinator=SimpleNamespace(data=shadows),
+            last_firmware_version=None,
+            firmware_updated_at=None,
+        )
+
+    def test_first_version_is_the_baseline(self):
+        from custom_components.roomba_plus.prime_coordinator import note_prime_firmware
+
+        data = self._data({"rw-software": {"softwareVer": "v1"}})
+        note_prime_firmware(data)
+        assert data.last_firmware_version == "v1"
+        assert data.firmware_updated_at is None
+
+    def test_a_change_stamps_the_update(self):
+        from custom_components.roomba_plus.prime_coordinator import note_prime_firmware
+
+        data = self._data({"rw-software": {"softwareVer": "v1"}})
+        note_prime_firmware(data)
+        note_prime_firmware(data)
+        assert data.firmware_updated_at is None
+        data.prime_status_coordinator.data = {"rw-software": {"softwareVer": "v2"}}
+        note_prime_firmware(data)
+        assert data.last_firmware_version == "v2"
+        assert data.firmware_updated_at is not None
+
+    def test_nothing_to_read_changes_nothing(self):
+        from custom_components.roomba_plus.prime_coordinator import note_prime_firmware
+
+        for shadows in (None, {}, {"rw-software": "x"}, {"rw-software": {}}):
+            data = self._data(shadows)
+            note_prime_firmware(data)
+            assert data.last_firmware_version is None

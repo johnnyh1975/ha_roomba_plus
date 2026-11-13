@@ -1501,7 +1501,12 @@ class TestAsyncSetupEntryCloudOnlyBranchBinarySensor:
         # Six since quiet hours: like the start-blocked sensor it is
         # created unconditionally -- any household can carry quiet
         # hours, and one that has none reports an empty list.
-        assert len(created) == 6
+        # Twelve since 4.6.0: mission active, mid-mission recharge and
+        # firmware updated always, and -- because a MagicMock entry has
+        # a maintenance store, a demand manager and a truthy option --
+        # maintenance due, start blocked and demand clean blocked. The
+        # gates are tested in TestSharedBinarySensorsOnPrime.
+        assert len(created) == 12
         assert any(isinstance(e, PrimeQuietHoursSensor) for e in created)
         assert any(isinstance(e, PrimeStartBlockedSensor) for e in created)
         assert any(isinstance(e, PrimeBinPresentSensor) for e in created)
@@ -2421,3 +2426,109 @@ class TestTheDueSensorReadsTheMaintenanceEntries:
         sensor.vacuum_state = {"bbrun": {"hr": 5000}}
         assert sensor.is_on is False
         assert sensor._shows_maintenance is True
+
+
+class TestSharedBinarySensorsOnPrime:
+    """4.6.0, parity P1/P3: the shared binary sensors whose source a
+    Prime robot has, built in the Prime branch with the Classic gates."""
+
+    @staticmethod
+    def _entry(*, maintenance=True, blocking=True, demand=True, shadows=None):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.const import CONF_BLOCKING_SENSORS
+        from custom_components.roomba_plus.models import ConnectionType
+
+        entry = entry_mock()
+        data = entry.runtime_data
+        data.connection_type = ConnectionType.CLOUD_ONLY
+        data.blid = "BLID123"
+        data.prime_status_coordinator.data = shadows or {"ro-currentstate": {}}
+        data.maintenance_store = MagicMock() if maintenance else None
+        data.dirt_threshold_manager = MagicMock() if demand else None
+        entry.options = {CONF_BLOCKING_SENSORS: ["binary_sensor.door"]} if blocking else {}
+        return entry
+
+    @staticmethod
+    async def _keys(entry):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus import binary_sensor as binary_sensor_mod
+
+        created = []
+        await binary_sensor_mod.async_setup_entry(MagicMock(), entry, created.extend)
+        return {
+            e.entity_description.key: e for e in created
+            if hasattr(e, "entity_description")
+        }
+
+    async def test_all_with_their_sources(self):
+        keys = await self._keys(self._entry())
+        assert {
+            "mission_active", "mid_mission_recharge", "firmware_updated",
+            "maintenance_due", "start_blocked", "demand_clean_blocked",
+        } <= set(keys)
+        # The Prime-only sensor stays beside the shared one: one reads
+        # the robot's blocking codes, the other the household's sensors.
+        assert "prime_start_blocked" in keys
+
+    async def test_the_classic_gates(self):
+        keys = await self._keys(
+            self._entry(maintenance=False, blocking=False, demand=False)
+        )
+        assert not {"maintenance_due", "start_blocked", "demand_clean_blocked"} & set(keys)
+        assert {"mission_active", "mid_mission_recharge", "firmware_updated"} <= set(keys)
+
+    async def test_mission_state_from_the_shadow(self):
+        def status(cycle, phase):
+            return {"ro-currentstate": {"cleanMissionStatus": {"cycle": cycle, "phase": phase}}}
+
+        entry = self._entry(shadows=status("clean", "charge"))
+        keys = await self._keys(entry)
+        assert keys["mission_active"].is_on is True
+        assert keys["mid_mission_recharge"].is_on is True
+        entry.runtime_data.prime_status_coordinator.data = status("none", "charge")
+        assert keys["mission_active"].is_on is False
+        assert keys["mid_mission_recharge"].is_on is False
+        entry.runtime_data.prime_status_coordinator.data = status("clean", "run")
+        assert keys["mission_active"].is_on is True
+        assert keys["mid_mission_recharge"].is_on is False
+
+    async def test_device_is_the_prime_device(self):
+        """With the entry passed through, the device info is built the
+        Prime way (title, serial info), not from an empty local state."""
+        entry = self._entry()
+        entry.title = "Kitchen robot"
+        keys = await self._keys(entry)
+        assert keys["mission_active"].device_info["name"] == "Kitchen robot"
+
+    async def test_follows_the_status_coordinator(self):
+        from unittest.mock import MagicMock, patch
+
+        from custom_components.roomba_plus.entity import IRobotEntity
+
+        entry = self._entry()
+        keys = await self._keys(entry)
+        entity = keys["mission_active"]
+        entity.async_on_remove = MagicMock()
+        with patch.object(IRobotEntity, "async_added_to_hass", new=_noop_added):
+            await entity.async_added_to_hass()
+        coordinator = entry.runtime_data.prime_status_coordinator
+        assert coordinator.async_add_listener.call_args.args[0] == entity.async_write_ha_state
+
+    async def test_classic_entity_does_not_listen(self):
+        from unittest.mock import MagicMock, patch
+
+        from custom_components.roomba_plus.binary_sensor import RoombaMissionActive
+        from custom_components.roomba_plus.entity import IRobotEntity
+
+        entry = self._entry()
+        entity = RoombaMissionActive(MagicMock(), "BLID123", entry)
+        entity.async_on_remove = MagicMock()
+        with patch.object(IRobotEntity, "async_added_to_hass", new=_noop_added):
+            await entity.async_added_to_hass()
+        entry.runtime_data.prime_status_coordinator.async_add_listener.assert_not_called()
+
+
+async def _noop_added(self):
+    return None
