@@ -401,6 +401,9 @@ class TestMissionSensorsExistForPrime:
         "last_mission_area",
         "last_error_code",
         "last_error_at",
+        "presence_clean_opportunities_7d",
+        "presence_clean_utilisation_7d",
+        "next_likely_clean_window",
     }
 
     def test_the_expected_keys_are_wired(self):
@@ -1847,3 +1850,42 @@ class TestPrimeMissionCompletedHasTheClassicShape:
         assert payload["area_sqft"] == 310
         assert payload["missions_added"] == 2
         assert payload["stuck_count"] is None
+
+
+class TestPresenceSensorsFromPrimeRecords:
+    """4.6.0: the presence sensors read the gaps between stored missions,
+    which Prime records carry as well as Classic ones."""
+
+    def test_values_from_prime_records(self):
+        from datetime import timedelta
+        from unittest.mock import MagicMock
+
+        from homeassistant.util import dt as dt_util
+
+        from custom_components.roomba_plus.mission_store import MissionStore
+        from custom_components.roomba_plus.sensor_core import SENSORS, RoombaSensor
+
+        now = dt_util.utcnow().replace(minute=0, second=0, microsecond=0)
+        store = MissionStore()
+        store._records = [
+            {
+                "id": f"p_{i}", "result": "completed", "duration_min": 30,
+                "started_at": (now - timedelta(days=4 - i, hours=1)).isoformat(),
+                "ended_at": (now - timedelta(days=4 - i, minutes=30)).isoformat(),
+            }
+            for i in range(4)
+        ]
+        entry = MagicMock()
+        entry.runtime_data.mission_store = store
+        values = {}
+        for description in SENSORS:
+            if description.key in (
+                "presence_clean_opportunities_7d",
+                "presence_clean_utilisation_7d",
+                "next_likely_clean_window",
+            ):
+                sensor = RoombaSensor(None, "BLID", description, entry)
+                values[description.key] = sensor.native_value
+        assert values["presence_clean_opportunities_7d"] == 3
+        assert values["presence_clean_utilisation_7d"] == 100.0
+        assert values["next_likely_clean_window"] is not None

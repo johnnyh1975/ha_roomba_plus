@@ -730,6 +730,10 @@ _PRIME_MISSION_SENSOR_KEYS: frozenset[str] = frozenset({
     # mission_result.note_last_error at setup and after each sync.
     "last_error_code",
     "last_error_at",
+    # 4.6.0: the gaps between missions, from the mission store alone.
+    "presence_clean_opportunities_7d",
+    "presence_clean_utilisation_7d",
+    "next_likely_clean_window",
     "completion_rate_30d",
     "last_mission_area",
 })
