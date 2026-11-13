@@ -1909,6 +1909,34 @@ class TestMissionPathView:
         assert [p["room"] for p in body["path"]] == ["Kitchen", "Hallway"]
 
     @pytest.mark.asyncio
+    async def test_a_prime_robot_reads_its_mission_store(self):
+        """4.6.0 (A4): no Classic archive on Prime, and the view answered
+        404. The mission store keeps the room visits of each mission."""
+        from custom_components.roomba_plus.api_views import MissionPathView
+        from custom_components.roomba_plus.models import ConnectionType
+
+        hass, entry = _make_hass_with_entry(records=[])
+        data = entry.runtime_data
+        data.mission_archive = None
+        data.connection_type = ConnectionType.CLOUD_ONLY
+        data.mission_store = MagicMock()
+        data.mission_store.records = [
+            {"id": "p_a", "nMssn": 101, "room_visits": [{"rid": "9", "ts": 1}]},
+            {"id": "p_b", "nMssn": 102, "room_visits": [
+                {"rid": "3", "ts": 1696660084}, {"rid": "3", "ts": 1696660090},
+                {"rid": "4", "ts": 1696660945},
+            ]},
+        ]
+        data.prime_room_names = {"3": "Kitchen", 4: "Hallway"}
+        view = MissionPathView()
+        resp = await view.get(self._make_request(hass), "abc123", "102")
+        assert resp.status == 200
+        body = json.loads(resp.body)
+        assert [p["room"] for p in body["path"]] == ["Kitchen", "Hallway"]
+        resp = await view.get(self._make_request(hass), "abc123", "555")
+        assert resp.status == 404
+
+    @pytest.mark.asyncio
     async def test_timeline_falls_back_to_rid_when_unnamed(self):
         from custom_components.roomba_plus.api_views import MissionPathView
         hass, entry = _make_hass_with_entry(records=[])

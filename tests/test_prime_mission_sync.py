@@ -927,6 +927,34 @@ class TestRoomDataFromTheRealTimeline:
             start + 1025, tz=timezone.utc
         ).isoformat()
 
+    def test_the_rooms_in_order_with_their_times_for_the_mission_path(self):
+        """4.6.0 (A4): the mission-path view answered 404 on every Prime
+        robot. The record keeps each room entered, oldest first, in the
+        Classic archive's shape; no positions."""
+        record = self._record([
+            self._room("16", 1784480600, 1784481300),
+            self._room("10", 1784480000, 1784480600),
+            {"type": "zone", "ts": 1784481400, "zone": {"zid": "7"}},
+            {"type": "travel", "ts": 1784481300},
+        ])
+        assert record["room_visits"] == [
+            {"rid": "10", "ts": 1784480000},
+            {"rid": "16", "ts": 1784480600},
+            {"rid": "7", "ts": 1784481400},
+        ]
+
+    def test_the_mission_number_is_kept(self):
+        from roombapy_prime.models import MissionHistoryEntry
+
+        from custom_components.roomba_plus.prime_mission_sync import prime_entry_to_record
+
+        entry = MissionHistoryEntry.from_json({
+            "missionId": "M2", "timestamp": 1784484000, "done": "ok", "nMssn": 57,
+        })
+        record = prime_entry_to_record(entry)
+        assert record["nMssn"] == 57
+        assert "room_visits" not in record
+
     def test_integer_seconds_are_measured(self):
         """The case that never worked: Prime fields, integer times."""
         record = self._record([self._room("11", 1784483054, 1784483654)])

@@ -351,7 +351,36 @@ def prime_entry_to_record(entry: Any) -> dict[str, Any] | None:
         if ended:
             record["room_ended_at"] = ended
 
+    # THE MISSION'S PATH THROUGH THE HOME (4.6.0, A4): each room or zone
+    # entered, in order, with when. The same shape as the Classic
+    # archive's `room_visits`, so the mission-path view reads one shape;
+    # it answered 404 on every Prime robot. Ids only, no positions.
+    path = _room_visits(events)
+    if path:
+        record["room_visits"] = path
+    raw = getattr(entry, "raw", None)
+    number = raw.get("nMssn") if isinstance(raw, dict) else None
+    if isinstance(number, int) and not isinstance(number, bool):
+        record["nMssn"] = number
+
     return record
+
+
+def _room_visits(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """`[{"rid", "ts"}]` for every room or zone event, oldest first."""
+    visits: list[dict[str, Any]] = []
+    for ev in events:
+        ts = ev.get("ts")
+        if isinstance(ts, bool) or not isinstance(ts, (int, float)):
+            continue
+        region = ev.get("room") or ev.get("zone") or {}
+        rid = region.get("rid") if isinstance(region, dict) else None
+        rid = rid if rid is not None else (region.get("zid") if isinstance(region, dict) else None)
+        if rid is None:
+            continue
+        visits.append({"rid": str(rid), "ts": int(ts)})
+    visits.sort(key=lambda v: v["ts"])
+    return visits
 
 
 def _epoch(value: Any) -> float | None:

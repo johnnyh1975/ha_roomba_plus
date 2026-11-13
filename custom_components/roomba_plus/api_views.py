@@ -877,7 +877,16 @@ class MissionPathView(RoombaPlusView):
 
         data: RoombaData = entry.runtime_data
         archive = getattr(data, "mission_archive", None)
-        if archive is None:
+        # PRIME (4.6.0, A4): no Classic archive, but the mission store
+        # keeps each mission's room visits from its timeline
+        # (prime_mission_sync), for the last MissionStore.MAX_RECORDS
+        # missions. This answered 404 on every Prime robot.
+        prime_store = (
+            data.mission_store
+            if data.connection_type is ConnectionType.CLOUD_ONLY
+            else None
+        )
+        if archive is None and prime_store is None:
             return self.json_message("No mission archive available", status_code=404)
 
         try:
@@ -885,7 +894,16 @@ class MissionPathView(RoombaPlusView):
         except ValueError:
             return self.json_message("Invalid mission number", status_code=400)
 
-        record = archive.find_by_nMssn(n_mssn_int)
+        if archive is not None:
+            record = archive.find_by_nMssn(n_mssn_int)
+        else:
+            record = next(
+                (
+                    rec for rec in (prime_store.records if prime_store is not None else [])
+                    if rec.get("nMssn") == n_mssn_int
+                ),
+                None,
+            )
         if record is None:
             return self.json_message("Mission not found", status_code=404)
 
@@ -895,7 +913,13 @@ class MissionPathView(RoombaPlusView):
 
         id_to_name: dict[str, str] = {}
         cc = data.cloud_coordinator
-        if cc is not None and cc.regions:
+        if prime_store is not None:
+            id_to_name = {
+                str(rid): name
+                for rid, name in (getattr(data, "prime_room_names", None) or {}).items()
+                if name
+            }
+        elif cc is not None and cc.regions:
             id_to_name = region_names_across_maps(cc)
         elif data.room_seg_store is not None:
             # Asking the attribute directly rather than through
