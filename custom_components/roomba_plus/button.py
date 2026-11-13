@@ -1283,7 +1283,12 @@ class SmartZoneButton(IRobotEntity, ButtonEntity):
             "SmartZoneButton: cleaning region %s on map %s",
             region_id, pmap_id[:12],
         )
-        await self.vacuum.send_command("start", params)
+        from .services import async_send_watched  # noqa: PLC0415
+
+        await async_send_watched(
+            self.hass, self._config_entry, "zone_button",
+            lambda: self.vacuum.send_command("start", params),
+        )
         # ON THE RECORD LIKE EVERY OTHER REGION COMMAND. This one was
         # not, so a diagnostics download after a button press showed
         # the service's commands and not the button's (@Hardy-196).

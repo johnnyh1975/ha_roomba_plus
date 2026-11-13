@@ -440,8 +440,12 @@ class DirtThresholdManager:
         # raises is not retried at the next mission end either.
         self._last_trigger_time = dt_util.utcnow()
         await self.async_save(entry_id)
-        await backend.clean_rooms(
-            [qualified_room_id(self._entry.runtime_data, room_id)]
+        from .services import async_send_watched  # noqa: PLC0415
+
+        _ids = [qualified_room_id(self._entry.runtime_data, room_id)]
+        await async_send_watched(
+            self._hass, self._entry, "demand_clean",
+            lambda: backend.clean_rooms(_ids),
         )
 
     async def async_evaluate(
@@ -519,7 +523,12 @@ class DirtThresholdManager:
                 "cleaning is a Classic path", entry_id,
             )
             return
-        await roomba.send_command("start")
+        from .services import async_send_watched  # noqa: PLC0415
+
+        await async_send_watched(
+            self._hass, self._entry, "demand_clean",
+            lambda: roomba.send_command("start"),
+        )
 
         _LOGGER.info("DirtThresholdManager: demand clean sent for %s", entry_id)
 

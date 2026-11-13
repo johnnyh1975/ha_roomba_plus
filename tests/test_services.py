@@ -277,6 +277,18 @@ class TestHandleSmartStartConnectionTypeBranching:
     (AttributeError) for any Prime entry with no CONF_BLOCKING_SENSORS
     set, which is the common case (blocking sensors are opt-in)."""
 
+    @pytest.fixture(autouse=True)
+    def _no_command_watch(self, monkeypatch):
+        """These tests are about what is sent; the watch after it (4.6.0)
+        is tested in test_services and would leave a coroutine behind on
+        a MagicMock entry."""
+        from unittest.mock import MagicMock as _MagicMock
+
+        from custom_components.roomba_plus import services as _services
+
+        monkeypatch.setattr(_services, "watch_for_swallowed_command", _MagicMock())
+
+
     def _make_call(self, hass, rooms=None, override=False):
         call = MagicMock()
         call.hass = hass
@@ -1559,6 +1571,18 @@ class TestCleanOverdueRooms:
 class TestAutoCleanDirtyRooms:
     """v3.3.0 SMART-ORDER — trust gate, whole-house fallback, dirtiest-
     first ordering, below-average exclusion."""
+
+    @pytest.fixture(autouse=True)
+    def _no_command_watch(self, monkeypatch):
+        """These tests are about what is sent; the watch after it (4.6.0)
+        is tested in test_services and would leave a coroutine behind on
+        a MagicMock entry."""
+        from unittest.mock import MagicMock as _MagicMock
+
+        from custom_components.roomba_plus import services as _services
+
+        monkeypatch.setattr(_services, "watch_for_swallowed_command", _MagicMock())
+
 
     def _entry(self, records, dirt_index=None, velocity=None):
         from custom_components.roomba_plus.mission_store import MissionStore
@@ -4137,3 +4161,40 @@ class TestSendWatched:
             await svc.async_handle_run_favorite(call)
             assert watched.await_args.args[2] == "run_favorite"
         assert watched.await_count == 2
+
+def _watched(monkeypatch, module):
+    """Replace `async_send_watched` in `module` by one that records `what`
+    and sends."""
+    seen: list = []
+
+    async def _through(hass, entry, what, send):
+        seen.append(what)
+        return await send()
+
+    monkeypatch.setattr(module, "async_send_watched", _through)
+    return seen
+
+
+class TestTheOtherStartsAreWatched:
+    """4.6.0: smart_start without blocking sensors and auto_clean_dirty_rooms
+    go through the command watch as well."""
+
+    @pytest.mark.asyncio
+    async def test_smart_start_on_both_generations(self, monkeypatch):
+        from custom_components.roomba_plus import services as svc
+
+        seen = _watched(monkeypatch, svc)
+        cases = TestHandleSmartStartConnectionTypeBranching()
+        await cases.test_prime_no_blocking_manager_calls_send_simple_command()
+        await cases.test_classic_no_blocking_manager_still_calls_roomba_start()
+        assert seen == ["smart_start", "smart_start"]
+
+    @pytest.mark.asyncio
+    async def test_auto_clean_dirty_rooms_rooms_and_fallback(self, monkeypatch):
+        from custom_components.roomba_plus import services as svc
+
+        seen = _watched(monkeypatch, svc)
+        cases = TestAutoCleanDirtyRooms()
+        await cases.test_prime_cleans_the_rooms_the_robot_rates_dirty()
+        await cases.test_prime_with_nothing_dirty_cleans_the_house()
+        assert seen == ["auto_clean_dirty_rooms", "auto_clean_dirty_rooms"]

@@ -1233,9 +1233,17 @@ async def async_handle_smart_start(call: ServiceCall) -> None:
             # send_simple_command("start") is the same confirmed-working
             # path the vacuum entity's own start action already uses.
             assert data.prime_robot is not None  # noqa: S101
-            _ok = await data.prime_robot.send_simple_command("start")
+            _prime = data.prime_robot
+            await async_send_watched(
+                hass, config_entry, "smart_start",
+                lambda: _prime.send_simple_command("start"),
+            )
         elif data.roomba is not None:
-            await data.roomba.send_command("start")
+            _roomba = data.roomba
+            await async_send_watched(
+                hass, config_entry, "smart_start",
+                lambda: _roomba.send_command("start"),
+            )
 
 
 async def async_handle_clean_overdue_rooms(call: ServiceCall) -> None:
@@ -1474,7 +1482,11 @@ async def async_handle_auto_clean_dirty_rooms(call: ServiceCall) -> None:
                     "auto_clean_dirty_rooms: starting rooms %s for %s "
                     "(the robot's own scores)", room_ids, eid,
                 )
-                await backend.clean_rooms(room_ids)
+                _backend, _ids = backend, room_ids
+                await async_send_watched(
+                    hass, config_entry, "auto_clean_dirty_rooms",
+                    lambda: _backend.clean_rooms(_ids),
+                )
                 continue
 
         ms = data.mission_store
@@ -1531,10 +1543,18 @@ async def async_handle_auto_clean_dirty_rooms(call: ServiceCall) -> None:
             # AttributeError instead of falling back to a whole-house
             # clean -- the one case this branch exists for.
             if data.prime_robot is not None:
-                _ok = await data.prime_robot.send_simple_command("start")
+                _prime = data.prime_robot
+                _ok = await async_send_watched(
+                    hass, config_entry, "auto_clean_dirty_rooms",
+                    lambda: _prime.send_simple_command("start"),
+                )
                 record_command(config_entry, "start", {"command": "start"}, ok=bool(_ok))
             elif data.roomba is not None:
-                await data.roomba.send_command("start")
+                _roomba = data.roomba
+                await async_send_watched(
+                    hass, config_entry, "auto_clean_dirty_rooms",
+                    lambda: _roomba.send_command("start"),
+                )
             continue
 
         candidates = _route_optimize_order(data, candidates, region_map)

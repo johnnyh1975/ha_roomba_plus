@@ -834,3 +834,52 @@ class TestDirtThresholdPrime:
         monkeypatch.setattr(dtm, "record_failure", lambda *a: failures.append(a))
         await m.async_evaluate_prime("e1")
         assert failures and failures[0][0] == "prime clean score"
+
+def _watched(monkeypatch, module):
+    """Replace `async_send_watched` in `module` by one that records `what`
+    and sends."""
+    seen: list = []
+
+    async def _through(hass, entry, what, send):
+        seen.append(what)
+        return await send()
+
+    monkeypatch.setattr(module, "async_send_watched", _through)
+    return seen
+
+
+class TestDemandCleanIsWatched:
+    """4.6.0: a demand clean is a start like any other and is watched."""
+
+    @pytest.mark.asyncio
+    async def test_classic(self, hass, monkeypatch):
+        from custom_components.roomba_plus import services as svc
+
+        seen = _watched(monkeypatch, svc)
+        roomba = MagicMock(send_command=AsyncMock())
+        m = _dtm(hass, _enabled(), roomba=roomba)
+        monkeypatch.setattr(m, "should_trigger", lambda *_a, **_k: (True, "dirty"))
+        monkeypatch.setattr(m, "gate_blocked", lambda: (False, ""))
+        monkeypatch.setattr(m, "async_save", AsyncMock())
+        await m._async_evaluate_inner(MagicMock(raw_records=[]), "e1")
+        assert seen == ["demand_clean"]
+        roomba.send_command.assert_awaited_once_with("start")
+
+    @pytest.mark.asyncio
+    async def test_prime(self, hass, monkeypatch):
+        from custom_components.roomba_plus import dirt_threshold_manager as dtm
+        from custom_components.roomba_plus import services as svc
+
+        seen = _watched(monkeypatch, svc)
+        backend = MagicMock(clean_rooms=AsyncMock())
+        m = _dtm(hass, _enabled())
+        monkeypatch.setattr(m, "gate_blocked", lambda: (False, ""))
+        monkeypatch.setattr(m, "async_save", AsyncMock())
+        monkeypatch.setattr(dtm, "prime_robot_docked", lambda _d: True)
+        monkeypatch.setattr(dtm, "async_get_room_cleaning_backend", lambda *_a: backend)
+        monkeypatch.setattr(dtm, "async_read_prime_clean_scores", AsyncMock(return_value={"x": 1}))
+        monkeypatch.setattr(dtm, "dirty_rooms", lambda _r: [("10", 0.9)])
+        monkeypatch.setattr(dtm, "qualified_room_id", lambda _d, rid: f"m1/{rid}")
+        await m.async_evaluate_prime("e1")
+        assert seen == ["demand_clean"]
+        backend.clean_rooms.assert_awaited_once_with(["m1/10"])

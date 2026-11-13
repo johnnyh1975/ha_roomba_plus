@@ -649,3 +649,32 @@ class TestBlockingStart:
         m = _bm(hass, prime_robot=None, roomba=roomba, sent_commands=[])
         await m._do_start(None)
         roomba.send_command.assert_awaited_once_with("start")
+
+def _watched(monkeypatch, module):
+    """Replace `async_send_watched` in `module` by one that records `what`
+    and sends."""
+    seen: list = []
+
+    async def _through(hass, entry, what, send):
+        seen.append(what)
+        return await send()
+
+    monkeypatch.setattr(module, "async_send_watched", _through)
+    return seen
+
+
+class TestTheStartIsWatched:
+    """4.6.0: a start the blocking manager lets through is watched."""
+
+    @pytest.mark.asyncio
+    async def test_whole_house_on_both_generations(self, hass, monkeypatch):
+        from custom_components.roomba_plus import blocking_manager
+
+        seen = _watched(monkeypatch, blocking_manager)
+        robot = MagicMock(send_simple_command=AsyncMock(return_value=True))
+        await _bm(hass, prime_robot=robot, sent_commands=[])._do_start(None)
+        roomba = MagicMock(send_command=AsyncMock())
+        await _bm(hass, prime_robot=None, roomba=roomba, sent_commands=[])._do_start(None)
+        assert seen == ["smart_start", "smart_start"]
+        robot.send_simple_command.assert_awaited_once_with("start")
+        roomba.send_command.assert_awaited_once_with("start")

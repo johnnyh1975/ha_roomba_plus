@@ -4010,3 +4010,28 @@ class TestCleanAreaIsWatched:
 async def _through(hass, entry, what, send):
     """An `async_send_watched` that only sends."""
     return await send()
+
+
+class TestSendCommandStartIsWatched:
+    """4.6.0: `vacuum.send_command` with `start` is watched, with or
+    without regions; other commands are not."""
+
+    @pytest.mark.asyncio
+    async def test_start_with_and_without_regions(self, monkeypatch):
+        from custom_components.roomba_plus import vacuum as vac
+
+        seen: list = []
+
+        async def _record(hass, entry, what, send):
+            seen.append(what)
+            return await send()
+
+        monkeypatch.setattr(vac, "async_send_watched", _record)
+        v = _make_vacuum_entity({})
+        v.vacuum.send_command = AsyncMock()
+        monkeypatch.setattr(v, "_build_region_command", lambda p: {"built": p["regions"]})
+        await v.async_send_command("start", {"regions": ["3"]})
+        await v.async_send_command("start")
+        await v.async_send_command("evac")
+        assert seen == ["send_command", "send_command"]
+        assert v.vacuum.send_command.await_count == 3

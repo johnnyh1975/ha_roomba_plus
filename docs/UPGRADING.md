@@ -27,8 +27,9 @@ Nothing to do. What you will notice:
 - **A command the robot ignores is sent once more**, when the robot is idle and
   reports no reason for refusing it. The option *Send an ignored command once more*
   turns this off. Prime is watched as well now, with 60 s instead of 20 s, and
-  every start path is: `vacuum.clean_area`, `run_favorite`, the zone and
-  favourite buttons and *Repeat last mission* too.
+  every start Roomba+ sends is: also `vacuum.clean_area`, `send_command`
+  with `start`, `run_favorite`, `smart_start`, `auto_clean_dirty_rooms`,
+  demand cleaning, the zone and favourite buttons and *Repeat last mission*.
 - **Fewer device triggers in the picker.** Triggers that could never fire for a
   robot are no longer offered: on Prime `bin_full`, `health_score_drop` and the map
   retrain triggers, and `start_blocked`, `maintenance_due` or `firmware_updated`

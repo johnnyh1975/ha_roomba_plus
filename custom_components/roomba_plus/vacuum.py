@@ -1545,8 +1545,18 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
 
         if command == "start" and isinstance(params, dict) and "regions" in params:
             region_cmd = self._build_region_command(params)
-            await self.vacuum.send_command("start", region_cmd)
+            await async_send_watched(
+                self.hass, self._config_entry, "send_command",
+                lambda: self.vacuum.send_command("start", region_cmd),
+            )
             record_command(self._config_entry, "start (send_command)", region_cmd)
+        elif command == "start":
+            # A plain start by hand is a start too (4.6.0): watched.
+            await async_send_watched(
+                self.hass, self._config_entry, "send_command",
+                lambda: self.vacuum.send_command(command, params or {}),
+            )
+            record_command(self._config_entry, f"{command} (send_command)", params or None)
         else:
             await self.vacuum.send_command(command, params or {})
             # IN THE SENT COMMANDS TOO (4.3.4). A command sent by hand

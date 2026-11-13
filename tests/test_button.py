@@ -562,6 +562,18 @@ def _sent(b):
 
 class TestCleanZoneButton:
 
+    @pytest.fixture(autouse=True)
+    def _no_command_watch(self, monkeypatch):
+        """These tests are about what is sent; the watch after it (4.6.0)
+        is tested in test_services and would leave a coroutine behind on
+        a MagicMock entry."""
+        from unittest.mock import MagicMock as _MagicMock
+
+        from custom_components.roomba_plus import services as _services
+
+        monkeypatch.setattr(_services, "watch_for_swallowed_command", _MagicMock())
+
+
     @pytest.mark.asyncio
     async def test_the_chosen_zone_starts_on_its_map_with_the_robots_pass_setting(self, monkeypatch):
         b = _zone_button(monkeypatch, pickers=[_picker("3", "p1")], state={"noAutoPasses": True, "twoPass": True})
@@ -1241,6 +1253,18 @@ class TestTheZoneButtonSendsAZoneAsAZone:
     """@Hardy-196 (i7+): "Esstisch" selected in the cloud zone select, the
     button pressed, nothing cleaned -- every selection went out as `rid`."""
 
+    @pytest.fixture(autouse=True)
+    def _no_command_watch(self, monkeypatch):
+        """These tests are about what is sent; the watch after it (4.6.0)
+        is tested in test_services and would leave a coroutine behind on
+        a MagicMock entry."""
+        from unittest.mock import MagicMock as _MagicMock
+
+        from custom_components.roomba_plus import services as _services
+
+        monkeypatch.setattr(_services, "watch_for_swallowed_command", _MagicMock())
+
+
     @pytest.mark.asyncio
     async def test_a_selected_zone_goes_out_as_zid(self, monkeypatch):
         picker = SimpleNamespace(
@@ -1262,6 +1286,18 @@ class TestTheZoneButtonSendsAZoneAsAZone:
 class TestTheZoneButtonGoesOnTheRecord:
     """@Hardy-196's diagnostics showed the service's region commands and
     not the button's, so his button test could not be told apart."""
+
+    @pytest.fixture(autouse=True)
+    def _no_command_watch(self, monkeypatch):
+        """These tests are about what is sent; the watch after it (4.6.0)
+        is tested in test_services and would leave a coroutine behind on
+        a MagicMock entry."""
+        from unittest.mock import MagicMock as _MagicMock
+
+        from custom_components.roomba_plus import services as _services
+
+        monkeypatch.setattr(_services, "watch_for_swallowed_command", _MagicMock())
+
 
     @pytest.mark.asyncio
     async def test_the_press_is_recorded_with_its_type(self, monkeypatch):
@@ -1499,3 +1535,21 @@ class TestStartButtonsAreWatched:
 async def _through(hass, entry, what, send):
     """An `async_send_watched` that only sends."""
     return await send()
+
+
+class TestTheSmartZoneButtonIsWatched:
+    """4.6.0: the Smart Map zone button starts a mission and is watched."""
+
+    @pytest.mark.asyncio
+    async def test_press(self, monkeypatch):
+        from custom_components.roomba_plus import services as svc
+
+        seen: list = []
+
+        async def _record(hass, entry, what, send):
+            seen.append(what)
+            return await send()
+
+        monkeypatch.setattr(svc, "async_send_watched", _record)
+        await TestCleanZoneButton().test_the_chosen_zone_starts_on_its_map_with_the_robots_pass_setting(monkeypatch)
+        assert seen == ["zone_button"]
