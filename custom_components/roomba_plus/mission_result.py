@@ -123,10 +123,20 @@ def note_last_error(data: Any) -> None:
     last error stays until there is a newer one, as on Classic.
     """
     store = getattr(data, "mission_store", None)
-    found = last_error(getattr(store, "records", None))
+    records = list(getattr(store, "records", None) or [])
+    found = last_error(records)
     if found is None:
         return
     data.last_error_code, data.last_error_at = found
+    # THE ROOM, where the mission was sent to exactly one: then that is
+    # where it failed. A mission sent to several says nothing about which.
+    record = next(
+        (r for r in reversed(records) if r.get("ended_at") == found[1]), None
+    )
+    requested = list((record or {}).get("requested_region_ids") or [])
+    data.last_error_zone = (
+        named_rooms(data, record, requested)[0] if len(requested) == 1 else None
+    )
 
 
 def named_rooms(data: Any, record: dict[str, Any] | None, rooms: list[str]) -> list[str]:

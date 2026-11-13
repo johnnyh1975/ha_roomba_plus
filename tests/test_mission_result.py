@@ -173,7 +173,7 @@ class TestLastError:
             mission_store=SimpleNamespace(records=[
                 {"result": "error", "error_code": 3, "ended_at": "T1"},
             ]),
-            last_error_code=None, last_error_at=None,
+            last_error_code=None, last_error_at=None, last_error_zone=None,
         )
         note_last_error(data)
         assert (data.last_error_code, data.last_error_at) == (3, "T1")
@@ -214,3 +214,21 @@ class TestPrimeRoomsLeftOut:
 
         outcome = mission_outcome({"result": "completed", "scope": "whole_home", "rooms_cleaned": ["10"]})
         assert outcome["type"] == "completed"
+
+    def test_the_room_only_for_a_mission_sent_to_one(self):
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.mission_result import note_last_error
+
+        one = {"result": "unknown", "error_code": 48, "ended_at": "T1",
+               "requested_region_ids": ["10"]}
+        data = SimpleNamespace(
+            mission_store=SimpleNamespace(records=[one]),
+            prime_room_names={"10": "Kitchen"},
+            last_error_code=None, last_error_at=None, last_error_zone="old",
+        )
+        note_last_error(data)
+        assert data.last_error_zone == "Kitchen"
+        one["requested_region_ids"] = ["10", "11"]
+        note_last_error(data)
+        assert data.last_error_zone is None

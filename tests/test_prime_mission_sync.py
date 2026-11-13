@@ -416,6 +416,7 @@ class TestMissionSensorsExistForPrime:
         "last_mission_area",
         "last_error_code",
         "last_error_at",
+        "last_error_zone",
         "presence_clean_opportunities_7d",
         "presence_clean_utilisation_7d",
         "next_likely_clean_window",
@@ -546,6 +547,7 @@ class TestMissionSensorsExistForPrime:
         entry.runtime_data.roomba = None
         entry.runtime_data.last_error_code = None
         entry.runtime_data.last_error_at = None
+        entry.runtime_data.last_error_zone = None
 
         for description in SENSORS:
             if description.key not in _PRIME_MISSION_SENSOR_KEYS:

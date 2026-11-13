@@ -422,7 +422,8 @@ class TestAsyncSetupEntryCloudOnlyBranch:
         # 46 with last error code and time and the last mission summary.
         # 49 with the three presence sensors, which read the gaps between
         # stored missions.
-        assert len(created) == 49, (
+        # 50 with last_error_zone.
+        assert len(created) == 50, (
             "rooms-overdue was added for Prime: it reads the mission "
             "store and cloud regions, both of which Prime has, and it "
             "was missing only because of the order things were built in"
