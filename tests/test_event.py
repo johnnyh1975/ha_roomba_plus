@@ -43,12 +43,12 @@ class TestWhichEntitiesExist:
     @pytest.mark.asyncio
     async def test_classic_gets_all_three(self):
         created = await _created(_entry())
-        assert set(created) == {"mission_completed", "room_completed", "stuck"}
+        assert set(created) == {"mission_completed", "room_completed", "stuck", "command"}
 
     @pytest.mark.asyncio
     async def test_prime_gets_no_stuck_entity_it_could_never_fire(self):
         created = await _created(_entry(ConnectionType.CLOUD_ONLY))
-        assert set(created) == {"mission_completed", "room_completed"}
+        assert set(created) == {"mission_completed", "room_completed", "command"}
 
     @pytest.mark.asyncio
     async def test_ids_and_types(self):
@@ -56,7 +56,10 @@ class TestWhichEntitiesExist:
         for key, entity in created.items():
             assert entity.unique_id == f"roomba_plus_BLID1_{key}"
             assert entity.suggested_object_id == key
-            assert entity.event_types == [key]
+            if key == "command":
+                assert entity.event_types == ["not_delivered", "state_frozen"]
+            else:
+                assert entity.event_types == [key]
 
 
 class TestTheyFollowTheBus:
@@ -376,3 +379,50 @@ class TestTheMaintenanceBlueprint:
         self._fire(hass, "2026-10-17T12:00:00+00:00")
         await hass.async_block_till_done()
         assert [c.data["message"] for c in sent] == ["https://example.com/a", ""]
+
+
+class TestTheCommandEntityFollowsBothBusEvents:
+    """4.6.0: a command taken and not acted on, and a state that stopped
+    following the robot, on one entity of both generations."""
+
+    @staticmethod
+    def _event(event_type, data):
+        return SimpleNamespace(event_type=event_type, data=data)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("prime", [False, True])
+    @pytest.mark.parametrize(("bus_event", "event_type"), [
+        ("roomba_plus_command_not_delivered", "not_delivered"),
+        ("roomba_plus_state_frozen", "state_frozen"),
+    ])
+    async def test_this_robots_event_sets_its_type(self, prime, bus_event, event_type):
+        connection = ConnectionType.CLOUD_ONLY if prime else ConnectionType.LOCAL_PUSH
+        entity = (await _created(_entry(connection)))["command"]
+        entity.async_write_ha_state = MagicMock()
+        entity._on_bus_event(self._event(bus_event, {"entry_id": "E1", "command": "start"}))
+        assert entity.state is not None
+        assert entity.state_attributes["event_type"] == event_type
+        assert entity.state_attributes["command"] == "start"
+
+    @pytest.mark.asyncio
+    async def test_another_robots_event_is_ignored(self):
+        entity = (await _created(_entry()))["command"]
+        entity.async_write_ha_state = MagicMock()
+        entity._on_bus_event(self._event(
+            "roomba_plus_command_not_delivered", {"entry_id": "OTHER"},
+        ))
+        assert entity.state is None
+
+    @pytest.mark.asyncio
+    async def test_it_listens_to_both_and_ignores_others(self):
+        entity = (await _created(_entry()))["command"]
+        entity.hass = MagicMock()
+        entity.async_on_remove = MagicMock()
+        with patch.object(event_mod.IRobotEntity, "async_added_to_hass", return_value=None):
+            await entity.async_added_to_hass()
+        listened = {c.args[0] for c in entity.hass.bus.async_listen.call_args_list}
+        assert listened == {"roomba_plus_command_not_delivered", "roomba_plus_state_frozen"}
+        entity.async_write_ha_state = MagicMock()
+        entity._on_bus_event(self._event("roomba_plus_unrelated", {"entry_id": "E1"}))
+        assert entity.state is None
+        assert entity.new_state_filter({}) is False

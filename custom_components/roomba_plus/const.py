@@ -297,6 +297,14 @@ EVENT_SCHEDULE_SUBOPTIMAL: Final = f"{DOMAIN}_schedule_suboptimal"
 EVENT_MAP_DRIFT_DETECTED: Final = f"{DOMAIN}_map_drift_detected"
 EVENT_MAP_RETRAIN_IN_PROGRESS: Final = f"{DOMAIN}_map_retrain_in_progress"
 EVENT_CLOUD_STALE: Final = f"{DOMAIN}_cloud_stale"
+#: 4.6.0 -- a command the robot took and did not act on, and a state that
+#: says "running" while the robot charges (command_watch.py).
+EVENT_COMMAND_NOT_DELIVERED: Final = f"{DOMAIN}_command_not_delivered"
+EVENT_STATE_FROZEN: Final = f"{DOMAIN}_state_frozen"
+#: Send a command the robot took and ignored once more (4.6.0, A3). On by
+#: default: it only acts when nothing explains the refusal, and only once.
+CONF_RESEND_SWALLOWED: Final = "resend_swallowed_command"
+DEFAULT_RESEND_SWALLOWED: Final = True
 
 # ── v1.7.0 — L7 Zone aliases & hidden ────────────────────────────────────────
 # F11 — demand-based cleaning (DirtThresholdManager)

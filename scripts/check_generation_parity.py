@@ -58,6 +58,19 @@ _SWALLOW_WATCH = (
 )
 
 DELIBERATE: dict[str, dict[str, str]] = {
+    "vacuum.py::_async_send_start": {
+        # The same act on both generations, in each one's own command
+        # (4.6.0). The Prime branch sends through roombapy-prime and
+        # keeps its own record of the command there.
+        "send_command": (
+            "Classic sends over the local connection; Prime sends through "
+            "_send_confirmed on its cloud robot in the branch above"
+        ),
+        "record_command": (
+            "records the Classic payload for the diagnostics; the Prime "
+            "whole-home start records its own room command"
+        ),
+    },
     "vacuum.py::_dock_operation_in_progress": {
         # THE WHOLE METHOD IS PRIME-ONLY and returns early for Classic,
         # so the checker reads every call in it as Classic-only. Listing

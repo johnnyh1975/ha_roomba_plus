@@ -1247,6 +1247,9 @@ async def _phase_finalize(ctx: _SetupContext) -> None:
     # (or any other entity) evaluates the message that ended a silence.
     from .callbacks import make_mqtt_stamp_callback
     roomba.register_on_message_callback(make_mqtt_stamp_callback(config_entry))
+    # "Running" while the battery charges (4.6.0, command_watch.py).
+    from .command_watch import make_classic_state_callback
+    roomba.register_on_message_callback(make_classic_state_callback(hass, config_entry))
 
     # LIVE STATE FOLLOWS THE LOCAL CONNECTION (@mdarocha). Started before
     # the platforms so the availability registry exists when the first

@@ -218,7 +218,8 @@
           "region_sensors": "Osobny czujnik dla każdego pomieszczenia i strefy",
           "map_rotation": "Obróć obraz mapy",
           "wall_thickness_cm": "Grubość ścian (cm)",
-          "door_width_cm": "Szerokość drzwi (cm)"
+          "door_width_cm": "Szerokość drzwi (cm)",
+          "resend_swallowed_command": "Wyślij zignorowane polecenie jeszcze raz"
         },
         "data_description": {
           "map_enabled": "Włącz mapę sprzątania na żywo dla robotów z wykrywaniem pozycji (Roomba 900, i, s, j, Braava m).",
@@ -237,7 +238,8 @@
           "region_sensors": "Tworzy osobny czujnik dla każdego pomieszczenia i strefy.",
           "map_rotation": "Obraca każdy obraz mapy w całości zgodnie z ruchem wskazówek zegara, pomieszczenia i trasę razem, na przykład tak, aby pasował do aplikacji iRobot. Nigdy nie przesuwa trasy względem pomieszczeń; do tego służy „Dopasuj trasę do pomieszczeń”. Mapa nie ma północy: góra to kierunek, w którym robot był zwrócony, opuszczając stację, więc zależy od ustawienia stacji.",
           "wall_thickness_cm": "Grubość, z jaką ściany są rysowane na mapach. W robocie serii 900 decyduje też, które krawędzie dwóch pomieszczeń są jedną ścianą. Domyślnie 15.",
-          "door_width_cm": "Szerokość, z jaką drzwi są rysowane na mapach; wyraźnie szerszy otwór jest rysowany jako otwarte przejście. Robot ze Smart Map szuka też drzwi mniej więcej tej szerokości, gdy dopasowuje swoją trasę do pomieszczeń. Domyślnie 80."
+          "door_width_cm": "Szerokość, z jaką drzwi są rysowane na mapach; wyraźnie szerszy otwór jest rysowany jako otwarte przejście. Robot ze Smart Map szuka też drzwi mniej więcej tej szerokości, gdy dopasowuje swoją trasę do pomieszczeń. Domyślnie 80.",
+          "resend_swallowed_command": "Jeśli robot przyjmie polecenie startu, pokoju lub strefy i nie rozpocznie misji, Roomba+ wyśle je jeszcze raz. Tylko gdy robot nie podaje powodu odmowy."
         }
       },
       "smart_zones_manual": {
@@ -1950,6 +1952,17 @@
               "overdue": "Zaległe",
               "done": "Zrobione",
               "snoozed": "Odłożone"
+            }
+          }
+        }
+      },
+      "command": {
+        "name": "Polecenie",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "not_delivered": "Nie wykonano",
+              "state_frozen": "Stan zamrożony"
             }
           }
         }

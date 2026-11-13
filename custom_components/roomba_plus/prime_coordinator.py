@@ -45,6 +45,7 @@ from datetime import timedelta
 import time as _time
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import Callable
 from typing import Any, Final
@@ -55,6 +56,7 @@ from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from . import cloud_errors
+from .command_watch import note_prime_shadows
 from .const import DOMAIN, EVENT_ROOM_COMPLETED
 
 from roombapy_prime import (
@@ -878,6 +880,9 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                     updated[shadow_name] = _deep_merge_reported(updated.get(shadow_name) or {}, reported)
                     self.entry.runtime_data.last_mqtt_message_ts = _time.time()
                     self._note_phase_for_timer(updated)
+                    # "Running" while the battery charges (4.6.0).
+                    with contextlib.suppress(Exception):
+                        note_prime_shadows(self.hass, self.entry, updated)
                     self.async_set_updated_data(updated)
                     backoff = 5.0  # a live update means things are healthy again
                 _LOGGER.warning(

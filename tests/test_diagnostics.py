@@ -2837,11 +2837,13 @@ class TestFieldEvidence:
         data = SimpleNamespace(
             readiness_observations=deque([{"code": 15}]),
             region_starts_in_open_cycle=deque([{"what": "clean_room"}]),
+            command_watches=deque([{"command": "start", "outcome": "started"}]),
         )
         out = _field_evidence(data)
         assert out == {
             "readiness_observations": [{"code": 15}],
             "region_starts_in_open_cycle": [{"what": "clean_room"}],
+            "command_watches": [{"command": "start", "outcome": "started"}],
             "mission_start_commands": [],
             "skip_attempts": [],
             "mission_command": None,
@@ -2855,6 +2857,7 @@ class TestFieldEvidence:
 
         assert _field_evidence(SimpleNamespace()) == {
             "readiness_observations": [], "region_starts_in_open_cycle": [],
+            "command_watches": [],
             "mission_start_commands": [], "skip_attempts": [],
             "mission_command": None,
         }

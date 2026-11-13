@@ -21,7 +21,7 @@ import logging
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable, Mapping
 from typing import TYPE_CHECKING, Any
 
 import voluptuous as vol
@@ -40,11 +40,14 @@ from .service_guard import register as register_guarded
 from .dirt_threshold_manager import async_read_prime_clean_scores, qualified_room_id
 from .prime_dirt import dirty_rooms
 from .const import (
+    CONF_RESEND_SWALLOWED,
+    DEFAULT_RESEND_SWALLOWED,
     lifetime_hours,
     prime_runtime_hours,
     CONF_SMART_ZONE_ALIASES,
     maintenance_changed_signal,
-    PRIME_ERROR_SEVERITY,
+    error_label,
+    not_ready_entry,
     cleaning_modes_for,
     ATTR_ORDERED,
     IROBOT_PART_ROLE_FILTER,
@@ -81,6 +84,7 @@ from .const import (
 from .prime_coordinator import prime_region_names_from_command
 from .room_cleaning import ZID_PREFIX, async_get_room_cleaning_backend
 from .zone_naming import resolve_zone_name
+from . import command_watch
 from .models import ConnectionType, RoombaConfigEntry, RoombaData
 from .prime_coordinator import prime_current_state
 
@@ -95,6 +99,16 @@ _LOGGER = logging.getLogger(__name__)
 #: that the log line is still near the action that caused it.
 _SWALLOWED_COMMAND_GRACE_SEC = 20
 
+#: THE SAME FOR PRIME, LONGER (4.6.0). The state comes through iRobot's
+#: cloud, and how long a start takes to show there has never been
+#: measured. Each watched command records the time it took
+#: (`command_watches` in the diagnostics), which is the measurement;
+#: until then a minute, so a slow cloud is not reported as a refusal.
+_PRIME_SWALLOWED_COMMAND_GRACE_SEC = 60
+
+#: How often the state is looked at while waiting. A start that shows
+#: early ends the wait early and records how long it took.
+_SWALLOW_POLL_SEC = 2.0
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -222,21 +236,28 @@ _OPEN_CYCLE_STATUS_KEYS = (
 
 
 def _mission_snapshot(entry: Any) -> dict[str, Any] | None:
-    """The Classic robot's mission state and last command, or None."""
-    try:
-        from . import roomba_reported_state  # noqa: PLC0415
+    """The robot's mission state and, on Classic, its last command; or None.
 
-        reported = roomba_reported_state(entry.runtime_data.roomba)
-    except Exception:  # noqa: BLE001
+    Both generations since 4.6.0 (command_watch.mission_status): Prime
+    reports the same `cleanMissionStatus` in its cloud shadow. Only the
+    last command is Classic's own; a Prime robot does not report one.
+    """
+    status = command_watch.mission_status(entry)
+    if status is None:
         return None
-    status = reported.get("cleanMissionStatus") or {}
-    last = reported.get("lastCommand") or {}
-    return {
-        **{k: status.get(k) for k in _OPEN_CYCLE_STATUS_KEYS},
-        "lastCommand": {
+    snapshot: dict[str, Any] = {k: status.get(k) for k in _OPEN_CYCLE_STATUS_KEYS}
+    roomba = getattr(getattr(entry, "runtime_data", None), "roomba", None)
+    if roomba is not None:
+        try:
+            from . import roomba_reported_state  # noqa: PLC0415
+
+            last = roomba_reported_state(roomba).get("lastCommand") or {}
+        except Exception:  # noqa: BLE001
+            last = {}
+        snapshot["lastCommand"] = {
             k: last.get(k) for k in ("command", "initiator", "time")
-        },
-    }
+        }
+    return snapshot
 
 
 def _in_open_cycle(snapshot: dict[str, Any] | None) -> bool:
@@ -248,8 +269,11 @@ def _in_open_cycle(snapshot: dict[str, Any] | None) -> bool:
 async def _async_warn_if_swallowed(
     hass: HomeAssistant, entry: Any, what: str,
     before: dict[str, Any] | None = None,
+    resend: Callable[[], Awaitable[Any]] | None = None,
+    *,
+    resent: bool = False,
 ) -> None:
-    """Log when a command was accepted and nothing happened.
+    """Report when a command was accepted and nothing happened.
 
     THREE CAUSES, ONE SIGNATURE. A robot can take a command into
     `lastCommand`, report `notReady: 0` and `error: 0`, and simply not
@@ -268,36 +292,62 @@ async def _async_warn_if_swallowed(
     months. Watching for the SYMPTOM covers all three and whatever comes
     next.
 
-    Deliberately a log line and not an exception: the service has
-    already returned by the time this can be known, and a robot that
-    starts late is better served by a warning than by a caller that
-    was told the call failed.
+    BOTH GENERATIONS SINCE 4.6.0 (command_watch.py). 4.5.2 took Prime out:
+    this read the local state, which a Prime robot does not have, and the
+    empty answer read as "no mission" after every room clean. The state
+    is now read where each generation keeps it. A Prime command that the
+    broker confirmed and the robot never saw is in the field (@ecovictor75,
+    Combo 105, 4.5.3).
+
+    A log line and an event (`roomba_plus_command_not_delivered`, and
+    `event.<robot>_command`), not an exception: the service has already
+    returned by the time this can be known.
+
+    SENT ONCE MORE (A3), when `resend` is given: only when nothing
+    explains the refusal (`notReady` and `error` both 0), the state is
+    not frozen (command_watch.py), and only once. A robot with a reason
+    to refuse refuses again; the event names the reason instead.
     """
-    import asyncio  # noqa: PLC0415
-
-    # CLASSIC ONLY (4.5.2). A Prime robot has no local state to read:
-    # `roomba_reported_state` answers {} for it, which reads as "no
-    # mission", so every room clean on a Prime robot was followed by
-    # this warning 20 s later, whether it started or not. What a
-    # swallowed Prime command looks like after 20 s is not recorded;
-    # until it is, Prime is not watched.
-    if getattr(getattr(entry, "runtime_data", None), "roomba", None) is None:
+    data = getattr(entry, "runtime_data", None)
+    prime = getattr(data, "connection_type", None) is ConnectionType.CLOUD_ONLY
+    if getattr(data, "roomba", None) is None and not prime:
         return
+    grace = _PRIME_SWALLOWED_COMMAND_GRACE_SEC if prime else _SWALLOWED_COMMAND_GRACE_SEC
 
-    await asyncio.sleep(_SWALLOWED_COMMAND_GRACE_SEC)
+    waited = 0.0
+    status: dict[str, Any] | None = None
+    while True:
+        step = min(_SWALLOW_POLL_SEC, max(grace - waited, 0.0))
+        await command_watch.sleep(step)
+        waited += step
+        status = command_watch.mission_status(entry)
+        if status is None:
+            return
+        if command_watch.cycle_is_open(status) or waited >= grace:
+            break
 
-    try:
-        from . import roomba_reported_state  # noqa: PLC0415
+    log = getattr(data, "command_watches", None)
 
-        status = roomba_reported_state(
-            entry.runtime_data.roomba
-        ).get("cleanMissionStatus") or {}
-    except Exception:  # noqa: BLE001
-        return
+    def _record(outcome: str) -> None:
+        if log is not None:
+            log.append({
+                "at": dt_util.utcnow().isoformat(timespec="seconds"),
+                "command": what,
+                "generation": "prime" if prime else "classic",
+                "outcome": outcome,
+                "waited_sec": round(waited, 1),
+                "resent": resent,
+                "phase": (status or {}).get("phase"),
+                "not_ready": (status or {}).get("notReady"),
+                "error": (status or {}).get("error"),
+            })
 
-    if (status.get("cycle") or "none") != "none":
+    if command_watch.cycle_is_open(status):
         if _in_open_cycle(before):
+            _record("open_mission")
             _record_open_cycle_start(entry, what, before)
+        else:
+            _record("started")
         return
 
     # BLIND SPOT, MEASURED AND NOT FIXED: a robot that was ALREADY in an
@@ -332,8 +382,30 @@ async def _async_warn_if_swallowed(
     # stack. That this service's own path is equally blind follows from
     # the code, not from a report.
 
-    not_ready = status.get("notReady")
-    err = status.get("error")
+    not_ready = status.get("notReady") if status else None
+    err = status.get("error") if status else None
+
+    if (
+        resend is not None
+        and not resent
+        and not not_ready
+        and not err
+        and not command_watch.frozen(entry)
+    ):
+        _record("resent")
+        _LOGGER.info(
+            "%s was accepted by the robot but no mission started within %ds; "
+            "sending it once more.", what, round(waited),
+        )
+        try:
+            await resend()
+        except Exception as exc:  # noqa: BLE001 - background task
+            _LOGGER.warning("%s: sending it again failed: %s", what, exc)
+            return
+        await _async_warn_if_swallowed(hass, entry, what, before, None, resent=True)
+        return
+
+    _record("not_delivered")
 
     # SAY WHAT THE NUMBERS MEAN, not just what they are.
     #
@@ -343,44 +415,62 @@ async def _async_warn_if_swallowed(
     # the only thing anyone saw. This module already carries the
     # catalogue; it simply was not consulted at the one moment it
     # mattered.
+    #
+    # AND THEN IT WAS NOT, AGAIN (found 4.6.0): the lookup read a table
+    # whose entries became `(priority, flag)` pairs, so `.get("label")`
+    # raised inside the suppress and the detail was never added. Now the
+    # same texts the error and readiness sensors show.
     _detail = ""
     with contextlib.suppress(Exception):
-        entry = PRIME_ERROR_SEVERITY.get(int(err or 0)) or {}
-        if entry.get("label"):
-            _detail = f" Error {err} is {entry['label']!r}."
-            if entry.get("action"):
-                _detail += f" {entry['action']}"
+        label = error_label(err, prime=prime) if err else None
+        if label:
+            _detail += f" Error {err} is {label!r}."
+        refusal = not_ready_entry(not_ready, "en").get("label") if not_ready else None
+        if refusal:
+            _detail += f" notReady {not_ready} is {refusal!r}."
 
     _LOGGER.warning(
-        "%s was accepted by the robot but no mission started within %ds "
+        "%s was accepted by the robot but no mission started within %ds%s "
         "(phase=%r, notReady=%r, error=%r).%s The robot takes a command "
         "and silently ignores it in several situations: a cliff sensor "
         "reading a dark floor as a drop-off, a region-targeted start "
         "sent while the robot is away from its dock, or a stale map "
         "version. Check the readiness sensor.",
         what,
-        _SWALLOWED_COMMAND_GRACE_SEC,
-        status.get("phase"),
+        round(waited),
+        ", also after sending it again" if resent else "",
+        status.get("phase") if status else None,
         not_ready,
         err,
         _detail,
+    )
+    command_watch.fire_not_delivered(
+        hass, entry, what, status, waited_sec=waited, resent=resent,
     )
 
 
 def watch_for_swallowed_command(
     hass: HomeAssistant, entry: Any, what: str,
     before: dict[str, Any] | None = None,
+    resend: Callable[[], Awaitable[Any]] | None = None,
 ) -> None:
-    """Report later if `what` was taken and nothing started (Classic).
+    """Report later if `what` was taken and nothing started (both generations).
 
     Fire and forget: the caller returns now. Used by room clean, zone
-    clean (4.5.2) and the vacuum's start (4.5.2).
+    clean (4.5.2) and the vacuum's start (4.5.2). `resend` sends the same
+    command again (4.6.0), unless the option to send once more is off.
     """
     if entry is None or not hasattr(entry, "async_create_background_task"):
         return
+    options = getattr(entry, "options", None)
+    if not (
+        options.get(CONF_RESEND_SWALLOWED, DEFAULT_RESEND_SWALLOWED)
+        if isinstance(options, Mapping) else DEFAULT_RESEND_SWALLOWED
+    ):
+        resend = None
     entry.async_create_background_task(
         hass,
-        _async_warn_if_swallowed(hass, entry, what, before),
+        _async_warn_if_swallowed(hass, entry, what, before, resend),
         name=f"roomba_plus_swallow_watch_{entry.entry_id}",
     )
 
@@ -650,19 +740,26 @@ async def _async_clean_rooms_via_backend(
     # THE STATE BEFORE, for a start into an open mission (4.3.2).
     _before = _mission_snapshot(_entry) if _entry is not None else None
 
-    await backend.clean_rooms(
-        room_ids, ordered=ordered, two_pass=two_pass,
-        # One entry per room: _per_room_or_global() writes the call-level
-        # value into every room without one of its own. _per_room() does
-        # not spread a short list.
-        operating_mode=_per_room_or_global(ATTR_CLEANING_MODE, caller_mode),
-        smart_scrub=_per_room_or_global(ATTR_SMART_SCRUB, _scrub),
-        pad_wetness=_per_room_or_global(ATTR_RUN_PAD_WETNESS, _wetness),
-    )
+    # One entry per room: _per_room_or_global() writes the call-level
+    # value into every room without one of its own. _per_room() does not
+    # spread a short list.
+    _modes = _per_room_or_global(ATTR_CLEANING_MODE, caller_mode)
+    _scrubs = _per_room_or_global(ATTR_SMART_SCRUB, _scrub)
+    _wetnesses = _per_room_or_global(ATTR_RUN_PAD_WETNESS, _wetness)
+
+    async def _send() -> None:
+        await backend.clean_rooms(
+            room_ids, ordered=ordered, two_pass=two_pass,
+            operating_mode=_modes,
+            smart_scrub=_scrubs,
+            pad_wetness=_wetnesses,
+        )
+
+    await _send()
 
     # Fire and forget: the service returns now, and this reports later
-    # if nothing actually started.
-    watch_for_swallowed_command(call.hass, _entry, "clean_room", _before)
+    # if nothing actually started (and sends it once more, 4.6.0).
+    watch_for_swallowed_command(call.hass, _entry, "clean_room", _before, _send)
 
 
 def _classic_zone_ids(config_entry: Any, names: list[str]) -> list[str]:
@@ -901,14 +998,17 @@ async def async_handle_clean_zone(call: ServiceCall) -> None:
         def _each(value: Any) -> list[Any] | None:
             return [value] * len(prefixed) if value is not None else None
 
-        await backend.clean_rooms(
-            prefixed,
-            operating_mode=_each(caller_mode),
-            smart_scrub=_each(scrub),
-            pad_wetness=_each(wetness),
-            two_pass=_each(bool(_two_pass_raw) if _two_pass_raw is not None else None),
-        )
-        watch_for_swallowed_command(hass, config_entry, "clean_zone", _before)
+        async def _send_zones() -> None:
+            await backend.clean_rooms(
+                prefixed,
+                operating_mode=_each(caller_mode),
+                smart_scrub=_each(scrub),
+                pad_wetness=_each(wetness),
+                two_pass=_each(bool(_two_pass_raw) if _two_pass_raw is not None else None),
+            )
+
+        await _send_zones()
+        watch_for_swallowed_command(hass, config_entry, "clean_zone", _before, _send_zones)
 
 
 async def async_handle_clean_room(call: ServiceCall) -> None:

@@ -1050,6 +1050,37 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
                 getattr(self._config_entry, "runtime_data", None), [mode],
                 robot_name=getattr(self._config_entry, "title", None),
             )
+            # THE SAME WATCH AS ON CLASSIC (4.6.0): Prime reports the
+            # mission state in its cloud shadow, and a start the broker
+            # confirmed can still never reach the robot (Combo 105, 4.5.3).
+            before = _mission_snapshot(self._config_entry)
+            await self._async_send_start(mode)
+            if before is not None and not _in_open_cycle(before):
+                watch_for_swallowed_command(
+                    self.hass, self._config_entry, "start", before,
+                    lambda: self._async_send_start(mode),
+                )
+            return
+        if self.activity == VacuumActivity.PAUSED:
+            await self.vacuum.send_command("resume")
+            return
+        # THE SAME WATCH AS A ROOM CLEAN (4.5.2), from a closed cycle
+        # only: a start into an open mission resumes it, and whether
+        # the robot took that cannot be told from the state.
+        before = _mission_snapshot(self._config_entry)
+        mode = self._start_mode()
+        await self._async_send_start(mode)
+        if before is not None and not _in_open_cycle(before):
+            watch_for_swallowed_command(
+                self.hass, self._config_entry, "start", before,
+                lambda: self._async_send_start(mode),
+            )
+
+    async def _async_send_start(self, mode: int | None) -> None:
+        """Send a whole-home start in `mode`, the way each generation's app
+        does; once from `async_start`, and once more from the command
+        watch if the robot ignored it (4.6.0)."""
+        if self._connection_type is ConnectionType.CLOUD_ONLY:
             if mode is not None:
                 idle = self._prime_cycle_is_idle()
                 if idle and await self._prime_start_whole_home(mode):
@@ -1064,24 +1095,14 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
                 )
             await _send_confirmed(self._prime_robot, "start")
             return
-        if self.activity == VacuumActivity.PAUSED:
-            await self.vacuum.send_command("resume")
-            return
-        # THE SAME WATCH AS A ROOM CLEAN (4.5.2), from a closed cycle
-        # only: a start into an open mission resumes it, and whether
-        # the robot took that cannot be told from the state.
-        before = _mission_snapshot(self._config_entry)
-        mode = self._start_mode()
         if mode is None:
             await self.vacuum.send_command("start")
-        else:
-            # THE CLASSIC APP'S WHOLE-HOME START (7.18.0, APK_MODUS_RECHERCHE
-            # F5): the mode in `params` at the top, no map, no rooms.
-            payload = {"params": {"operatingMode": mode}}
-            await self.vacuum.send_command("start", payload)
-            record_command(self._config_entry, "start (mode)", payload)
-        if before is not None and not _in_open_cycle(before):
-            watch_for_swallowed_command(self.hass, self._config_entry, "start", before)
+            return
+        # THE CLASSIC APP'S WHOLE-HOME START (7.18.0, APK_MODUS_RECHERCHE
+        # F5): the mode in `params` at the top, no map, no rooms.
+        payload = {"params": {"operatingMode": mode}}
+        await self.vacuum.send_command("start", payload)
+        record_command(self._config_entry, "start (mode)", payload)
 
     def _robot_o_mode(self) -> object:
         """`cap.oMode`: Classic in its state, Prime in a shadow (as the

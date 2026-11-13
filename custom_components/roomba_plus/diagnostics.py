@@ -1820,6 +1820,9 @@ def _field_evidence(data: Any) -> dict[str, Any]:
         "region_starts_in_open_cycle": list(
             getattr(data, "region_starts_in_open_cycle", None) or []
         ),
+        # 4.6.0: each watched command, how long its mission took to show
+        # (never measured on Prime before) or that it did not.
+        "command_watches": list(getattr(data, "command_watches", None) or []),
         # 4.3.4: the command a starting mission found, and the next one.
         "mission_start_commands": list(
             getattr(data, "mission_start_commands", None) or []

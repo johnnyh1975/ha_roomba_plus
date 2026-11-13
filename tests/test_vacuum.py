@@ -15,7 +15,7 @@ from unittest.mock import MagicMock
 from unittest.mock import patch
 import pytest
 
-from tests.conftest import robot_mock
+from tests.conftest import close_entry_tasks, robot_mock
 from custom_components.roomba_plus.umf_aligner import UmfAligner
 import json
 from pathlib import Path
@@ -109,7 +109,9 @@ def _make_vacuum_entity(state: dict | None = None, runtime_data=None):
     """Build a bare IRobotVacuum without HA setup."""
     roomba = _make_roomba(state)
     blid = "TEST_BLID"
-    entry = MagicMock()
+    # A start is watched in the background (4.5.2, both generations since
+    # 4.6.0); the watch is closed here rather than left unawaited.
+    entry = close_entry_tasks(MagicMock())
     entry.options = {}
     if runtime_data is not None:
         entry.runtime_data = runtime_data
@@ -1238,7 +1240,9 @@ def _make_prime_vacuum_entity() -> IRobotVacuum:
     v = object.__new__(IRobotVacuum)
     v.vacuum = None
     v.vacuum_state = {}
-    v._config_entry = MagicMock()
+    # The start is watched on Prime too (4.6.0); the watch is a background
+    # task of the entry, closed here rather than left unawaited.
+    v._config_entry = close_entry_tasks(MagicMock())
     v._cap_position = False
     v._segment_mismatch_streak = 0
     v._connection_type = ConnectionType.CLOUD_ONLY

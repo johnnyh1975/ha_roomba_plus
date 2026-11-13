@@ -124,6 +124,8 @@ from .const import (
     CONF_MAP_NOMOP_ZONES,
     CONF_MAP_ROOM_LABELS,
     CONF_REGION_SENSORS,
+    CONF_RESEND_SWALLOWED,
+    DEFAULT_RESEND_SWALLOWED,
     DEFAULT_REGION_SENSORS,
     CONF_PRESENCE_ENTITIES,
     CONF_PRESENCE_MODE,
@@ -1989,6 +1991,14 @@ class RoombaPlusOptionsFlow(OptionsFlow):
                                 CONF_REGION_SENSORS, DEFAULT_REGION_SENSORS
                             ),
                         ): bool,
+                        # Send a command the robot took and ignored once
+                        # more (4.6.0). Same option on both generations.
+                        vol.Optional(
+                            CONF_RESEND_SWALLOWED,
+                            default=options.get(
+                                CONF_RESEND_SWALLOWED, DEFAULT_RESEND_SWALLOWED
+                            ),
+                        ): bool,
                         vol.Optional(
                             CONF_MAP_ROOM_LABELS,
                             default=options.get(
@@ -2122,6 +2132,12 @@ class RoombaPlusOptionsFlow(OptionsFlow):
                     CONF_REGION_SENSORS,
                     default=options.get(
                         CONF_REGION_SENSORS, DEFAULT_REGION_SENSORS
+                    ),
+                ): bool,
+                vol.Optional(
+                    CONF_RESEND_SWALLOWED,
+                    default=options.get(
+                        CONF_RESEND_SWALLOWED, DEFAULT_RESEND_SWALLOWED
                     ),
                 ): bool,
                 vol.Optional(

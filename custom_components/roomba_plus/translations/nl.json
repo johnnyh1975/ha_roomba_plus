@@ -218,7 +218,8 @@
           "region_sensors": "Aparte sensor per kamer en zone",
           "map_rotation": "Kaartafbeelding draaien",
           "wall_thickness_cm": "Wanddikte (cm)",
-          "door_width_cm": "Deurbreedte (cm)"
+          "door_width_cm": "Deurbreedte (cm)",
+          "resend_swallowed_command": "Genegeerde opdracht één keer opnieuw sturen"
         },
         "data_description": {
           "map_enabled": "De live reinigingskaart inschakelen voor robots met positiebepaling (Roomba 900, i, s, j, Braava m).",
@@ -237,7 +238,8 @@
           "region_sensors": "Maakt een aparte sensor voor elke kamer en zone.",
           "map_rotation": "Draait elke kaartafbeelding als geheel met de klok mee, kamers en pad samen, bijvoorbeeld zodat ze overeenkomt met de iRobot-app. Het pad verschuift nooit ten opzichte van de kamers; daarvoor is ‘Pad uitlijnen op de kamers’. De kaart heeft geen noorden: boven is de richting waarin de robot keek toen hij het dock verliet, dus het hangt af van hoe het dock staat.",
           "wall_thickness_cm": "Hoe dik wanden op de kaarten worden getekend. Bij een robot uit de 900-serie bepaalt dit ook welke randen van twee ruimtes één wand zijn. Standaard 15.",
-          "door_width_cm": "Hoe breed een deur op de kaarten wordt getekend; een duidelijk bredere opening wordt als open doorgang getekend. Een robot met Smart Map zoekt bovendien naar deuren van ongeveer deze breedte wanneer hij zijn route op zijn ruimtes uitlijnt. Standaard 80."
+          "door_width_cm": "Hoe breed een deur op de kaarten wordt getekend; een duidelijk bredere opening wordt als open doorgang getekend. Een robot met Smart Map zoekt bovendien naar deuren van ongeveer deze breedte wanneer hij zijn route op zijn ruimtes uitlijnt. Standaard 80.",
+          "resend_swallowed_command": "Als de robot een start-, kamer- of zoneopdracht aanneemt en er begint geen missie, stuurt Roomba+ hem nog één keer. Alleen als de robot geen reden voor de weigering meldt."
         }
       },
       "smart_zones_manual": {
@@ -1950,6 +1952,17 @@
               "overdue": "Te laat",
               "done": "Gedaan",
               "snoozed": "Uitgesteld"
+            }
+          }
+        }
+      },
+      "command": {
+        "name": "Opdracht",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "not_delivered": "Niet uitgevoerd",
+              "state_frozen": "Status bevroren"
             }
           }
         }

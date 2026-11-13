@@ -1915,9 +1915,11 @@ class TestTheStartBlockedTrigger:
 
         from custom_components.roomba_plus import device_trigger
 
-        source = inspect.getsource(device_trigger)
-
-        assert '_find_entity(hass, device_id, "prime_start_blocked")' in source
+        # Both sensors since 4.6.0: the robot's own refusal (Prime) and a
+        # start held back by the blocking sensors (both generations).
+        assert device_trigger._TRIGGER_ENTITY_KEYS[device_trigger.TRIGGER_START_BLOCKED] == (
+            "prime_start_blocked", "start_blocked",
+        )
 
     def test_it_is_translated_everywhere(self):
         """An untranslated trigger shows the raw key in the automation

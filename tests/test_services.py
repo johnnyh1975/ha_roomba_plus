@@ -2557,21 +2557,150 @@ class TestASwallowedCommandIsReported:
             await _async_warn_if_swallowed(MagicMock(), entry, "clean_room")
         return caplog.text
 
-    @pytest.mark.asyncio
-    async def test_a_prime_robot_is_not_watched(self, caplog):
-        """4.5.2: a Prime robot has no local state, which read as "no
-        mission", so every Prime room clean was followed by the warning."""
+    @staticmethod
+    def _prime_entry(status, battery=90, options=None):
+        from collections import deque
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.command_watch import FrozenStateDetector
+        from custom_components.roomba_plus.models import ConnectionType
+
+        entry = MagicMock()
+        entry.entry_id = "E1"
+        entry.title = "Robo"
+        entry.options = options or {}
+        entry.runtime_data.roomba = None
+        entry.runtime_data.connection_type = ConnectionType.CLOUD_ONLY
+        entry.runtime_data.command_watches = deque(maxlen=20)
+        entry.runtime_data.frozen_state = FrozenStateDetector()
+        entry.runtime_data.prime_status_coordinator.data = {
+            "ro-currentstate": {"cleanMissionStatus": status, "batPct": battery},
+        }
+        return entry
+
+    @staticmethod
+    async def _watch(entry, resend=None):
         from unittest.mock import MagicMock, patch
 
         from custom_components.roomba_plus.services import _async_warn_if_swallowed
 
-        entry = MagicMock()
-        entry.runtime_data.roomba = None
+        hass = MagicMock()
         with patch(
             "custom_components.roomba_plus.services._SWALLOWED_COMMAND_GRACE_SEC", 0,
+        ), patch(
+            "custom_components.roomba_plus.services._PRIME_SWALLOWED_COMMAND_GRACE_SEC", 0,
         ):
-            await _async_warn_if_swallowed(MagicMock(), entry, "clean_room")
+            await _async_warn_if_swallowed(hass, entry, "clean_room", None, resend)
+        return hass
+
+    @pytest.mark.asyncio
+    async def test_a_prime_robot_is_watched_from_its_cloud_state(self, caplog):
+        """4.6.0. 4.5.2 took Prime out because the check read the local
+        state, which Prime does not have. Prime reports the same mission
+        status in `ro-currentstate`, and a confirmed command that never
+        reached the robot is in the field (Combo 105, 4.5.3)."""
+        entry = self._prime_entry({"cycle": "none", "phase": "charge", "notReady": 0, "error": 0})
+        hass = await self._watch(entry)
+        assert "no mission started" in caplog.text
+        hass.bus.async_fire.assert_called_once()
+        event, payload = hass.bus.async_fire.call_args.args
+        assert event == "roomba_plus_command_not_delivered"
+        assert payload["entry_id"] == "E1"
+        assert payload["command"] == "clean_room"
+        assert payload["resent"] is False
+        (rec,) = entry.runtime_data.command_watches
+        assert rec["generation"] == "prime"
+        assert rec["outcome"] == "not_delivered"
+
+    @pytest.mark.asyncio
+    async def test_a_prime_start_that_shows_is_recorded_and_not_reported(self, caplog):
+        """No false alarm after every Prime room clean (the 4.5.2 bug), and
+        the time it took is kept: nobody has measured it yet."""
+        entry = self._prime_entry({"cycle": "clean", "phase": "run", "notReady": 0, "error": 0})
+        hass = await self._watch(entry)
         assert "no mission started" not in caplog.text
+        hass.bus.async_fire.assert_not_called()
+        (rec,) = entry.runtime_data.command_watches
+        assert rec["outcome"] == "started"
+        assert "waited_sec" in rec
+
+    @pytest.mark.asyncio
+    async def test_it_is_sent_once_more_and_then_reported(self, caplog):
+        """A3: once, only when nothing explains the refusal."""
+        from unittest.mock import AsyncMock
+
+        entry = self._prime_entry({"cycle": "none", "phase": "charge", "notReady": 0, "error": 0})
+        resend = AsyncMock()
+        hass = await self._watch(entry, resend)
+        resend.assert_awaited_once()
+        hass.bus.async_fire.assert_called_once()
+        assert hass.bus.async_fire.call_args.args[1]["resent"] is True
+        assert [r["outcome"] for r in entry.runtime_data.command_watches] == [
+            "resent", "not_delivered",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_a_resent_command_that_starts_is_not_reported(self):
+        from unittest.mock import AsyncMock
+
+        entry = self._prime_entry({"cycle": "none", "phase": "charge", "notReady": 0, "error": 0})
+        coordinator = entry.runtime_data.prime_status_coordinator
+
+        async def _starts() -> None:
+            coordinator.data = {"ro-currentstate": {
+                "cleanMissionStatus": {"cycle": "clean", "phase": "run"}, "batPct": 90,
+            }}
+
+        resend = AsyncMock(side_effect=_starts)
+        hass = await self._watch(entry, resend)
+        hass.bus.async_fire.assert_not_called()
+        assert [r["outcome"] for r in entry.runtime_data.command_watches] == [
+            "resent", "started",
+        ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("status", [
+        {"cycle": "none", "phase": "stop", "notReady": 1, "error": 0},
+        {"cycle": "none", "phase": "stop", "notReady": 0, "error": 15},
+    ])
+    async def test_a_robot_with_a_reason_is_not_asked_again(self, status):
+        from unittest.mock import AsyncMock
+
+        entry = self._prime_entry(status)
+        resend = AsyncMock()
+        hass = await self._watch(entry, resend)
+        resend.assert_not_awaited()
+        hass.bus.async_fire.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_a_frozen_state_is_not_asked_again(self):
+        """@utkjmitch's Y351020: 61 hours of ignored commands; only a power
+        cycle helped. Sending again into that changes nothing."""
+        from unittest.mock import AsyncMock
+
+        entry = self._prime_entry({"cycle": "none", "phase": "charge", "notReady": 0, "error": 0})
+        entry.runtime_data.frozen_state.reported = True
+        resend = AsyncMock()
+        await self._watch(entry, resend)
+        resend.assert_not_awaited()
+
+    @pytest.mark.parametrize(("options", "kept"), [
+        ({}, True),
+        ({"resend_swallowed_command": True}, True),
+        ({"resend_swallowed_command": False}, False),
+    ])
+    def test_the_option_turns_sending_again_off(self, options, kept):
+        from types import MappingProxyType
+        from unittest.mock import MagicMock, patch
+
+        from custom_components.roomba_plus import services
+
+        entry = MagicMock()
+        entry.options = MappingProxyType(options)
+        resend = MagicMock()
+        with patch.object(services, "_async_warn_if_swallowed", MagicMock()) as watch:
+            services.watch_for_swallowed_command(MagicMock(), entry, "start", None, resend)
+        assert (watch.call_args.args[4] is resend) is kept
 
     @pytest.mark.asyncio
     async def test_a_start_into_an_open_mission_is_recorded(self, caplog):
@@ -2675,6 +2804,18 @@ class TestASwallowedCommandIsReported:
         )
 
         assert "notReady=1" in text
+
+    @pytest.mark.asyncio
+    async def test_the_numbers_are_named(self, caplog):
+        """@Thonno's i7+ (error 224, notReady 68) had to ask what the
+        numbers meant. The lookup meant to name them read a table whose
+        entries had changed shape and never added anything (4.6.0)."""
+        text = await self._run(
+            {"cycle": "none", "phase": "stop", "notReady": 1, "error": 224},
+            caplog,
+        )
+        assert "Error 224 is 'Smart Map problem'" in text
+        assert "while detecting a cliff" in text
 
     @pytest.mark.asyncio
     async def test_an_unreadable_state_does_not_raise(self, caplog):

@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from homeassistant.config_entries import ConfigEntry
 
+from .command_watch import FrozenStateDetector
 from .position_room import PathTurnLearner, PositionRoomTracker
 
 if TYPE_CHECKING:
@@ -525,6 +526,16 @@ class RoombaData:
     region_starts_in_open_cycle: deque[dict[str, Any]] = field(
         default_factory=lambda: deque(maxlen=10)
     )
+    #: Each watched command and how it ended (4.6.0, command_watch.py):
+    #: when the mission opened, or that it did not, and whether it was
+    #: sent again. How long a Prime robot's cloud state takes to show a
+    #: start has never been measured; these are the measurement.
+    #: Command name, timings and status codes only.
+    command_watches: deque[dict[str, Any]] = field(
+        default_factory=lambda: deque(maxlen=20)
+    )
+    #: "Running" while the battery charges (4.6.0, command_watch.py).
+    frozen_state: FrozenStateDetector = field(default_factory=FrozenStateDetector)
     #: Which command a starting mission found, and the next one the
     #: robot reported after it (4.3.4). Whether a robot reports the
     #: running mission before its new last command decides how far

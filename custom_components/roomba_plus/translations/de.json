@@ -218,7 +218,8 @@
           "region_sensors": "Eigener Sensor je Raum und Zone",
           "map_rotation": "Kartenbild drehen",
           "wall_thickness_cm": "Wandstärke (cm)",
-          "door_width_cm": "Türbreite (cm)"
+          "door_width_cm": "Türbreite (cm)",
+          "resend_swallowed_command": "Ignorierten Befehl einmal erneut senden"
         },
         "data_description": {
           "map_enabled": "Aktiviert die Live-Reinigungskarte für Roboter mit Positionserkennung (Roomba 900, i, s, j, Braava m).",
@@ -237,7 +238,8 @@
           "region_sensors": "Legt für jeden Raum und jede Zone einen eigenen Sensor an.",
           "map_rotation": "Dreht jedes Kartenbild als Ganzes im Uhrzeigersinn, Räume und Weg gemeinsam, etwa passend zur iRobot-App. Den Weg gegen die Räume verschiebt es nie, dafür gibt es „Weg an den Räumen ausrichten“. Die Karte hat keine Nordrichtung: Oben ist die Richtung, in die der Roboter beim Verlassen des Docks schaut. Sie hängt davon ab, wie das Dock steht.",
           "wall_thickness_cm": "Wie dick Wände auf den Karten gezeichnet werden. Bei einem Roboter der 900er-Serie entscheidet der Wert auch, welche Ränder zweier Räume eine gemeinsame Wand sind. Standard 15.",
-          "door_width_cm": "Wie breit eine Tür auf den Karten gezeichnet wird; eine deutlich breitere Öffnung erscheint als offener Durchgang. Ein Roboter mit Smart Map sucht außerdem Türen etwa dieser Breite, wenn er seine Fahrspur an seinen Räumen ausrichtet. Standard 80."
+          "door_width_cm": "Wie breit eine Tür auf den Karten gezeichnet wird; eine deutlich breitere Öffnung erscheint als offener Durchgang. Ein Roboter mit Smart Map sucht außerdem Türen etwa dieser Breite, wenn er seine Fahrspur an seinen Räumen ausrichtet. Standard 80.",
+          "resend_swallowed_command": "Nimmt der Roboter einen Start-, Raum- oder Zonenbefehl an und beginnt keine Mission, sendet Roomba+ ihn noch einmal. Nur wenn der Roboter keinen Grund für die Ablehnung meldet."
         }
       },
       "smart_zones_manual": {
@@ -1950,6 +1952,17 @@
               "overdue": "Überfällig",
               "done": "Erledigt",
               "snoozed": "Zurückgestellt"
+            }
+          }
+        }
+      },
+      "command": {
+        "name": "Befehl",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "not_delivered": "Nicht ausgeführt",
+              "state_frozen": "Zustand eingefroren"
             }
           }
         }

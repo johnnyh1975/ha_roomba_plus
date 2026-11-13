@@ -32,8 +32,10 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 
 from .const import (
+    EVENT_COMMAND_NOT_DELIVERED,
     EVENT_MISSION_COMPLETED,
     EVENT_ROOM_COMPLETED,
+    EVENT_STATE_FROZEN,
     EVENT_STUCK,
     maintenance_event_signal,
 )
@@ -51,6 +53,17 @@ _MOMENTS: tuple[tuple[str, str, str], ...] = (
 
 #: Moments a Prime robot never reports.
 _CLASSIC_ONLY = frozenset({"stuck"})
+
+#: ONE ENTITY, SEVERAL KINDS (4.6.0). Where the kinds answer one question
+#: a card or an automation asks -- "did the robot do what it was told?"
+#: -- they share an entity and differ by event type. Each bus event is
+#: still fired on its own, as every other moment is.
+_GROUPED_MOMENTS: tuple[tuple[str, dict[str, str]], ...] = (
+    ("command", {
+        EVENT_COMMAND_NOT_DELIVERED: "not_delivered",
+        EVENT_STATE_FROZEN: "state_frozen",
+    }),
+)
 
 
 async def async_setup_entry(
@@ -72,6 +85,11 @@ async def async_setup_entry(
         entities.append(
             RoombaMaintenanceEvent(None if prime else data.roomba, data.blid, config_entry)
         )
+    for key, bus_events in _GROUPED_MOMENTS:
+        entities.append(RoombaGroupedEvent(
+            None if prime else data.roomba, data.blid, config_entry,
+            key=key, bus_events=bus_events,
+        ))
     async_add_entities(entities)
 
 
@@ -151,5 +169,53 @@ class RoombaMaintenanceEvent(IRobotEntity, EventEntity):
 
     @callback
     def _on_maintenance(self, event_type: str, payload: dict[str, Any]) -> None:
+        self._trigger_event(event_type, payload)
+        self.async_write_ha_state()
+
+
+class RoombaGroupedEvent(IRobotEntity, EventEntity):
+    """Several bus events of this robot as one event entity (4.6.0).
+
+    Both generations. The event type says which bus event it was; the
+    payload, `entry_id` included, is the event's data.
+    """
+
+    _attr_has_entity_name = True
+
+    def __init__(
+        self,
+        roomba: Any,
+        blid: str,
+        config_entry: RoombaConfigEntry,
+        *,
+        key: str,
+        bus_events: dict[str, str],
+    ) -> None:
+        super().__init__(roomba, blid, config_entry)
+        self._config_entry = config_entry
+        self._bus_events = dict(bus_events)
+        self._attr_translation_key = key
+        self._attr_event_types = list(bus_events.values())
+        self._attr_unique_id = f"{self.robot_unique_id}_{key}"
+
+    def new_state_filter(self, new_state: dict[str, Any]) -> bool:
+        """Never on a robot message: the state changes only on an event."""
+        return False
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        for bus_event in self._bus_events:
+            self.async_on_remove(
+                self.hass.bus.async_listen(bus_event, self._on_bus_event)
+            )
+
+    @callback
+    def _on_bus_event(self, event: Event[Any]) -> None:
+        payload = dict(event.data or {})
+        if payload.get("entry_id") != self._config_entry.entry_id:
+            return
+        event_type = self._bus_events.get(str(event.event_type))
+        if event_type is None:
+            return
         self._trigger_event(event_type, payload)
         self.async_write_ha_state()

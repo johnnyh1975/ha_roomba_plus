@@ -218,7 +218,8 @@
           "region_sensors": "Sensor separado por divisão e zona",
           "map_rotation": "Rodar a imagem do mapa",
           "wall_thickness_cm": "Espessura das paredes (cm)",
-          "door_width_cm": "Largura das portas (cm)"
+          "door_width_cm": "Largura das portas (cm)",
+          "resend_swallowed_command": "Reenviar uma vez um comando ignorado"
         },
         "data_description": {
           "map_enabled": "Ativar o mapa de limpeza em tempo real para robôs com deteção de posição (Roomba 900, i, s, j, Braava m).",
@@ -237,7 +238,8 @@
           "region_sensors": "Cria um sensor próprio para cada divisão e zona.",
           "map_rotation": "Roda cada imagem do mapa por inteiro no sentido dos ponteiros do relógio, divisões e percurso juntos, por exemplo para coincidir com a app iRobot. Nunca move o percurso em relação às divisões; para isso existe «Alinhar o percurso com as divisões». O mapa não tem norte: o topo é a direção em que o robô estava virado ao sair da base, por isso depende de como a base está colocada.",
           "wall_thickness_cm": "Espessura com que as paredes são desenhadas nos mapas. Num robô da série 900 decide também que limites de duas divisões são uma única parede. Predefinição 15.",
-          "door_width_cm": "Largura com que uma porta é desenhada nos mapas; uma abertura claramente mais larga é desenhada como passagem aberta. Um robô com Smart Map procura também portas com cerca desta largura quando alinha o seu percurso com as divisões. Predefinição 80."
+          "door_width_cm": "Largura com que uma porta é desenhada nos mapas; uma abertura claramente mais larga é desenhada como passagem aberta. Um robô com Smart Map procura também portas com cerca desta largura quando alinha o seu percurso com as divisões. Predefinição 80.",
+          "resend_swallowed_command": "Se o robô aceitar um comando de início, divisão ou zona e nenhuma missão começar, o Roomba+ envia-o mais uma vez. Apenas quando o robô não indica nenhum motivo para a recusa."
         }
       },
       "smart_zones_manual": {
@@ -1950,6 +1952,17 @@
               "overdue": "Atrasado",
               "done": "Feito",
               "snoozed": "Adiado"
+            }
+          }
+        }
+      },
+      "command": {
+        "name": "Comando",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "not_delivered": "Não executado",
+              "state_frozen": "Estado congelado"
             }
           }
         }
