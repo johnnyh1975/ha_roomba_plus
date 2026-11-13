@@ -2268,6 +2268,24 @@
           "description": "La mission dont les pièces sont à nettoyer à nouveau (l’ID de l’historique des missions). Vide : la dernière mission."
         }
       }
+    },
+    "debug_capture_start": {
+      "name": "Démarrer la capture de débogage",
+      "description": "Conserve en mémoire le journal de débogage de Roomba+, sans adresses, noms de réseau, identifiants de robot, positions ni secrets. Sans redémarrage ; s’arrête seule après la durée indiquée.",
+      "fields": {
+        "minutes": {
+          "name": "Minutes",
+          "description": "Durée de la capture avant l’arrêt automatique."
+        }
+      }
+    },
+    "debug_capture_stop": {
+      "name": "Arrêter la capture de débogage",
+      "description": "Arrête la capture et rétablit les niveaux de journal ; renvoie les lignes conservées si une réponse est demandée."
+    },
+    "debug_capture_get": {
+      "name": "Récupérer la capture de débogage",
+      "description": "Renvoie les lignes de la capture, anonymisées, prêtes à coller dans un ticket."
     }
   },
   "exceptions": {

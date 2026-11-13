@@ -2268,6 +2268,24 @@
           "description": "Die Mission, deren Räume nachgeholt werden (die ID aus dem Missionsverlauf). Leer: die letzte Mission."
         }
       }
+    },
+    "debug_capture_start": {
+      "name": "Debug-Mitschnitt starten",
+      "description": "Hält das Debug-Log von Roomba+ im Speicher, ohne Adressen, Netzwerknamen, Roboter-IDs, Positionen und Geheimnisse. Ohne Neustart; endet von selbst nach der angegebenen Zeit.",
+      "fields": {
+        "minutes": {
+          "name": "Minuten",
+          "description": "Wie lange mitgeschnitten wird, bevor es von selbst endet."
+        }
+      }
+    },
+    "debug_capture_stop": {
+      "name": "Debug-Mitschnitt beenden",
+      "description": "Beendet den Debug-Mitschnitt und stellt die Log-Stufen zurück; gibt auf Wunsch die bisherigen Zeilen zurück."
+    },
+    "debug_capture_get": {
+      "name": "Debug-Mitschnitt abrufen",
+      "description": "Gibt die Zeilen des Debug-Mitschnitts zurück, geschwärzt und fertig zum Einfügen in ein Issue."
     }
   },
   "exceptions": {

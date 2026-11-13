@@ -2268,6 +2268,24 @@
           "description": "Misja, której pokoje mają zostać posprzątane ponownie (ID z historii misji). Puste: ostatnia misja."
         }
       }
+    },
+    "debug_capture_start": {
+      "name": "Rozpocznij zapis debugowania",
+      "description": "Przechowuje w pamięci dziennik debugowania Roomba+, bez adresów, nazw sieci, identyfikatorów robotów, pozycji i sekretów. Bez restartu; kończy się sam po podanym czasie.",
+      "fields": {
+        "minutes": {
+          "name": "Minuty",
+          "description": "Jak długo zapisywać, zanim zapis zakończy się sam."
+        }
+      }
+    },
+    "debug_capture_stop": {
+      "name": "Zakończ zapis debugowania",
+      "description": "Kończy zapis i przywraca poziomy dziennika; na żądanie zwraca zebrane wiersze."
+    },
+    "debug_capture_get": {
+      "name": "Pobierz zapis debugowania",
+      "description": "Zwraca wiersze zapisu, zanonimizowane i gotowe do wklejenia w zgłoszeniu."
     }
   },
   "exceptions": {

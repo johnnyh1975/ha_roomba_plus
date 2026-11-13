@@ -2268,6 +2268,24 @@
           "description": "La misión cuyas habitaciones se limpian de nuevo (el ID del historial de misiones). Vacío: la última misión."
         }
       }
+    },
+    "debug_capture_start": {
+      "name": "Iniciar captura de depuración",
+      "description": "Guarda en memoria el registro de depuración de Roomba+, sin direcciones, nombres de red, IDs de robot, posiciones ni secretos. Sin reiniciar; se detiene sola tras el tiempo indicado.",
+      "fields": {
+        "minutes": {
+          "name": "Minutos",
+          "description": "Cuánto tiempo capturar antes de detenerse sola."
+        }
+      }
+    },
+    "debug_capture_stop": {
+      "name": "Detener captura de depuración",
+      "description": "Detiene la captura y restablece los niveles de registro; devuelve las líneas guardadas si se pide respuesta."
+    },
+    "debug_capture_get": {
+      "name": "Obtener captura de depuración",
+      "description": "Devuelve las líneas de la captura, ya anonimizadas, listas para pegar en un issue."
     }
   },
   "exceptions": {

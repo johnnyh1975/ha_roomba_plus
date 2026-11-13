@@ -40,6 +40,9 @@ from .service_guard import register as register_guarded
 from .dirt_threshold_manager import async_read_prime_clean_scores, qualified_room_id
 from .prime_dirt import dirty_rooms
 from .const import (
+    SERVICE_DEBUG_CAPTURE_GET,
+    SERVICE_DEBUG_CAPTURE_START,
+    SERVICE_DEBUG_CAPTURE_STOP,
     SERVICE_RETRY_MISSED_ROOMS,
     CONF_RESEND_SWALLOWED,
     DEFAULT_RESEND_SWALLOWED,
@@ -86,6 +89,9 @@ from .prime_coordinator import prime_region_names_from_command
 from .room_cleaning import ZID_PREFIX, async_get_room_cleaning_backend
 from .zone_naming import resolve_zone_name
 from . import command_watch
+from .debug_capture import DEFAULT_MINUTES as DEBUG_DEFAULT_MINUTES
+from .debug_capture import MAX_MINUTES as DEBUG_MAX_MINUTES
+from .debug_capture import get_capture as get_debug_capture
 from .mission_result import rooms_to_retry
 from .models import ConnectionType, RoombaConfigEntry, RoombaData
 from .prime_coordinator import prime_current_state
@@ -1762,6 +1768,28 @@ async def async_handle_reset_robot_profile(call: ServiceCall) -> None:
 
 # ── v3.2.0 ANOMALY-EXPLAIN ──────────────────────────────────────────────────
 
+async def async_handle_debug_capture_start(call: ServiceCall) -> None:
+    """Handle roomba_plus.debug_capture_start (4.6.0, A1, debug_capture.py)."""
+    minutes = int(call.data.get("minutes", DEBUG_DEFAULT_MINUTES))
+    get_debug_capture(call.hass).start(call.hass, minutes)
+    _LOGGER.info(
+        "Roomba+ debug capture started for %d minutes; the lines are kept in "
+        "memory, redacted, until roomba_plus.debug_capture_get.", minutes,
+    )
+
+
+async def async_handle_debug_capture_stop(call: ServiceCall) -> dict[str, Any]:
+    """Handle roomba_plus.debug_capture_stop: stop, and return what was kept."""
+    capture = get_debug_capture(call.hass)
+    capture.stop()
+    return capture.report()
+
+
+async def async_handle_debug_capture_get(call: ServiceCall) -> dict[str, Any]:
+    """Handle roomba_plus.debug_capture_get: the lines kept so far."""
+    return get_debug_capture(call.hass).report()
+
+
 async def async_handle_retry_missed_rooms(call: ServiceCall) -> None:
     """Handle roomba_plus.retry_missed_rooms (4.6.0, A5).
 
@@ -2440,6 +2468,35 @@ def async_register_services(hass: HomeAssistant) -> None:
             supports_response=SupportsResponse.ONLY,
         )
         _LOGGER.debug("Registered %s.%s action", DOMAIN, SERVICE_EXPLAIN_MISSION)
+
+    # ── 4.6.0 A1 — debug capture ──────────────────────────────────────────────
+    if not hass.services.has_service(DOMAIN, SERVICE_DEBUG_CAPTURE_START):
+        register_guarded(hass,
+            DOMAIN,
+            SERVICE_DEBUG_CAPTURE_START,
+            async_handle_debug_capture_start,
+            schema=vol.Schema({
+                vol.Optional("minutes", default=DEBUG_DEFAULT_MINUTES): vol.All(
+                    vol.Coerce(int), vol.Range(min=1, max=DEBUG_MAX_MINUTES),
+                ),
+            }),
+        )
+    if not hass.services.has_service(DOMAIN, SERVICE_DEBUG_CAPTURE_STOP):
+        register_guarded(hass,
+            DOMAIN,
+            SERVICE_DEBUG_CAPTURE_STOP,
+            async_handle_debug_capture_stop,
+            schema=vol.Schema({}),
+            supports_response=SupportsResponse.OPTIONAL,
+        )
+    if not hass.services.has_service(DOMAIN, SERVICE_DEBUG_CAPTURE_GET):
+        register_guarded(hass,
+            DOMAIN,
+            SERVICE_DEBUG_CAPTURE_GET,
+            async_handle_debug_capture_get,
+            schema=vol.Schema({}),
+            supports_response=SupportsResponse.ONLY,
+        )
 
     # ── 4.6.0 A5 — retry_missed_rooms ─────────────────────────────────────────
     if not hass.services.has_service(DOMAIN, SERVICE_RETRY_MISSED_ROOMS):

@@ -2268,6 +2268,24 @@
           "description": "The mission whose rooms to clean again (the id from the mission history). Empty: the latest mission."
         }
       }
+    },
+    "debug_capture_start": {
+      "name": "Start debug capture",
+      "description": "Keeps the debug log of Roomba+ in memory, with addresses, network names, robot ids, positions and secrets removed. No restart needed; stops by itself after the given time.",
+      "fields": {
+        "minutes": {
+          "name": "Minutes",
+          "description": "How long to capture before it stops by itself."
+        }
+      }
+    },
+    "debug_capture_stop": {
+      "name": "Stop debug capture",
+      "description": "Stops the debug capture and puts the log levels back; returns the lines kept so far when asked for a response."
+    },
+    "debug_capture_get": {
+      "name": "Get debug capture",
+      "description": "Returns the lines of the debug capture, redacted, ready to paste into an issue."
     }
   },
   "exceptions": {

@@ -1004,6 +1004,9 @@ SERVICE_CLEAN_OVERDUE_ROOMS: Final = "clean_overdue_rooms"  # v3.3.0 ROOM-SCHED
 SERVICE_AUTO_CLEAN_DIRTY_ROOMS: Final = "auto_clean_dirty_rooms"  # v3.3.0 SMART-ORDER
 SERVICE_EXPLAIN_MISSION: Final = "explain_mission"  # v3.2.0 ANOMALY-EXPLAIN
 SERVICE_RETRY_MISSED_ROOMS: Final = "retry_missed_rooms"  # 4.6.0, A5
+SERVICE_DEBUG_CAPTURE_START: Final = "debug_capture_start"  # 4.6.0, A1
+SERVICE_DEBUG_CAPTURE_STOP: Final = "debug_capture_stop"
+SERVICE_DEBUG_CAPTURE_GET: Final = "debug_capture_get"
 SERVICE_CREATE_BACKUP: Final = "create_backup"  # v3.5.0 FULL-BACKUP
 SERVICE_RESTORE_BACKUP: Final = "restore_backup"  # v3.5.0 FULL-BACKUP
 

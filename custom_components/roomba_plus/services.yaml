@@ -244,6 +244,37 @@ retry_missed_rooms:
       selector:
         text:
 
+debug_capture_start:
+  name: Start debug capture
+  description: >-
+    Turns on debug logging for Roomba+, roombapy and roombapy-prime and
+    keeps the lines in memory, with addresses, network names, robot ids,
+    positions and anything secret-shaped already removed. No restart, no
+    configuration.yaml. Stops by itself after the given time.
+  fields:
+    minutes:
+      name: Minutes
+      description: How long to capture before it stops by itself.
+      required: false
+      default: 30
+      selector:
+        number:
+          min: 1
+          max: 240
+          unit_of_measurement: min
+
+debug_capture_stop:
+  name: Stop debug capture
+  description: >-
+    Stops the debug capture and puts the log levels back. Returns the
+    lines kept so far when called with a response.
+
+debug_capture_get:
+  name: Get debug capture
+  description: >-
+    Returns the lines of the debug capture, redacted, ready to paste into
+    an issue.
+
 clean_overdue_rooms:
   name: Clean overdue rooms
   description: >-

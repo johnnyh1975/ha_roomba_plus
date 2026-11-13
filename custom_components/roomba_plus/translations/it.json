@@ -2268,6 +2268,24 @@
           "description": "La missione le cui stanze vanno pulite di nuovo (l’ID dalla cronologia delle missioni). Vuoto: l’ultima missione."
         }
       }
+    },
+    "debug_capture_start": {
+      "name": "Avvia acquisizione di debug",
+      "description": "Mantiene in memoria il log di debug di Roomba+, senza indirizzi, nomi di rete, ID dei robot, posizioni e segreti. Senza riavvio; si ferma da sola dopo il tempo indicato.",
+      "fields": {
+        "minutes": {
+          "name": "Minuti",
+          "description": "Quanto a lungo acquisire prima di fermarsi da sola."
+        }
+      }
+    },
+    "debug_capture_stop": {
+      "name": "Ferma acquisizione di debug",
+      "description": "Ferma l’acquisizione e ripristina i livelli di log; restituisce le righe raccolte se si chiede una risposta."
+    },
+    "debug_capture_get": {
+      "name": "Recupera acquisizione di debug",
+      "description": "Restituisce le righe dell’acquisizione, già anonimizzate, pronte da incollare in una segnalazione."
     }
   },
   "exceptions": {

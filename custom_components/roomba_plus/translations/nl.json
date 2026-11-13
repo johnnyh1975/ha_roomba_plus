@@ -2268,6 +2268,24 @@
           "description": "De missie waarvan de kamers opnieuw worden gereinigd (de ID uit de missiegeschiedenis). Leeg: de laatste missie."
         }
       }
+    },
+    "debug_capture_start": {
+      "name": "Debugopname starten",
+      "description": "Houdt het debuglogboek van Roomba+ in het geheugen, zonder adressen, netwerknamen, robot-ID's, posities en geheimen. Zonder herstart; stopt vanzelf na de opgegeven tijd.",
+      "fields": {
+        "minutes": {
+          "name": "Minuten",
+          "description": "Hoe lang er wordt opgenomen voordat het vanzelf stopt."
+        }
+      }
+    },
+    "debug_capture_stop": {
+      "name": "Debugopname stoppen",
+      "description": "Stopt de opname en zet de logniveaus terug; geeft de bewaarde regels terug als om een antwoord wordt gevraagd."
+    },
+    "debug_capture_get": {
+      "name": "Debugopname ophalen",
+      "description": "Geeft de regels van de opname terug, geanonimiseerd en klaar om in een issue te plakken."
     }
   },
   "exceptions": {
