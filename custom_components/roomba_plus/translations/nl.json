@@ -219,7 +219,8 @@
           "map_rotation": "Kaartafbeelding draaien",
           "wall_thickness_cm": "Wanddikte (cm)",
           "door_width_cm": "Deurbreedte (cm)",
-          "resend_swallowed_command": "Genegeerde opdracht één keer opnieuw sturen"
+          "resend_swallowed_command": "Genegeerde opdracht één keer opnieuw sturen",
+          "pause_timeout_minutes": "Na een pauze naar huis sturen (minuten)"
         },
         "data_description": {
           "map_enabled": "De live reinigingskaart inschakelen voor robots met positiebepaling (Roomba 900, i, s, j, Braava m).",
@@ -239,7 +240,8 @@
           "map_rotation": "Draait elke kaartafbeelding als geheel met de klok mee, kamers en pad samen, bijvoorbeeld zodat ze overeenkomt met de iRobot-app. Het pad verschuift nooit ten opzichte van de kamers; daarvoor is ‘Pad uitlijnen op de kamers’. De kaart heeft geen noorden: boven is de richting waarin de robot keek toen hij het dock verliet, dus het hangt af van hoe het dock staat.",
           "wall_thickness_cm": "Hoe dik wanden op de kaarten worden getekend. Bij een robot uit de 900-serie bepaalt dit ook welke randen van twee ruimtes één wand zijn. Standaard 15.",
           "door_width_cm": "Hoe breed een deur op de kaarten wordt getekend; een duidelijk bredere opening wordt als open doorgang getekend. Een robot met Smart Map zoekt bovendien naar deuren van ongeveer deze breedte wanneer hij zijn route op zijn ruimtes uitlijnt. Standaard 80.",
-          "resend_swallowed_command": "Als de robot een start-, kamer- of zoneopdracht aanneemt en er begint geen missie, stuurt Roomba+ hem nog één keer. Alleen als de robot geen reden voor de weigering meldt."
+          "resend_swallowed_command": "Als de robot een start-, kamer- of zoneopdracht aanneemt en er begint geen missie, stuurt Roomba+ hem nog één keer. Alleen als de robot geen reden voor de weigering meldt.",
+          "pause_timeout_minutes": "Een robot die zo lang gepauzeerd staat, wordt naar zijn basis teruggestuurd. 0 schakelt dit uit."
         }
       },
       "smart_zones_manual": {
@@ -1482,6 +1484,24 @@
       },
       "estimated_end_time": {
         "name": "Verwacht einde"
+      },
+      "area_last_vacuumed": {
+        "name": "{area} laatst gezogen"
+      },
+      "area_last_mopped": {
+        "name": "{area} laatst gedweild"
+      },
+      "prime_stream_shadows": {
+        "name": "Laatste statusbericht"
+      },
+      "prime_stream_timeline": {
+        "name": "Laatste tijdlijnbericht"
+      },
+      "prime_stream_live_map": {
+        "name": "Laatste livekaartbericht"
+      },
+      "prime_stream_rejections": {
+        "name": "Laatste weigeringsbericht"
       }
     },
     "binary_sensor": {

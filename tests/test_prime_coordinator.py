@@ -1179,6 +1179,8 @@ class TestRejectedCommandWatch:
 
         c.prime_robot.watch_rejected_commands = _watch
         c.blid = "PRIMECOORD"
+        # B16 (4.6.0): each message is noted on the entry's data.
+        c.entry = MagicMock()
         return c
 
     @pytest.mark.asyncio
@@ -1956,3 +1958,25 @@ class TestThePrimeMissionsBattery:
     async def test_nothing_seen_nothing_kept(self):
         data = await self._run([("clean", 50), ("none", 40)])
         assert data.prime_mission_end_figures == {}
+
+
+class TestEachStreamIsNoted:
+    """B16 (4.6.0): note_stream() keeps when each stream last spoke."""
+
+    def test_noted(self):
+        data = SimpleNamespace(prime_stream_seen={})
+        pc.note_stream(data, "timeline")
+        assert set(data.prime_stream_seen) == {"timeline"}
+        pc.note_stream(SimpleNamespace(), "timeline")  # no field, no error
+
+    @pytest.mark.asyncio
+    async def test_the_rejections_stream(self, monkeypatch):
+        async def _sleep(_s):
+            raise asyncio.CancelledError
+
+        monkeypatch.setattr(pc.asyncio, "sleep", _sleep)
+        c = TestRejectedCommandWatch()._coord([[SimpleNamespace(cmd="x")]])
+        c.entry.runtime_data = SimpleNamespace(prime_stream_seen={})
+        with pytest.raises(asyncio.CancelledError):
+            await c._async_watch_rejected_commands()
+        assert "rejections" in c.entry.runtime_data.prime_stream_seen

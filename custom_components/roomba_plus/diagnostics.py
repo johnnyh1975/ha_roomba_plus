@@ -1596,6 +1596,14 @@ def _push_freshness(data: Any) -> dict[str, Any]:
             if age > 900
             else "recent"
         ),
+        # B16 (4.6.0): per stream, so a quiet one shows beside a live one.
+        # Seconds since its last message; a stream absent here has said
+        # nothing since setup.
+        "streams_seconds_ago": {
+            str(name): round(_time_mod.time() - float(when))
+            for name, when in (getattr(data, "prime_stream_seen", None) or {}).items()
+            if isinstance(when, (int, float)) and not isinstance(when, bool)
+        },
     }
 
 

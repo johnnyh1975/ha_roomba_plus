@@ -313,6 +313,10 @@ EVENT_MISSION_STARTED: Final = f"{DOMAIN}_mission_started"
 #: default: it only acts when nothing explains the refusal, and only once.
 CONF_RESEND_SWALLOWED: Final = "resend_swallowed_command"
 DEFAULT_RESEND_SWALLOWED: Final = True
+#: Minutes a robot may stand paused before Roomba+ sends it home (4.6.0,
+#: B15, pause_timeout.py). 0 is off, the default.
+CONF_PAUSE_TIMEOUT_MIN: Final = "pause_timeout_minutes"
+DEFAULT_PAUSE_TIMEOUT_MIN: Final = 0
 
 # ── v1.7.0 — L7 Zone aliases & hidden ────────────────────────────────────────
 # F11 — demand-based cleaning (DirtThresholdManager)

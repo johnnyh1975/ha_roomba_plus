@@ -5683,3 +5683,32 @@ class TestMissingCommandData:
         store._records = [{"id": "p_m1", "initiator": "schedule"}]
         assert store.add_missing_command_data({"id": "p_m1", "initiator": "schedule", "scope": "whole_home"})
         assert store._records[0]["scope"] == "whole_home"
+
+
+class TestRoomHistoryByMode:
+    """B14 (4.6.0): the room history split by vacuum and mop."""
+
+    def test_vacuum_mop_and_both(self):
+        from custom_components.roomba_plus.mission_store import MissionStore
+
+        store = MissionStore()
+        store._records = [
+            {"id": "m_1", "ended_at": "2026-11-10T10:00:00+00:00",
+             "last_cleaned_rooms": ["Kitchen"], "cmd": {"operatingMode": 6}},
+            {"id": "m_2", "ended_at": "2026-11-11T10:00:00+00:00",
+             "last_cleaned_rooms": ["Kitchen", "Hall"], "cmd": {"operatingMode": 2}},
+            {"id": "m_3", "ended_at": "2026-11-12T10:00:00+00:00",
+             "last_cleaned_rooms": ["Hall"]},
+        ]
+        assert store.room_cleaning_history_by_mode() == {
+            "Hall": {"vacuum": "2026-11-12T10:00:00+00:00"},
+            "Kitchen": {"vacuum": "2026-11-11T10:00:00+00:00", "mop": "2026-11-10T10:00:00+00:00"},
+        }
+        # A Braava's missions without a mode are mops.
+        assert store.room_cleaning_history_by_mode(default_mode="mop")["Hall"] == {
+            "mop": "2026-11-12T10:00:00+00:00", "vacuum": "2026-11-11T10:00:00+00:00",
+        }
+        # The combined history is unchanged.
+        assert store.room_cleaning_history() == {
+            "Hall": "2026-11-12T10:00:00+00:00", "Kitchen": "2026-11-11T10:00:00+00:00",
+        }

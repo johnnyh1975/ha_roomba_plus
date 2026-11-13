@@ -68,6 +68,13 @@ class TestServicesRegistration:
 
         class _FakeHass:
             services = _Services()
+            #: Background work async_setup starts (4.6.0: the blueprint
+            #: copy); closed here, it is tested in test_blueprint_install.
+            tasks: list[str] = []
+
+            def async_create_background_task(self, coro, name):
+                coro.close()
+                self.tasks.append(name)
 
         return _FakeHass(), registered
 

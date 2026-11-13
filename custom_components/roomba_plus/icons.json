@@ -447,6 +447,24 @@
       },
       "estimated_end_time": {
         "default": "mdi:clock-end"
+      },
+      "area_last_vacuumed": {
+        "default": "mdi:robot-vacuum"
+      },
+      "area_last_mopped": {
+        "default": "mdi:water"
+      },
+      "prime_stream_shadows": {
+        "default": "mdi:access-point-network"
+      },
+      "prime_stream_timeline": {
+        "default": "mdi:access-point-network"
+      },
+      "prime_stream_live_map": {
+        "default": "mdi:access-point-network"
+      },
+      "prime_stream_rejections": {
+        "default": "mdi:access-point-network"
       }
     },
     "button": {

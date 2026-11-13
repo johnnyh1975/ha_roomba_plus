@@ -1954,6 +1954,18 @@ class TestTheCommandOfAPrimeMission:
         assert record["requested_region_ids"] == ["10", "11"]
         assert record["scope"] == "rooms"
 
+    def test_the_cleaning_mode_of_the_start(self):
+        """B14 (4.6.0): in the Classic `cmd` shape, from the start's params
+        or else a region's."""
+        top = self._record({"command": "start", "params": {"operatingMode": 4}})
+        assert top["cmd"] == {"operatingMode": 4}
+        region = self._record({"command": "start", "regions": [
+            {"region_id": "10", "type": "rid"},
+            {"region_id": "11", "type": "rid", "params": {"operatingMode": 32}},
+        ]})
+        assert region["cmd"] == {"operatingMode": 32}
+        assert "cmd" not in self._record({"command": "start"})
+
     def test_a_whole_home_start(self):
         record = self._record({"command": "start", "initiator": "schedule"})
         assert record["scope"] == "whole_home"

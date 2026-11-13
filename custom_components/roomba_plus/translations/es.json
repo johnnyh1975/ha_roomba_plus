@@ -219,7 +219,8 @@
           "map_rotation": "Girar la imagen del mapa",
           "wall_thickness_cm": "Grosor de pared (cm)",
           "door_width_cm": "Ancho de puerta (cm)",
-          "resend_swallowed_command": "Reenviar una vez un comando ignorado"
+          "resend_swallowed_command": "Reenviar una vez un comando ignorado",
+          "pause_timeout_minutes": "Enviar a la base tras una pausa (minutos)"
         },
         "data_description": {
           "map_enabled": "Activar el mapa de limpieza en tiempo real para robots con detección de posición (Roomba 900, i, s, j, Braava m).",
@@ -239,7 +240,8 @@
           "map_rotation": "Gira cada imagen del mapa entera en el sentido de las agujas del reloj, habitaciones y recorrido juntos, por ejemplo para que coincida con la app de iRobot. Nunca mueve el recorrido respecto a las habitaciones; para eso está «Alinear el recorrido con las habitaciones». El mapa no tiene norte: arriba es hacia donde mira el robot al salir de la base, así que depende de cómo esté colocada la base.",
           "wall_thickness_cm": "Grosor con el que se dibujan las paredes en los mapas. En un robot de la serie 900 también decide qué bordes de dos estancias son una sola pared. Por defecto 15.",
           "door_width_cm": "Ancho con el que se dibuja una puerta en los mapas; una abertura claramente más ancha se dibuja como paso abierto. Un robot con Smart Map busca además puertas de aproximadamente este ancho al alinear su recorrido con sus estancias. Por defecto 80.",
-          "resend_swallowed_command": "Si el robot acepta un comando de inicio, de habitación o de zona y no empieza ninguna misión, Roomba+ lo envía una vez más. Solo si el robot no indica ningún motivo para rechazarlo."
+          "resend_swallowed_command": "Si el robot acepta un comando de inicio, de habitación o de zona y no empieza ninguna misión, Roomba+ lo envía una vez más. Solo si el robot no indica ningún motivo para rechazarlo.",
+          "pause_timeout_minutes": "Un robot que lleve este tiempo en pausa vuelve a su base. 0 lo desactiva."
         }
       },
       "smart_zones_manual": {
@@ -1482,6 +1484,24 @@
       },
       "estimated_end_time": {
         "name": "Fin estimado"
+      },
+      "area_last_vacuumed": {
+        "name": "{area}: última aspiración"
+      },
+      "area_last_mopped": {
+        "name": "{area}: último fregado"
+      },
+      "prime_stream_shadows": {
+        "name": "Último mensaje de estado"
+      },
+      "prime_stream_timeline": {
+        "name": "Último mensaje de la cronología"
+      },
+      "prime_stream_live_map": {
+        "name": "Último mensaje del mapa en vivo"
+      },
+      "prime_stream_rejections": {
+        "name": "Último mensaje de rechazo"
       }
     },
     "binary_sensor": {

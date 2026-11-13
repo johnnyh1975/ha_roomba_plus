@@ -41,7 +41,7 @@ import time
 
 from typing import Any, Final
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from homeassistant.util import dt as dt_util
 
@@ -53,6 +53,7 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.const import EntityCategory, PERCENTAGE, UnitOfTime
 from homeassistant.core import callback
+from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers import entity_registry as er
 
 from roombapy_prime.models.mission_history import FaultScene
@@ -227,6 +228,53 @@ class PrimeMissionEventSensor(IRobotEntity, SensorEntity):
         )
         if pc is not None:
             self.async_on_remove(pc.async_add_listener(self.schedule_update_ha_state))
+
+
+class PrimeStreamSeenSensor(IRobotEntity, SensorEntity):
+    """When a Prime cloud stream last delivered a message (4.6.0, B16).
+
+    One per stream (prime_coordinator.PRIME_STREAMS). The connection
+    health above says whether the coordinator raised; a stream can stop
+    delivering without raising, and the irbt namespace (rejections, the
+    timeline on some deployments) is quiet for long stretches anyway. So
+    the time is shown, not judged: a timeline that has said nothing for
+    a day while the shadows talk is something to look at.
+
+    To the minute, refreshed once a minute: the live map delivers several
+    messages a second while the robot runs. Off by default.
+    """
+
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_registry_enabled_default = False
+
+    def __init__(self, blid: str, config_entry: RoombaConfigEntry, stream: str) -> None:
+        super().__init__(None, blid, config_entry)
+        self._config_entry = config_entry
+        self._stream = stream
+        key = f"prime_stream_{stream}"
+        self.entity_description = SensorEntityDescription(key=key, translation_key=key)
+        self._attr_unique_id = f"{self.robot_unique_id}_{key}"
+
+    @property
+    def native_value(self) -> datetime | None:
+        seen = (getattr(self._config_entry.runtime_data, "prime_stream_seen", None) or {}).get(
+            self._stream
+        )
+        if not isinstance(seen, (int, float)) or isinstance(seen, bool):
+            return None
+        return dt_util.utc_from_timestamp(float(seen)).replace(second=0, microsecond=0)
+
+    def new_state_filter(self, new_state: dict[str, Any]) -> bool:
+        return False
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        self.async_on_remove(async_track_time_interval(
+            self.hass,
+            callback(lambda _now: self.async_write_ha_state()),
+            timedelta(minutes=1),
+        ))
 
 
 class PrimeConnectionHealthSensor(IRobotEntity, SensorEntity):

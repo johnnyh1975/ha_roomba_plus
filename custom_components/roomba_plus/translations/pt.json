@@ -219,7 +219,8 @@
           "map_rotation": "Rodar a imagem do mapa",
           "wall_thickness_cm": "Espessura das paredes (cm)",
           "door_width_cm": "Largura das portas (cm)",
-          "resend_swallowed_command": "Reenviar uma vez um comando ignorado"
+          "resend_swallowed_command": "Reenviar uma vez um comando ignorado",
+          "pause_timeout_minutes": "Enviar para a base após uma pausa (minutos)"
         },
         "data_description": {
           "map_enabled": "Ativar o mapa de limpeza em tempo real para robôs com deteção de posição (Roomba 900, i, s, j, Braava m).",
@@ -239,7 +240,8 @@
           "map_rotation": "Roda cada imagem do mapa por inteiro no sentido dos ponteiros do relógio, divisões e percurso juntos, por exemplo para coincidir com a app iRobot. Nunca move o percurso em relação às divisões; para isso existe «Alinhar o percurso com as divisões». O mapa não tem norte: o topo é a direção em que o robô estava virado ao sair da base, por isso depende de como a base está colocada.",
           "wall_thickness_cm": "Espessura com que as paredes são desenhadas nos mapas. Num robô da série 900 decide também que limites de duas divisões são uma única parede. Predefinição 15.",
           "door_width_cm": "Largura com que uma porta é desenhada nos mapas; uma abertura claramente mais larga é desenhada como passagem aberta. Um robô com Smart Map procura também portas com cerca desta largura quando alinha o seu percurso com as divisões. Predefinição 80.",
-          "resend_swallowed_command": "Se o robô aceitar um comando de início, divisão ou zona e nenhuma missão começar, o Roomba+ envia-o mais uma vez. Apenas quando o robô não indica nenhum motivo para a recusa."
+          "resend_swallowed_command": "Se o robô aceitar um comando de início, divisão ou zona e nenhuma missão começar, o Roomba+ envia-o mais uma vez. Apenas quando o robô não indica nenhum motivo para a recusa.",
+          "pause_timeout_minutes": "Um robô que fique em pausa este tempo é enviado de volta à base. 0 desativa."
         }
       },
       "smart_zones_manual": {
@@ -1482,6 +1484,24 @@
       },
       "estimated_end_time": {
         "name": "Fim estimado"
+      },
+      "area_last_vacuumed": {
+        "name": "{area} aspirado pela última vez"
+      },
+      "area_last_mopped": {
+        "name": "{area} lavado pela última vez"
+      },
+      "prime_stream_shadows": {
+        "name": "Última mensagem de estado"
+      },
+      "prime_stream_timeline": {
+        "name": "Última mensagem da cronologia"
+      },
+      "prime_stream_live_map": {
+        "name": "Última mensagem do mapa ao vivo"
+      },
+      "prime_stream_rejections": {
+        "name": "Última mensagem de recusa"
       }
     },
     "binary_sensor": {

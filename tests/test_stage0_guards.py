@@ -566,6 +566,11 @@ _EXPLICIT_ICON_KEYS = frozenset({
 _DYNAMIC_ICON_KEYS = frozenset({
     "prime_empty_bin", "prime_wash_pad", "prime_stop_pad_dry",
     "prime_start_pad_dry", "favorite",
+    # 4.6.0: keys built per area kind (sensor_areas.py) and per Prime
+    # stream (sensor_prime.PrimeStreamSeenSensor).
+    "area_last_vacuumed", "area_last_mopped",
+    "prime_stream_shadows", "prime_stream_timeline",
+    "prime_stream_live_map", "prime_stream_rejections",
 })
 
 

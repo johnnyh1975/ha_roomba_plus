@@ -78,6 +78,7 @@ from .sensor_prime import (
     PrimeChargeCyclesErrorSensor,
     PrimeChargeCyclesOkSensor,
     PrimeConnectionHealthSensor,
+    PrimeStreamSeenSensor,
     PrimeCleaningModeSensor,
     PrimeDetectedPadSensor,
     PrimeDockStatusSensor,
@@ -191,6 +192,7 @@ from .sensor_rooms import (
     _region_maps_for,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
     _resolve_smart_tier_room_state,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
 )
+from .sensor_areas import async_setup_area_sensors
 from .sensor_diagnostics import (
     RawStateSensor,
     RoombaFirmwareVersionSensor,
@@ -231,8 +233,15 @@ async def async_setup_entry(
     # (roomba_reported_state(), SENSORS filter_fn list, cloud-history/
     # edge-coverage/learning/zone sensors -- all cloud_coordinator-based,
     # a different coordinator entirely) applies to a CLOUD_ONLY entry.
+    # B14 (4.6.0): when each HA area was last vacuumed and mopped, across
+    # every robot -- both generations, before the Prime branch returns.
+    async_setup_area_sensors(
+        hass, config_entry, async_add_entities,
+        None if data.connection_type is ConnectionType.CLOUD_ONLY else data.roomba,
+    )
     if data.connection_type is ConnectionType.CLOUD_ONLY:
         from .prime_coordinator import (  # noqa: PLC0415
+            PRIME_STREAMS,
             _dock_reports_itself,
             add_prime_entities_when_available,
             get_prime_capability_flags,
@@ -243,6 +252,8 @@ async def async_setup_entry(
         entities: list[SensorEntity] = [
             PrimeMissionEventSensor(data.blid, config_entry),
             PrimeConnectionHealthSensor(data.blid, config_entry),
+            # B16 (4.6.0): when each cloud stream last spoke.
+            *(PrimeStreamSeenSensor(data.blid, config_entry, s) for s in PRIME_STREAMS),
             PrimeBatterySensor(data.blid, config_entry),
             PrimeRuntimeHoursSensor(data.blid, config_entry),
             PrimeFirmwareVersionSensor(data.blid, config_entry),

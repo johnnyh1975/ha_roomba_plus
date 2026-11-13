@@ -209,6 +209,7 @@ class PrimeCoordinator(DataUpdateCoordinator[MissionTimelineReport]):
         while True:
             try:
                 async for message in self.prime_robot.watch_rejected_commands():
+                    note_stream(self.entry.runtime_data, "rejections")
                     now = _time.time()
                     if now - last_logged >= 60.0:
                         last_logged = now
@@ -321,6 +322,7 @@ class PrimeCoordinator(DataUpdateCoordinator[MissionTimelineReport]):
                     # thing that distinguishes "quiet because nothing is
                     # happening" from "quiet because the stream died".
                     self.entry.runtime_data.last_mqtt_message_ts = _time.time()
+                    note_stream(self.entry.runtime_data, "timeline")
                     # `payload` IS `dict | str` ON THE WIRE TYPE. A
                     # string arrives when the broker delivers something
                     # unparsed, and `from_json` wants the dict.
@@ -926,6 +928,7 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                     updated = dict(self.data or {})
                     updated[shadow_name] = _deep_merge_reported(updated.get(shadow_name) or {}, reported)
                     self.entry.runtime_data.last_mqtt_message_ts = _time.time()
+                    note_stream(self.entry.runtime_data, "shadows")
                     self._note_phase_for_timer(updated)
                     self._note_stuck(updated)
                     self._note_mission_start(updated)
@@ -1882,6 +1885,23 @@ class PrimeScheduleCoordinator(DataUpdateCoordinator[list[tuple[str, list[Any]]]
             # switch its schedule vanished.
             raise UpdateFailed("could not read schedules", translation_domain=DOMAIN, translation_key="schedules_unreadable")
         return containers
+
+
+#: The Prime cloud streams Roomba+ listens to (4.6.0, B16).
+PRIME_STREAMS: tuple[str, ...] = ("shadows", "timeline", "live_map", "rejections")
+
+
+def note_stream(data: Any, stream: str) -> None:
+    """A message arrived on this Prime stream (4.6.0, B16).
+
+    `last_mqtt_message_ts` says that SOME stream is alive; the shadows and
+    the timeline both write it, so a timeline that died under a live
+    shadow stream went unseen -- and the rejections, on the irbt
+    namespace, write nothing at all. Per stream, a quiet one shows.
+    """
+    seen = getattr(data, "prime_stream_seen", None)
+    if isinstance(seen, dict):
+        seen[stream] = _time.time()
 
 
 def prime_reported_state(data: Any) -> dict[str, Any]:

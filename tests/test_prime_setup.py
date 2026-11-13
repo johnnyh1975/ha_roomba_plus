@@ -1030,8 +1030,8 @@ class TestClassicShapedReadsOnPrime:
         # DECIDED: no Prime entry reaches it. It runs only where the
         # entry has a GridStore, and the pose-derived stores are not
         # created for Prime.
-        # 40 with mission_queries._data_state() (4.6.0), the cleaning
-        # mode for get_rooms' estimate quality.
+        # 40 with mission_queries.reported_state() (4.6.0), the cleaning
+        # mode for get_rooms' estimate quality and the area sensors.
         #
         # DECIDED: Prime reaches it, and has its fallback in place: the
         # read is `roomba_reported_state() or prime_reported_state()`.

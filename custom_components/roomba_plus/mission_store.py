@@ -36,7 +36,7 @@ from .const import (
     room_event_covered_share,
     room_event_was_cleaned,
 )
-from .room_times import learn_from_records, record_region_visits
+from .room_times import learn_from_records, record_cleaning_mode, record_region_visits
 from .const import extract_region_id, fin_events_in_order, recovered_after_stuck, SQFT_TO_M2
 
 _LOGGER = logging.getLogger(__name__)
@@ -522,7 +522,7 @@ class MissionStore:
         return False
 
     #: The command fields a Prime record gained in 4.6.0.
-    COMMAND_KEYS: tuple[str, ...] = ("initiator", "requested_region_ids", "scope")
+    COMMAND_KEYS: tuple[str, ...] = ("initiator", "requested_region_ids", "scope", "cmd")
 
     def add_missing_command_data(self, record: dict[str, Any]) -> bool:
         """Give a stored Prime record the command fields of 4.6.0.
@@ -1547,8 +1547,45 @@ class MissionStore:
 
         Result: ``{"Kitchen": "2026-06-29T08:45:00", "Living Room": "2026-06-27T09:10:00"}``
         """
-        effective_map = region_map if region_map else (umf_regions or {})
         result: dict[str, str] = {}
+        for room, end, _rec in self._room_ends(region_map, umf_regions, regions_by_pmap):
+            if room not in result:
+                result[room] = end
+        return result
+
+    def room_cleaning_history_by_mode(
+        self,
+        region_map: dict[str, str] | None = None,
+        umf_regions: dict[str, str] | None = None,
+        regions_by_pmap: dict[str, dict[str, str]] | None = None,
+        default_mode: str | None = None,
+    ) -> dict[str, dict[str, str]]:
+        """room_cleaning_history() split by what the robot did (4.6.0, B14).
+
+        `{room: {"vacuum": iso, "mop": iso}}`, each the newest mission of
+        that kind; a vacuum-and-mop mission counts for both. The kind is
+        the record's cleaning mode (room_times.record_cleaning_mode), else
+        `default_mode` (a Braava mops), else vacuum: a robot that says
+        nothing about its mode is a vacuum.
+        """
+        result: dict[str, dict[str, str]] = {}
+        for room, end, rec in self._room_ends(region_map, umf_regions, regions_by_pmap):
+            mode = record_cleaning_mode(rec, default_mode) or "vacuum"
+            kinds = ("vacuum", "mop") if mode == "vacuum_mop" else (mode,)
+            entry = result.setdefault(room, {})
+            for kind in kinds:
+                entry.setdefault(kind, end)
+        return result
+
+    def _room_ends(
+        self,
+        region_map: dict[str, str] | None,
+        umf_regions: dict[str, str] | None,
+        regions_by_pmap: dict[str, dict[str, str]] | None,
+    ) -> Any:
+        """(room, when it was done, record) newest record first, for the
+        room histories above."""
+        effective_map = region_map if region_map else (umf_regions or {})
         for rec in reversed(self._records):
             ended_at = rec.get("ended_at")
             # v3.2.0 full-review fix — same defence-in-depth guard as
@@ -1576,9 +1613,7 @@ class MissionStore:
                     if end and name not in own_end:
                         own_end[name] = end
             for room in rooms:
-                if room not in result:
-                    result[room] = own_end.get(room) or ended_at
-        return result
+                yield room, own_end.get(room) or ended_at, rec
 
     @staticmethod
     def record_region_ids(rec: dict[str, Any]) -> list[str]:

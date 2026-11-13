@@ -126,6 +126,8 @@ from .const import (
     CONF_REGION_SENSORS,
     CONF_RESEND_SWALLOWED,
     DEFAULT_RESEND_SWALLOWED,
+    CONF_PAUSE_TIMEOUT_MIN,
+    DEFAULT_PAUSE_TIMEOUT_MIN,
     DEFAULT_REGION_SENSORS,
     CONF_PRESENCE_ENTITIES,
     CONF_PRESENCE_MODE,
@@ -176,6 +178,10 @@ from .room_seg_store import RoomSegStore, area_number
 from .todo import MaintenanceWording
 
 _LOGGER = logging.getLogger(__name__)
+
+#: Minutes a robot may stand paused before it is sent home; 0 is off
+#: (4.6.0, B15, pause_timeout.py).
+_PAUSE_MINUTES = vol.All(vol.Coerce(int), vol.Range(min=0, max=240))
 
 #: Options a robot added from 4.5.0 on starts with, unlike one set up
 #: before (E1 of the maintenance plan): the maintenance list is on. It
@@ -1999,6 +2005,13 @@ class RoombaPlusOptionsFlow(OptionsFlow):
                                 CONF_RESEND_SWALLOWED, DEFAULT_RESEND_SWALLOWED
                             ),
                         ): bool,
+                        # Send a robot left paused home (4.6.0, B15).
+                        vol.Optional(
+                            CONF_PAUSE_TIMEOUT_MIN,
+                            default=options.get(
+                                CONF_PAUSE_TIMEOUT_MIN, DEFAULT_PAUSE_TIMEOUT_MIN
+                            ),
+                        ): _PAUSE_MINUTES,
                         vol.Optional(
                             CONF_MAP_ROOM_LABELS,
                             default=options.get(
@@ -2140,6 +2153,12 @@ class RoombaPlusOptionsFlow(OptionsFlow):
                         CONF_RESEND_SWALLOWED, DEFAULT_RESEND_SWALLOWED
                     ),
                 ): bool,
+                vol.Optional(
+                    CONF_PAUSE_TIMEOUT_MIN,
+                    default=options.get(
+                        CONF_PAUSE_TIMEOUT_MIN, DEFAULT_PAUSE_TIMEOUT_MIN
+                    ),
+                ): _PAUSE_MINUTES,
                 vol.Optional(
                     CONF_MAP_ROOM_LABELS,
                     default=options.get(

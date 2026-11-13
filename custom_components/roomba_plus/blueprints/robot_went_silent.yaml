@@ -1,0 +1,101 @@
+blueprint:
+  name: Roomba+ Robot Went Silent
+  description: >
+    Notifies you when your robot stops reporting — the failure that looks
+    like nothing is wrong.
+
+    A robot that goes quiet does not clear its entities. Every sensor
+    keeps showing its last value: battery still reads 36%, phase still
+    reads "stuck", and none of it looks stale. One field tester's robot
+    sat undiscovered for nine days that way, off its dock with the dock
+    unpowered, while Home Assistant cheerfully reported it as cleaning.
+
+    This fires on the status sensor reaching `no_contact`, which the
+    integration sets after an hour without a message. That state
+    survives a Home Assistant restart: silence is measured from setup
+    when no message has ever arrived, so a robot that was already quiet
+    before a restart is still reported as quiet.
+
+    Full integration: https://github.com/johnnyh1975/ha_roomba_plus
+  domain: automation
+  author: johnnyh1975
+  source_url: https://github.com/johnnyh1975/ha_roomba_plus/blob/main/blueprints/automation/robot_went_silent.yaml
+  homeassistant:
+    min_version: "2024.10.0"
+  input:
+    status_entity:
+      name: "Status sensor"
+      description: >
+        This robot's `sensor.*_status` entity. It reports `no_contact`
+        when nothing has arrived for an hour.
+      selector:
+        entity:
+          filter:
+            - domain: sensor
+              integration: roomba_plus
+    notify_target:
+      name: "Notify service"
+      description: >
+        The notify service to call, e.g. `notify.mobile_app_yourphone`
+        or `notify.persistent_notification`.
+      default: notify.persistent_notification
+      selector:
+        text:
+    grace_minutes:
+      name: "Extra wait before notifying"
+      description: >
+        Minutes the sensor must stay at `no_contact` before you are
+        told. The integration already waits an hour; this is on top of
+        that.
+
+        Zero is fine. The default exists because a robot carried to
+        another room, or a router restart, can produce a brief gap that
+        resolves itself — and a notification about a robot that is
+        already back is worse than none.
+      default: 15
+      selector:
+        number:
+          min: 0
+          max: 120
+          unit_of_measurement: minutes
+          mode: slider
+    notify_title:
+      name: "Notification title"
+      default: "Robot not responding"
+      selector:
+        text:
+
+mode: single
+max_exceeded: silent
+
+trigger:
+  # THE STATE, not an event. There is no "went silent" event to listen
+  # for -- silence is the absence of messages, so nothing fires. The
+  # integration turns that absence into a state, and this watches it.
+  - platform: state
+    entity_id: !input status_entity
+    to: "no_contact"
+    for:
+      minutes: !input grace_minutes
+
+action:
+  - variables:
+      status: !input status_entity
+      robot: "{{ state_attr(status, 'friendly_name') | default('Your robot', true) }}"
+  - service: !input notify_target
+    data:
+      title: !input notify_title
+      # NO "last known phase" HERE. The status sensor does not expose
+      # one, and inventing a plausible attribute name is how a blueprint
+      # ships showing "unknown" to everybody. What the other entities
+      # still display IS the last known state -- the message says to go
+      # look at them rather than repeating a value it cannot read.
+      message: >-
+        {{ robot }} has stopped reporting.
+
+        Its other sensors are still showing the values they had when it
+        went quiet — battery, phase, everything. They are not being
+        updated, and they will not change until it comes back.
+
+        Common causes: off its dock with the dock unpowered, out of
+        Wi-Fi range, or a flat battery.

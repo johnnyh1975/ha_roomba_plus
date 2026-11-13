@@ -219,7 +219,8 @@
           "map_rotation": "Ruota l’immagine della mappa",
           "wall_thickness_cm": "Spessore delle pareti (cm)",
           "door_width_cm": "Larghezza delle porte (cm)",
-          "resend_swallowed_command": "Reinvia una volta un comando ignorato"
+          "resend_swallowed_command": "Reinvia una volta un comando ignorato",
+          "pause_timeout_minutes": "Rimanda alla base dopo una pausa (minuti)"
         },
         "data_description": {
           "map_enabled": "Abilita la mappa di pulizia in tempo reale per i robot con rilevamento della posizione (Roomba 900, i, s, j, Braava m).",
@@ -239,7 +240,8 @@
           "map_rotation": "Ruota ogni immagine della mappa per intero in senso orario, stanze e percorso insieme, ad esempio per farla coincidere con l’app iRobot. Non sposta mai il percorso rispetto alle stanze: per questo c’è «Allinea il percorso alle stanze». La mappa non ha un nord: in alto è la direzione del robot quando lascia la base, quindi dipende da come è posizionata la base.",
           "wall_thickness_cm": "Spessore con cui le pareti vengono disegnate sulle mappe. Su un robot della serie 900 decide anche quali bordi di due stanze sono un’unica parete. Predefinito 15.",
           "door_width_cm": "Larghezza con cui una porta viene disegnata sulle mappe; un’apertura nettamente più larga viene disegnata come passaggio aperto. Un robot con Smart Map cerca inoltre porte di circa questa larghezza quando allinea il percorso alle sue stanze. Predefinito 80.",
-          "resend_swallowed_command": "Se il robot accetta un comando di avvio, stanza o zona e non inizia alcuna missione, Roomba+ lo invia di nuovo una volta. Solo se il robot non segnala alcun motivo per il rifiuto."
+          "resend_swallowed_command": "Se il robot accetta un comando di avvio, stanza o zona e non inizia alcuna missione, Roomba+ lo invia di nuovo una volta. Solo se il robot non segnala alcun motivo per il rifiuto.",
+          "pause_timeout_minutes": "Un robot rimasto in pausa così a lungo viene rimandato alla base. 0 lo disattiva."
         }
       },
       "smart_zones_manual": {
@@ -1482,6 +1484,24 @@
       },
       "estimated_end_time": {
         "name": "Fine stimata"
+      },
+      "area_last_vacuumed": {
+        "name": "{area} ultima aspirazione"
+      },
+      "area_last_mopped": {
+        "name": "{area} ultimo lavaggio"
+      },
+      "prime_stream_shadows": {
+        "name": "Ultimo messaggio di stato"
+      },
+      "prime_stream_timeline": {
+        "name": "Ultimo messaggio della cronologia"
+      },
+      "prime_stream_live_map": {
+        "name": "Ultimo messaggio della mappa live"
+      },
+      "prime_stream_rejections": {
+        "name": "Ultimo messaggio di rifiuto"
       }
     },
     "binary_sensor": {

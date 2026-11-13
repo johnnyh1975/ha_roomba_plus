@@ -425,7 +425,8 @@ class TestAsyncSetupEntryCloudOnlyBranch:
         # 50 with last_error_zone.
         # 52 with current_room and estimated_end_time (B5), created
         # with mission_progress.
-        assert len(created) == 52, (
+        # 56 with one stream sensor per Prime cloud stream (B16).
+        assert len(created) == 56, (
             "rooms-overdue was added for Prime: it reads the mission "
             "store and cloud regions, both of which Prime has, and it "
             "was missing only because of the order things were built in"
@@ -2714,7 +2715,11 @@ class TestSilenceThatPredatesTheRestart:
 # new one is held to it without anyone adding it to a list.
 
 # Classes that need constructor data to exist at all (a part id, a region).
-_NEEDS_ARGS = {"PrimeConsumablePartSensor", "PrimeRegionLastCleanedSensor"}
+_NEEDS_ARGS = {
+    "PrimeConsumablePartSensor", "PrimeRegionLastCleanedSensor",
+    # 4.6.0 (B16): one per stream, tested in TestTheStreamSensors.
+    "PrimeStreamSeenSensor",
+}
 
 
 def _sensor_classes():
@@ -2973,3 +2978,27 @@ class TestRawStateAndPresenceWindowOnPrime:
         with patch.object(IRobotEntity, "async_added_to_hass", new=_noop):
             await raw.async_added_to_hass()
         assert coordinator.async_add_listener.call_args.args[0] == raw.async_write_ha_state
+
+
+class TestTheStreamSensors:
+    """B16 (4.6.0): when each Prime cloud stream last spoke, to the minute."""
+
+    def _sensor(self, seen):
+        from types import SimpleNamespace
+
+        entry = MagicMock()
+        entry.runtime_data = SimpleNamespace(prime_stream_seen=seen)
+        return sp.PrimeStreamSeenSensor("PRIMESENS01", entry, "timeline")
+
+    def test_the_time_to_the_minute(self):
+        from datetime import datetime, timezone
+
+        sensor = self._sensor({"timeline": datetime(2026, 11, 13, 20, 5, 42, tzinfo=timezone.utc).timestamp()})
+        assert sensor.unique_id.endswith("_prime_stream_timeline")
+        assert sensor.native_value == datetime(2026, 11, 13, 20, 5, tzinfo=timezone.utc)
+        assert sensor.entity_registry_enabled_default is False
+        assert sensor.new_state_filter({"x": 1}) is False
+
+    def test_a_stream_that_said_nothing(self):
+        assert self._sensor({"shadows": 1.0}).native_value is None
+        assert self._sensor({"timeline": True}).native_value is None

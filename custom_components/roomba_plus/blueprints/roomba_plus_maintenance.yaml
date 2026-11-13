@@ -1,0 +1,293 @@
+blueprint:
+  name: Roomba+ Maintenance
+  description: >
+    A notification when a part or care task of the robot is due or
+    overdue -- with the care guide one tap away and buttons on the phone:
+    "Replaced" or "Cleaned", "Only cleaned" for a part that can also be
+    cleaned, "Remind me later", and "How to do it". A button marks it done
+    in Roomba+ (on a Prime robot the reset goes to iRobot), the same as
+    ticking it off in the maintenance list. Android shows three buttons:
+    the guide button comes last, and tapping the notification opens the
+    guide anyway.
+
+    Notifications outside the hours you choose wait for the start of
+    them (a restart in between drops the waiting one; the maintenance
+    list still has the entry).
+
+    An error that points to a care task arrives the same way while the
+    robot reports it ("Guide when an error points to a care task" set to
+    the maintenance list, the default).
+
+    Variables for your own notification action:
+    {{ notification_title }}, {{ notification_message }},
+    {{ notification_url }} (the care guide, a path that opens in the
+    companion app and the browser), {{ notification_help_url }}
+    (iRobot's article for the error that brought the entry, empty
+    otherwise), {{ notification_actions }} (the buttons, for
+    `data: actions:` of a mobile app notification).
+
+    Full integration: https://github.com/johnnyh1975/ha_roomba_plus
+  domain: automation
+  author: johnnyh1975
+  source_url: https://github.com/johnnyh1975/ha_roomba_plus/blob/main/blueprints/automation/roomba_plus_maintenance.yaml
+  homeassistant:
+    min_version: "2024.10.0"
+
+  input:
+    maintenance_event:
+      name: Maintenance event
+      description: The robot's event.*_maintenance entity (Roomba+ 4.5.0 or later).
+      selector:
+        entity:
+          domain: event
+          integration: roomba_plus
+
+    vacuum_entity:
+      name: Robot
+      description: The robot's vacuum entity -- the target of "Done" and "Remind me later".
+      selector:
+        entity:
+          domain: vacuum
+          integration: roomba_plus
+
+    event_types:
+      name: Notify on
+      default: [due, overdue]
+      selector:
+        select:
+          multiple: true
+          options:
+            - label: Due
+              value: due
+            - label: Overdue
+              value: overdue
+            - label: Marked done
+              value: done
+            - label: Snoozed
+              value: snoozed
+
+    snooze_days:
+      name: '"Remind me later" after'
+      default: 1
+      selector:
+        number:
+          min: 1
+          max: 60
+          unit_of_measurement: days
+          mode: box
+
+    notify_action:
+      name: Notification action
+      description: >
+        What to do. The default is a persistent notification in Home
+        Assistant. For your phone, a mobile app notify action with
+        `data: url: "{{ notification_url }}"`, `clickAction:
+        "{{ notification_url }}"` and `actions: "{{ notification_actions }}"`
+        -- see the integration's AUTOMATIONS.md.
+      default:
+        - action: persistent_notification.create
+          data:
+            title: "{{ notification_title }}"
+            message: >-
+              {{ notification_message }}{% if notification_url %}
+
+
+              [{{ guide_text }}]({{ notification_url }}){% endif %}{% if notification_help_url %}
+
+
+              [{{ help_text }}]({{ notification_help_url }}){% endif %}
+      selector:
+        action:
+
+    due_text:
+      name: Wording for "due"
+      default: is due
+      selector:
+        text:
+    overdue_text:
+      name: Wording for "overdue"
+      default: is overdue
+      selector:
+        text:
+    done_text:
+      name: Wording for "marked done"
+      default: is done
+      selector:
+        text:
+    snoozed_text:
+      name: Wording for "snoozed"
+      default: is snoozed
+      selector:
+        text:
+    error_text:
+      name: Wording for an error
+      description: Put in front of the error code.
+      default: Error
+      selector:
+        text:
+    guide_text:
+      name: Label of the guide link
+      default: How to do it
+      selector:
+        text:
+    help_text:
+      name: Label of iRobot's article
+      description: Shown for an entry an error brought, where iRobot has an article for it.
+      default: iRobot's article on the error
+      selector:
+        text:
+    send_from:
+      name: Send notifications from
+      description: Equal times mean at any time.
+      default: "08:00:00"
+      selector:
+        time:
+    send_until:
+      name: Send notifications until
+      default: "21:00:00"
+      selector:
+        time:
+    replaced_button:
+      name: Label of the "Replaced" button
+      default: Replaced
+      selector:
+        text:
+    cleaned_button:
+      name: Label of the "Cleaned" button
+      default: Cleaned
+      selector:
+        text:
+    only_cleaned_button:
+      name: Label of the "Only cleaned" button
+      default: Only cleaned
+      selector:
+        text:
+    later_button:
+      name: Label of the "Remind me later" button
+      default: Remind me later
+      selector:
+        text:
+
+# Parallel: a notification waiting for the morning must not hold up a
+# button pressed meanwhile.
+mode: parallel
+max: 20
+
+# Inputs reach a template only through a variable: Home Assistant does
+# not substitute `!input` inside a template string.
+variables:
+  vacuum_entity: !input vacuum_entity
+  event_types: !input event_types
+  snooze_days: !input snooze_days
+  due_text: !input due_text
+  overdue_text: !input overdue_text
+  done_text: !input done_text
+  snoozed_text: !input snoozed_text
+  error_text: !input error_text
+  guide_text: !input guide_text
+  help_text: !input help_text
+  replaced_button: !input replaced_button
+  cleaned_button: !input cleaned_button
+  only_cleaned_button: !input only_cleaned_button
+  later_button: !input later_button
+  send_from: !input send_from
+  send_until: !input send_until
+
+triggers:
+  - trigger: state
+    entity_id: !input maintenance_event
+    id: maintenance
+  # A button on the phone. The action carries the robot and the entry,
+  # so it still works after a restart.
+  - trigger: event
+    event_type: mobile_app_notification_action
+    id: button
+
+conditions:
+  - condition: template
+    value_template: >
+      {% if trigger.id == "maintenance" %}
+        {{ trigger.from_state is not none
+           and trigger.from_state.state not in ("unavailable", "unknown")
+           and trigger.to_state.state not in ("unavailable", "unknown")
+           and trigger.to_state.attributes.event_type in event_types }}
+      {% else %}
+        {% set parts = (trigger.event.data.action or "").split("|") %}
+        {{ parts | length in (3, 4)
+           and parts[0] in ("ROOMBA_PLUS_DONE", "ROOMBA_PLUS_LATER")
+           and parts[1] == vacuum_entity }}
+      {% endif %}
+
+actions:
+  - choose:
+      - conditions: "{{ trigger.id == 'button' }}"
+        sequence:
+          - variables:
+              parts: "{{ trigger.event.data.action.split('|') }}"
+          - if: "{{ parts[0] == 'ROOMBA_PLUS_DONE' and parts | length == 4 }}"
+            then:
+              - action: roomba_plus.maintenance_done
+                target:
+                  entity_id: "{{ vacuum_entity }}"
+                data:
+                  item: "{{ parts[2] }}"
+                  action: "{{ parts[3] }}"
+          - if: "{{ parts[0] == 'ROOMBA_PLUS_DONE' and parts | length == 3 }}"
+            then:
+              - action: roomba_plus.maintenance_done
+                target:
+                  entity_id: "{{ vacuum_entity }}"
+                data:
+                  item: "{{ parts[2] }}"
+          - if: "{{ parts[0] == 'ROOMBA_PLUS_LATER' }}"
+            then:
+              - action: roomba_plus.maintenance_snooze
+                target:
+                  entity_id: "{{ vacuum_entity }}"
+                data:
+                  item: "{{ parts[2] }}"
+                  days: "{{ snooze_days }}"
+    default:
+      - variables:
+          event: "{{ trigger.to_state.attributes.event_type }}"
+          item: "{{ trigger.to_state.attributes.id }}"
+          what: >-
+            {{ trigger.to_state.attributes.guide_title or trigger.to_state.attributes.id }}
+          error: "{{ trigger.to_state.attributes.error }}"
+          notification_title: "{{ trigger.to_state.attributes.name }}"
+          notification_message: >-
+            {% set words = {"due": due_text, "overdue": overdue_text,
+                            "done": done_text, "snoozed": snoozed_text} %}
+            {% if error %}{{ error_text }} {{ error }}: {% endif %}{{ what }} {{ words.get(event, event) }}
+          notification_url: "{{ trigger.to_state.attributes.guide or '' }}"
+          notification_help_url: "{{ trigger.to_state.attributes.help_url or '' }}"
+          notification_actions: >-
+            {% set base = vacuum_entity ~ "|" ~ item %}
+            {% set replace = item.startswith("replace.") %}
+            {% set buttons = [] %}
+            {% if event in ("due", "overdue") %}
+              {% if replace %}
+                {% set buttons = buttons + [{"action": "ROOMBA_PLUS_DONE|" ~ base ~ "|replace", "title": replaced_button}] %}
+                {% if trigger.to_state.attributes.can_clean %}
+                  {% set buttons = buttons + [{"action": "ROOMBA_PLUS_DONE|" ~ base ~ "|clean", "title": only_cleaned_button}] %}
+                {% endif %}
+              {% else %}
+                {% set buttons = buttons + [{"action": "ROOMBA_PLUS_DONE|" ~ base, "title": cleaned_button}] %}
+              {% endif %}
+              {% set buttons = buttons + [{"action": "ROOMBA_PLUS_LATER|" ~ base, "title": later_button}] %}
+              {% if notification_url %}
+                {% set buttons = buttons + [{"action": "URI", "title": guide_text, "uri": notification_url}] %}
+              {% endif %}
+            {% endif %}
+            {{ buttons[:3] }}
+      # OUTSIDE THE HOURS, WAIT FOR THEIR START. Equal times: any time.
+      - if: >-
+          {% set now_t = now().strftime("%H:%M:%S") %}
+          {% if send_from == send_until %}false
+          {% elif send_from < send_until %}{{ not (send_from <= now_t < send_until) }}
+          {% else %}{{ not (now_t >= send_from or now_t < send_until) }}{% endif %}
+        then:
+          - wait_for_trigger:
+              - trigger: time
+                at: !input send_from
+      - sequence: !input notify_action

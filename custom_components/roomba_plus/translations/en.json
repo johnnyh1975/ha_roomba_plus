@@ -219,7 +219,8 @@
           "map_rotation": "Rotate the map picture",
           "wall_thickness_cm": "Wall thickness (cm)",
           "door_width_cm": "Door width (cm)",
-          "resend_swallowed_command": "Send an ignored command once more"
+          "resend_swallowed_command": "Send an ignored command once more",
+          "pause_timeout_minutes": "Send home after a pause (minutes)"
         },
         "data_description": {
           "map_enabled": "Enable the live cleaning map for robots with position sensing (Roomba 900, i, s, j, Braava m).",
@@ -239,7 +240,8 @@
           "map_rotation": "Turns every map picture clockwise as a whole, rooms and path together, for example to match the iRobot app. It never moves the path against the rooms; for that, use “Align the path with the rooms”. The map has no north: its top is the way the robot faced when it left the dock, so it depends on how the dock stands.",
           "wall_thickness_cm": "How thick walls are drawn on the maps. On a 900-series robot it also decides which two rooms' edges are one wall. Default 15.",
           "door_width_cm": "How wide a door is drawn on the maps; an opening clearly wider is drawn as an open passage. A Smart Map robot also looks for doors of about this width when it lines its path up with its rooms. Default 80.",
-          "resend_swallowed_command": "If the robot accepts a start, room or zone command and no mission begins, Roomba+ sends it once more. Only when the robot reports no reason for refusing it."
+          "resend_swallowed_command": "If the robot accepts a start, room or zone command and no mission begins, Roomba+ sends it once more. Only when the robot reports no reason for refusing it.",
+          "pause_timeout_minutes": "A robot that stands paused this long is sent back to its base. 0 turns this off."
         }
       },
       "smart_zones_manual": {
@@ -1482,6 +1484,24 @@
       },
       "estimated_end_time": {
         "name": "Estimated end"
+      },
+      "area_last_vacuumed": {
+        "name": "{area} last vacuumed"
+      },
+      "area_last_mopped": {
+        "name": "{area} last mopped"
+      },
+      "prime_stream_shadows": {
+        "name": "Last state message"
+      },
+      "prime_stream_timeline": {
+        "name": "Last timeline message"
+      },
+      "prime_stream_live_map": {
+        "name": "Last live map message"
+      },
+      "prime_stream_rejections": {
+        "name": "Last refusal message"
       }
     },
     "binary_sensor": {

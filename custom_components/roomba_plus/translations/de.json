@@ -219,7 +219,8 @@
           "map_rotation": "Kartenbild drehen",
           "wall_thickness_cm": "Wandstärke (cm)",
           "door_width_cm": "Türbreite (cm)",
-          "resend_swallowed_command": "Ignorierten Befehl einmal erneut senden"
+          "resend_swallowed_command": "Ignorierten Befehl einmal erneut senden",
+          "pause_timeout_minutes": "Nach einer Pause heimschicken (Minuten)"
         },
         "data_description": {
           "map_enabled": "Aktiviert die Live-Reinigungskarte für Roboter mit Positionserkennung (Roomba 900, i, s, j, Braava m).",
@@ -239,7 +240,8 @@
           "map_rotation": "Dreht jedes Kartenbild als Ganzes im Uhrzeigersinn, Räume und Weg gemeinsam, etwa passend zur iRobot-App. Den Weg gegen die Räume verschiebt es nie, dafür gibt es „Weg an den Räumen ausrichten“. Die Karte hat keine Nordrichtung: Oben ist die Richtung, in die der Roboter beim Verlassen des Docks schaut. Sie hängt davon ab, wie das Dock steht.",
           "wall_thickness_cm": "Wie dick Wände auf den Karten gezeichnet werden. Bei einem Roboter der 900er-Serie entscheidet der Wert auch, welche Ränder zweier Räume eine gemeinsame Wand sind. Standard 15.",
           "door_width_cm": "Wie breit eine Tür auf den Karten gezeichnet wird; eine deutlich breitere Öffnung erscheint als offener Durchgang. Ein Roboter mit Smart Map sucht außerdem Türen etwa dieser Breite, wenn er seine Fahrspur an seinen Räumen ausrichtet. Standard 80.",
-          "resend_swallowed_command": "Nimmt der Roboter einen Start-, Raum- oder Zonenbefehl an und beginnt keine Mission, sendet Roomba+ ihn noch einmal. Nur wenn der Roboter keinen Grund für die Ablehnung meldet."
+          "resend_swallowed_command": "Nimmt der Roboter einen Start-, Raum- oder Zonenbefehl an und beginnt keine Mission, sendet Roomba+ ihn noch einmal. Nur wenn der Roboter keinen Grund für die Ablehnung meldet.",
+          "pause_timeout_minutes": "Ein Roboter, der so lange pausiert steht, wird zur Basis zurückgeschickt. 0 schaltet das aus."
         }
       },
       "smart_zones_manual": {
@@ -1482,6 +1484,24 @@
       },
       "estimated_end_time": {
         "name": "Voraussichtliches Ende"
+      },
+      "area_last_vacuumed": {
+        "name": "{area} zuletzt gesaugt"
+      },
+      "area_last_mopped": {
+        "name": "{area} zuletzt gewischt"
+      },
+      "prime_stream_shadows": {
+        "name": "Letzte Zustandsmeldung"
+      },
+      "prime_stream_timeline": {
+        "name": "Letzte Verlaufsmeldung"
+      },
+      "prime_stream_live_map": {
+        "name": "Letzte Live-Kartenmeldung"
+      },
+      "prime_stream_rejections": {
+        "name": "Letzte Ablehnungsmeldung"
       }
     },
     "binary_sensor": {

@@ -342,6 +342,22 @@ class TestPushFreshnessInDiagnostics:
         assert "EXPECTED if the robot has been idle" in result["note"]
         assert "not delivering" not in result["note"]
 
+    def test_each_stream_has_its_own_age(self):
+        """B16 (4.6.0): a quiet stream shows beside a live one."""
+        import time
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.diagnostics import _push_freshness
+
+        now = time.time()
+        data = MagicMock()
+        data.last_mqtt_message_ts = now - 5
+        data.silence_reference_ts = now - 5
+        data.prime_stream_seen = {"shadows": now - 5, "timeline": now - 7200, "x": "junk"}
+        ages = _push_freshness(data)["streams_seconds_ago"]
+        assert set(ages) == {"shadows", "timeline"}
+        assert ages["timeline"] >= 7199
+
     def test_a_recent_message_reports_a_small_age(self):
         import time
 

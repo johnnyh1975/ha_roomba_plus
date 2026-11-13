@@ -119,6 +119,7 @@ from .live_position import LivePositionStream
 from .room_cleaning import region_names_across_maps
 from .segment_anchoring import anchor_segment
 from .trajectory_segments import split_into_segments
+from .prime_coordinator import note_stream
 from .prime_room_map import SIGNAL_PRIME_ROOM_NAMES
 from .structural_failures import record_failure, record_success
 from .grid_store import GridStore, CELL_SIZE_MM, DECAY, VISIT_INCREMENT
@@ -1185,6 +1186,8 @@ class PrimeMapImage(IRobotEntity, ImageEntity):
             stream = self._prime_robot.watch_live_map()
             try:
                 async for message in stream:
+                    # B16 (4.6.0): the live map stream is alive.
+                    note_stream(self._config_entry.runtime_data, "live_map")
                     # POSITION MESSAGES ARE COUNTED, NOT USED (this session).
                     #
                     # The stream carries two kinds: a URL to iRobot's own

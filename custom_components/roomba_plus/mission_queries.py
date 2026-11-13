@@ -26,6 +26,7 @@ from .area_resolver import async_room_area_fields
 from .estimate_quality import mission_estimate_error, room_quality
 from .mission_result import mission_outcome, named_rooms
 from .models import ConnectionType
+from .prime_coordinator import prime_reported_state
 from .room_times import current_cleaning_mode, room_learning
 
 #: The mission fields every answer carries, in this order.
@@ -35,10 +36,8 @@ _SUMMARY_FIELDS = (
 )
 
 
-def _data_state(data: Any) -> dict[str, Any]:
+def reported_state(data: Any) -> dict[str, Any]:
     """The robot's reported state, Prime's assembled from its shadows."""
-    from .prime_coordinator import prime_reported_state  # noqa: PLC0415
-
     try:
         # Classic first; on Prime it is {} and the shadows answer.
         state = data.roomba_reported_state() or prime_reported_state(data)
@@ -74,7 +73,7 @@ def rooms_of(hass: HomeAssistant, entry: Any) -> list[dict[str, Any]]:
     zones in one id set). Empty for a robot without a room map.
     """
     data = entry.runtime_data
-    mode = current_cleaning_mode(_data_state(data))
+    mode = current_cleaning_mode(reported_state(data))
     cache = _cache(data)
     rows: list[tuple[str, str, Any, Any]] = []
     if data.connection_type is ConnectionType.CLOUD_ONLY:

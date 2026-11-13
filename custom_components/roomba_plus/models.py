@@ -562,6 +562,12 @@ class RoombaData:
     #: pause, resume or skip.
     mission_command: dict[str, Any] | None = None
 
+    #: When each Prime cloud stream last delivered a message, Unix time,
+    #: by stream: `shadows`, `timeline`, `live_map`, `rejections` (4.6.0,
+    #: B16, prime_coordinator.note_stream). A stream that has said nothing
+    #: since setup is absent.
+    prime_stream_seen: dict[str, float] = field(default_factory=dict)
+
     #: The battery at the start of the running mission (4.6.0, B12,
     #: mission_battery.py). In memory only.
     mission_battery: dict[str, Any] | None = None

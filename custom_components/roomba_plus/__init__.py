@@ -119,6 +119,8 @@ from .grid_store import GridStore
 from .room_seg_store import RoomSegStore
 from .mission_store import MissionStore
 from .mission_result import async_setup_mission_result, note_last_error
+from .pause_timeout import async_setup_pause_timeout
+from .blueprint_install import async_install_blueprints
 from .prime_mission_archive import PrimeMissionArchive
 from .mission_archive import MissionArchive  # v2.8.0 ARC1
 from .presence_manager import PresenceManager
@@ -1520,6 +1522,12 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     with a translated message, before any handler runs.
     """
     async_register_services(hass)
+    # The shipped blueprints, copied once, never overwritten (4.6.0, B18).
+    # In the background: a slow disk must not hold up the start, and the
+    # installer catches what it can expect itself.
+    hass.async_create_background_task(
+        async_install_blueprints(hass), name="roomba_plus_install_blueprints",
+    )
     return True
 
 
@@ -1568,6 +1576,8 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: RoombaConfigEntry
     # mission-completed event this listens to; one place, before the paths
     # part, so neither can miss it.
     async_setup_mission_result(hass, config_entry)
+    # A pause that lasts sends the robot home, when set (4.6.0, B15).
+    async_setup_pause_timeout(hass, config_entry)
 
     if _connection_type(config_entry) == ConnectionType.CLOUD_ONLY:
         return await _async_setup_entry_prime(hass, config_entry)

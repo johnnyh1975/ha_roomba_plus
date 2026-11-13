@@ -1,0 +1,207 @@
+blueprint:
+  name: Roomba+ Exception Notifications
+  description: >
+    Nothing after a normal mission -- a notification only when something
+    is wrong: a mission that ended in an error or stuck (or cancelled, or
+    never started, if chosen), the same error again and again, the robot
+    getting stuck in the same place at the same time, missions flagged
+    anomalous in a row, a mission iRobot's numbers show as unusual (a
+    lot of dirt, perhaps a spill), and scheduled cleans skipped in a row.
+
+    Roomba+ raises each of these once per occurrence, not once per
+    mission, so a robot having a bad week does not become a notification
+    stream.
+
+    Two variables for your own notification action:
+    {{ notification_title }} and {{ notification_message }}.
+
+    Full integration: https://github.com/johnnyh1975/ha_roomba_plus
+  domain: automation
+  author: johnnyh1975
+  source_url: https://github.com/johnnyh1975/ha_roomba_plus/blob/main/blueprints/automation/roomba_plus_exceptions.yaml
+  homeassistant:
+    min_version: "2024.10.0"
+
+  input:
+    vacuum_entity:
+      name: Robot
+      description: >
+        The robot's vacuum entity. Events of other robots are ignored --
+        matched on the robot's config entry, not its name.
+      selector:
+        entity:
+          domain: vacuum
+          integration: roomba_plus
+
+    notify_action:
+      name: Notification action
+      description: >
+        What to do -- a mobile app notify action, persistent_notification,
+        TTS. Use {{ notification_title }} and {{ notification_message }}.
+        The default is a persistent notification in Home Assistant.
+      default:
+        - action: persistent_notification.create
+          data:
+            title: "{{ notification_title }}"
+            message: "{{ notification_message }}"
+      selector:
+        action:
+
+    mission_results:
+      name: Mission ended
+      description: The mission results that notify.
+      default: [error, stuck]
+      selector:
+        select:
+          multiple: true
+          options:
+            - label: In an error
+              value: error
+            - label: Stuck
+              value: stuck
+            - label: Cancelled
+              value: cancelled
+            - label: Never started (blocking sensors)
+              value: blocked_timeout
+
+    notify_error_recurrence:
+      name: The same error again and again
+      default: true
+      selector:
+        boolean:
+
+    notify_stuck_pattern:
+      name: Stuck in the same place at the same time
+      default: true
+      selector:
+        boolean:
+
+    notify_anomalies:
+      name: Anomalous missions in a row
+      default: true
+      selector:
+        boolean:
+
+    notify_reassessed:
+      name: A mission iRobot's numbers show as unusual
+      description: >
+        Classic robots with the iRobot login: the dirt count of a mission
+        arrives with iRobot's mission history minutes after it ended. When
+        it is far above the usual, perhaps from a spill, this notifies.
+      default: true
+      selector:
+        boolean:
+
+    notify_cancellations:
+      name: Missions cancelled again and again
+      default: false
+      selector:
+        boolean:
+
+    skips_sensor:
+      name: Consecutive clean skips sensor
+      description: >
+        Optional. The robot's "Consecutive clean skips" sensor (disabled by
+        default -- enable it on the device page first). Notifies when
+        blocking sensors or presence planning stopped the number of
+        scheduled cleans below in a row.
+      default: ""
+      selector:
+        entity:
+          domain: sensor
+          integration: roomba_plus
+
+    skips_threshold:
+      name: Skips in a row
+      default: 3
+      selector:
+        number:
+          min: 1
+          max: 20
+          mode: box
+
+mode: queued
+max: 10
+
+trigger_variables:
+  skips_sensor: !input skips_sensor
+  skips_threshold: !input skips_threshold
+
+# Inputs reach a template only through a variable: Home Assistant does
+# not substitute `!input` inside a template string.
+variables:
+  vacuum_entity: !input vacuum_entity
+  mission_results: !input mission_results
+  enabled:
+    error_recurrence: !input notify_error_recurrence
+    stuck_pattern: !input notify_stuck_pattern
+    anomalies: !input notify_anomalies
+    reassessed: !input notify_reassessed
+    cancellations: !input notify_cancellations
+  robot: "{{ state_attr(vacuum_entity, 'friendly_name') or vacuum_entity }}"
+
+triggers:
+  - trigger: event
+    event_type: roomba_plus_mission_completed
+    id: mission
+  - trigger: event
+    event_type: roomba_plus_error_recurrence
+    id: error_recurrence
+  - trigger: event
+    event_type: roomba_plus_stuck_pattern
+    id: stuck_pattern
+  - trigger: event
+    event_type: roomba_plus_mission_anomaly
+    id: anomalies
+  - trigger: event
+    event_type: roomba_plus_mission_reassessed
+    id: reassessed
+  - trigger: event
+    event_type: roomba_plus_cancellation_recurrence
+    id: cancellations
+  - trigger: template
+    value_template: >
+      {{ skips_sensor not in ("", none, [])
+         and states(skips_sensor) | int(0) >= skips_threshold | int(3) }}
+    id: skips
+
+conditions:
+  - condition: template
+    value_template: >
+      {% if trigger.id == "skips" %}
+        true
+      {% elif trigger.event.data.entry_id != config_entry_id(vacuum_entity) %}
+        false
+      {% elif trigger.id == "mission" %}
+        {{ trigger.event.data.result in mission_results }}
+      {% else %}
+        {{ enabled.get(trigger.id, false) }}
+      {% endif %}
+
+actions:
+  - variables:
+      notification_title: "{{ robot }}"
+      notification_message: >-
+        {% set data = trigger.event.data if trigger.platform == "event" else {} %}
+        {% if trigger.id == "mission" %}
+          {% set what = {"error": "ended in an error", "stuck": "got stuck",
+                         "cancelled": "was cancelled",
+                         "blocked_timeout": "did not start: blocking sensors"} %}
+          The mission {{ what.get(data.result, data.result) }}.
+          {%- if data.anomaly_reason %} {{ data.recommended_action }}{% endif %}
+        {% elif trigger.id == "error_recurrence" %}
+          Error {{ data.error_code }} ({{ data.label }}) {{ data.count }} times
+          {%- if data.room %}, in {{ data.room }}{% endif %}. {{ data.action or "" }}
+        {% elif trigger.id == "stuck_pattern" %}
+          Stuck again and again{% if data.room %} in {{ data.room }}{% endif %}
+          {%- if data.time %}, {{ data.time }}{% endif %}.
+        {% elif trigger.id == "anomalies" %}
+          {{ data.count }} anomalous missions in a row. The mission history says why.
+        {% elif trigger.id == "reassessed" %}
+          The last mission was unusual by iRobot's numbers. {{ data.recommended_action or "" }}
+        {% elif trigger.id == "cancellations" %}
+          {{ data.count }} missions cancelled recently ({{ data.by_user_count }} by you).
+        {% else %}
+          {{ states(skips_sensor) }} scheduled cleans skipped in a row. Check the blocking sensors and the presence planning.
+        {% endif %}
+  - sequence: !input notify_action

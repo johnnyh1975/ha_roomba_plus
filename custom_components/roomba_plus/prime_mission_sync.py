@@ -325,6 +325,19 @@ def prime_entry_to_record(entry: Any) -> dict[str, Any] | None:
             record["scope"] = "rooms"
         elif getattr(command, "command", None) == "start":
             record["scope"] = "whole_home"
+        # WHAT THE ROBOT WAS TOLD TO DO (4.6.0, B14): `operatingMode`, in
+        # the Classic record's `cmd` shape, so room_times'
+        # record_cleaning_mode() reads vacuum or mop from a Prime mission
+        # as it does from a Classic one. The start's own params first,
+        # else the first region that carries one.
+        mode = getattr(getattr(command, "params", None), "operating_mode", None)
+        if mode is None:
+            mode = next((
+                m for region in (getattr(command, "regions", None) or [])
+                if (m := getattr(getattr(region, "params", None), "operating_mode", None)) is not None
+            ), None)
+        if isinstance(mode, int) and not isinstance(mode, bool):
+            record["cmd"] = {"operatingMode": mode}
 
     # PER ROOM AND ZONE, from the mission's own timeline (4.2.21).
     #
