@@ -726,8 +726,8 @@ class TestDroppedFavouritesAreReported:
 
         source = inspect_source(prime_favorites)
 
-        assert "were not offered as buttons" in source
-        assert "dropped," in source and "len(favorites or [])," in source
+        assert "not offered as buttons" in source
+        assert "unusable," in source and "total," in source
 
 
 def inspect_source(module):

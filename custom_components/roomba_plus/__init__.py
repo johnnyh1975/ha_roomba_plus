@@ -1609,9 +1609,14 @@ def _async_note_unknown_sku(sku: str | None, blid: str) -> None:
     once setup has actually succeeded.
 
     DELIBERATELY HERE AND NOT IN THE CONFIG FLOW. At discovery time all
-    that exists is an SKU string, and whether the robot is really Prime
-    is a guess. By this point it is a fact: the account-based setup
-    worked, which only happens for a Prime-generation robot.
+    that exists is an SKU string. By this point the account-based setup
+    has worked, so a diagnostics download exists.
+
+    IT DOES NOT PROVE THE ROBOT IS PRIME. This said it did. A Classic
+    robot whose SKU the table lacks takes the same path and is set up
+    cloud-only: the Combo j7+/j9+, the 600 series and the j8+ all did
+    (4.5.4, j855020). So the message says it works over the cloud, and
+    how a Classic robot gets its local connection back.
 
     That changes what the report is worth. A diagnostics download now
     exists and contains the capability flags, the dock capability flags
@@ -1632,8 +1637,10 @@ def _async_note_unknown_sku(sku: str | None, blid: str) -> None:
 
     _LOGGER.warning(
         "roomba_plus: robot %s set up successfully with SKU %r, which this version does "
-        "not recognise as a known model. Everything should work -- but the SKU table is "
-        "used to tell robot generations apart, so an unknown one is worth adding. "
+        "not recognise as a known model. It works over the iRobot cloud. If it is a "
+        "Classic robot (600, 900, e, i, j, s series, Braava jet m6), it can use its "
+        "local connection instead: Reconfigure the entry with the robot's IP address. "
+        "The SKU table tells robot generations apart, so an unknown one is worth adding. "
         "If you are willing: %s -- please attach a diagnostics download "
         "(Settings > Devices & Services > Roomba+ > three dots > Download diagnostics), "
         "which carries the capability data that makes a new model useful. It contains no "

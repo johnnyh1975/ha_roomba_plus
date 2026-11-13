@@ -26,8 +26,14 @@ everywhere count towards them. Repairs left over from room cleans go at
 the next check or restart.
 
 **Two or more Prime robots on one account share one connection now**
-(roombapy-prime 0.9.0). Before, they dropped each other every few
-seconds. Nothing to do.
+(roombapy-prime 0.9.0; 4.5.4 needs 0.9.1). Before, they dropped each
+other every few seconds. Nothing to do.
+
+**A Roomba j8+ added from the iRobot account** was set up cloud-only:
+its SKU was missing from the table, and it took the Prime path. New
+setups take the local path now. An existing entry keeps working over the
+cloud; to move it to the local connection, *Reconfigure* it with the
+robot's IP address and leave the password empty.
 
 Two maintenance fixes take effect by themselves:
 

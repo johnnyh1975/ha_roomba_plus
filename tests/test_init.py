@@ -68,7 +68,15 @@ class TestUnknownSkuIsReportedAfterSetup:
         reads as a fault the user is expected to fix."""
         message = self._warn_for("Z995020").call_args.args[0]
 
-        assert "Everything should work" in message
+        assert "It works over the iRobot cloud" in message
+
+    def test_the_message_shows_a_classic_robot_the_way_back_to_local(self):
+        """4.5.4: a j8+ (j855020) was set up cloud-only because the table
+        lacked its SKU. "Everything should work" hid that a Classic robot
+        had lost its local connection."""
+        message = self._warn_for("Z995020").call_args.args[0]
+
+        assert "Reconfigure" in message and "IP address" in message
 
     def test_the_message_asks_for_the_diagnostics_download(self):
         """The reason for reporting at this moment rather than earlier:

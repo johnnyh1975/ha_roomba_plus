@@ -43,6 +43,11 @@ def _raw_favorite_is_for(favorite: dict[str, Any], blid: str) -> bool:
     return blid in attributed
 
 
+#: The (unusable, total) favourite counts last warned about, by config
+#: entry -- see async_favorites_attribute().
+_UNUSABLE_WARNED: dict[str, tuple[int, int]] = {}
+
+
 def _is_internal_favorite_name(name: str) -> bool:
     """Whether a favourite name is a firmware-internal id rather than
     something a user named in the app.
@@ -124,18 +129,25 @@ async def async_favorites_attribute(
         _LOGGER.debug("roomba_plus: could not read favorites", exc_info=True)
         return []
 
-    kept = [
-        {
-            "id": str(getattr(f, "favorite_id", "")),
-            "name": getattr(f, "name", "") or "",
-        }
-        for f in favorites or []
-        if getattr(f, "favorite_id", None)
-        and not getattr(f, "is_deleted", False)
-        and not getattr(f, "is_hidden", False)
-        and not _is_internal_favorite_name(getattr(f, "name", "") or "")
-        and _favorite_is_for(f, config_entry.runtime_data.blid)
-    ]
+    kept: list[dict[str, Any]] = []
+    unusable = 0
+    expected: dict[str, int] = {}
+    for f in favorites or []:
+        name = getattr(f, "name", "") or ""
+        if not getattr(f, "favorite_id", None):
+            unusable += 1
+            continue
+        reason = (
+            "deleted" if getattr(f, "is_deleted", False)
+            else "hidden" if getattr(f, "is_hidden", False)
+            else "internal" if _is_internal_favorite_name(name)
+            else "other robot" if not _favorite_is_for(f, config_entry.runtime_data.blid)
+            else None
+        )
+        if reason is not None:
+            expected[reason] = expected.get(reason, 0) + 1
+            continue
+        kept.append({"id": str(f.favorite_id), "name": name})
 
     # SAY WHAT WAS DROPPED, because silence here is what made this bug
     # unfindable for weeks.
@@ -150,13 +162,29 @@ async def async_favorites_attribute(
     # several releases. Each fix along the way was plausible and none of
     # them could be confirmed or ruled out, because the log said nothing
     # either way.
-    dropped = len(favorites or []) - len(kept)
-    if dropped:
-        _LOGGER.warning(
-            "Roomba+ Prime: %d of %d favourite(s) were not offered as buttons "
-            "-- deleted, hidden, or carrying no usable id. Enable debug "
-            "logging for roombapy_prime to see which",
-            dropped,
-            len(favorites or []),
+    #
+    # ONLY THE UNEXPECTED, AND ONCE (4.5.4b3, @Baby-scarf). The warning
+    # counted every drop, and the list is read every fifteen minutes: on
+    # an account with two Prime robots each robot warned about the
+    # other's favourite, 22 times in five hours, for a favourite in
+    # perfect order. A favourite without an id is the parser question the
+    # warning exists for; it is a warning, once per robot until the count
+    # changes. Deleted, hidden, internal and the other robots' are the
+    # filter working, and are logged at debug.
+    total = len(favorites or [])
+    if expected:
+        _LOGGER.debug(
+            "Roomba+ Prime: favourites not offered here, as intended: %s",
+            ", ".join(f"{count} {why}" for why, count in sorted(expected.items())),
         )
+    entry_id = getattr(config_entry, "entry_id", "")
+    if unusable and _UNUSABLE_WARNED.get(entry_id) != (unusable, total):
+        _LOGGER.warning(
+            "Roomba+ Prime: %d of %d favourite(s) carry no usable id and were "
+            "not offered as buttons. Enable debug logging for roombapy_prime "
+            "to see which",
+            unusable,
+            total,
+        )
+    _UNUSABLE_WARNED[entry_id] = (unusable, total)
     return kept

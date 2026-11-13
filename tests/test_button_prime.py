@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import logging
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -258,6 +259,38 @@ class TestFavoritesAttributeAndService:
         )
 
         assert result == []
+
+    @pytest.mark.asyncio
+    async def test_the_filter_working_is_no_warning(self, caplog):
+        """@Baby-scarf: "1 of 1 favourite(s) were not offered", every
+        fifteen minutes, for the other robot's favourite on his account."""
+        from custom_components.roomba_plus.button_prime import (
+            async_favorites_attribute,
+        )
+
+        caplog.set_level(logging.DEBUG, logger="custom_components.roomba_plus")
+        await async_favorites_attribute(_entry([
+            _favorite("f1", robot="OTHER"), _favorite("f2", deleted=True),
+            _favorite("f3", hidden=True), _favorite("f4", "_mission_init_config_X"),
+        ]))
+        assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+        assert "1 deleted, 1 hidden, 1 internal, 1 other robot" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_a_favourite_without_an_id_warns_once_until_the_count_changes(self, caplog):
+        from custom_components.roomba_plus.button_prime import (
+            async_favorites_attribute,
+        )
+
+        caplog.set_level(logging.WARNING, logger="custom_components.roomba_plus")
+        entry = _entry([_favorite(None), _favorite("f2")])
+        for _ in range(3):
+            assert await async_favorites_attribute(entry) == [{"id": "f2", "name": "Evening"}]
+        assert caplog.text.count("1 of 2 favourite(s) carry no usable id") == 1
+
+        entry.runtime_data.prime_robot.get_favorites.return_value = [_favorite(None)]
+        await async_favorites_attribute(entry)
+        assert caplog.text.count("1 of 1 favourite(s) carry no usable id") == 1
 
     @pytest.mark.asyncio
     async def test_running_by_id_sends_the_commands(self):
