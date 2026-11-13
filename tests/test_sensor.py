@@ -2712,7 +2712,7 @@ class TestSharedSensorsOnPrime:
         "ro-currentstate": {"cleanMissionStatus": {
             "cycle": "clean", "phase": "charge", "missionId": "M7", "mssnStrtTm": 1784470000,
             "rechrgTm": 1784480000, "expireTm": 1784490000,
-        }},
+        }, "dock": {"fwVer": "1.2.3"}},
         "ro-stats": {
             "bbmssn": {"nMssn": 276, "nMssnOk": 247, "aMssnM": 54},
             "bbchg": {"nChatters": 3, "nKnockoffs": 1},
@@ -2735,6 +2735,7 @@ class TestSharedSensorsOnPrime:
         assert created["lifetime_completion_rate"].native_value == round(247 / 276 * 100, 1)
         assert created["dock_contact_chatters"].native_value == 3
         assert created["dock_knockoffs"].native_value == 1
+        assert created["dock_firmware_version"].native_value == "1.2.3"
         assert created["mission_recharge_time"].native_value.timestamp() == 1784480000
 
     def test_only_fields_that_arrived_and_more_as_they_come(self):

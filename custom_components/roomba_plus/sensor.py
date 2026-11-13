@@ -774,6 +774,9 @@ _PRIME_SHADOW_SENSOR_FIELDS: dict[str, tuple[str, str]] = {
     "average_mission_time": ("bbmssn", "aMssnM"),
     "dock_contact_chatters": ("bbchg", "nChatters"),
     "dock_knockoffs": ("bbchg", "nKnockoffs"),
+    # The dock's own firmware, in `ro-currentstate.dock` as in the local
+    # state (4.6.0); empty on the one Prime dock seen so far.
+    "dock_firmware_version": ("dock", "fwVer"),
 }
 _PRIME_SHADOW_SENSOR_KEYS: frozenset[str] = frozenset(_PRIME_SHADOW_SENSOR_FIELDS)
 

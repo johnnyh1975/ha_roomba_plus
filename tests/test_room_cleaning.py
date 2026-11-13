@@ -4880,3 +4880,21 @@ class TestCommandRegionNames:
         cc.region_names_by_type = MagicMock()   # not a dict: an older stand-in
         assert region_names_for_command(cc, [{"region_id": "1"}], "MAP_B") == ["Master Bedroom"]
         assert region_names_for_command(None, [{"region_id": "1"}]) == []
+
+
+class TestA224CountsForItsOwnMap:
+    """4.6.0, plan A7 (c), checked in code: a 224 counts against the version
+    of the map its command went to and no other, so a failure on one map
+    never makes a command to another skip a working version."""
+
+    def test_only_the_map_of_the_failed_command(self):
+        from custom_components.roomba_plus.room_cleaning import _version_that_failed
+
+        state = {
+            "cleanMissionStatus": {"error": 224},
+            "lastCommand": {"pmap_id": "MAP-A", "user_pmapv_id": "V-A"},
+        }
+        assert _version_that_failed(state, "MAP-A") == "V-A"
+        assert _version_that_failed(state, "MAP-B") is None
+        state["cleanMissionStatus"]["error"] = 0
+        assert _version_that_failed(state, "MAP-A") is None
