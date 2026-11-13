@@ -528,6 +528,12 @@ async def async_setup_entry(
         _add_discovered_parts(hass, data, config_entry, async_add_entities)
         _add_prime_mission_sensors(data, config_entry, async_add_entities)
         _add_prime_shared_sensors(config_entry, async_add_entities)
+        # 4.6.0, parity: the debug view of the robot's state, from the
+        # shadows; and the presence window, where presence is on.
+        shared: list[SensorEntity] = [PrimeRawStateSensor(data.blid, config_entry)]
+        if getattr(data, "presence_manager", None) is not None:
+            shared.append(RoombaOptimalCleanWindow(None, data.blid, config_entry))
+        async_add_entities(shared)
         return
 
     roomba = config_entry.runtime_data.roomba
@@ -786,6 +792,34 @@ def _add_prime_shared_sensors(
 
 class PrimeSharedSensor(RoombaSensor):
     """A shared sensor description, read from the Prime shadows (4.6.0)."""
+
+    @property
+    def vacuum_state(self) -> dict[str, Any]:
+        return prime_reported_state(self._config_entry.runtime_data)
+
+    @vacuum_state.setter
+    def vacuum_state(self, _value: dict[str, Any]) -> None:
+        """The base class assigns the local state; Prime has none."""
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        coordinator = getattr(
+            self._config_entry.runtime_data, "prime_status_coordinator", None
+        )
+        if coordinator is not None:
+            self.async_on_remove(
+                coordinator.async_add_listener(self.async_write_ha_state)
+            )
+
+
+class PrimeRawStateSensor(RawStateSensor):
+    """The raw-state sensor on Prime: the shadows, merged into the local
+    shape (prime_reported_state), as the diagnostics show them. Opt-in
+    as on Classic (4.6.0)."""
+
+    def __init__(self, blid: str, config_entry: RoombaConfigEntry) -> None:
+        IRobotEntity.__init__(self, None, blid, config_entry)
+        self._attr_unique_id = f"{self.robot_unique_id}_raw_state"
 
     @property
     def vacuum_state(self) -> dict[str, Any]:

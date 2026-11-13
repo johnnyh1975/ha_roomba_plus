@@ -1824,3 +1824,42 @@ class TestPlanFromTheTimeline:
         store.mission_id = None
         c._fire_room_completed_if_changed(self._report("10"))
         assert store.planned_rooms == []
+
+
+class TestMissionStartForPresence:
+    """4.6.0: the presence manager learns when Prime cleans start."""
+
+    @staticmethod
+    def _update(cycle):
+        return ShadowResponse(
+            topic="$aws/things/BLID123/shadow/name/ro-currentstate/update/accepted",
+            payload={"state": {"reported": {"cleanMissionStatus": {"cycle": cycle, "phase": "run"}}}},
+        )
+
+    async def _run(self, cycles, *, manager=True):
+        coordinator, config_entry, prime_robot = _make_status_coordinator()
+        config_entry.runtime_data.presence_manager = MagicMock() if manager else None
+
+        async def fake_watch():
+            for cycle in cycles:
+                yield self._update(cycle)
+            raise asyncio.CancelledError
+
+        prime_robot.watch_named_shadows_updates = fake_watch
+        with pytest.raises(asyncio.CancelledError):
+            await coordinator._async_watch_status_updates()
+        return config_entry.runtime_data.presence_manager
+
+    @pytest.mark.asyncio
+    async def test_a_start_is_recorded_once(self):
+        manager = await self._run(["none", "clean", "clean", "none", "evac", "none", "quick"])
+        assert manager.record_clean_event.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_not_for_a_mission_running_at_setup(self):
+        manager = await self._run(["clean", "clean"])
+        manager.record_clean_event.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_without_presence_nothing_happens(self):
+        assert await self._run(["none", "clean"], manager=False) is None

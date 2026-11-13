@@ -417,7 +417,9 @@ class TestAsyncSetupEntryCloudOnlyBranch:
         # last_mission_area read only the mission store, which Prime
         # fills. (The shared shadow sensors are added later, when their
         # field arrives, and are not counted here.)
-        assert len(created) == 41, (
+        # 43 with the raw-state sensor and the optimal clean window (a
+        # MagicMock entry has a presence manager).
+        assert len(created) == 43, (
             "rooms-overdue was added for Prime: it reads the mission "
             "store and cloud regions, both of which Prime has, and it "
             "was missing only because of the order things were built in"
@@ -2913,3 +2915,55 @@ class TestTheRegionSensorSaysHowLongItTook:
 
         assert s.native_value.isoformat() == "2026-08-21T09:40:00+00:00"
         assert s.extra_state_attributes["last_duration_min"] == 10.0
+
+
+class TestRawStateAndPresenceWindowOnPrime:
+    """4.6.0, parity: the raw-state sensor reads the shadows; the optimal
+    clean window exists where presence scheduling is on."""
+
+    @staticmethod
+    async def _created(presence):
+        from tests import prime_fixtures
+
+        from custom_components.roomba_plus import sensor as sensor_mod
+
+        entry = prime_fixtures.cloud_only_config_entry()
+        entry.options = {}
+        entry.runtime_data.presence_manager = MagicMock() if presence else None
+        created: list = []
+        await sensor_mod.async_setup_entry(MagicMock(), entry, created.extend)
+        return {type(e).__name__: e for e in created}, entry
+
+    @pytest.mark.asyncio
+    async def test_raw_state_from_the_shadows(self):
+        created, entry = await self._created(presence=False)
+        raw = created["PrimeRawStateSensor"]
+        assert raw.unique_id.endswith("_raw_state")
+        assert raw.entity_registry_enabled_default is False
+        assert raw.native_value > 0
+        assert raw.extra_state_attributes["batPct"] == 84
+        assert "RoombaOptimalCleanWindow" not in created
+
+    @pytest.mark.asyncio
+    async def test_presence_window_with_presence(self):
+        created, _entry = await self._created(presence=True)
+        assert "RoombaOptimalCleanWindow" in created
+
+    @pytest.mark.asyncio
+    async def test_raw_state_follows_the_coordinator(self):
+        from unittest.mock import patch
+
+        from custom_components.roomba_plus.entity import IRobotEntity
+
+        created, entry = await self._created(presence=False)
+        raw = created["PrimeRawStateSensor"]
+        raw.async_on_remove = MagicMock()
+
+        async def _noop(self):
+            return None
+
+        coordinator = MagicMock()
+        entry.runtime_data.prime_status_coordinator = coordinator
+        with patch.object(IRobotEntity, "async_added_to_hass", new=_noop):
+            await raw.async_added_to_hass()
+        assert coordinator.async_add_listener.call_args.args[0] == raw.async_write_ha_state

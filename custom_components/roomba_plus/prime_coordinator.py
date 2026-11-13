@@ -54,6 +54,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.util import dt as dt_util
 
 from . import cloud_errors
 from .command_watch import note_prime_shadows
@@ -805,6 +806,8 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         #: The phase of the previous shadow update, for the stuck event
         #: (4.6.0). None until the first one.
         self._previous_phase: str | None = None
+        #: The cycle of the previous update, for the presence history.
+        self._previous_cycle: str | None = None
 
     async def async_start(self) -> None:
         """Seeds initial data by fetching ALL eight named shadows once,
@@ -916,6 +919,7 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                     self.entry.runtime_data.last_mqtt_message_ts = _time.time()
                     self._note_phase_for_timer(updated)
                     self._note_stuck(updated)
+                    self._note_mission_start(updated)
                     # "Running" while the battery charges (4.6.0).
                     with contextlib.suppress(Exception):
                         note_prime_shadows(self.hass, self.entry, updated)
@@ -1040,6 +1044,31 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
             data.prime_observed_dock = (float(last[0]), float(last[1]))
         except (TypeError, ValueError):
             return
+
+    def _note_mission_start(self, shadows: dict[str, Any]) -> None:
+        """A mission began: tell the presence manager when (4.6.0).
+
+        The presence manager learns its best cleaning window from when
+        cleans start; Classic tells it from the MQTT mission start
+        (callbacks.py), and on Prime nothing did, so the optimal clean
+        window had no history. A start is the cycle leaving `none` for
+        anything but an emptying at the dock. Not for the first update
+        after setup, which is no start that Home Assistant saw.
+        """
+        status = (shadows.get("ro-currentstate") or {}).get("cleanMissionStatus") or {}
+        cycle = status.get("cycle")
+        if not isinstance(cycle, str):
+            return
+        previous, self._previous_cycle = self._previous_cycle, cycle
+        if previous != "none" or cycle in ("none", "evac", ""):
+            return
+        manager = getattr(self.entry.runtime_data, "presence_manager", None)
+        if manager is None:
+            return
+        try:
+            manager.record_clean_event(dt_util.utcnow())
+        except Exception:  # noqa: BLE001 -- a history entry must not stop the stream
+            _LOGGER.debug("Prime: could not record the clean for presence", exc_info=True)
 
     def _note_stuck(self, shadows: dict[str, Any]) -> None:
         """Fire `roomba_plus_stuck` when the robot reports `phase: stuck` (4.6.0).
