@@ -34,7 +34,7 @@ from .entity import IRobotEntity
 from .prime_room_map import SIGNAL_PRIME_ROOM_NAMES
 from .models import RoombaConfigEntry
 from .prime_coordinator import prime_current_state, prime_last_command
-from .room_times import current_cleaning_mode, measured_room_seconds, typical_room_seconds
+from .room_times import STAT_SUFFIXES, current_cleaning_mode, measured_room_seconds, typical_room_seconds
 from .room_cleaning import CommandRegionNames, region_names_across_maps
 
 _LOGGER = logging.getLogger("custom_components.roomba_plus.sensor")
@@ -369,7 +369,8 @@ def cached_room_seconds(config_entry: Any, region_id: str) -> float | None:
     # as a three-second room and win the `min()` outright.
     seconds = [
         v for k, v in cache.items()
-        if k.startswith(prefix) and v > 0 and not k.endswith("|count")
+        # The spread's sums too (4.6.0, room_times.STAT_SUFFIXES).
+        if k.startswith(prefix) and v > 0 and not k.endswith(STAT_SUFFIXES)
     ]
     return min(seconds) if seconds else None
 
@@ -1897,6 +1898,9 @@ class RoombaLastMissionSummarySensor(IRobotEntity, SensorEntity):
                 "cleaning_passes": None,
                 "battery_start_pct": None,
                 "battery_end_pct": None,
+                "battery_used_pct": None,
+                "battery_used_pct_per_m2": None,
+                "battery_recharged": None,
                 "recharges": None,
                 "dirt_events": None,
                 "evacuations": None,
@@ -1928,8 +1932,13 @@ class RoombaLastMissionSummarySensor(IRobotEntity, SensorEntity):
             ),
             "room_coverage": room_coverage,
             "cleaning_passes": rec.get("cleaning_passes"),
+            # Read here since 3.1.0 and written since 4.6.0 (B12,
+            # mission_battery.py): no record carried them before.
             "battery_start_pct": rec.get("battery_start_pct"),
             "battery_end_pct": rec.get("battery_end_pct"),
+            "battery_used_pct": rec.get("battery_used_pct"),
+            "battery_used_pct_per_m2": rec.get("battery_used_pct_per_m2"),
+            "battery_recharged": rec.get("battery_recharged"),
             "recharges": rec.get("recharges"),
             "dirt_events": rec.get("dirt_events"),
             "evacuations": rec.get("evacuations"),

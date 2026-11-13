@@ -2304,6 +2304,66 @@
     "debug_capture_get": {
       "name": "Get debug capture",
       "description": "Returns the lines of the debug capture, redacted, ready to paste into an issue."
+    },
+    "get_rooms": {
+      "name": "Get rooms",
+      "description": "Returns the rooms and zones the robot knows, each with its id, map, Home Assistant area, time estimate and how good that estimate is.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "Vacuum entity of the robot."
+        }
+      }
+    },
+    "get_missions": {
+      "name": "Get missions",
+      "description": "Returns the newest stored missions, newest first: when, how they ended, who started them, which rooms were asked for, cleaned, skipped or not reached, and the battery they used.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "Vacuum entity of the robot."
+        },
+        "limit": {
+          "name": "Limit",
+          "description": "How many missions at most."
+        },
+        "days": {
+          "name": "Days",
+          "description": "Only missions that ended within this many days."
+        }
+      }
+    },
+    "get_mission": {
+      "name": "Get mission",
+      "description": "Returns one stored mission in full, with the battery it used and, per room, whether its time went into the learned estimates and why not. The latest mission unless a mission ID is given.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "Vacuum entity of the robot."
+        },
+        "mission_id": {
+          "name": "Mission ID",
+          "description": "The mission to return (the id from get_missions). Empty: the latest mission."
+        }
+      }
+    },
+    "plan_clean": {
+      "name": "Plan a clean",
+      "description": "Returns what a clean started now would take, without starting it: the rooms in order with their estimates, the total and the end. Without rooms, the robot's mean mission length. Travel and recharges are not in the estimates.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "Vacuum entity of the robot."
+        },
+        "room_name": {
+          "name": "Rooms",
+          "description": "A room name or a list of them, in the order to clean. Empty: the whole home."
+        },
+        "end_by": {
+          "name": "End by",
+          "description": "When the clean has to be finished; the answer says whether it fits."
+        }
+      }
     }
   },
   "exceptions": {

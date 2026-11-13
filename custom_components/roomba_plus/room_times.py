@@ -103,6 +103,39 @@ def remember(cache: dict[str, float], room: str, seconds: float, mode: str | Non
         mean, n = float(seconds), 1
     cache[key] = mean
     cache[count_key] = float(n)
+    # THE SPREAD (4.6.0, B11): sums over the measurements from here on,
+    # three more keys beside the mean. Additive -- a figure learned
+    # before 4.6.0 has none and starts its spread with the next run --
+    # and never read by anything that reads the mean.
+    cache[f"{key}|sq_n"] = float(cache.get(f"{key}|sq_n", 0.0) or 0.0) + 1.0
+    cache[f"{key}|sq_sum"] = float(cache.get(f"{key}|sq_sum", 0.0) or 0.0) + float(seconds)
+    cache[f"{key}|sq_sumsq"] = (
+        float(cache.get(f"{key}|sq_sumsq", 0.0) or 0.0) + float(seconds) ** 2
+    )
+
+
+#: The suffixes of the keys beside a mean (count and spread).
+STAT_SUFFIXES = ("|count", "|sq_n", "|sq_sum", "|sq_sumsq")
+
+
+def room_spread(cache: dict[str, float], room: str, mode: str | None) -> tuple[int, float | None]:
+    """(runs, standard deviation in seconds) of this room in this mode.
+
+    Runs is every measurement the mean holds; the deviation only from the
+    ones since 4.6.0, and None below two of them.
+    """
+    key = measured_key(room, mode)
+    count = cache.get(f"{key}|count")
+    runs = int(count) if isinstance(count, (int, float)) and count > 0 else (
+        1 if key in cache else 0
+    )
+    n = float(cache.get(f"{key}|sq_n", 0.0) or 0.0)
+    if n < 2:
+        return runs, None
+    total = float(cache.get(f"{key}|sq_sum", 0.0) or 0.0)
+    squares = float(cache.get(f"{key}|sq_sumsq", 0.0) or 0.0)
+    variance = max(0.0, (squares - total * total / n) / (n - 1))
+    return runs, variance ** 0.5
 
 
 def _measurements(cache: dict[str, float], room: str | None = None) -> list[tuple[str, str | None, float, float]]:
@@ -110,7 +143,7 @@ def _measurements(cache: dict[str, float], room: str | None = None) -> list[tupl
     cache. Keys written before counts existed count once."""
     found: list[tuple[str, str | None, float, float]] = []
     for key, value in cache.items():
-        if key.endswith("|count") or "|measured|" not in key:
+        if key.endswith(STAT_SUFFIXES) or "|measured|" not in key:
             continue
         name, _, suffix = key.partition("|measured|")
         if room is not None and name != room:
@@ -238,19 +271,41 @@ def _record_end(rec: dict[str, Any]) -> float | None:
     return None
 
 
-def timeline_room_seconds(rec: dict[str, Any]) -> dict[str, float]:
-    """{region id: seconds} for one mission, from the cloud's room events.
+#: Why a room of a mission taught nothing (4.6.0, B9). `None` for one
+#: that did.
+REASON_PASSAGE = "passage"          # reached into, not cleaned
+REASON_NOT_FINISHED = "not_finished"  # no finished pass
+REASON_TOO_SHORT = "too_short"
+REASON_TOO_LONG = "too_long"
+REASON_SKIPPED = "skipped"          # skipped by command
+REASON_STUCK = "stuck"
+REASON_ERROR = "error"
+REASON_CANCELLED = "cancelled"
+REASON_PAUSED = "paused"
 
-    A room runs from its event's `ts` to the next room, drive, recharge
-    or bin run -- or, for the last room, to the mission's end (`timestamp`
-    on a cloud record). Several passes over one room add up. Only rooms
-    with a finished pass (status 0 or 6) that covered at least
-    MIN_CLEANED_ROOM_SHARE count; figures outside
-    MIN_ROOM_SECONDS..MAX_ROOM_SECONDS are dropped.
-    """
+
+def _nothing_reason(rec: dict[str, Any]) -> str | None:
+    """Why a whole mission teaches nothing, or None (see _teaches_nothing)."""
+    result = str(rec.get("result") or rec.get("classified_result") or "").lower()
+    for word, reason in (
+        ("stuck", REASON_STUCK), ("error", REASON_ERROR), ("cancel", REASON_CANCELLED),
+    ):
+        if word in result:
+            return reason
+    pause = rec.get("pauseM")
+    if isinstance(pause, (int, float)) and not isinstance(pause, bool) and pause > 0:
+        return REASON_PAUSED
+    return None
+
+
+def _timeline_rooms(rec: dict[str, Any]) -> list[tuple[str, float, str | None]]:
+    """(region id, seconds, reason) per room of one mission's timeline,
+    in the order entered. The reason is the room's own (passage, not
+    finished, too short or long, skipped), None for a room whose time
+    counts; the mission-wide reason (_nothing_reason) is not applied."""
     timeline = rec.get("timeline")
     if not isinstance(timeline, dict):
-        return {}
+        return []
     events: list[tuple[float, dict[str, Any]]] = []
     for ev in timeline.get("finEvents") or []:
         if not isinstance(ev, dict):
@@ -265,6 +320,7 @@ def timeline_room_seconds(rec: dict[str, Any]) -> dict[str, float]:
     mission_end = _record_end(rec)
 
     spent: dict[str, float] = {}
+    finished: set[str] = set()
     cleaned: set[str] = set()
     for index, (ts, ev) in enumerate(events):
         if ev.get("type") != "room":
@@ -275,26 +331,108 @@ def timeline_room_seconds(rec: dict[str, Any]) -> dict[str, float]:
         rid = str(room.get("rid", "") or "")
         if not rid:
             continue
+        spent.setdefault(rid, 0.0)
         # A FINISHED PASS OVER A ROOM THE ROBOT REALLY CLEANED: the rule
         # for learned figures (ROOM_EVENT_DONE_STATUSES), and not a room
         # only reached into (MIN_CLEANED_ROOM_SHARE). A room closed at a
         # cancelled mission's end would teach a fraction of a room.
         share = room_event_covered_share(room)
-        if room.get("status") in ROOM_EVENT_DONE_STATUSES and (
-            share is None or share >= MIN_CLEANED_ROOM_SHARE
-        ):
-            cleaned.add(rid)
+        if room.get("status") in ROOM_EVENT_DONE_STATUSES:
+            finished.add(rid)
+            if share is None or share >= MIN_CLEANED_ROOM_SHARE:
+                cleaned.add(rid)
         until = next(
             (t for t, later in events[index + 1:]
              if later.get("type") in _BOUNDARY_TYPES and t > ts),
             mission_end,
         )
         if until is not None and until > ts:
-            spent[rid] = spent.get(rid, 0.0) + (until - ts)
+            spent[rid] += until - ts
+
+    skipped = {str(r) for r in rec.get("skipped_rids") or []}
+    rows: list[tuple[str, float, str | None]] = []
+    for rid, seconds in spent.items():
+        reason: str | None
+        if rid in cleaned:
+            reason = (
+                REASON_TOO_SHORT if seconds < MIN_ROOM_SECONDS
+                else REASON_TOO_LONG if seconds > MAX_ROOM_SECONDS
+                else None
+            )
+        elif rid in skipped:
+            reason = REASON_SKIPPED
+        elif rid in finished:
+            reason = REASON_PASSAGE
+        else:
+            reason = REASON_NOT_FINISHED
+        rows.append((rid, seconds, reason))
+    return rows
+
+
+def room_learning(rec: dict[str, Any]) -> list[dict[str, Any]]:
+    """Each room of one mission's cloud timeline, and whether its time
+    was learned (4.6.0, B9).
+
+    `[{"room_id", "seconds", "accepted", "reason"}]` in the order the rooms
+    were entered; `reason` is None for an accepted room, else one of the
+    REASON_* words: the room's own, or else the mission's (stuck, error,
+    cancelled, paused), which keeps every room of it out. Empty without
+    a timeline.
+
+    THE LEARNING GOES THROUGH THE SAME RULE: timeline_room_seconds() is
+    the rooms without a reason of their own, and learn_from_records()
+    takes none of a mission _teaches_nothing() rejects. So what
+    `get_mission` says was learned is what was.
+    """
+    whole = _nothing_reason(rec)
+    out: list[dict[str, Any]] = []
+    for rid, seconds, reason in _timeline_rooms(rec):
+        final = reason if reason is not None else whole
+        out.append({
+            "room_id": rid,
+            "seconds": round(seconds, 1),
+            "accepted": final is None,
+            "reason": final,
+        })
+    return out
+
+
+def timeline_room_seconds(rec: dict[str, Any]) -> dict[str, float]:
+    """{region id: seconds} for one mission, from the cloud's room events.
+
+    A room runs from its event's `ts` to the next room, drive, recharge
+    or bin run -- or, for the last room, to the mission's end (`timestamp`
+    on a cloud record). Several passes over one room add up. Only rooms
+    with a finished pass (status 0 or 6) that covered at least
+    MIN_CLEANED_ROOM_SHARE count; figures outside
+    MIN_ROOM_SECONDS..MAX_ROOM_SECONDS are dropped (_timeline_rooms).
+    """
     return {
-        rid: seconds for rid, seconds in spent.items()
-        if rid in cleaned and MIN_ROOM_SECONDS <= seconds <= MAX_ROOM_SECONDS
+        rid: seconds for rid, seconds, reason in _timeline_rooms(rec)
+        if reason is None
     }
+
+
+def visit_learning(visits: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    """room_learning() for region_visits() output: the Prime form (4.6.0, B9).
+
+    A Prime record keeps `room_durations_sec`, the regions that count:
+    cleaned, and at least MIN_ROOM_SECONDS. prime_mission_sync derives
+    that from this list, so the two agree by construction.
+    """
+    out: list[dict[str, Any]] = []
+    for rid, visit in visits.items():
+        seconds = round(float(visit.get("seconds") or 0.0), 1)
+        reason = (
+            REASON_PASSAGE if not visit.get("cleaned")
+            else REASON_TOO_SHORT if seconds < MIN_ROOM_SECONDS
+            else None
+        )
+        out.append({
+            "room_id": str(rid), "seconds": seconds,
+            "accepted": reason is None, "reason": reason,
+        })
+    return out
 
 
 #: What ends a room or zone visit for the history below: the next room
@@ -415,11 +553,7 @@ def _teaches_nothing(rec: dict[str, Any]) -> bool:
     """A mission whose clock ran without cleaning: stuck, failed,
     cancelled, or paused by someone. The waiting would count into
     whatever room it happened in."""
-    result = str(rec.get("result") or rec.get("classified_result") or "").lower()
-    if any(word in result for word in ("stuck", "error", "cancel")):
-        return True
-    pause = rec.get("pauseM")
-    return isinstance(pause, (int, float)) and not isinstance(pause, bool) and pause > 0
+    return _nothing_reason(rec) is not None
 
 
 def learn_from_records(

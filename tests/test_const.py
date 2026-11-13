@@ -824,7 +824,7 @@ _PKG = pathlib.Path("custom_components/roomba_plus")
 FINISHED = {
     ("callbacks.py", "_async_update_robot_profile_store"),  # learned area/time
     ("mission_store.py", "record_room_coverage"),          # measurement
-    ("room_times.py", "timeline_room_seconds"),            # learned room times
+    ("room_times.py", "_timeline_rooms"),                  # learned room times (4.6.0: with reasons)
     ("mission_archive.py", "_parse_derived"),               # completed/interrupted split
     ("mission_archive.py", "_parse_timeline"),              # done/enter/interrupted split
 }

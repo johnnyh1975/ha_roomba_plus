@@ -75,6 +75,14 @@ NON_CYCLE_REASONS: dict[str, str] = {
         "imported module does not import back' means DIRECTLY, and an "
         "indirect cycle looks exactly like a lazy import with no reason."
     ),
+    "mission_queries -> sensor_rooms": (
+        "INDIRECT CYCLE, the one callbacks -> sensor_rooms has. "
+        "`sensor_rooms` imports `entity`, which imports the package, "
+        "which imports `blocking_manager` -> `services` -> "
+        "`mission_queries`. At module level the package fails to import "
+        "(`roomba_reported_state` from a partially initialized module), "
+        "tried in 4.6.0."
+    ),
     "image -> map_renderer": (
         "pulls in PIL through the renderer. Deferred so a Home Assistant "
         "instance with the map disabled does not pay for it at startup"

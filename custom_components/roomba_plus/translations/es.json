@@ -2304,6 +2304,66 @@
     "debug_capture_get": {
       "name": "Obtener captura de depuración",
       "description": "Devuelve las líneas de la captura, ya anonimizadas, listas para pegar en un issue."
+    },
+    "get_rooms": {
+      "name": "Obtener habitaciones",
+      "description": "Devuelve las habitaciones y zonas que conoce el robot, cada una con su id, mapa, área de Home Assistant, tiempo estimado y la calidad de esa estimación.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "Entidad aspiradora del robot."
+        }
+      }
+    },
+    "get_missions": {
+      "name": "Obtener misiones",
+      "description": "Devuelve las misiones guardadas más recientes, la más nueva primero: cuándo, cómo terminaron, quién las inició, qué habitaciones se pidieron, limpiaron, omitieron o no se alcanzaron, y la batería que usaron.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "Entidad aspiradora del robot."
+        },
+        "limit": {
+          "name": "Límite",
+          "description": "Cuántas misiones como máximo."
+        },
+        "days": {
+          "name": "Días",
+          "description": "Solo misiones que terminaron en este número de días."
+        }
+      }
+    },
+    "get_mission": {
+      "name": "Obtener misión",
+      "description": "Devuelve una misión guardada completa, con la batería que usó y, por habitación, si su tiempo entró en las estimaciones aprendidas y por qué no. La última misión salvo que se indique un ID.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "Entidad aspiradora del robot."
+        },
+        "mission_id": {
+          "name": "ID de misión",
+          "description": "La misión a devolver (el id de get_missions). Vacío: la última misión."
+        }
+      }
+    },
+    "plan_clean": {
+      "name": "Planificar una limpieza",
+      "description": "Devuelve lo que tardaría una limpieza iniciada ahora, sin iniciarla: las habitaciones en orden con sus estimaciones, el total y el final. Sin habitaciones, la duración media de misión del robot. Los trayectos y recargas no están incluidos.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "Entidad aspiradora del robot."
+        },
+        "room_name": {
+          "name": "Habitaciones",
+          "description": "Un nombre de habitación o una lista, en el orden de limpieza. Vacío: toda la casa."
+        },
+        "end_by": {
+          "name": "Terminar antes de",
+          "description": "Cuándo debe terminar la limpieza; la respuesta dice si cabe."
+        }
+      }
     }
   },
   "exceptions": {

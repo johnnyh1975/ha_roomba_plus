@@ -102,6 +102,11 @@ class TestServicesRegistration:
             (DOMAIN, "explain_mission"),
             # 4.6.0 A5
             (DOMAIN, "retry_missed_rooms"),
+            # 4.6.0 B6, B8 -- response actions
+            (DOMAIN, "get_rooms"),
+            (DOMAIN, "get_missions"),
+            (DOMAIN, "get_mission"),
+            (DOMAIN, "plan_clean"),
             # 4.6.0 A1
             (DOMAIN, "debug_capture_start"),
             (DOMAIN, "debug_capture_stop"),
@@ -138,7 +143,7 @@ class TestServicesRegistration:
         async_register_services(hass)
         # Handler not replaced on second call
         assert registered[(DOMAIN, "clean_room")] is first_handler
-        assert len(registered) == 30
+        assert len(registered) == 34
 
     # THE REMOVAL TESTS ARE GONE WITH THE REMOVAL (4.2.11, quality scale:
     # action-setup). Services used to disappear when the last entry
@@ -156,7 +161,7 @@ class TestServicesRegistration:
         hass, registered = self._make_hass()
         assert asyncio.run(async_setup(hass, {})) is True
         assert (DOMAIN, "clean_room") in registered
-        assert len(registered) == 30
+        assert len(registered) == 34
 
 
 class TestConfCleanDelayMin:
@@ -4264,3 +4269,64 @@ class TestThePrimeArchiveIsInTheBackup:
         from custom_components.roomba_plus.services import _BACKUP_STORES
 
         assert ("prime_mission_archive", STORAGE_KEY_PREFIX) in _BACKUP_STORES
+
+
+class TestTheResponseActions:
+    """B6, B8 (4.6.0): get_rooms, get_missions, get_mission, plan_clean
+    answer from mission_queries for the robot of the entity."""
+
+    @staticmethod
+    def _call(**data):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(hass=MagicMock(), data={"entity_id": "vacuum.r", **data})
+
+    @staticmethod
+    def _entry(runtime=True):
+        entry = MagicMock()
+        if not runtime:
+            entry.runtime_data = None
+        return entry
+
+    @pytest.mark.asyncio
+    async def test_each_answers(self):
+        from custom_components.roomba_plus import services as svc
+
+        entry = self._entry()
+        with patch.object(svc, "_resolve_config_entry_from_entity", return_value=entry), \
+                patch.object(svc.mission_queries, "rooms_of", return_value=[{"id": "1"}]), \
+                patch.object(svc.mission_queries, "missions_of", return_value=[{"id": "m"}]) as missions, \
+                patch.object(svc.mission_queries, "find_mission", return_value={"id": "m"}), \
+                patch.object(svc.mission_queries, "mission_detail", return_value={"id": "m", "x": 1}), \
+                patch.object(svc.mission_queries, "plan_clean", return_value={"total_sec": 1}) as plan:
+            assert await svc.async_handle_get_rooms(self._call()) == {"rooms": [{"id": "1"}]}
+            assert await svc.async_handle_get_missions(self._call(limit=5, days=3)) == {
+                "missions": [{"id": "m"}],
+            }
+            assert missions.call_args.kwargs == {"limit": 5, "days": 3}
+            assert await svc.async_handle_get_mission(self._call()) == {"id": "m", "x": 1}
+            assert await svc.async_handle_plan_clean(self._call(room_name="Kitchen")) == {"total_sec": 1}
+            assert plan.call_args.args[2] == ["Kitchen"]
+            await svc.async_handle_plan_clean(self._call())
+            assert plan.call_args.args[2] is None
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_mission_is_an_error(self):
+        from homeassistant.exceptions import ServiceValidationError
+
+        from custom_components.roomba_plus import services as svc
+
+        with patch.object(svc, "_resolve_config_entry_from_entity", return_value=self._entry()), \
+                patch.object(svc.mission_queries, "find_mission", return_value=None):
+            with pytest.raises(ServiceValidationError):
+                await svc.async_handle_get_mission(self._call(mission_id="nope"))
+
+    @pytest.mark.asyncio
+    async def test_a_robot_not_loaded_is_an_error(self):
+        from homeassistant.exceptions import ServiceValidationError
+
+        from custom_components.roomba_plus import services as svc
+
+        with patch.object(svc, "_resolve_config_entry_from_entity", return_value=self._entry(False)):
+            with pytest.raises(ServiceValidationError):
+                await svc.async_handle_get_rooms(self._call())

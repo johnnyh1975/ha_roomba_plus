@@ -226,7 +226,12 @@ class TestTheMissionStoreLearns:
         store._records = [rec]
         cache: dict[str, float] = {}
         assert store.learn_room_times(cache, [], {"1": "Kitchen"}, {"up": {"1": "Study"}}, "mop") == (1, 1)
-        assert cache == {"Study|measured|mop": 600.0, "Study|measured|mop|count": 1.0}
+        assert cache == {
+            "Study|measured|mop": 600.0, "Study|measured|mop|count": 1.0,
+            # The spread's sums (4.6.0, B11).
+            "Study|measured|mop|sq_n": 1.0, "Study|measured|mop|sq_sum": 600.0,
+            "Study|measured|mop|sq_sumsq": 360000.0,
+        }
 
 
 class TestTheEstimatesUseThem:
@@ -383,3 +388,86 @@ class TestRegionVisits:
         visit = record_region_visits(rec)["3"]
         assert visit["seconds"] == 600.0
         assert visit["ended_at"] == 600.0
+
+
+class TestWhyARoomTaughtNothing:
+    """B9 (4.6.0): each room of a mission, and whether its time was
+    learned -- by the rule the learning itself uses."""
+
+    @staticmethod
+    def _rec(*events, **extra):
+        return {"id": "m_1", "timestamp": 20000, "timeline": {"finEvents": list(events)}, **extra}
+
+    def test_each_reason(self):
+        rec = self._rec(
+            _room("1", 100), _travel(700),                     # 600 s: learned
+            _room("2", 760), _travel(780),                     # 20 s: too short
+            _room("3", 800, pass_area=5), _travel(1400),       # 5 %: passage
+            _room("4", 1500, status=3), _travel(2000),         # not finished
+            _room("5", 2100, status=3), _travel(2200),         # skipped by command
+            _room("6", 2300), _travel(2300 + 4 * 3600),        # too long
+            skipped_rids=["5"],
+        )
+        rows = {r["room_id"]: (r["accepted"], r["reason"]) for r in rt.room_learning(rec)}
+        assert rows == {
+            "1": (True, None),
+            "2": (False, "too_short"),
+            "3": (False, "passage"),
+            "4": (False, "not_finished"),
+            "5": (False, "skipped"),
+            "6": (False, "too_long"),
+        }
+
+    def test_the_learned_figures_are_the_accepted_rooms(self):
+        rec = self._rec(_room("1", 100), _travel(700), _room("2", 760), _travel(780))
+        accepted = {r["room_id"]: r["seconds"] for r in rt.room_learning(rec) if r["accepted"]}
+        assert accepted == {"1": 600.0} == rt.timeline_room_seconds(rec)
+
+    @pytest.mark.parametrize(("extra", "reason"), [
+        ({"result": "stuck"}, "stuck"), ({"result": "cancelled"}, "cancelled"),
+        ({"classified_result": "error"}, "error"), ({"pauseM": 3}, "paused"),
+    ])
+    def test_a_mission_that_teaches_nothing_says_why(self, extra, reason):
+        rec = self._rec(_room("1", 100), _travel(700), **extra)
+        assert rt.room_learning(rec) == [
+            {"room_id": "1", "seconds": 600.0, "accepted": False, "reason": reason},
+        ]
+
+    def test_no_timeline_nothing(self):
+        assert rt.room_learning({"id": "m_1"}) == []
+
+    def test_the_prime_form(self):
+        visits = {
+            "10": {"seconds": 300.04, "cleaned": True},
+            "11": {"seconds": 12.0, "cleaned": True},
+            "12": {"seconds": 200.0, "cleaned": False},
+        }
+        assert rt.visit_learning(visits) == [
+            {"room_id": "10", "seconds": 300.0, "accepted": True, "reason": None},
+            {"room_id": "11", "seconds": 12.0, "accepted": False, "reason": "too_short"},
+            {"room_id": "12", "seconds": 200.0, "accepted": False, "reason": "passage"},
+        ]
+
+
+class TestTheSpread:
+    """B11 (4.6.0): the spread of a room's runs, beside its mean."""
+
+    def test_the_spread_of_the_runs(self):
+        cache: dict[str, float] = {}
+        for value in (100.0, 200.0, 300.0):
+            rt.remember(cache, "K", value, "vacuum")
+        runs, spread = rt.room_spread(cache, "K", "vacuum")
+        assert runs == 3
+        assert spread == pytest.approx(100.0)
+        # The mean is still the mean, and the sums are no measurement.
+        assert rt.measured_room_seconds(cache, "K", "vacuum") == pytest.approx(200.0)
+        assert rt.typical_room_seconds(cache, "vacuum") == pytest.approx(200.0)
+
+    def test_one_run_has_no_spread(self):
+        cache: dict[str, float] = {}
+        rt.remember(cache, "K", 100.0, "vacuum")
+        assert rt.room_spread(cache, "K", "vacuum") == (1, None)
+
+    def test_an_old_mean_without_a_count_is_one_run(self):
+        assert rt.room_spread({"K|measured|vacuum": 100.0}, "K", "vacuum") == (1, None)
+        assert rt.room_spread({}, "K", "vacuum") == (0, None)

@@ -2304,6 +2304,66 @@
     "debug_capture_get": {
       "name": "Obter captura de depuração",
       "description": "Devolve as linhas da captura, anonimizadas, prontas a colar num issue."
+    },
+    "get_rooms": {
+      "name": "Obter divisões",
+      "description": "Devolve as divisões e zonas que o robô conhece, cada uma com id, mapa, área do Home Assistant, tempo estimado e a qualidade dessa estimativa.",
+      "fields": {
+        "entity_id": {
+          "name": "Robô",
+          "description": "Entidade aspirador do robô."
+        }
+      }
+    },
+    "get_missions": {
+      "name": "Obter missões",
+      "description": "Devolve as missões guardadas mais recentes, a mais nova primeiro: quando, como terminaram, quem as iniciou, que divisões foram pedidas, limpas, saltadas ou não alcançadas, e a bateria que usaram.",
+      "fields": {
+        "entity_id": {
+          "name": "Robô",
+          "description": "Entidade aspirador do robô."
+        },
+        "limit": {
+          "name": "Limite",
+          "description": "Quantas missões no máximo."
+        },
+        "days": {
+          "name": "Dias",
+          "description": "Só missões que terminaram dentro deste número de dias."
+        }
+      }
+    },
+    "get_mission": {
+      "name": "Obter missão",
+      "description": "Devolve uma missão guardada completa, com a bateria usada e, por divisão, se o seu tempo entrou nas estimativas aprendidas e porque não. A última missão salvo indicação de um ID.",
+      "fields": {
+        "entity_id": {
+          "name": "Robô",
+          "description": "Entidade aspirador do robô."
+        },
+        "mission_id": {
+          "name": "ID da missão",
+          "description": "A missão a devolver (o id de get_missions). Vazio: a última missão."
+        }
+      }
+    },
+    "plan_clean": {
+      "name": "Planear uma limpeza",
+      "description": "Devolve o que uma limpeza iniciada agora levaria, sem a iniciar: as divisões por ordem com as suas estimativas, o total e o fim. Sem divisões, a duração média de missão do robô. Deslocações e recargas não estão incluídas.",
+      "fields": {
+        "entity_id": {
+          "name": "Robô",
+          "description": "Entidade aspirador do robô."
+        },
+        "room_name": {
+          "name": "Divisões",
+          "description": "Um nome de divisão ou uma lista, pela ordem de limpeza. Vazio: a casa toda."
+        },
+        "end_by": {
+          "name": "Terminar até",
+          "description": "Quando a limpeza tem de estar terminada; a resposta diz se cabe."
+        }
+      }
     }
   },
   "exceptions": {

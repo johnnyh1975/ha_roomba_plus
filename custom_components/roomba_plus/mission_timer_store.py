@@ -127,6 +127,10 @@ class MissionTimerStore:
         #: cleaned otherwise. Kept across a replan: the skip happened.
         self.skipped_rooms: list[str] = []
         self.skipped_rids: list[str] = []
+        #: Room times room tracking learned this mission without a cloud
+        #: account (4.6.0, B9): `{"room", "seconds", "accepted", "reason"}`,
+        #: for the mission record. Each is taken, so accepted is always True.
+        self.learned_rooms: list[dict[str, Any]] = []
         self.recharge_positions: list[int] = []
         self.snapshot_ts: float = 0.0
         self._last_phase_ts: float = 0.0
@@ -208,6 +212,9 @@ class MissionTimerStore:
             self.skipped_rids = [
                 str(r) for r in data.get("skipped_rids") or [] if isinstance(r, str)
             ]
+            self.learned_rooms = [
+                dict(r) for r in data.get("learned_rooms") or [] if isinstance(r, dict)
+            ]
             self.mission_started_wall_ts = float(data.get("mission_started_wall_ts", 0))
             self.recharge_min          = float(data.get("recharge_min", 0))
             self.snapshot_ts          = snapshot_ts
@@ -236,6 +243,7 @@ class MissionTimerStore:
             "rooms_from_positions": self.rooms_from_positions,
             "skipped_rooms":       self.skipped_rooms,
             "skipped_rids":        self.skipped_rids,
+            "learned_rooms":       self.learned_rooms,
             "mission_started_wall_ts": self.mission_started_wall_ts,
             "recharge_min":        self.recharge_min,
             "snapshot_ts":         time.time(),
@@ -344,6 +352,7 @@ class MissionTimerStore:
             self.rooms_from_positions = False
             self.skipped_rooms       = []
             self.skipped_rids        = []
+            self.learned_rooms       = []
         elif replan:
             self.current_room_idx    = 0
             self.room_progress_observed = False
@@ -444,6 +453,7 @@ class MissionTimerStore:
             self.rooms_from_positions = False
             self.skipped_rooms = []
             self.skipped_rids = []
+            self.learned_rooms = []
             self._schedule_save(hass, entry_id)
             return
 
@@ -641,6 +651,7 @@ class MissionTimerStore:
         self.rooms_from_positions = False
         self.skipped_rooms       = []
         self.skipped_rids        = []
+        self.learned_rooms       = []
         self.mission_started_wall_ts = 0.0
         self.recharge_min        = 0.0
         self.snapshot_ts         = 0.0

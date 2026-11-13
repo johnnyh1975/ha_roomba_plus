@@ -519,7 +519,9 @@ class TestMissionSensorsExistForPrime:
 
         _add_prime_mission_sensors(data, MagicMock(), added)
 
-        assert len(added.call_args.args[0]) == 1
+        # 3 since 4.6.0 (B5): current_room and estimated_end_time come
+        # with mission_progress.
+        assert len(added.call_args.args[0]) == 3
 
     def test_each_sensor_produces_a_value_from_a_prime_record(self):
         """The end-to-end property that matters: a record written by the
@@ -1004,6 +1006,20 @@ class TestRoomDataFromTheRealTimeline:
         record = prime_entry_to_record(entry)
         assert record["nMssn"] == 57
         assert "room_visits" not in record
+
+    def test_each_room_says_whether_its_time_counts(self):
+        """B9 (4.6.0): the record keeps why a room taught nothing, and the
+        durations are the rooms it accepts."""
+        record = self._record([
+            self._room("11", 1784483054, 1784483654),
+            self._room("12", 1784483700, 1784483710),
+        ])
+        # Room 11 runs to the next room's start (646 s).
+        assert record["room_learning"] == [
+            {"room_id": "11", "seconds": 646.0, "accepted": True, "reason": None},
+            {"room_id": "12", "seconds": 10.0, "accepted": False, "reason": "too_short"},
+        ]
+        assert record["room_durations_sec"] == {"11": 646.0}
 
     def test_integer_seconds_are_measured(self):
         """The case that never worked: Prime fields, integer times."""
@@ -1942,6 +1958,22 @@ class TestTheCommandOfAPrimeMission:
         record = self._record({"command": "start", "initiator": "schedule"})
         assert record["scope"] == "whole_home"
         assert "requested_region_ids" not in record
+
+
+class TestTheSyncTakesTheEndFigures:
+    """B12, B11 (4.6.0): a new record gets the battery figures and the
+    estimate the coordinator kept for its mission number."""
+
+    @pytest.mark.asyncio
+    async def test_the_figures_go_on_the_record(self):
+        from custom_components.roomba_plus import prime_mission_sync as sync
+
+        cases = TestReconciliation()
+        entry, store = cases._config_entry([cases._hist("a", 27)])
+        seen = []
+        with patch.object(sync.mission_battery, "take_prime", side_effect=lambda d, r: seen.append(r["id"])):
+            await sync.async_sync_prime_missions(entry)
+        assert seen == ["p_a"]
 
 
 class TestTheArchiveFollowsTheSync:

@@ -2304,6 +2304,66 @@
     "debug_capture_get": {
       "name": "Debug-Mitschnitt abrufen",
       "description": "Gibt die Zeilen des Debug-Mitschnitts zurück, geschwärzt und fertig zum Einfügen in ein Issue."
+    },
+    "get_rooms": {
+      "name": "Räume abrufen",
+      "description": "Gibt die Räume und Zonen zurück, die der Roboter kennt, jeweils mit ID, Karte, Home-Assistant-Bereich, Zeitschätzung und deren Güte.",
+      "fields": {
+        "entity_id": {
+          "name": "Roboter",
+          "description": "Staubsauger-Entität des Roboters."
+        }
+      }
+    },
+    "get_missions": {
+      "name": "Missionen abrufen",
+      "description": "Gibt die neuesten gespeicherten Missionen zurück, die neueste zuerst: wann, wie sie endeten, wer sie gestartet hat, welche Räume angefordert, gereinigt, übersprungen oder nicht erreicht wurden und wie viel Akku sie verbraucht haben.",
+      "fields": {
+        "entity_id": {
+          "name": "Roboter",
+          "description": "Staubsauger-Entität des Roboters."
+        },
+        "limit": {
+          "name": "Anzahl",
+          "description": "Wie viele Missionen höchstens."
+        },
+        "days": {
+          "name": "Tage",
+          "description": "Nur Missionen, die in so vielen Tagen endeten."
+        }
+      }
+    },
+    "get_mission": {
+      "name": "Mission abrufen",
+      "description": "Gibt eine gespeicherte Mission vollständig zurück, mit dem verbrauchten Akku und je Raum, ob seine Zeit in die gelernten Schätzungen eingegangen ist und warum nicht. Die letzte Mission, wenn keine ID angegeben ist.",
+      "fields": {
+        "entity_id": {
+          "name": "Roboter",
+          "description": "Staubsauger-Entität des Roboters."
+        },
+        "mission_id": {
+          "name": "Missions-ID",
+          "description": "Die gewünschte Mission (die ID aus get_missions). Leer: die letzte Mission."
+        }
+      }
+    },
+    "plan_clean": {
+      "name": "Reinigung planen",
+      "description": "Gibt zurück, was eine jetzt gestartete Reinigung bräuchte, ohne sie zu starten: die Räume in Reihenfolge mit ihren Schätzungen, die Summe und das Ende. Ohne Räume die mittlere Missionsdauer des Roboters. Fahrten und Zwischenladen sind nicht enthalten.",
+      "fields": {
+        "entity_id": {
+          "name": "Roboter",
+          "description": "Staubsauger-Entität des Roboters."
+        },
+        "room_name": {
+          "name": "Räume",
+          "description": "Ein Raumname oder eine Liste, in der Reihenfolge der Reinigung. Leer: das ganze Zuhause."
+        },
+        "end_by": {
+          "name": "Fertig bis",
+          "description": "Wann die Reinigung fertig sein muss; die Antwort sagt, ob es passt."
+        }
+      }
     }
   },
   "exceptions": {

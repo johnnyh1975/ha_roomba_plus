@@ -2304,6 +2304,66 @@
     "debug_capture_get": {
       "name": "Debugopname ophalen",
       "description": "Geeft de regels van de opname terug, geanonimiseerd en klaar om in een issue te plakken."
+    },
+    "get_rooms": {
+      "name": "Ruimtes ophalen",
+      "description": "Geeft de ruimtes en zones die de robot kent, elk met id, kaart, Home Assistant-gebied, tijdschatting en hoe goed die schatting is.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "Stofzuigerentiteit van de robot."
+        }
+      }
+    },
+    "get_missions": {
+      "name": "Missies ophalen",
+      "description": "Geeft de nieuwste opgeslagen missies, nieuwste eerst: wanneer, hoe ze eindigden, wie ze startte, welke ruimtes gevraagd, gereinigd, overgeslagen of niet bereikt werden, en de accu die ze gebruikten.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "Stofzuigerentiteit van de robot."
+        },
+        "limit": {
+          "name": "Limiet",
+          "description": "Hoeveel missies maximaal."
+        },
+        "days": {
+          "name": "Dagen",
+          "description": "Alleen missies die binnen zoveel dagen eindigden."
+        }
+      }
+    },
+    "get_mission": {
+      "name": "Missie ophalen",
+      "description": "Geeft één opgeslagen missie volledig, met de gebruikte accu en per ruimte of de tijd in de geleerde schattingen is meegenomen en waarom niet. De laatste missie tenzij een id is opgegeven.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "Stofzuigerentiteit van de robot."
+        },
+        "mission_id": {
+          "name": "Missie-id",
+          "description": "De missie om terug te geven (de id uit get_missions). Leeg: de laatste missie."
+        }
+      }
+    },
+    "plan_clean": {
+      "name": "Reiniging plannen",
+      "description": "Geeft wat een nu gestarte reiniging zou kosten, zonder te starten: de ruimtes op volgorde met hun schattingen, het totaal en het einde. Zonder ruimtes de gemiddelde missieduur van de robot. Ritten en tussentijds laden zitten er niet in.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "Stofzuigerentiteit van de robot."
+        },
+        "room_name": {
+          "name": "Ruimtes",
+          "description": "Een ruimtenaam of een lijst, in de volgorde van reinigen. Leeg: het hele huis."
+        },
+        "end_by": {
+          "name": "Klaar om",
+          "description": "Wanneer de reiniging klaar moet zijn; het antwoord zegt of het past."
+        }
+      }
     }
   },
   "exceptions": {

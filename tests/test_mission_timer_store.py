@@ -3812,3 +3812,31 @@ class TestASkippedRoom:
         assert mts.room_entered_run_sec == 50.0
         assert mts.visited_rooms == [1]
 
+
+
+class TestLearnedRoomsOfTheMission:
+    """B9 (4.6.0): the room times room tracking learned this mission
+    survive a restart and are gone with the next mission."""
+
+    @pytest.mark.asyncio
+    async def test_kept_and_reset(self):
+        mts, hass = MissionTimerStore(), MagicMock()
+        with patch.object(MissionTimerStore, "_schedule_save"):
+            mts.set_mission_plan("B_7", ["Studio"], None, hass, "e")
+        row = {"room": "Studio", "seconds": 300.0, "accepted": True, "reason": None}
+        mts.learned_rooms.append(row)
+
+        payload = {**mts._payload(), "snapshot_ts": __import__("time").time()}
+        restored = MissionTimerStore()
+        with patch("custom_components.roomba_plus.mission_timer_store.Store") as store:
+            store.return_value.async_load = AsyncMock(return_value=payload)
+            await restored.async_load(hass, "e")
+        assert restored.learned_rooms == [row]
+
+        with patch.object(MissionTimerStore, "_schedule_save"):
+            mts.set_mission_plan("B_8", ["Hall"], None, hass, "e")
+        assert mts.learned_rooms == []
+        mts.learned_rooms.append(row)
+        with patch.object(MissionTimerStore, "_schedule_save"):
+            mts.clear(hass, "e")
+        assert mts.learned_rooms == []

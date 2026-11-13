@@ -2304,6 +2304,66 @@
     "debug_capture_get": {
       "name": "Récupérer la capture de débogage",
       "description": "Renvoie les lignes de la capture, anonymisées, prêtes à coller dans un ticket."
+    },
+    "get_rooms": {
+      "name": "Obtenir les pièces",
+      "description": "Renvoie les pièces et zones que le robot connaît, chacune avec son id, sa carte, sa zone Home Assistant, son estimation de durée et la qualité de cette estimation.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "Entité aspirateur du robot."
+        }
+      }
+    },
+    "get_missions": {
+      "name": "Obtenir les missions",
+      "description": "Renvoie les missions enregistrées les plus récentes, la plus récente d'abord : quand, comment elles se sont terminées, qui les a lancées, quelles pièces ont été demandées, nettoyées, sautées ou non atteintes, et la batterie utilisée.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "Entité aspirateur du robot."
+        },
+        "limit": {
+          "name": "Limite",
+          "description": "Nombre maximal de missions."
+        },
+        "days": {
+          "name": "Jours",
+          "description": "Seulement les missions terminées dans ce nombre de jours."
+        }
+      }
+    },
+    "get_mission": {
+      "name": "Obtenir une mission",
+      "description": "Renvoie une mission enregistrée complète, avec la batterie utilisée et, par pièce, si son temps est entré dans les estimations apprises et pourquoi pas. La dernière mission sauf si un ID est donné.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "Entité aspirateur du robot."
+        },
+        "mission_id": {
+          "name": "ID de mission",
+          "description": "La mission à renvoyer (l'id de get_missions). Vide : la dernière mission."
+        }
+      }
+    },
+    "plan_clean": {
+      "name": "Planifier un nettoyage",
+      "description": "Renvoie ce que prendrait un nettoyage lancé maintenant, sans le lancer : les pièces dans l'ordre avec leurs estimations, le total et la fin. Sans pièces, la durée moyenne de mission du robot. Les trajets et recharges ne sont pas compris.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "Entité aspirateur du robot."
+        },
+        "room_name": {
+          "name": "Pièces",
+          "description": "Un nom de pièce ou une liste, dans l'ordre du nettoyage. Vide : tout le logement."
+        },
+        "end_by": {
+          "name": "Terminer avant",
+          "description": "Quand le nettoyage doit être terminé ; la réponse dit si cela tient."
+        }
+      }
     }
   },
   "exceptions": {

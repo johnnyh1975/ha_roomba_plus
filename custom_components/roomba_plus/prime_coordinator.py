@@ -57,6 +57,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from homeassistant.util import dt as dt_util
 
 from . import cloud_errors
+from . import mission_battery
 from .area_resolver import async_room_area_fields
 from .command_watch import note_prime_shadows
 from .mission_started import fire_mission_started, prime_start_details
@@ -814,6 +815,8 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         self._previous_phase: str | None = None
         #: The cycle of the previous update, for the presence history.
         self._previous_cycle: str | None = None
+        #: The running mission's estimate, seconds (B11, 4.6.0).
+        self._mission_estimate_sec: float | None = None
 
     async def async_start(self) -> None:
         """Seeds initial data by fetching ALL eight named shadows once,
@@ -1066,8 +1069,32 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         if not isinstance(cycle, str):
             return
         previous, self._previous_cycle = self._previous_cycle, cycle
+        # B12 (4.6.0): the battery the mission uses (mission_battery.py).
+        data = self.entry.runtime_data
+        level = (shadows.get("ro-currentstate") or {}).get("batPct")
+        if previous not in (None, "none") and cycle != "none":
+            mission_battery.note_level(data, level)
+            # B11 (4.6.0): the estimate the run was given, while there is
+            # one -- the timer store forgets it when the mission ends.
+            estimate = getattr(
+                getattr(data, "mission_timer_store", None), "total_estimated_sec", None,
+            )
+            if isinstance(estimate, (int, float)) and not isinstance(estimate, bool) and estimate > 0:
+                self._mission_estimate_sec = float(estimate)
+        elif previous not in (None, "none") and cycle == "none":
+            running = getattr(data, "mission_battery", None)
+            number = (
+                running.get("number") if isinstance(running, dict) else None
+            ) or status.get("nMssn")
+            fields = mission_battery.finish(data, level)
+            if self._mission_estimate_sec:
+                fields["estimated_duration_min"] = round(self._mission_estimate_sec / 60, 1)
+            self._mission_estimate_sec = None
+            if fields["battery_start_pct"] is not None or "estimated_duration_min" in fields:
+                mission_battery.keep_prime(data, number, fields)
         if previous != "none" or cycle in ("none", "evac", ""):
             return
+        mission_battery.note_start(data, level, status.get("nMssn"))
         # B2 (4.6.0): the start as an event. Who and where come from the
         # last command, and only from a recent one (mission_started.py).
         initiator, scope, rooms = prime_start_details(self.entry.runtime_data)

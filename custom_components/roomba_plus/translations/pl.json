@@ -2304,6 +2304,66 @@
     "debug_capture_get": {
       "name": "Pobierz zapis debugowania",
       "description": "Zwraca wiersze zapisu, zanonimizowane i gotowe do wklejenia w zgłoszeniu."
+    },
+    "get_rooms": {
+      "name": "Pobierz pomieszczenia",
+      "description": "Zwraca pomieszczenia i strefy znane robotowi, każde z identyfikatorem, mapą, obszarem Home Assistant, szacowanym czasem i jakością tego szacunku.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "Encja odkurzacza robota."
+        }
+      }
+    },
+    "get_missions": {
+      "name": "Pobierz misje",
+      "description": "Zwraca najnowsze zapisane misje, od najnowszej: kiedy, jak się zakończyły, kto je uruchomił, które pomieszczenia zlecono, posprzątano, pominięto lub do których nie dotarto, oraz zużytą baterię.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "Encja odkurzacza robota."
+        },
+        "limit": {
+          "name": "Limit",
+          "description": "Maksymalna liczba misji."
+        },
+        "days": {
+          "name": "Dni",
+          "description": "Tylko misje zakończone w ciągu tylu dni."
+        }
+      }
+    },
+    "get_mission": {
+      "name": "Pobierz misję",
+      "description": "Zwraca jedną zapisaną misję w całości, ze zużytą baterią i dla każdego pomieszczenia, czy jego czas trafił do wyuczonych szacunków i dlaczego nie. Ostatnia misja, chyba że podano ID.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "Encja odkurzacza robota."
+        },
+        "mission_id": {
+          "name": "ID misji",
+          "description": "Misja do zwrócenia (id z get_missions). Puste: ostatnia misja."
+        }
+      }
+    },
+    "plan_clean": {
+      "name": "Zaplanuj sprzątanie",
+      "description": "Zwraca, ile trwałoby sprzątanie rozpoczęte teraz, bez jego uruchamiania: pomieszczenia w kolejności z szacunkami, sumę i koniec. Bez pomieszczeń średni czas misji robota. Przejazdy i doładowania nie są wliczone.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "Encja odkurzacza robota."
+        },
+        "room_name": {
+          "name": "Pomieszczenia",
+          "description": "Nazwa pomieszczenia lub lista, w kolejności sprzątania. Puste: cały dom."
+        },
+        "end_by": {
+          "name": "Zakończ do",
+          "description": "Kiedy sprzątanie musi się skończyć; odpowiedź mówi, czy się zmieści."
+        }
+      }
     }
   },
   "exceptions": {

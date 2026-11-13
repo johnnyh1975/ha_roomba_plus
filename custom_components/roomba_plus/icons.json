@@ -441,6 +441,12 @@
           "due": "mdi:wrench",
           "overdue": "mdi:alert-circle"
         }
+      },
+      "current_room": {
+        "default": "mdi:map-marker"
+      },
+      "estimated_end_time": {
+        "default": "mdi:clock-end"
       }
     },
     "button": {

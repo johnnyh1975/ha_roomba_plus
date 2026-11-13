@@ -229,6 +229,8 @@ EXPECTED_LIVE_CLASSES = {
     "SimpleRoombaSelect", "PrimeSettingSelect", "PrimeCleaningModeSelect",
     # Classic
     "IRobotVacuum", "RoombaDeviceTracker", "RoombaMissionProgress",
+    # 4.6.0 (B5): current room and estimated end, both generations.
+    "_RunningMissionSensor",
     "RoombaBinStatus", "RoombaBinPresentStatus",
     "RoombaMopReadyStatus", "RoombaMopTankPresentStatus",
     "RoombaMopLidClosedStatus", "RoombaMopLidOpen", "RoombaMopTankPresentDirect",

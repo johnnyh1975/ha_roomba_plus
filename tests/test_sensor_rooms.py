@@ -2160,3 +2160,42 @@ class TestTheRunningMissionAsStates:
     def test_no_estimate_no_end(self, monkeypatch):
         sr = self._state(monkeypatch, {"estimated_remaining_min": None})
         assert sr.RoombaEstimatedEndSensor(None, "BLID", self._entry()).native_value is None
+
+
+class TestTheGateIgnoresTheSpread:
+    """B11 (4.6.0): the spread's sums sit under the room's prefix too; a
+    run count of 1 must not be read as a one-second room."""
+
+    def test_only_durations(self):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.room_times import remember
+        from custom_components.roomba_plus.sensor_rooms import cached_room_seconds
+
+        cache: dict[str, float] = {}
+        remember(cache, "7", 400.0, "vacuum")
+        entry = MagicMock()
+        entry.runtime_data.robot_profile_store.room_estimate_cache = cache
+        assert cached_room_seconds(entry, "7") == 400.0
+
+
+class TestTheSummaryCarriesTheBattery:
+    """B12 (4.6.0): the battery fields the summary has read since 3.1.0
+    are written now, with the use and its share per m²."""
+
+    def test_battery_fields(self):
+        sensor = _make_last_mission_summary_sensor(mission_store=_store_with({
+            "id": "m_1", "ended_at": "2026-11-13T10:00:00+00:00",
+            "result": "completed", "battery_start_pct": 90, "battery_end_pct": 70,
+            "battery_used_pct": 20, "battery_used_pct_per_m2": 0.8,
+            "battery_recharged": False,
+        }))
+        attrs = sensor.extra_state_attributes
+        assert (attrs["battery_used_pct"], attrs["battery_used_pct_per_m2"], attrs["battery_recharged"]) == (
+            20, 0.8, False,
+        )
+
+    def test_no_mission_none(self):
+        sensor = _make_last_mission_summary_sensor(mission_store=_store_with())
+        attrs = sensor.extra_state_attributes
+        assert attrs["battery_used_pct"] is None and attrs["battery_recharged"] is None

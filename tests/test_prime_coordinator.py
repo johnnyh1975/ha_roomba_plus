@@ -1892,3 +1892,67 @@ class TestMissionStartedOnPrime:
     async def test_not_for_a_mission_running_at_setup(self):
         fire = await self._fired(["clean", "clean"])
         fire.assert_not_called()
+
+
+class TestThePrimeMissionsBattery:
+    """B12, B11 (4.6.0): the coordinator keeps a Prime mission's battery
+    use and the estimate it ran under, for the history sync."""
+
+    @staticmethod
+    def _update(cycle, bat, n=7):
+        return ShadowResponse(
+            topic="$aws/things/BLID123/shadow/name/ro-currentstate/update/accepted",
+            payload={"state": {"reported": {
+                "batPct": bat,
+                "cleanMissionStatus": {"cycle": cycle, "phase": "run", "nMssn": n},
+            }}},
+        )
+
+    async def _run(self, steps):
+        coordinator, config_entry, prime_robot = _make_status_coordinator()
+        data = config_entry.runtime_data
+        data.presence_manager = None
+        data.mission_timer_store.total_estimated_sec = 1800.0
+        data.prime_mission_end_figures = {}
+
+        async def fake_watch():
+            for cycle, bat in steps:
+                yield self._update(cycle, bat)
+            raise asyncio.CancelledError
+
+        prime_robot.watch_named_shadows_updates = fake_watch
+        with patch(
+            "custom_components.roomba_plus.prime_coordinator.fire_mission_started",
+        ), pytest.raises(asyncio.CancelledError):
+            await coordinator._async_watch_status_updates()
+        return data
+
+    @pytest.mark.asyncio
+    async def test_use_and_estimate_are_kept_by_number(self):
+        data = await self._run([("none", 99), ("clean", 98), ("clean", 80), ("none", 70)])
+        figures = data.prime_mission_end_figures["7"]
+        assert figures["battery_used_pct"] == 28
+        assert figures["battery_recharged"] is False
+        assert figures["estimated_duration_min"] == 30.0
+
+    @pytest.mark.asyncio
+    async def test_a_recharge_gives_no_use(self):
+        data = await self._run([("none", 99), ("clean", 60), ("clean", 20), ("clean", 50), ("none", 45)])
+        assert data.prime_mission_end_figures["7"]["battery_used_pct"] is None
+        assert data.prime_mission_end_figures["7"]["battery_recharged"] is True
+
+    @pytest.mark.asyncio
+    async def test_a_mission_running_at_setup_keeps_only_the_estimate(self):
+        """Its start level is not known; the estimate, from the timer
+        store that outlives a restart, is."""
+        data = await self._run([("clean", 50), ("clean", 45), ("none", 40)])
+        assert data.prime_mission_end_figures["7"] == {
+            "battery_start_pct": None, "battery_end_pct": 40,
+            "battery_used_pct": None, "battery_recharged": None,
+            "estimated_duration_min": 30.0,
+        }
+
+    @pytest.mark.asyncio
+    async def test_nothing_seen_nothing_kept(self):
+        data = await self._run([("clean", 50), ("none", 40)])
+        assert data.prime_mission_end_figures == {}

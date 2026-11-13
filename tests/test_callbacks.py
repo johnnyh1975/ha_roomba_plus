@@ -245,6 +245,49 @@ class TestAsyncRecordMissionResult:
         assert rec["stuck_at_ts"] == 1_791_722_000
         assert self._run({"phase": "charge", "error": 0}, {})["stuck_at_ts"] is None
 
+    def test_the_battery_it_used(self):
+        """B12 (4.6.0): from the start level to the end level, and per m²;
+        none for a mission that recharged."""
+        from custom_components.roomba_plus import callbacks as cb
+
+        def run(recharge_min):
+            with patch.object(cb.mission_battery, "finish", wraps=cb.mission_battery.finish) as finish:
+                rec = self._run({"phase": "charge", "error": 0, "sqft": 100},
+                                {"batPct": 60}, recharge_min=recharge_min)
+            return rec, finish
+
+        rec, finish = run(0)
+        assert finish.call_args.args[1] == 60
+        assert finish.call_args.kwargs == {"recharged": False}
+        assert rec["battery_end_pct"] == 60
+        assert "battery_used_pct_per_m2" in rec
+        _rec, finish = run(12)
+        assert finish.call_args.kwargs == {"recharged": True}
+
+    def test_what_room_tracking_learned_and_the_estimate(self):
+        """B9, B11 (4.6.0): the room times learned without a cloud account,
+        and what the run was estimated to take."""
+        from custom_components.roomba_plus.callbacks import async_record_mission
+        from custom_components.roomba_plus.mission_timer_store import MissionTimerStore
+
+        store = _make_store()
+        loop = asyncio.new_event_loop()
+        entry = _make_entry(store)
+        timer = MissionTimerStore()
+        timer.learned_rooms = [{"room": "K", "seconds": 300.0, "accepted": True, "reason": None}]
+        timer.total_estimated_sec = 1800.0
+        entry.runtime_data.mission_timer_store = timer
+        try:
+            loop.run_until_complete(async_record_mission(
+                _make_hass(loop), entry, {"phase": "charge", "error": 0}, {}, [],
+                int(loop.time()) - 3600, 0,
+            ))
+        finally:
+            loop.close()
+        rec = store.latest()
+        assert rec["room_learning"] == timer.learned_rooms
+        assert rec["estimated_duration_min"] == 30.0
+
     def test_completed(self):
         rec = self._run({"phase": "charge", "error": 0, "sqft": 100}, {})
         assert rec["result"] == "completed"
@@ -4649,6 +4692,22 @@ class TestMeasuredRoomTimesAverage:
             "Guest Bathroom|measured|vacuum|count"
         ] == 4.0
 
+    def test_each_figure_is_noted_for_the_mission(self) -> None:
+        """B9 (4.6.0): what room tracking learned goes on the mission
+        record, through the timer store."""
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.callbacks import (
+            _remember_measured_room_time,
+        )
+
+        profile, entry = self._store()
+        entry.runtime_data.mission_timer_store = SimpleNamespace(learned_rooms=[])
+        _remember_measured_room_time(entry, "Hall", 123.44, mode=2)
+        assert entry.runtime_data.mission_timer_store.learned_rooms == [
+            {"room": "Hall", "seconds": 123.4, "accepted": True, "reason": None},
+        ]
+
     def test_modes_do_not_mix(self) -> None:
         from custom_components.roomba_plus.callbacks import (
             _remember_measured_room_time,
@@ -5026,7 +5085,7 @@ class TestTheStartIsAnEvent:
         entry.options = {}
         mission = {"phase": "run", "initiator": "schedule", "cycle": "clean",
                    "mssnStrtTm": 1700000000, "nMssn": 42}
-        reported = {"cleanMissionStatus": mission, "bbrun": {"nStuck": 0}}
+        reported = {"cleanMissionStatus": mission, "bbrun": {"nStuck": 0}, "batPct": 97}
         ms = _MissionState()
         _handle_mission_start(
             ms, hass, entry,
@@ -5050,6 +5109,8 @@ class TestTheStartIsAnEvent:
         assert payload["scope"] == ms.current_mission_scope
         assert payload["rooms"] == list(ms.current_mission_zones)
         assert payload["mission_number"] == 42
+        # B12 (4.6.0): the battery at the start is kept for the record.
+        assert entry.runtime_data.mission_battery["start"] == 97
 
 
 class TestEndGateRoomChecksDirectly:

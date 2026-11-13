@@ -2304,6 +2304,66 @@
     "debug_capture_get": {
       "name": "Recupera acquisizione di debug",
       "description": "Restituisce le righe dell’acquisizione, già anonimizzate, pronte da incollare in una segnalazione."
+    },
+    "get_rooms": {
+      "name": "Ottieni stanze",
+      "description": "Restituisce le stanze e le zone che il robot conosce, ciascuna con id, mappa, area di Home Assistant, tempo stimato e qualità della stima.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "Entità aspirapolvere del robot."
+        }
+      }
+    },
+    "get_missions": {
+      "name": "Ottieni missioni",
+      "description": "Restituisce le missioni salvate più recenti, la più nuova per prima: quando, come sono finite, chi le ha avviate, quali stanze sono state richieste, pulite, saltate o non raggiunte e quanta batteria hanno usato.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "Entità aspirapolvere del robot."
+        },
+        "limit": {
+          "name": "Limite",
+          "description": "Quante missioni al massimo."
+        },
+        "days": {
+          "name": "Giorni",
+          "description": "Solo missioni terminate entro questo numero di giorni."
+        }
+      }
+    },
+    "get_mission": {
+      "name": "Ottieni missione",
+      "description": "Restituisce una missione salvata completa, con la batteria usata e, per stanza, se il suo tempo è entrato nelle stime apprese e perché no. L'ultima missione se non è indicato un ID.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "Entità aspirapolvere del robot."
+        },
+        "mission_id": {
+          "name": "ID missione",
+          "description": "La missione da restituire (l'id da get_missions). Vuoto: l'ultima missione."
+        }
+      }
+    },
+    "plan_clean": {
+      "name": "Pianifica una pulizia",
+      "description": "Restituisce quanto richiederebbe una pulizia avviata ora, senza avviarla: le stanze in ordine con le loro stime, il totale e la fine. Senza stanze, la durata media delle missioni del robot. Spostamenti e ricariche non sono inclusi.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "Entità aspirapolvere del robot."
+        },
+        "room_name": {
+          "name": "Stanze",
+          "description": "Un nome di stanza o un elenco, nell'ordine di pulizia. Vuoto: tutta la casa."
+        },
+        "end_by": {
+          "name": "Finire entro",
+          "description": "Quando la pulizia deve essere finita; la risposta dice se ci sta."
+        }
+      }
     }
   },
   "exceptions": {

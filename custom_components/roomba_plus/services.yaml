@@ -244,6 +244,114 @@ retry_missed_rooms:
       selector:
         text:
 
+get_rooms:
+  name: Get rooms
+  description: >-
+    Returns the rooms and zones the robot knows, each with its id, map,
+    Home Assistant area, time estimate and how good that estimate is.
+    Reads what Roomba+ holds; nothing is asked of the cloud.
+  fields:
+    entity_id:
+      name: Robot
+      description: Vacuum entity of the robot.
+      required: true
+      selector:
+        entity:
+          domain: vacuum
+          integration: roomba_plus
+
+get_missions:
+  name: Get missions
+  description: >-
+    Returns the newest stored missions, newest first: when, how they
+    ended, who started them, which rooms were asked for, cleaned, skipped
+    or not reached, and the battery they used.
+  fields:
+    entity_id:
+      name: Robot
+      description: Vacuum entity of the robot.
+      required: true
+      selector:
+        entity:
+          domain: vacuum
+          integration: roomba_plus
+    limit:
+      name: Limit
+      description: How many missions at most.
+      required: false
+      default: 20
+      selector:
+        number:
+          min: 1
+          max: 200
+          mode: box
+    days:
+      name: Days
+      description: Only missions that ended within this many days.
+      required: false
+      selector:
+        number:
+          min: 1
+          max: 3650
+          mode: box
+
+get_mission:
+  name: Get mission
+  description: >-
+    Returns one stored mission in full, with the battery it used and, per
+    room, whether its time went into the learned estimates and why not.
+    The latest mission unless mission_id names another.
+  fields:
+    entity_id:
+      name: Robot
+      description: Vacuum entity of the robot.
+      required: true
+      selector:
+        entity:
+          domain: vacuum
+          integration: roomba_plus
+    mission_id:
+      name: Mission ID
+      description: >-
+        The mission to return (the "id" from get_missions). Omit for the
+        latest mission.
+      required: false
+      selector:
+        text:
+
+plan_clean:
+  name: Plan a clean
+  description: >-
+    Returns what a clean started now would take, without starting it: the
+    rooms in order with their estimates, the total and the end. Without
+    rooms, the robot's mean mission length. Travel and recharges are not
+    in the estimates; past_error says how far recent estimates were off.
+  fields:
+    entity_id:
+      name: Robot
+      description: Vacuum entity of the robot.
+      required: true
+      selector:
+        entity:
+          domain: vacuum
+          integration: roomba_plus
+    room_name:
+      name: Rooms
+      description: >-
+        A room name or a list of them, in the order to clean. Omit for the
+        whole home.
+      required: false
+      example: "Kitchen"
+      selector:
+        text:
+          multiple: true
+    end_by:
+      name: End by
+      description: When the clean has to be finished; the answer says whether it fits.
+      required: false
+      selector:
+        datetime:
+
 debug_capture_start:
   name: Start debug capture
   description: >-

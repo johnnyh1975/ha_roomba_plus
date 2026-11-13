@@ -45,6 +45,10 @@ from .const import (
     SERVICE_DEBUG_CAPTURE_START,
     SERVICE_DEBUG_CAPTURE_STOP,
     SERVICE_RETRY_MISSED_ROOMS,
+    SERVICE_GET_ROOMS,
+    SERVICE_GET_MISSIONS,
+    SERVICE_GET_MISSION,
+    SERVICE_PLAN_CLEAN,
     CONF_RESEND_SWALLOWED,
     DEFAULT_RESEND_SWALLOWED,
     lifetime_hours,
@@ -89,7 +93,7 @@ from .const import (
 from .prime_coordinator import prime_region_names_from_command
 from .room_cleaning import ZID_PREFIX, async_get_room_cleaning_backend
 from .zone_naming import resolve_zone_name
-from . import command_watch
+from . import command_watch, mission_queries
 from .debug_capture import DEFAULT_MINUTES as DEBUG_DEFAULT_MINUTES
 from .debug_capture import MAX_MINUTES as DEBUG_MAX_MINUTES
 from .debug_capture import get_capture as get_debug_capture
@@ -1970,6 +1974,63 @@ async def async_handle_explain_mission(call: ServiceCall) -> dict[str, Any]:
     return dict(result)
 
 
+# ── 4.6.0 B6, B8 — get_rooms, get_missions, get_mission, plan_clean ─────────
+
+def _query_entry(call: ServiceCall, service: str) -> Any:
+    """The robot's config entry, loaded, or a validation error."""
+    entry = _resolve_config_entry_from_entity(call.hass, call.data["entity_id"], service)
+    if getattr(entry, "runtime_data", None) is None:
+        raise ServiceValidationError(
+            f"{service}: {call.data['entity_id']} is not loaded",
+            translation_domain=DOMAIN, translation_key="config_entry_not_found",
+            translation_placeholders={"entity_id": str(call.data["entity_id"])},
+        )
+    return entry
+
+
+async def async_handle_get_rooms(call: ServiceCall) -> dict[str, Any]:
+    """roomba_plus.get_rooms: the rooms the robot knows (B6)."""
+    entry = _query_entry(call, SERVICE_GET_ROOMS)
+    return {"rooms": mission_queries.rooms_of(call.hass, entry)}
+
+
+async def async_handle_get_missions(call: ServiceCall) -> dict[str, Any]:
+    """roomba_plus.get_missions: the newest stored missions (B6)."""
+    entry = _query_entry(call, SERVICE_GET_MISSIONS)
+    return {"missions": mission_queries.missions_of(
+        entry.runtime_data, limit=call.data["limit"], days=call.data.get("days"),
+    )}
+
+
+async def async_handle_get_mission(call: ServiceCall) -> dict[str, Any]:
+    """roomba_plus.get_mission: one stored mission in full (B6, B9, B12)."""
+    entry = _query_entry(call, SERVICE_GET_MISSION)
+    mission_id = call.data.get("mission_id")
+    record = mission_queries.find_mission(entry.runtime_data, mission_id)
+    if record is None:
+        raise ServiceValidationError(
+            f"get_mission: mission not found for {call.data['entity_id']}",
+            translation_domain=DOMAIN, translation_key="mission_not_found",
+            translation_placeholders={
+                "entity_id": str(call.data["entity_id"]),
+                "mission_id": str(mission_id) if mission_id is not None else "-",
+            },
+        )
+    return mission_queries.mission_detail(entry.runtime_data, record)
+
+
+async def async_handle_plan_clean(call: ServiceCall) -> dict[str, Any]:
+    """roomba_plus.plan_clean: what a clean would take, without starting (B8)."""
+    entry = _query_entry(call, SERVICE_PLAN_CLEAN)
+    rooms = call.data.get(ATTR_ROOM_NAME)
+    if isinstance(rooms, str):
+        rooms = [rooms]
+    return mission_queries.plan_clean(
+        call.hass, entry, list(rooms) if rooms else None,
+        end_by=call.data.get("end_by"),
+    )
+
+
 # ── F10d — clean_sequence ─────────────────────────────────────────────────────
 
 _CLEAN_SEQUENCE_SCHEMA = vol.Schema({
@@ -2576,6 +2637,35 @@ def async_register_services(hass: HomeAssistant) -> None:
                 vol.Optional("mission_id"): cv.string,
             }),
         )
+
+    # ── 4.6.0 B6, B8 — response actions ──────────────────────────────────────
+    for _name, _handler, _schema in (
+        (SERVICE_GET_ROOMS, async_handle_get_rooms, vol.Schema({
+            vol.Required("entity_id"): cv.entity_id,
+        })),
+        (SERVICE_GET_MISSIONS, async_handle_get_missions, vol.Schema({
+            vol.Required("entity_id"): cv.entity_id,
+            vol.Optional("limit", default=20): vol.All(vol.Coerce(int), vol.Range(min=1, max=200)),
+            vol.Optional("days"): vol.All(vol.Coerce(int), vol.Range(min=1, max=3650)),
+        })),
+        (SERVICE_GET_MISSION, async_handle_get_mission, vol.Schema({
+            vol.Required("entity_id"): cv.entity_id,
+            vol.Optional("mission_id"): cv.string,
+        })),
+        (SERVICE_PLAN_CLEAN, async_handle_plan_clean, vol.Schema({
+            vol.Required("entity_id"): cv.entity_id,
+            vol.Optional(ATTR_ROOM_NAME): vol.Any(cv.string, [cv.string]),
+            vol.Optional("end_by"): cv.datetime,
+        })),
+    ):
+        if not hass.services.has_service(DOMAIN, _name):
+            register_guarded(hass,
+                DOMAIN,
+                _name,
+                _handler,
+                schema=_schema,
+                supports_response=SupportsResponse.ONLY,
+            )
 
     # ── v3.5.0 FULL-BACKUP — create_backup / restore_backup ───────────────────
     if not hass.services.has_service(DOMAIN, SERVICE_CREATE_BACKUP):

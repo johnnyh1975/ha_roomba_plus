@@ -562,6 +562,14 @@ class RoombaData:
     #: pause, resume or skip.
     mission_command: dict[str, Any] | None = None
 
+    #: The battery at the start of the running mission (4.6.0, B12,
+    #: mission_battery.py). In memory only.
+    mission_battery: dict[str, Any] | None = None
+    #: What Roomba+ saw of finished Prime missions -- the battery figures
+    #: and the estimate at the start -- by mission number, until the
+    #: history sync stores the mission (mission_battery.keep_prime).
+    prime_mission_end_figures: dict[str, Any] = field(default_factory=dict)
+
     # v3.2.1 — MQTT-watchdog resume grace: wall-clock timestamp of the last
     # observed phase transition INTO "run" from any non-run phase (fresh
     # start, resume after recharge, stuck recovery).  Written by

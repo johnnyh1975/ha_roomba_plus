@@ -1030,8 +1030,13 @@ class TestClassicShapedReadsOnPrime:
         # DECIDED: no Prime entry reaches it. It runs only where the
         # entry has a GridStore, and the pose-derived stores are not
         # created for Prime.
-        assert count == 39, (
-            f"{count} call sites, expected 39 — a new one needs a decision "
+        # 40 with mission_queries._data_state() (4.6.0), the cleaning
+        # mode for get_rooms' estimate quality.
+        #
+        # DECIDED: Prime reaches it, and has its fallback in place: the
+        # read is `roomba_reported_state() or prime_reported_state()`.
+        assert count == 40, (
+            f"{count} call sites, expected 40 — a new one needs a decision "
             "about whether a Prime entry reaches it, and a Prime fallback "
             "if it does. Four of the 39 are inside the fallback helpers "
             "themselves, which read Classic first on purpose."

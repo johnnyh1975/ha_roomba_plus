@@ -51,7 +51,8 @@ if TYPE_CHECKING:
 
 from .const import EVENT_MISSION_COMPLETED, mission_store_changed_signal
 from .mission_result import note_last_error
-from .room_times import MIN_ROOM_SECONDS, region_visits
+from . import mission_battery
+from .room_times import region_visits, visit_learning
 from .structural_failures import record_failure, record_success
 
 _LOGGER = logging.getLogger(__name__)
@@ -359,10 +360,12 @@ def prime_entry_to_record(entry: Any) -> dict[str, Any] | None:
         # A skipped room or a doorway strip leaves a few seconds, and the
         # estimate is a median: a room often closed off would read as
         # done the moment the robot reached it.
+        # B9 (4.6.0): each region and whether its time counts, with why
+        # not; the durations are the ones that do (room_times).
+        learning = visit_learning(visits)
+        record["room_learning"] = learning
         durations = {
-            rid: round(v["seconds"], 1)
-            for rid, v in visits.items()
-            if v["cleaned"] and v["seconds"] >= MIN_ROOM_SECONDS
+            row["room_id"]: row["seconds"] for row in learning if row["accepted"]
         }
         if durations:
             record["room_durations_sec"] = durations
@@ -601,6 +604,9 @@ async def _async_sync_locked(
                 backfilled += 1
             continue
         known.add(record["id"])
+        # B12 (4.6.0): the battery figures the coordinator kept for this
+        # mission number, if it saw the mission run.
+        mission_battery.take_prime(config_entry.runtime_data, record)
         # Count only what was actually stored. A dropped duplicate counted
         # here would still trigger the save, the statistics backfill and
         # EVENT_MISSION_COMPLETED -- a "finished cleaning" for nothing.

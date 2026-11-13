@@ -42,6 +42,7 @@ from .const import (
     mission_store_changed_signal,
 )
 from .area_resolver import async_room_area_fields
+from . import mission_battery
 from .mission_started import fire_mission_started
 from .const import CLEANING_PHASES, CONF_BLID, CONF_CORRELATION_ENTITIES, CONF_SMART_ZONE_DATA, END_SIGNAL_DEBOUNCE_COUNT, END_SIGNAL_MIN_HOLD_SECONDS, EVENT_MAP_RETRAIN_COMPLETED, EVENT_MAP_RETRAIN_STARTED, EVENT_MISSION_COMPLETED, EVENT_MISSION_REASSESSED, EVENT_ROOM_COMPLETED, POSE_POINT_CM_TO_MM, ROOM_TRANSITION_CANDIDATE_PHASES, UNVISITED_ROOMS_MAX_SUPPRESSION_SECONDS, active_charge_cycles, estcap_to_mah
 from .map_renderer import ROBOT_DIAMETER_MM_ISJ_SERIES
@@ -343,6 +344,14 @@ def _remember_measured_room_time(
             cache, room, float(seconds),
             mode if isinstance(mode, str) else cleaning_mode(mode),
         )
+        # B9 (4.6.0): what was learned, for the mission record.
+        timer = getattr(entry.runtime_data, "mission_timer_store", None)
+        learned = getattr(timer, "learned_rooms", None)
+        if isinstance(learned, list):
+            learned.append({
+                "room": room, "seconds": round(float(seconds), 1),
+                "accepted": True, "reason": None,
+            })
         _LOGGER.debug(
             "AUTO-ADVANCE-ROOM: measured %s at %.0fs, kept for next time "
             "(the cloud offers no per-room estimate in auto pass mode)",
@@ -559,6 +568,18 @@ def _merged_top_level(
     roomba = getattr(entry.runtime_data, "roomba", None)
     master = getattr(roomba, "master_state", None) or {}
     return ((master.get("state") or {}).get("reported") or {}).get(key) or {}
+
+
+def _battery_level(entry: RoombaConfigEntry, reported: dict[str, Any]) -> Any:
+    """`batPct` of this message, else the robot's last known one (B12)."""
+    value = reported.get("batPct")
+    if value is not None:
+        return value
+    roomba = getattr(entry.runtime_data, "roomba", None)
+    master = getattr(roomba, "master_state", None) or {}
+    if not isinstance(master, dict):
+        return None
+    return ((master.get("state") or {}).get("reported") or {}).get("batPct")
 
 
 # ── Zone-name capture ─────────────────────────────────────────────────────────
@@ -966,6 +987,21 @@ async def async_record_mission(
         "team_id": team_id,   # v3.2.0 TEAM-INDICATOR
         "npicks_delta": npicks_delta,   # v3.2.0 ANOMALY-EXPLAIN
     }
+    # B12 (4.6.0): the battery the mission used; none for one that
+    # recharged on the way (mission_battery.py).
+    mission_battery.apply(record, mission_battery.finish(
+        data, _battery_level(entry, reported), recharged=recharge_min > 0,
+    ))
+    # B9 (4.6.0): the room times room tracking learned in this mission
+    # without a cloud account, which takes each one (room_times).
+    _learned = getattr(getattr(data, "mission_timer_store", None), "learned_rooms", None)
+    if isinstance(_learned, list) and _learned:
+        record["room_learning"] = [dict(row) for row in _learned]
+    # B11 (4.6.0): what the run was estimated to take, to measure the
+    # estimates against what missions took (estimate_quality.py).
+    _estimate = getattr(getattr(data, "mission_timer_store", None), "total_estimated_sec", None)
+    if isinstance(_estimate, (int, float)) and not isinstance(_estimate, bool) and _estimate > 0:
+        record["estimated_duration_min"] = round(float(_estimate) / 60, 1)
 
     # GUESSES WAIT FOR THE CLOUD (4.2.15). A robot that reports no room
     # change (no travel signal, no position) leaves room tracking to the
@@ -1490,6 +1526,10 @@ def _handle_mission_start(
         bbrun = _merged_top_level(entry, reported, "bbrun")
         ms.nstuck_at_start = bbrun.get("nStuck", 0)
         ms.npicks_at_start = bbrun.get("nPicks", 0)
+        # B12 (4.6.0): the battery at the start, for what the mission used.
+        mission_battery.note_start(
+            entry.runtime_data, _battery_level(entry, reported), mission.get("nMssn"),
+        )
         ms.recharge_min_accumulator = 0
         ms.current_leg_rechrgM = 0
         ms.last_recharge_phase_ts = 0.0

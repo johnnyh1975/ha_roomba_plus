@@ -184,39 +184,49 @@ def async_area_for_room(
     if not room:
         return None
     try:
-        data = config_entry.runtime_data
-        if data.connection_type is ConnectionType.CLOUD_ONLY:
-            rid: str | None = None
-            qualified = (prime_rooms or {}).get(room)
-            if qualified and "/" in str(qualified):
-                rid = str(qualified).partition("/")[2]
-            else:
-                names = getattr(data, "prime_room_names", None) or {}
-                rid = next(
-                    (str(k) for k, v in names.items() if str(v) == room), None
-                )
-            if rid:
-                area = async_area_for_segment(hass, config_entry, f"rid_{rid}")
-                if area:
-                    return area
-            return async_area_for_room_name(hass, config_entry, room)
-
-        regions = getattr(
-            getattr(data, "cloud_coordinator", None), "regions", None
-        ) or []
-        for region in regions:
-            if str(region.get("name") or "") != room:
-                continue
-            area = async_area_for_segment(
-                hass, config_entry,
-                f"{region.get('pmap_id') or ''}_rid_{region.get('id') or ''}",
-            )
-            if area:
-                return area
-        return async_area_for_room_name(hass, config_entry, room)
+        return _area_for_room(hass, config_entry, room, prime_rooms)
     except Exception:  # noqa: BLE001
         _LOGGER.debug("roomba_plus: area resolution failed", exc_info=True)
         return None
+
+
+def _area_for_room(
+    hass: HomeAssistant,
+    config_entry: RoombaConfigEntry,
+    room: str,
+    prime_rooms: dict[str, str] | None,
+) -> str | None:
+    """async_area_for_room() without the guard."""
+    data = config_entry.runtime_data
+    if data.connection_type is ConnectionType.CLOUD_ONLY:
+        rid: str | None = None
+        qualified = (prime_rooms or {}).get(room)
+        if qualified and "/" in str(qualified):
+            rid = str(qualified).partition("/")[2]
+        else:
+            names = getattr(data, "prime_room_names", None) or {}
+            rid = next(
+                (str(k) for k, v in names.items() if str(v) == room), None
+            )
+        if rid:
+            area = async_area_for_segment(hass, config_entry, f"rid_{rid}")
+            if area:
+                return area
+        return async_area_for_room_name(hass, config_entry, room)
+
+    regions = getattr(
+        getattr(data, "cloud_coordinator", None), "regions", None
+    ) or []
+    for region in regions:
+        if str(region.get("name") or "") != room:
+            continue
+        area = async_area_for_segment(
+            hass, config_entry,
+            f"{region.get('pmap_id') or ''}_rid_{region.get('id') or ''}",
+        )
+        if area:
+            return area
+    return async_area_for_room_name(hass, config_entry, room)
 
 
 def async_area_name(hass: HomeAssistant, area_id: str | None) -> str | None:
