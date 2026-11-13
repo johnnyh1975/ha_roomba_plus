@@ -40,6 +40,36 @@ the stable v3.x line at all.
 Sections below that carry no tag apply to Classic robots. Prime-only entities are
 marked in their own headings.
 
+### Which generation, section by section *(4.6.0)*
+
+Feature parity is the goal: a section is Classic or Prime only where the robot or its
+protocol does not give the data. Where that is so, the reason is in
+[Prime robots: what Classic already had](#prime-robots-what-classic-already-had-460).
+
+| Section | Classic | Prime |
+|---|---|---|
+| Status, control & error intelligence; debug capture | ✓ | ✓ |
+| Child lock, eco charge · gentle mode | ✓ · ✓ | ✓ · — (not among the Prime settings) |
+| `clean_room`, `vacuum.clean_area`, HA areas, Smart Start | ✓ | ✓ |
+| Skipping the current room | ✓ (button and command) | command only, unconfirmed |
+| Cloud zone selector, naming rooms, zone management, cloud zone sync | ✓ | rooms and zones come from the maps (map and zone selects) |
+| Room detection, map drift (900-series), room type suggestion | ✓ | — (Classic map tiers) |
+| Layout change detection, coverage map, stuck patterns and hotspots | ✓ | — (built on the local position grid) |
+| Cleaning map, rooms map, floor plan of each map, map colours, CJK names | ✓ | ✓ |
+| Maintenance entries, Configure → Maintenance, care guides, repairs, calendar, to-do list, due sensor | ✓ | ✓ |
+| Remaining life, cloud consumables | ✓ | the part sensors |
+| Status, Clean Base status, replacement dates, care reminders | ✓ | ✓ |
+| Navigation health, dock contact health, device diagnostics, health score and trend, reset diagnostics | ✓ | partly: navigation resets, dock counters once reported |
+| Mission log, progress, phase, error intelligence, explanation, statistics, REST history | ✓ | ✓ |
+| Mission anomaly detection | ✓ | the count sensor; the repair issue and events are not checked on Prime |
+| Room intelligence, map intelligence, performance sensors | ✓ | — (read Classic cloud history; a Prime variant is planned) |
+| Rhythms, overdue rooms, cadence health | ✓ | ✓ |
+| Schedule calendar, presence scheduling and analytics, demand cleaning, favourites | ✓ | ✓ |
+| Pad wash and dry, pad wetness, per-room preferences, quiet hours, robot's start-blocking codes | not recorded on Classic | ✓ |
+| Braava / mop sensors | ✓ | tank present |
+| Events and device triggers | ✓ | ✓ (map retrain: Classic) |
+
+
 ---
 
 ## Status, control & error intelligence
