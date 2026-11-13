@@ -1962,7 +1962,9 @@
           "event_type": {
             "state": {
               "not_delivered": "Não executado",
-              "state_frozen": "Estado congelado"
+              "state_frozen": "Estado congelado",
+              "start_blocked": "Início retido",
+              "start_timeout": "Início em espera abandonado"
             }
           }
         }

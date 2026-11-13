@@ -38,6 +38,9 @@ Nothing to do. What you will notice:
   now; it never did.
 - **Room progress on Prime for missions started in the app** or by a schedule:
   the current room and the rooms visited, from the mission timeline.
+- **`roomba_plus_start_blocked` and `roomba_plus_start_timeout` name the robot**
+  (`entry_id`, `name`) and show on `event.<robot>_command`. An automation that
+  listened to them still works; it can now filter by robot.
 - **New actions**: `roomba_plus.retry_missed_rooms`, and
   `roomba_plus.debug_capture_start` / `_stop` / `_get` for a redacted debug log
   without editing `configuration.yaml`.

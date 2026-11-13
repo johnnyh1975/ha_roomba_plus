@@ -1962,7 +1962,9 @@
           "event_type": {
             "state": {
               "not_delivered": "Nicht ausgeführt",
-              "state_frozen": "Zustand eingefroren"
+              "state_frozen": "Zustand eingefroren",
+              "start_blocked": "Start aufgehalten",
+              "start_timeout": "Wartender Start aufgegeben"
             }
           }
         }

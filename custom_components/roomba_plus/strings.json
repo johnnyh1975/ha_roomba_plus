@@ -1962,7 +1962,9 @@
           "event_type": {
             "state": {
               "not_delivered": "Not carried out",
-              "state_frozen": "State frozen"
+              "state_frozen": "State frozen",
+              "start_blocked": "Start held back",
+              "start_timeout": "Waiting start given up"
             }
           }
         }

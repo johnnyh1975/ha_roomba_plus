@@ -33,6 +33,8 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 
 from .const import (
     EVENT_COMMAND_NOT_DELIVERED,
+    EVENT_START_BLOCKED,
+    EVENT_START_TIMEOUT,
     EVENT_MISSION_COMPLETED,
     EVENT_MISSION_RESULT,
     EVENT_ROOM_COMPLETED,
@@ -67,6 +69,10 @@ _GROUPED_MOMENTS: tuple[tuple[str, dict[str, str]], ...] = (
     ("command", {
         EVENT_COMMAND_NOT_DELIVERED: "not_delivered",
         EVENT_STATE_FROZEN: "state_frozen",
+        # A6 (4.6.0): a start the blocking sensors held back, and a
+        # waiting start that ran out of time.
+        EVENT_START_BLOCKED: "start_blocked",
+        EVENT_START_TIMEOUT: "start_timeout",
     }),
 )
 

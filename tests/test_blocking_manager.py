@@ -678,3 +678,61 @@ class TestTheStartIsWatched:
         assert seen == ["smart_start", "smart_start"]
         robot.send_simple_command.assert_awaited_once_with("start")
         roomba.send_command.assert_awaited_once_with("start")
+
+
+class TestTheEventsNameTheRobot:
+    """4.6.0, A6: the blocking manager's events carry the robot, so an
+    automation can tell which one, and the robot's command event entity
+    (event.py) takes them."""
+
+    @pytest.mark.asyncio
+    async def test_start_blocked_and_timeout(self, hass):
+        from custom_components.roomba_plus.blocking_manager import BlockingManager
+        from custom_components.roomba_plus.const import (
+            CONF_BLOCKING_BEHAVIOR,
+            CONF_BLOCKING_SENSORS,
+            EVENT_START_BLOCKED,
+            EVENT_START_TIMEOUT,
+        )
+
+        from tests.conftest import entry_mock
+
+        entry = entry_mock()
+        entry.entry_id = "E1"
+        entry.title = "Upstairs"
+        entry.options = {CONF_BLOCKING_SENSORS: ["binary_sensor.door"], CONF_BLOCKING_BEHAVIOR: "abort"}
+        hass.states.async_set("binary_sensor.door", "on")
+        fired: list = []
+        hass.bus.async_listen(EVENT_START_BLOCKED, lambda e: fired.append(e))
+        hass.bus.async_listen(EVENT_START_TIMEOUT, lambda e: fired.append(e))
+        manager = BlockingManager(hass, entry)
+        await manager.check_and_start(["Kitchen"], False)
+        await hass.async_block_till_done()
+        assert fired[0].data == {
+            "entry_id": "E1", "name": "Upstairs",
+            "blocking_entities": ["binary_sensor.door"], "rooms": ["Kitchen"],
+        }
+
+    @pytest.mark.asyncio
+    async def test_timeout_names_the_robot(self, hass, monkeypatch):
+        from tests.conftest import entry_mock
+
+        from custom_components.roomba_plus import blocking_manager as bm_mod
+        from custom_components.roomba_plus.blocking_manager import BlockingManager
+        from custom_components.roomba_plus.const import EVENT_START_TIMEOUT
+
+        entry = entry_mock()
+        entry.entry_id = "E1"
+        entry.title = "Upstairs"
+        entry.options = {}
+        fired: list = []
+        hass.bus.async_listen(EVENT_START_TIMEOUT, lambda e: fired.append(e))
+        manager = BlockingManager(hass, entry)
+        monkeypatch.setattr(BlockingManager, "is_queued", property(lambda _s: True))
+        monkeypatch.setattr(manager, "cancel_queue", lambda: None)
+        monkeypatch.setattr(bm_mod.asyncio, "sleep", AsyncMock())
+        await manager._run_timeout(5)
+        await hass.async_block_till_done()
+        assert fired[0].data["entry_id"] == "E1"
+        assert fired[0].data["name"] == "Upstairs"
+        assert fired[0].data["waited_sec"] == 5

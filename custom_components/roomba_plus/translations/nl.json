@@ -1962,7 +1962,9 @@
           "event_type": {
             "state": {
               "not_delivered": "Niet uitgevoerd",
-              "state_frozen": "Status bevroren"
+              "state_frozen": "Status bevroren",
+              "start_blocked": "Start tegengehouden",
+              "start_timeout": "Wachtende start opgegeven"
             }
           }
         }

@@ -61,7 +61,9 @@ class TestWhichEntitiesExist:
             assert entity.unique_id == f"roomba_plus_BLID1_{key}"
             assert entity.suggested_object_id == key
             if key == "command":
-                assert entity.event_types == ["not_delivered", "state_frozen"]
+                assert entity.event_types == [
+                    "not_delivered", "state_frozen", "start_blocked", "start_timeout",
+                ]
             elif key == "mission_result":
                 assert entity.event_types == [
                     "completed", "completed_with_skips", "cancelled",
@@ -430,7 +432,10 @@ class TestTheCommandEntityFollowsBothBusEvents:
         with patch.object(event_mod.IRobotEntity, "async_added_to_hass", return_value=None):
             await entity.async_added_to_hass()
         listened = {c.args[0] for c in entity.hass.bus.async_listen.call_args_list}
-        assert listened == {"roomba_plus_command_not_delivered", "roomba_plus_state_frozen"}
+        assert listened == {
+            "roomba_plus_command_not_delivered", "roomba_plus_state_frozen",
+            "roomba_plus_start_blocked", "roomba_plus_start_timeout",
+        }
         entity.async_write_ha_state = MagicMock()
         entity._on_bus_event(self._event("roomba_plus_unrelated", {"entry_id": "E1"}))
         assert entity.state is None
@@ -478,3 +483,4 @@ class TestTheMissionResultEntity:
             "roomba_plus_mission_result", entity._on_result,
         )
         assert entity.new_state_filter({}) is False
+

@@ -1962,7 +1962,9 @@
           "event_type": {
             "state": {
               "not_delivered": "Non exécutée",
-              "state_frozen": "État figé"
+              "state_frozen": "État figé",
+              "start_blocked": "Démarrage retenu",
+              "start_timeout": "Démarrage en attente abandonné"
             }
           }
         }

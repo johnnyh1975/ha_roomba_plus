@@ -1762,7 +1762,7 @@ for Prime users, with no error to explain it.
 | `roomba_plus_command_not_delivered` (4.6.0) | A command that should start a mission was sent from a closed cycle and the robot did not start within 20 s (Classic) or 60 s (Prime). Watched: every start Roomba+ sends — the start, `clean_room`, `clean_zone`, `vacuum.clean_area`, `vacuum.send_command` with `start`, `run_favorite`, `smart_start` (also a start the blocking sensors let through), `auto_clean_dirty_rooms`, demand cleaning, the zone, Smart Map zone and favourite buttons and *Repeat last mission*; `command` says which (`start`, `clean_room`, `clean_zone`, `clean_area`, `send_command`, `run_favorite`, `smart_start`, `auto_clean_dirty_rooms`, `demand_clean`, `zone_button`, `favorite`, `repeat_last_mission`). A start from the robot's own schedule or the iRobot app is not Roomba+'s and is not watched. A start into an open mission is not watched: whether the robot took it cannot be told from the state | `entry_id`, `name`, `command`, `phase`, `not_ready`, `error`, `waited_sec`, `resent` (`true` when Roomba+ had already sent it a second time, see below) |
 | `roomba_plus_state_frozen` (4.6.0) | The robot's state has said `run` for at least ten minutes while its battery climbed three points or more. A robot cannot clean and charge at once: the state has stopped following the robot, and commands are likely to be ignored until it is power-cycled. Once per episode | `entry_id`, `name`, `phase`, `error`, `minutes_in_run`, `battery_from`, `battery_to` |
 | `roomba_plus_all_away` · `roomba_plus_person_detected_during_clean` | Presence-aware scheduling (see above) | — |
-| `roomba_plus_start_blocked` · `roomba_plus_start_timeout` | Smart Start blocking-sensor gate (see above) | `blocking_entities` (for `start_blocked`) |
+| `roomba_plus_start_blocked` · `roomba_plus_start_timeout` | Smart Start blocking-sensor gate (see above): a start held back (behaviour *abort*), a waiting start given up (behaviour *queue*) | `blocking_entities`; since 4.6.0 also `entry_id` and `name` (before, an automation could not tell which robot), `rooms` (`start_blocked`, `null` for the whole home) and `waited_sec` (`start_timeout`) |
 
 `roomba_plus_mission_completed`, `roomba_plus_maintenance_reset`, and `roomba_plus_stuck` also produce rich, searchable **Logbook** entries automatically — no setup needed.
 
@@ -1782,7 +1782,7 @@ The moments a dashboard most wants to react to are also **event entities**:
 | `event.{name}_room_completed` | `roomba_plus_room_completed` | both generations |
 | `event.{name}_stuck` | `roomba_plus_stuck` | both generations (Prime since 4.6.0) |
 | `event.{name}_mission_result` *(4.6.0)* | `roomba_plus_mission_result`; the event type is the result type | both generations |
-| `event.{name}_command` *(4.6.0)* | `roomba_plus_command_not_delivered` (type `not_delivered`) and `roomba_plus_state_frozen` (type `state_frozen`) | both generations |
+| `event.{name}_command` *(4.6.0)* | `roomba_plus_command_not_delivered` (type `not_delivered`), `roomba_plus_state_frozen` (type `state_frozen`), `roomba_plus_start_blocked` (type `start_blocked`) and `roomba_plus_start_timeout` (type `start_timeout`) | both generations |
 
 Each changes state when its bus event fires for that robot, with the event's payload as its attributes (`event_type` plus the fields above). The bus events still fire as before; automations and device triggers are unaffected.
 

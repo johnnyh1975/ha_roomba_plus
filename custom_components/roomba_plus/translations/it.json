@@ -1962,7 +1962,9 @@
           "event_type": {
             "state": {
               "not_delivered": "Non eseguito",
-              "state_frozen": "Stato bloccato"
+              "state_frozen": "Stato bloccato",
+              "start_blocked": "Avvio trattenuto",
+              "start_timeout": "Avvio in attesa abbandonato"
             }
           }
         }

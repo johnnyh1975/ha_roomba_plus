@@ -1962,7 +1962,9 @@
           "event_type": {
             "state": {
               "not_delivered": "Nie wykonano",
-              "state_frozen": "Stan zamrożony"
+              "state_frozen": "Stan zamrożony",
+              "start_blocked": "Start wstrzymany",
+              "start_timeout": "Oczekujący start porzucony"
             }
           }
         }

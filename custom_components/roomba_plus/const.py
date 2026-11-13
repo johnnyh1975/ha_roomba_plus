@@ -303,6 +303,9 @@ EVENT_COMMAND_NOT_DELIVERED: Final = f"{DOMAIN}_command_not_delivered"
 EVENT_STATE_FROZEN: Final = f"{DOMAIN}_state_frozen"
 #: 4.6.0 -- how a mission ended, as a type (mission_result.py).
 EVENT_MISSION_RESULT: Final = f"{DOMAIN}_mission_result"
+#: Fired by the blocking manager (moved here in 4.6.0 for the event entity).
+EVENT_START_BLOCKED: Final = f"{DOMAIN}_start_blocked"
+EVENT_START_TIMEOUT: Final = f"{DOMAIN}_start_timeout"
 #: Send a command the robot took and ignored once more (4.6.0, A3). On by
 #: default: it only acts when nothing explains the refusal, and only once.
 CONF_RESEND_SWALLOWED: Final = "resend_swallowed_command"

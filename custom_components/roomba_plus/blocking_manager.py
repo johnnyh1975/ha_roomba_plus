@@ -39,6 +39,8 @@ from .const import (
     DEFAULT_BLOCKING_BEHAVIOR,
     DEFAULT_BLOCKING_TIMEOUT_MIN,
     DOMAIN,
+    EVENT_START_BLOCKED as _EVENT_START_BLOCKED,
+    EVENT_START_TIMEOUT as _EVENT_START_TIMEOUT,
 )
 
 if TYPE_CHECKING:
@@ -46,9 +48,10 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
-# HA event names fired by the blocking manager
-EVENT_START_BLOCKED = f"{DOMAIN}_start_blocked"
-EVENT_START_TIMEOUT = f"{DOMAIN}_start_timeout"
+# HA event names fired by the blocking manager (defined in const.py
+# since 4.6.0; kept importable from here).
+EVENT_START_BLOCKED = _EVENT_START_BLOCKED
+EVENT_START_TIMEOUT = _EVENT_START_TIMEOUT
 
 # Sensor states that count as "active / blocking"
 _ACTIVE_STATES = frozenset({"on", "home", "true"})
@@ -155,9 +158,17 @@ class BlockingManager:
             CONF_BLOCKING_BEHAVIOR, DEFAULT_BLOCKING_BEHAVIOR
         )
         if behavior == "abort":
+            # WHICH ROBOT (4.6.0): the event had only the sensors, so an
+            # automation could not tell the robot, and the event entity
+            # of the robot could not take it.
             self._hass.bus.async_fire(
                 EVENT_START_BLOCKED,
-                {"blocking_entities": self.blocking_entities},
+                {
+                    "entry_id": self._entry.entry_id,
+                    "name": getattr(self._entry, "title", None),
+                    "blocking_entities": self.blocking_entities,
+                    "rooms": list(rooms) if rooms else None,
+                },
             )
             _LOGGER.info(
                 "BlockingManager: start aborted — active sensors: %s",
@@ -249,7 +260,12 @@ class BlockingManager:
                 seconds,
                 self.blocking_entities,
             )
-            self._hass.bus.async_fire(EVENT_START_TIMEOUT, {})
+            self._hass.bus.async_fire(EVENT_START_TIMEOUT, {
+                "entry_id": self._entry.entry_id,
+                "name": getattr(self._entry, "title", None),
+                "blocking_entities": self.blocking_entities,
+                "waited_sec": seconds,
+            })
             self.cancel_queue()
 
             # F6c — record the timeout as a blocked_timeout mission result
