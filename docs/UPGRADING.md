@@ -9,6 +9,37 @@ note are listed — most releases need zero action beyond updating.
 
 ---
 
+## v4.6.0 — from v4.5.x
+
+Nothing to do. What you will notice:
+
+- **New entities on Prime robots**, those Classic already had: sensors for the
+  mission (start, elapsed, id, recharge and expiry), the lifetime mission figures
+  and the dock counters, each appearing once the robot reports its field; binary
+  sensors for mission active, mid-mission recharge, firmware updated, maintenance
+  due and, where configured, start blocked and demand clean blocked; the stuck
+  event entity; a disabled floor plan of each map. See
+  [Prime robots: what Classic already had](FEATURES.md#prime-robots-what-classic-already-had-460).
+- **Three new event entities on both generations**: `event.<robot>_mission_result`,
+  `event.<robot>_command` (command not delivered, state frozen) and, on Prime,
+  `event.<robot>_stuck`.
+- **A command the robot ignores is sent once more**, when the robot is idle and
+  reports no reason for refusing it. The option *Send an ignored command once more*
+  turns this off. Prime is watched as well now, with 60 s instead of 20 s.
+- **Fewer device triggers in the picker.** Triggers that could never fire for a
+  robot are no longer offered: on Prime `bin_full`, `health_score_drop` and the map
+  retrain triggers, and `start_blocked`, `maintenance_due` or `firmware_updated`
+  where the robot lacks their entity. An automation that already uses one keeps
+  working as before — it did not fire then either. `start_blocked` fires on Classic
+  now; it never did.
+- **Room progress on Prime for missions started in the app** or by a schedule:
+  the current room and the rooms visited, from the mission timeline.
+- **New actions**: `roomba_plus.retry_missed_rooms`, and
+  `roomba_plus.debug_capture_start` / `_stop` / `_get` for a redacted debug log
+  without editing `configuration.yaml`.
+
+---
+
 ## v4.5.4 — from v4.5.x
 
 Nothing to do. Two visible changes:

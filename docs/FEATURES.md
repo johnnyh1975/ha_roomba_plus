@@ -111,6 +111,8 @@ marked in their own headings.
 | `roomba_plus.clean_overdue_rooms` | SMART + cloud | Clean every room currently overdue (configured or learned rhythm), travel-optimized route from the dock (v3.3.0) |
 | `roomba_plus.auto_clean_dirty_rooms` | SMART + cloud, Prime | Clean the rooms that are dirtier than your household average, travel-optimized (v3.3.0); on Prime the rooms the robot rates dirty (4.5.0) |
 | `roomba_plus.explain_mission` | All | Plain-language reason for a flagged mission anomaly (v3.2.0) |
+| `roomba_plus.retry_missed_rooms` | SMART + cloud, Prime | Clean the rooms the latest mission (or the one `mission_id` names) skipped or did not reach, in the order it asked for them (4.6.0). "Not reached" is known only where the rooms were observed during the run |
+| `roomba_plus.debug_capture_start` · `_stop` · `_get` | All | A debug log without `configuration.yaml` or a restart (4.6.0) — see [Debug capture](#debug-capture-460) |
 
 **Device triggers** for automations:
 
@@ -122,6 +124,21 @@ marked in their own headings.
 | Bin full | Dust bin is full |
 | Docked | Robot is docked and charging |
 | Error reported | Robot reports any error |
+
+#### Debug capture (4.6.0)
+
+`roomba_plus.debug_capture_start` turns on debug logging for Roomba+, roombapy and
+roombapy-prime and keeps the lines in memory, for 30 minutes unless `minutes` says
+otherwise (at most 240), and at most 5,000 lines. `debug_capture_stop` ends it and puts
+the log levels back; `debug_capture_get` returns the lines. Both answer as an action
+response, so in *Developer tools → Actions* the result can be copied straight into an
+issue.
+
+The lines are redacted before they are kept: addresses (IPv4, IPv6, MAC), e-mail
+addresses, robot ids, tokens and keys, and the values of fields with private names
+(passwords, network names, positions). It is the same list the diagnostics use. Look
+the text over before posting it all the same — a room name you gave a person's name is
+not something a filter can know.
 
 **Experimental buttons — 900-series only** (disabled by default, enable via entity list):
 
@@ -491,6 +508,10 @@ show_state: false
 - Room names: the map's own name for the room, then a name typed into the naming notice for this map, then the room's number. Aliases are not used here: they are kept by room number, and room numbers repeat across maps.
 - A map deleted in the app makes its image unavailable; it is removed at the next start.
 - Attributes: `map_name`, `map_version`, `room_count`.
+- **Prime robots too (4.6.0)**, one per map the account lists (the maps the map select
+  offers). Rooms come from the map's metadata and, where it has no outline, from its map
+  bundle, as on the rooms map; read once per map version. If the list of maps cannot be
+  read at startup, there are no floor plans until the next start, and none are removed.
 
 **A new map version keeps the rooms** *(4.5.4)*. When a map got a new version (an edit in the iRobot app, or one the cloud makes itself), the rooms map was rebuilt without room outlines and stayed empty until Home Assistant restarted. It is now rebuilt from the same data as at startup, and with the door width you set.
 
@@ -1485,6 +1506,52 @@ appears.
 
 ---
 
+## Prime robots: what Classic already had *(4.6.0)*
+
+The Prime branch of each platform used to stop before the part both generations share,
+so a Prime robot went without entities whose data it reports. 4.6.0 builds them where the
+data is there; what still differs, and why, is listed below.
+
+**Sensors** — read from the robot's shadows, each created only once its field has
+arrived (several are declared by the Prime app and not yet seen from a robot):
+mission start time, mission elapsed time, mission id, recharge and expiry time (time and
+minutes), average mission time, lifetime completion rate, dock contact chatters, dock
+knockoffs. From the mission history: missions in the last 30 days, 30-day completion
+rate, last mission area. Also the opt-in raw state (the shadows, merged as the
+diagnostics show them), and the optimal clean window where presence scheduling is on.
+
+**Binary sensors** — mission active, mid-mission recharge, firmware updated (from
+`rw-software`: the version read at startup is the baseline), maintenance due, start
+blocked (blocking sensors configured), demand clean blocked (demand cleaning on). The
+Prime start-blocked sensor that reads the robot's own blocking codes stays beside the
+blocking-sensor one.
+
+**Events** — `roomba_plus_stuck` and its event entity (the robot reports `phase:
+stuck`), and the new events of 4.6.0 on both generations.
+
+**Room progress for missions started elsewhere.** A mission started in the iRobot app,
+by a schedule or on the robot has no plan in Home Assistant, because only a start from
+Home Assistant writes one. The rooms the mission timeline names now become the list, in
+the order the robot enters them: the current room, the rooms visited and the time in
+each. There is no forecast of the rooms still to come, and so no remaining time; a start
+from Home Assistant has both, as before.
+
+**Mission path** — `GET /mission/{n_mssn}/path` answers on Prime from the mission
+history, with the rooms named as on the map.
+
+**Floor plan of each map** — see [Floor plan of each map](#floor-plan-of-each-map--smart-map-robots-with-an-irobot-account-454).
+
+**Still Classic only, with the reason:**
+
+| Entity | Why not on Prime |
+|---|---|
+| `stuck_count_30d` | A Prime mission record has no stuck result: the history's end codes say completed or cancelled, and a stuck mission ends as `unknown` |
+| `last_error_code`, `last_error_at` | Classic keeps them from missions that ended in error or stuck, which Prime records cannot say (see above). The current error is `sensor.*_prime_error` |
+| `last_mission_summary` | Names its rooms from the Classic cloud's regions; needs a Prime variant |
+| `dock_charge_aborts` | `bbchg.aborts` is declared by the app and not seen from a robot |
+| `problem_zone`, `consecutive_clean_skips` | No room per stuck mission; no schedule skip detection on Prime |
+| `mqtt_stale`, `cloud_connected` | A Prime robot has no local connection to fall silent; `binary_sensor.*_robot_connectivity` covers the cloud side |
+
 ## Connectivity, mop & configuration reference
 
 #### Braava / mop sensors
@@ -1683,21 +1750,32 @@ for Prime users, with no error to explain it.
 | `roomba_plus_health_change` | `sensor.*_integration_health` crosses a band (healthy/degraded/critical) | `entry_id`, `name`, `score`, `previous_score`, `band`, `previous_band` |
 | `roomba_plus_map_retrain_started` / `_completed` | Cloud detects a Smart Map change and syncs | `entry_id`, `name`, `pmap_id` |
 | `roomba_plus_maintenance_reset` | Filter/brush/battery/pad/wheel/contact/bin reset — button or service | `entry_id`, `name`, `component`, `hours` (`null` for calendar-based resets) |
-| `roomba_plus_stuck` (v3.2.0) | MQTT watchdog detects the robot went silent during an active mission | `entry_id`, `name`, `last_room`, `phase`, `stuck_count`, `minutes_stuck`, `last_known_position` (if pose data available: `x_mm`/`y_mm` in millimetres from the dock and `map_x_mm`/`map_y_mm` in the maps' frame, as on the tracker; `x`/`y` are the firmware's raw centimetres) |
+| `roomba_plus_stuck` (v3.2.0) | Classic: the MQTT watchdog detects the robot went silent during an active mission. **Prime (4.6.0):** the robot reports `phase: stuck`, once per time it gets stuck (not for a robot already stuck when Home Assistant started) | `entry_id`, `name`, `last_room`, `phase`, `stuck_count`, `minutes_stuck`, `last_known_position` (if pose data available: `x_mm`/`y_mm` in millimetres from the dock and `map_x_mm`/`map_y_mm` in the maps' frame, as on the tracker; `x`/`y` are the firmware's raw centimetres). On Prime `stuck_count`, `minutes_stuck` and `last_known_position` are `null`: the robot reports none of them |
+| `roomba_plus_mission_result` (4.6.0) | A mission's result is stored, both generations. Not for a Prime sync that imports several missions at once | `entry_id`, `name`, `mission_id`, `type` (`completed`, `completed_with_skips`, `cancelled`, `stuck_abandoned`, `error`), `result` (the stored result), `skipped_rooms`, `missed_rooms` (asked for, not skipped, not cleaned — only where the rooms were observed during the run), `requested_rooms`, `error_code` |
+| `roomba_plus_command_not_delivered` (4.6.0) | A start, room or zone command was sent and the robot did not start within 20 s (Classic) or 60 s (Prime) | `entry_id`, `name`, `command`, `phase`, `not_ready`, `error`, `waited_sec`, `resent` (`true` when Roomba+ had already sent it a second time, see below) |
+| `roomba_plus_state_frozen` (4.6.0) | The robot's state has said `run` for at least ten minutes while its battery climbed three points or more. A robot cannot clean and charge at once: the state has stopped following the robot, and commands are likely to be ignored until it is power-cycled. Once per episode | `entry_id`, `name`, `phase`, `error`, `minutes_in_run`, `battery_from`, `battery_to` |
 | `roomba_plus_all_away` · `roomba_plus_person_detected_during_clean` | Presence-aware scheduling (see above) | — |
 | `roomba_plus_start_blocked` · `roomba_plus_start_timeout` | Smart Start blocking-sensor gate (see above) | `blocking_entities` (for `start_blocked`) |
 
 `roomba_plus_mission_completed`, `roomba_plus_maintenance_reset`, and `roomba_plus_stuck` also produce rich, searchable **Logbook** entries automatically — no setup needed.
 
+**Sent once more (4.6.0).** When a command was not delivered and the robot is idle —
+no `notReady` reason, no error, the state not frozen — Roomba+ sends it a second time
+and waits again. Only once, never mid-mission, never into a frozen state. The event
+fires either way, with `resent` saying which. The option *Send an ignored command once
+more* (on by default, under *Settings*) turns this off.
+
 ### Event entities *(4.2.19)*
 
-The three moments a dashboard most wants to react to are also **event entities**:
+The moments a dashboard most wants to react to are also **event entities**:
 
 | Entity | Mirrors | Robots |
 |---|---|---|
 | `event.{name}_mission_completed` | `roomba_plus_mission_completed` | both generations |
 | `event.{name}_room_completed` | `roomba_plus_room_completed` | both generations |
-| `event.{name}_stuck` | `roomba_plus_stuck` | Classic only — Prime robots report no stuck event |
+| `event.{name}_stuck` | `roomba_plus_stuck` | both generations (Prime since 4.6.0) |
+| `event.{name}_mission_result` *(4.6.0)* | `roomba_plus_mission_result`; the event type is the result type | both generations |
+| `event.{name}_command` *(4.6.0)* | `roomba_plus_command_not_delivered` (type `not_delivered`) and `roomba_plus_state_frozen` (type `state_frozen`) | both generations |
 
 Each changes state when its bus event fires for that robot, with the event's payload as its attributes (`event_type` plus the fields above). The bus events still fire as before; automations and device triggers are unaffected.
 
@@ -1707,7 +1785,14 @@ Each changes state when its bus event fires for that robot, with the event's pay
 
 Available in the Automation editor's Device trigger picker for every Roomba+ robot:
 
-`cleaning_started` · `cleaning_finished` · `stuck` · `bin_full` · `docked` · `error` · `room_completed` · `maintenance_due` · `health_score_drop` · `map_retrain_started` · `map_retrain_completed` · `firmware_updated`
+`cleaning_started` · `cleaning_finished` · `stuck` · `bin_full` · `start_blocked` · `docked` · `error` · `room_completed` · `maintenance_due` · `health_score_drop` · `map_retrain_started` · `map_retrain_completed` · `firmware_updated`
+
+**Only the triggers that can fire are offered (4.6.0).** Each one watches an entity, and a
+robot without that entity — a Prime robot has no `bin_full` sensor, a robot without
+blocking sensors no `start_blocked` — used to get the trigger in the picker anyway, where
+it never fired. The map retrain triggers are Classic only. `start_blocked` follows the
+blocking-sensor sensor on Classic and the robot's own blocking codes on Prime; on
+Classic it had never fired before 4.6.0.
 
 `health_score_drop` only fires when the health band genuinely *worsens* (e.g. healthy → degraded) — not on every score fluctuation, and not when it improves.
 
