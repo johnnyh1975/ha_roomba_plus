@@ -1966,6 +1966,20 @@
             }
           }
         }
+      },
+      "mission_result": {
+        "name": "Resultado de la misión",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "completed": "Completada",
+              "completed_with_skips": "Completada, con habitaciones omitidas",
+              "cancelled": "Cancelada",
+              "stuck_abandoned": "Atascada, sin reanudar",
+              "error": "Error"
+            }
+          }
+        }
       }
     }
   },
@@ -2238,6 +2252,20 @@
         "item": {
           "name": "Entradas",
           "description": "Las piezas, por ejemplo replace.filter. Vacío: todas las piezas."
+        }
+      }
+    },
+    "retry_missed_rooms": {
+      "name": "Repetir habitaciones omitidas",
+      "description": "Limpia las habitaciones que una misión omitió o no alcanzó, en el orden de la misión. La última misión, salvo que se indique un ID de misión.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "Entidad aspirador del robot."
+        },
+        "mission_id": {
+          "name": "ID de misión",
+          "description": "La misión cuyas habitaciones se limpian de nuevo (el ID del historial de misiones). Vacío: la última misión."
         }
       }
     }
@@ -2566,6 +2594,9 @@
     },
     "maintenance_reset_not_applied": {
       "message": "iRobot aceptó el reinicio de {item}, pero no lo aplicó a ninguna pieza. El contador no ha cambiado; confirma la pieza en la app de iRobot."
+    },
+    "nothing_to_retry": {
+      "message": "La misión no omitió ninguna habitación en {entity_id}."
     }
   },
   "selector": {

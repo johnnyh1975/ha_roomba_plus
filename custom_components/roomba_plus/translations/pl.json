@@ -1966,6 +1966,20 @@
             }
           }
         }
+      },
+      "mission_result": {
+        "name": "Wynik misji",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "completed": "Ukończona",
+              "completed_with_skips": "Ukończona, pominięte pokoje",
+              "cancelled": "Anulowana",
+              "stuck_abandoned": "Utknęła, nie wznowiono",
+              "error": "Błąd"
+            }
+          }
+        }
       }
     }
   },
@@ -2238,6 +2252,20 @@
         "item": {
           "name": "Pozycje",
           "description": "Części, na przykład replace.filter. Puste: wszystkie części."
+        }
+      }
+    },
+    "retry_missed_rooms": {
+      "name": "Powtórz pominięte pokoje",
+      "description": "Sprząta pokoje, które misja pominęła lub do których nie dotarła, w kolejności misji. Ostatnia misja, jeśli nie podano ID misji.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "Encja odkurzacza robota."
+        },
+        "mission_id": {
+          "name": "ID misji",
+          "description": "Misja, której pokoje mają zostać posprzątane ponownie (ID z historii misji). Puste: ostatnia misja."
         }
       }
     }
@@ -2566,6 +2594,9 @@
     },
     "maintenance_reset_not_applied": {
       "message": "iRobot przyjął zresetowanie {item}, ale nie zastosował go do żadnej części. Licznik się nie zmienił; potwierdź część w aplikacji iRobot."
+    },
+    "nothing_to_retry": {
+      "message": "Misja nie pominęła żadnego pokoju na {entity_id}."
     }
   },
   "selector": {

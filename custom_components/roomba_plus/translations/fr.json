@@ -1966,6 +1966,20 @@
             }
           }
         }
+      },
+      "mission_result": {
+        "name": "Résultat de la mission",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "completed": "Terminée",
+              "completed_with_skips": "Terminée, pièces manquées",
+              "cancelled": "Annulée",
+              "stuck_abandoned": "Bloquée, non reprise",
+              "error": "Erreur"
+            }
+          }
+        }
       }
     }
   },
@@ -2238,6 +2252,20 @@
         "item": {
           "name": "Éléments",
           "description": "Les pièces, par exemple replace.filter. Vide : toutes les pièces."
+        }
+      }
+    },
+    "retry_missed_rooms": {
+      "name": "Reprendre les pièces manquées",
+      "description": "Nettoie les pièces qu’une mission a sautées ou n’a pas atteintes, dans l’ordre de la mission. La dernière mission, sauf si un ID de mission est indiqué.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "Entité aspirateur du robot."
+        },
+        "mission_id": {
+          "name": "ID de mission",
+          "description": "La mission dont les pièces sont à nettoyer à nouveau (l’ID de l’historique des missions). Vide : la dernière mission."
         }
       }
     }
@@ -2566,6 +2594,9 @@
     },
     "maintenance_reset_not_applied": {
       "message": "iRobot a accepté la réinitialisation de {item} mais ne l'a appliquée à aucune pièce. Le compteur est inchangé ; confirmez plutôt la pièce dans l'application iRobot."
+    },
+    "nothing_to_retry": {
+      "message": "La mission n’a laissé aucune pièce de côté sur {entity_id}."
     }
   },
   "selector": {

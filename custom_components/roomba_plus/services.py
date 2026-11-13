@@ -40,6 +40,7 @@ from .service_guard import register as register_guarded
 from .dirt_threshold_manager import async_read_prime_clean_scores, qualified_room_id
 from .prime_dirt import dirty_rooms
 from .const import (
+    SERVICE_RETRY_MISSED_ROOMS,
     CONF_RESEND_SWALLOWED,
     DEFAULT_RESEND_SWALLOWED,
     lifetime_hours,
@@ -85,6 +86,7 @@ from .prime_coordinator import prime_region_names_from_command
 from .room_cleaning import ZID_PREFIX, async_get_room_cleaning_backend
 from .zone_naming import resolve_zone_name
 from . import command_watch
+from .mission_result import rooms_to_retry
 from .models import ConnectionType, RoombaConfigEntry, RoombaData
 from .prime_coordinator import prime_current_state
 
@@ -1760,6 +1762,56 @@ async def async_handle_reset_robot_profile(call: ServiceCall) -> None:
 
 # ── v3.2.0 ANOMALY-EXPLAIN ──────────────────────────────────────────────────
 
+async def async_handle_retry_missed_rooms(call: ServiceCall) -> None:
+    """Handle roomba_plus.retry_missed_rooms (4.6.0, A5).
+
+    Cleans the rooms a mission skipped or did not reach, in the order the
+    mission asked for them, through `clean_room`: the same name matching,
+    map checks and command watch as any room clean. The latest mission
+    unless `mission_id` names another. Nothing to retry is an error the
+    caller sees, not a silent no-op.
+    """
+    entity_id: str = call.data["entity_id"]
+    mission_id: str | None = call.data.get("mission_id")
+
+    entry_reg = er.async_get(call.hass).async_get(entity_id)
+    if entry_reg is None:
+        raise ServiceValidationError(
+            f"retry_missed_rooms: entity not found: {entity_id}",
+            translation_domain=DOMAIN, translation_key="entity_not_found",
+            translation_placeholders={"entity_id": str(entity_id)},
+        )
+    config_entry = call.hass.config_entries.async_get_entry(entry_reg.config_entry_id or "")
+    store = getattr(getattr(config_entry, "runtime_data", None), "mission_store", None)
+    if store is None:
+        raise ServiceValidationError(
+            f"retry_missed_rooms: no mission history for {entity_id}",
+            translation_domain=DOMAIN, translation_key="no_mission_history",
+            translation_placeholders={"entity_id": str(entity_id)},
+        )
+    record = store.find_by_id(mission_id) if mission_id else store.latest()
+    if record is None:
+        raise ServiceValidationError(
+            f"retry_missed_rooms: mission not found for {entity_id}",
+            translation_domain=DOMAIN, translation_key="mission_not_found",
+            translation_placeholders={
+                "entity_id": str(entity_id), "mission_id": str(mission_id or "-"),
+            },
+        )
+    rooms = rooms_to_retry(record)
+    if not rooms:
+        raise ServiceValidationError(
+            f"retry_missed_rooms: the mission left no room out ({entity_id})",
+            translation_domain=DOMAIN, translation_key="nothing_to_retry",
+            translation_placeholders={"entity_id": str(entity_id)},
+        )
+    await call.hass.services.async_call(
+        DOMAIN, SERVICE_CLEAN_ROOM,
+        {"entity_id": entity_id, ATTR_ROOM_NAME: rooms, ATTR_ORDERED: True},
+        blocking=True,
+    )
+
+
 async def async_handle_explain_mission(call: ServiceCall) -> dict[str, Any]:
     """Handle roomba_plus.explain_mission.
 
@@ -2388,6 +2440,18 @@ def async_register_services(hass: HomeAssistant) -> None:
             supports_response=SupportsResponse.ONLY,
         )
         _LOGGER.debug("Registered %s.%s action", DOMAIN, SERVICE_EXPLAIN_MISSION)
+
+    # ── 4.6.0 A5 — retry_missed_rooms ─────────────────────────────────────────
+    if not hass.services.has_service(DOMAIN, SERVICE_RETRY_MISSED_ROOMS):
+        register_guarded(hass,
+            DOMAIN,
+            SERVICE_RETRY_MISSED_ROOMS,
+            async_handle_retry_missed_rooms,
+            schema=vol.Schema({
+                vol.Required("entity_id"): cv.entity_id,
+                vol.Optional("mission_id"): cv.string,
+            }),
+        )
 
     # ── v3.5.0 FULL-BACKUP — create_backup / restore_backup ───────────────────
     if not hass.services.has_service(DOMAIN, SERVICE_CREATE_BACKUP):

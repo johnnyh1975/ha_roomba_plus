@@ -1966,6 +1966,20 @@
             }
           }
         }
+      },
+      "mission_result": {
+        "name": "Mission result",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "completed": "Completed",
+              "completed_with_skips": "Completed, rooms left out",
+              "cancelled": "Cancelled",
+              "stuck_abandoned": "Stuck, not resumed",
+              "error": "Error"
+            }
+          }
+        }
       }
     }
   },
@@ -2238,6 +2252,20 @@
         "item": {
           "name": "Entries",
           "description": "The parts, for example replace.filter. Empty: every part."
+        }
+      }
+    },
+    "retry_missed_rooms": {
+      "name": "Retry missed rooms",
+      "description": "Cleans the rooms a mission skipped or did not reach, in the order the mission asked for them. The latest mission unless a mission ID is given.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "Vacuum entity of the robot."
+        },
+        "mission_id": {
+          "name": "Mission ID",
+          "description": "The mission whose rooms to clean again (the id from the mission history). Empty: the latest mission."
         }
       }
     }
@@ -2566,6 +2594,9 @@
     },
     "maintenance_reset_not_applied": {
       "message": "iRobot accepted the reset of {item} but applied it to no part. The counter is unchanged; confirm the part in the iRobot app instead."
+    },
+    "nothing_to_retry": {
+      "message": "The mission left no room out on {entity_id}."
     }
   },
   "selector": {

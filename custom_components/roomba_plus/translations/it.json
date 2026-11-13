@@ -1966,6 +1966,20 @@
             }
           }
         }
+      },
+      "mission_result": {
+        "name": "Esito della missione",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "completed": "Completata",
+              "completed_with_skips": "Completata, stanze saltate",
+              "cancelled": "Annullata",
+              "stuck_abandoned": "Bloccata, non ripresa",
+              "error": "Errore"
+            }
+          }
+        }
       }
     }
   },
@@ -2238,6 +2252,20 @@
         "item": {
           "name": "Voci",
           "description": "I componenti, per esempio replace.filter. Vuoto: tutti i componenti."
+        }
+      }
+    },
+    "retry_missed_rooms": {
+      "name": "Ripeti le stanze saltate",
+      "description": "Pulisce le stanze che una missione ha saltato o non ha raggiunto, nell’ordine della missione. L’ultima missione, se non è indicato un ID missione.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "Entità aspirapolvere del robot."
+        },
+        "mission_id": {
+          "name": "ID missione",
+          "description": "La missione le cui stanze vanno pulite di nuovo (l’ID dalla cronologia delle missioni). Vuoto: l’ultima missione."
         }
       }
     }
@@ -2566,6 +2594,9 @@
     },
     "maintenance_reset_not_applied": {
       "message": "iRobot ha accettato l'azzeramento di {item} ma non l'ha applicato a nessun componente. Il contatore è invariato; conferma il componente nell'app iRobot."
+    },
+    "nothing_to_retry": {
+      "message": "La missione non ha saltato nessuna stanza su {entity_id}."
     }
   },
   "selector": {

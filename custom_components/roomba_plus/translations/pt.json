@@ -1966,6 +1966,20 @@
             }
           }
         }
+      },
+      "mission_result": {
+        "name": "Resultado da missão",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "completed": "Concluída",
+              "completed_with_skips": "Concluída, divisões em falta",
+              "cancelled": "Cancelada",
+              "stuck_abandoned": "Presa, não retomada",
+              "error": "Erro"
+            }
+          }
+        }
       }
     }
   },
@@ -2238,6 +2252,20 @@
         "item": {
           "name": "Entradas",
           "description": "As peças, por exemplo replace.filter. Vazio: todas as peças."
+        }
+      }
+    },
+    "retry_missed_rooms": {
+      "name": "Repetir divisões em falta",
+      "description": "Limpa as divisões que uma missão saltou ou não alcançou, pela ordem da missão. A última missão, salvo se for indicado um ID de missão.",
+      "fields": {
+        "entity_id": {
+          "name": "Robô",
+          "description": "Entidade aspirador do robô."
+        },
+        "mission_id": {
+          "name": "ID da missão",
+          "description": "A missão cujas divisões são limpas de novo (o ID do histórico de missões). Vazio: a última missão."
         }
       }
     }
@@ -2566,6 +2594,9 @@
     },
     "maintenance_reset_not_applied": {
       "message": "A iRobot aceitou a reposição de {item}, mas não a aplicou a nenhuma peça. O contador não mudou; confirme a peça na app da iRobot."
+    },
+    "nothing_to_retry": {
+      "message": "A missão não deixou nenhuma divisão de fora em {entity_id}."
     }
   },
   "selector": {

@@ -88,6 +88,8 @@ class TestServicesRegistration:
             (DOMAIN, "run_favorite"),
             # v3.2.0 ANOMALY-EXPLAIN
             (DOMAIN, "explain_mission"),
+            # 4.6.0 A5
+            (DOMAIN, "retry_missed_rooms"),
             # v3.3.0 ROOM-SCHED
             (DOMAIN, "clean_overdue_rooms"),
             # v3.3.0 SMART-ORDER
@@ -120,7 +122,7 @@ class TestServicesRegistration:
         async_register_services(hass)
         # Handler not replaced on second call
         assert registered[(DOMAIN, "clean_room")] is first_handler
-        assert len(registered) == 26
+        assert len(registered) == 27
 
     # THE REMOVAL TESTS ARE GONE WITH THE REMOVAL (4.2.11, quality scale:
     # action-setup). Services used to disappear when the last entry
@@ -138,7 +140,7 @@ class TestServicesRegistration:
         hass, registered = self._make_hass()
         assert asyncio.run(async_setup(hass, {})) is True
         assert (DOMAIN, "clean_room") in registered
-        assert len(registered) == 26
+        assert len(registered) == 27
 
 
 class TestConfCleanDelayMin:
@@ -3967,3 +3969,97 @@ class TestForgetLearnedAction:
         assert [c.args for c in tracker.async_forget_learned.await_args_list] == [
             (["replace.filter"],), ((),),
         ]
+
+
+from homeassistant.exceptions import ServiceValidationError as HAServiceValidationError  # noqa: E402
+
+
+class TestRetryMissedRooms:
+    """4.6.0 (A5, #178): clean the rooms a mission skipped or did not
+    reach, through clean_room, in the order the mission asked."""
+
+    @staticmethod
+    def _call(records, data):
+        from unittest.mock import AsyncMock, MagicMock
+
+        call = MagicMock()
+        call.data = data
+        reg_entry = MagicMock(config_entry_id="E1")
+        store = MagicMock()
+        store.latest.return_value = records[-1] if records else None
+        store.find_by_id.side_effect = lambda mid: next(
+            (r for r in records if r["id"] == mid), None
+        )
+        config_entry = MagicMock()
+        config_entry.runtime_data.mission_store = store
+        call.hass.config_entries.async_get_entry.return_value = config_entry
+        call.hass.services.async_call = AsyncMock()
+        return call, reg_entry
+
+    @staticmethod
+    def _record(mid, **fields):
+        rec = {
+            "id": mid, "result": "completed", "scope": "rooms",
+            "zones": ["Kitchen", "Hall", "Bath"],
+            "last_cleaned_rooms": ["Kitchen", "Hall", "Bath"], "skipped_rooms": [],
+        }
+        rec.update(fields)
+        return rec
+
+    async def _run(self, call, reg_entry):
+        from unittest.mock import MagicMock, patch
+
+        from custom_components.roomba_plus.services import async_handle_retry_missed_rooms
+
+        reg = MagicMock()
+        reg.async_get.return_value = reg_entry
+        with patch("custom_components.roomba_plus.services.er.async_get", return_value=reg):
+            await async_handle_retry_missed_rooms(call)
+
+    @pytest.mark.asyncio
+    async def test_the_latest_missions_rooms_go_to_clean_room(self):
+        call, reg_entry = self._call(
+            [self._record("m_2", skipped_rooms=["Bath"], last_cleaned_rooms=["Hall"])],
+            {"entity_id": "vacuum.robo"},
+        )
+        await self._run(call, reg_entry)
+        call.hass.services.async_call.assert_awaited_once_with(
+            "roomba_plus", "clean_room",
+            {"entity_id": "vacuum.robo", "room_name": ["Kitchen", "Bath"], "ordered": True},
+            blocking=True,
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_named_mission(self):
+        call, reg_entry = self._call(
+            [self._record("m_1", skipped_rooms=["Hall"], last_cleaned_rooms=["Kitchen", "Bath"]),
+             self._record("m_2")],
+            {"entity_id": "vacuum.robo", "mission_id": "m_1"},
+        )
+        await self._run(call, reg_entry)
+        assert call.hass.services.async_call.await_args.args[2]["room_name"] == ["Hall"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("records", "data", "key"), [
+        ([], {"entity_id": "vacuum.robo"}, "mission_not_found"),
+        ([{"id": "m_1", "result": "completed"}], {"entity_id": "vacuum.robo"}, "nothing_to_retry"),
+        ([], {"entity_id": "vacuum.robo", "mission_id": "m_9"}, "mission_not_found"),
+    ])
+    async def test_nothing_to_do_is_said(self, records, data, key):
+        call, reg_entry = self._call(records, data)
+        with pytest.raises(HAServiceValidationError) as err:
+            await self._run(call, reg_entry)
+        assert err.value.translation_key == key
+        call.hass.services.async_call.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_unknown_entity_and_missing_history(self):
+        call, _ = self._call([], {"entity_id": "vacuum.nope"})
+        with pytest.raises(HAServiceValidationError) as err:
+            await self._run(call, None)
+        assert err.value.translation_key == "entity_not_found"
+        call, reg_entry = self._call([], {"entity_id": "vacuum.robo"})
+        call.hass.config_entries.async_get_entry.return_value.runtime_data.mission_store = None
+        with pytest.raises(HAServiceValidationError) as err:
+            await self._run(call, reg_entry)
+        assert err.value.translation_key == "no_mission_history"

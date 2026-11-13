@@ -1966,6 +1966,20 @@
             }
           }
         }
+      },
+      "mission_result": {
+        "name": "Missionsergebnis",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "completed": "Abgeschlossen",
+              "completed_with_skips": "Abgeschlossen, Räume ausgelassen",
+              "cancelled": "Abgebrochen",
+              "stuck_abandoned": "Festgefahren, nicht fortgesetzt",
+              "error": "Fehler"
+            }
+          }
+        }
       }
     }
   },
@@ -2238,6 +2252,20 @@
         "item": {
           "name": "Einträge",
           "description": "Die Teile, zum Beispiel replace.filter. Leer: alle Teile."
+        }
+      }
+    },
+    "retry_missed_rooms": {
+      "name": "Ausgelassene Räume nachholen",
+      "description": "Reinigt die Räume, die eine Mission übersprungen oder nicht erreicht hat, in der Reihenfolge der Mission. Die letzte Mission, wenn keine Missions-ID angegeben ist.",
+      "fields": {
+        "entity_id": {
+          "name": "Roboter",
+          "description": "Staubsauger-Entität des Roboters."
+        },
+        "mission_id": {
+          "name": "Missions-ID",
+          "description": "Die Mission, deren Räume nachgeholt werden (die ID aus dem Missionsverlauf). Leer: die letzte Mission."
         }
       }
     }
@@ -2566,6 +2594,9 @@
     },
     "maintenance_reset_not_applied": {
       "message": "iRobot hat das Zurücksetzen von {item} angenommen, aber auf kein Teil angewendet. Der Zähler ist unverändert; bestätige das Teil stattdessen in der iRobot-App."
+    },
+    "nothing_to_retry": {
+      "message": "Die Mission hat auf {entity_id} keinen Raum ausgelassen."
     }
   },
   "selector": {

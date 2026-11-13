@@ -34,12 +34,14 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from .const import (
     EVENT_COMMAND_NOT_DELIVERED,
     EVENT_MISSION_COMPLETED,
+    EVENT_MISSION_RESULT,
     EVENT_ROOM_COMPLETED,
     EVENT_STATE_FROZEN,
     EVENT_STUCK,
     maintenance_event_signal,
 )
 from .maintenance_model import EVENT_TYPES as MAINTENANCE_EVENT_TYPES
+from .mission_result import RESULT_TYPES
 from .entity import IRobotEntity
 from .models import ConnectionType, RoombaConfigEntry
 
@@ -85,6 +87,9 @@ async def async_setup_entry(
         entities.append(
             RoombaMaintenanceEvent(None if prime else data.roomba, data.blid, config_entry)
         )
+    entities.append(RoombaMissionResultEvent(
+        None if prime else data.roomba, data.blid, config_entry,
+    ))
     for key, bus_events in _GROUPED_MOMENTS:
         entities.append(RoombaGroupedEvent(
             None if prime else data.roomba, data.blid, config_entry,
@@ -218,4 +223,42 @@ class RoombaGroupedEvent(IRobotEntity, EventEntity):
         if event_type is None:
             return
         self._trigger_event(event_type, payload)
+        self.async_write_ha_state()
+
+
+class RoombaMissionResultEvent(IRobotEntity, EventEntity):
+    """How a mission ended, by type (4.6.0, mission_result.py).
+
+    Both generations. `event.<robot>_mission_completed` stays as it is;
+    this one lets an automation pick "completed with skips" or "stuck and
+    abandoned" without reading the payload, and carries the rooms the run
+    skipped or did not reach.
+    """
+
+    _attr_has_entity_name = True
+    _attr_translation_key = "mission_result"
+    _attr_event_types = list(RESULT_TYPES)
+
+    def __init__(self, roomba: Any, blid: str, config_entry: RoombaConfigEntry) -> None:
+        super().__init__(roomba, blid, config_entry)
+        self._config_entry = config_entry
+        self._attr_unique_id = f"{self.robot_unique_id}_mission_result"
+
+    def new_state_filter(self, new_state: dict[str, Any]) -> bool:
+        return False
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        self.async_on_remove(
+            self.hass.bus.async_listen(EVENT_MISSION_RESULT, self._on_result)
+        )
+
+    @callback
+    def _on_result(self, event: Event[Any]) -> None:
+        payload = dict(event.data or {})
+        if payload.get("entry_id") != self._config_entry.entry_id:
+            return
+        if payload.get("type") not in RESULT_TYPES:
+            return
+        self._trigger_event(str(payload["type"]), payload)
         self.async_write_ha_state()

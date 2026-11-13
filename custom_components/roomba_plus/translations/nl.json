@@ -1966,6 +1966,20 @@
             }
           }
         }
+      },
+      "mission_result": {
+        "name": "Missieresultaat",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "completed": "Voltooid",
+              "completed_with_skips": "Voltooid, kamers overgeslagen",
+              "cancelled": "Geannuleerd",
+              "stuck_abandoned": "Vastgelopen, niet hervat",
+              "error": "Fout"
+            }
+          }
+        }
       }
     }
   },
@@ -2238,6 +2252,20 @@
         "item": {
           "name": "Items",
           "description": "De onderdelen, bijvoorbeeld replace.filter. Leeg: alle onderdelen."
+        }
+      }
+    },
+    "retry_missed_rooms": {
+      "name": "Overgeslagen kamers opnieuw",
+      "description": "Reinigt de kamers die een missie heeft overgeslagen of niet bereikt, in de volgorde van de missie. De laatste missie, tenzij een missie-ID is opgegeven.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "Stofzuigerentiteit van de robot."
+        },
+        "mission_id": {
+          "name": "Missie-ID",
+          "description": "De missie waarvan de kamers opnieuw worden gereinigd (de ID uit de missiegeschiedenis). Leeg: de laatste missie."
         }
       }
     }
@@ -2566,6 +2594,9 @@
     },
     "maintenance_reset_not_applied": {
       "message": "iRobot heeft het resetten van {item} aangenomen, maar op geen onderdeel toegepast. De teller is ongewijzigd; bevestig het onderdeel in plaats daarvan in de iRobot-app."
+    },
+    "nothing_to_retry": {
+      "message": "De missie heeft op {entity_id} geen kamer overgeslagen."
     }
   },
   "selector": {

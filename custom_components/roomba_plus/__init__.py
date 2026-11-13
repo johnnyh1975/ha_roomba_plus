@@ -118,6 +118,7 @@ from .parts_catalog import async_load_into as _load_parts_catalogue
 from .grid_store import GridStore
 from .room_seg_store import RoomSegStore
 from .mission_store import MissionStore
+from .mission_result import async_setup_mission_result
 from .mission_archive import MissionArchive  # v2.8.0 ARC1
 from .presence_manager import PresenceManager
 from .cloud_coordinator import IrobotCloudCoordinator
@@ -1560,6 +1561,11 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: RoombaConfigEntry
         )
 
     _seed_reload_baseline(hass, config_entry)
+
+    # HOW A MISSION ENDED, as a type (4.6.0): both generations fire the
+    # mission-completed event this listens to; one place, before the paths
+    # part, so neither can miss it.
+    async_setup_mission_result(hass, config_entry)
 
     if _connection_type(config_entry) == ConnectionType.CLOUD_ONLY:
         return await _async_setup_entry_prime(hass, config_entry)

@@ -301,6 +301,8 @@ EVENT_CLOUD_STALE: Final = f"{DOMAIN}_cloud_stale"
 #: says "running" while the robot charges (command_watch.py).
 EVENT_COMMAND_NOT_DELIVERED: Final = f"{DOMAIN}_command_not_delivered"
 EVENT_STATE_FROZEN: Final = f"{DOMAIN}_state_frozen"
+#: 4.6.0 -- how a mission ended, as a type (mission_result.py).
+EVENT_MISSION_RESULT: Final = f"{DOMAIN}_mission_result"
 #: Send a command the robot took and ignored once more (4.6.0, A3). On by
 #: default: it only acts when nothing explains the refusal, and only once.
 CONF_RESEND_SWALLOWED: Final = "resend_swallowed_command"
@@ -1001,6 +1003,7 @@ SERVICE_CLEAN_SEQUENCE: Final = "clean_sequence"   # F10d — start robot B when
 SERVICE_CLEAN_OVERDUE_ROOMS: Final = "clean_overdue_rooms"  # v3.3.0 ROOM-SCHED
 SERVICE_AUTO_CLEAN_DIRTY_ROOMS: Final = "auto_clean_dirty_rooms"  # v3.3.0 SMART-ORDER
 SERVICE_EXPLAIN_MISSION: Final = "explain_mission"  # v3.2.0 ANOMALY-EXPLAIN
+SERVICE_RETRY_MISSED_ROOMS: Final = "retry_missed_rooms"  # 4.6.0, A5
 SERVICE_CREATE_BACKUP: Final = "create_backup"  # v3.5.0 FULL-BACKUP
 SERVICE_RESTORE_BACKUP: Final = "restore_backup"  # v3.5.0 FULL-BACKUP
 

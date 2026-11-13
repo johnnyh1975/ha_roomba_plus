@@ -219,6 +219,31 @@ explain_mission:
       selector:
         text:
 
+retry_missed_rooms:
+  name: Retry missed rooms
+  description: >-
+    Cleans the rooms a mission skipped or did not reach, in the order the
+    mission asked for them. The latest mission unless mission_id names
+    another. Rooms not reached are known only where the robot's rooms
+    were observed during the run.
+  fields:
+    entity_id:
+      name: Robot
+      description: Vacuum entity of the robot.
+      required: true
+      selector:
+        entity:
+          domain: vacuum
+          integration: roomba_plus
+    mission_id:
+      name: Mission ID
+      description: >-
+        The mission whose rooms to clean again (the "id" from the mission
+        history). Omit for the latest mission.
+      required: false
+      selector:
+        text:
+
 clean_overdue_rooms:
   name: Clean overdue rooms
   description: >-
