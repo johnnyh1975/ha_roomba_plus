@@ -119,6 +119,12 @@ _PRIME_SWALLOWED_COMMAND_GRACE_SEC = 60
 #: early ends the wait early and records how long it took.
 _SWALLOW_POLL_SEC = 2.0
 
+#: How long a command reported as not delivered is still watched (4.6.0).
+#: A start that shows after the grace is recorded as `started_late` with
+#: its time, so the diagnostics show whether the grace is too short --
+#: the measurement the Prime grace above is waiting for.
+_LATE_WATCH_SEC = 300.0
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 # v3.5.0 FULL-BACKUP — every per-robot Store this integration persists.
@@ -456,6 +462,23 @@ async def _async_warn_if_swallowed(
     command_watch.fire_not_delivered(
         hass, entry, what, status, waited_sec=waited, resent=resent,
     )
+
+    # A LATE START IS STILL A MEASUREMENT (4.6.0). Nothing more is sent
+    # or fired; the record says when the mission began after all.
+    while waited < _LATE_WATCH_SEC:
+        await command_watch.sleep(_SWALLOW_POLL_SEC * 5)
+        waited += _SWALLOW_POLL_SEC * 5
+        late = command_watch.mission_status(entry)
+        if late is None:
+            return
+        if command_watch.cycle_is_open(late):
+            status = late
+            _record("started_late")
+            _LOGGER.info(
+                "%s: the mission began %ds after the command after all.",
+                what, round(waited),
+            )
+            return
 
 
 def watch_for_swallowed_command(

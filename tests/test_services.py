@@ -14,6 +14,18 @@ from pathlib import Path
 
 import pytest
 
+
+@pytest.fixture(autouse=True)
+def _instant_command_watch_sleep(monkeypatch):
+    """The command watch polls and, since 4.6.0, watches for a late start
+    for minutes; in tests every wait returns at once."""
+    from custom_components.roomba_plus import command_watch
+
+    async def _no_wait(_seconds):
+        return None
+
+    monkeypatch.setattr(command_watch, "sleep", _no_wait)
+
 from tests.conftest import entry_mock, hass_mock, robot_mock
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -4198,3 +4210,46 @@ class TestTheOtherStartsAreWatched:
         await cases.test_prime_cleans_the_rooms_the_robot_rates_dirty()
         await cases.test_prime_with_nothing_dirty_cleans_the_house()
         assert seen == ["auto_clean_dirty_rooms", "auto_clean_dirty_rooms"]
+
+
+class TestALateStartIsMeasured:
+    """4.6.0: a command reported as not delivered is watched a few minutes
+    longer; a mission that begins then is recorded with its time, which is
+    the measurement the Prime grace waits for."""
+
+    @pytest.mark.asyncio
+    async def test_started_late_is_recorded_once(self, monkeypatch):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus import command_watch
+        from custom_components.roomba_plus import services as svc
+
+        closed = {"cycle": "none", "phase": "charge", "notReady": 0, "error": 0}
+        opened = {"cycle": "clean", "phase": "run", "notReady": 0, "error": 0}
+        states = iter([closed] * 40 + [opened] * 5)
+        monkeypatch.setattr(command_watch, "mission_status", lambda _e: next(states))
+        entry = TestASwallowedCommandIsReported._prime_entry(closed)
+        hass = MagicMock()
+        await svc._async_warn_if_swallowed(hass, entry, "start", None, None)
+        outcomes = [w["outcome"] for w in entry.runtime_data.command_watches]
+        assert outcomes == ["not_delivered", "started_late"]
+        late = entry.runtime_data.command_watches[-1]
+        assert late["waited_sec"] > svc._PRIME_SWALLOWED_COMMAND_GRACE_SEC
+        assert late["phase"] == "run"
+        # Only the one event: a late start is recorded, not announced.
+        assert hass.bus.async_fire.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_the_late_watch_ends(self, monkeypatch):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus import command_watch
+        from custom_components.roomba_plus import services as svc
+
+        closed = {"cycle": "none", "phase": "charge", "notReady": 0, "error": 0}
+        calls = []
+        monkeypatch.setattr(command_watch, "mission_status", lambda _e: calls.append(1) or closed)
+        entry = TestASwallowedCommandIsReported._prime_entry(closed)
+        await svc._async_warn_if_swallowed(MagicMock(), entry, "start", None, None)
+        assert [w["outcome"] for w in entry.runtime_data.command_watches] == ["not_delivered"]
+        assert len(calls) < 100

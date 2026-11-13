@@ -1769,7 +1769,11 @@ for Prime users, with no error to explain it.
 **Sent once more (4.6.0).** When a command was not delivered and the robot is idle —
 no `notReady` reason, no error, the state not frozen — Roomba+ sends it a second time
 and waits again. Only once, never mid-mission, never into a frozen state. The event
-fires either way, with `resent` saying which. The option *Send an ignored command once
+fires either way, with `resent` saying which. A command reported as not delivered is
+watched five minutes longer: a mission that begins then is not announced again, but the
+diagnostics record it (`command_watches`, outcome `started_late`, with the time it took),
+next to `started` with the time for every start that came in time. That is how the
+60 s for Prime will be checked against real robots. The option *Send an ignored command once
 more* (on by default, under *Settings*) turns this off.
 
 ### Event entities *(4.2.19)*
