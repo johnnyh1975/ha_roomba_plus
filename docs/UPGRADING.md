@@ -257,7 +257,7 @@ automation that compares an error's description word for word may need
 the new text.
 
 **Delete `custom_components/roomba_plus/vendor_errors.py`** if you update
-by copying files rather than through HACS: 4.3.4 no longer has it, and
+by copying files rather than through the Marketplace or HACS: 4.3.4 no longer has it, and
 nothing reads it.
 
 ---

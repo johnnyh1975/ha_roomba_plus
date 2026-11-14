@@ -554,8 +554,8 @@ def _discover_rest980_rooms(
         config entry fails to load, `select.async_setup_entry` never
         runs, and no `CleanRoomPasses` is ever constructed.
 
-    Hence the ordering in README's migration section: install through
-    HACS and restart FIRST, while the container is still running, then
+    Hence the ordering in README's migration section: install from
+    the Marketplace (HACS) and restart FIRST, while the container is still running, then
     stop it. A user who restarts between stopping the container and
     running the import will land here with an empty dict and no
     indication why.

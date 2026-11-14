@@ -42,7 +42,7 @@ comparison below does not apply to those robots at all.
 | 🎮 [Control](#controls) | Room targeting, blocking sensors, favourites, sequences | Start / stop / return | Per-room staging select + cloud routines |
 | 🧠 [Intelligence](#intelligence--scheduling) | Presence scheduling, demand cleaning, anomaly detection, learned per-room rhythms, mission maps | None | None |
 | 📊 [Monitoring](#sensors--monitoring) | 100+ entities — maintenance, performance, error detail | 13 entities | ~29 base sensors + dynamic room selects and favourite buttons |
-| 🏆 [HA quality](#ha-integration-quality) | Platinum, 8,700+ tests, 8 languages, CI/CD | Silver, built-in | Bronze, EN only |
+| 🏆 [HA quality](#ha-integration-quality) | Platinum, 10,000+ tests, 8 languages, CI/CD | Silver, built-in | Bronze, EN only |
 
 ---
 
@@ -86,7 +86,7 @@ over: [From roomba_rest980](../README.md#from-roomba_rest980).
 | Setup effort | ✅ Low — auto-discovery ★ | ✅ Low — auto-discovery | ❌ High — manual Docker + credential config, no auto-discovery |
 | Supported models | ✅ 600–900, i, s, j, Braava m6, **and Prime-generation** ★ | ⚠️ 690, 890, 960, 980, s9+, Braava m6 | ⚠️ Smart Map robots (i/s/j-series) only |
 | HA Long-Term Statistics backfill | ✅ area, duration, completions — auto-backfilled on startup ★ | ❌ | ❌ |
-| Unit tests | ✅ **8,700+ tests** ★ | ✅ in the HA core suite | ❌ none in the repository |
+| Unit tests | ✅ **10,000+ tests** ★ | ✅ in the HA core suite | ❌ none in the repository |
 | Quality Scale | **Platinum ★** | not declared in its manifest | **Bronze** (rules file present, several `todo`) |
 | Translations | ✅ 8 languages, complete and enforced by a check | ✅ **38 languages ★** — it ships with Home Assistant | ⚠️ 1 |
 
@@ -235,7 +235,7 @@ over: [From roomba_rest980](../README.md#from-roomba_rest980).
 | Repair Issues | ✅ 16 issue types ★ | ❌ | ❌ |
 | Diagnostics download | ✅ map + zone + cloud + robot profile ★ | ⚠️ basic | ❌ |
 | Multi-robot support | ✅ BLID-based, separate stores per entry ★ | ✅ | ⚠️ one container per robot |
-| Integration tests | ✅ 8,700+ pytest tests ★ | ✅ | ❌ |
+| Integration tests | ✅ 10,000+ pytest tests ★ | ✅ | ❌ |
 | GitHub Actions CI | ✅ ★ | ❌ | ✅ push + PR + nightly hassfest + HACS validation |
 
 ---

@@ -58,9 +58,9 @@ _VALID_FORMATS = {"summary", "records", "hazards", "export", "zone_coverage_heal
 #: response shape changes in a way that would break an existing reader.
 #:
 #: WHY IT EXISTS BEFORE ANYTHING READS IT. The Lovelace card consumes
-#: these endpoints and ships separately — HACS updates the two on
-#: independent schedules, so a card can be newer or older than the
-#: integration it talks to. A card cannot check a version that is not
+#: these endpoints and ships separately — the Marketplace (HACS)
+#: updates the two on independent schedules, so a card can be newer
+#: or older than the integration it talks to. A card cannot check a version that is not
 #: being sent, so this has to land first and be present in the field for
 #: a while before any card can rely on it. It is deliberately useless
 #: today.
