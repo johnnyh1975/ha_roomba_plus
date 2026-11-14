@@ -2354,7 +2354,7 @@
       "message": "The robot schedule could not be changed: {reason}"
     },
     "command_not_delivered": {
-      "message": "The “{command}” command was not accepted for delivery — it never reached iRobot's cloud, so the robot has not seen it. This is a connection problem, not a refusal by the robot."
+      "message": "Publication of the “{command}” command was not confirmed. Delivery is unknown; check the robot’s state before retrying."
     },
     "schedules_unreadable": {
       "message": "Could not read the schedules from the iRobot cloud — nothing was written."

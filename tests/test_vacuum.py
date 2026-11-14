@@ -2286,7 +2286,7 @@ class TestUndeliveredCommandsAreReported:
         robot = AsyncMock()
         robot.send_simple_command.return_value = False
 
-        with pytest.raises(HomeAssistantError, match="never reached"):
+        with pytest.raises(HomeAssistantError, match="not confirmed"):
             await _send_confirmed(robot, "start")
 
     @pytest.mark.asyncio
@@ -3886,6 +3886,131 @@ class TestAPlainStartCarriesTheSelectedMode:
             ["M/1", "M/2"], ordered=False, operating_mode=[4, 4]
         )
         v._prime_robot.send_simple_command.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("outcome", [False, True, "exception", "cancelled"])
+    async def test_prime_region_publish_result_reaches_vacuum_start(self, monkeypatch, outcome):
+        """Use the real vacuum and backend; never hide a failed region send
+        with a successful fallback or create a plan for that failed send."""
+        import asyncio
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+
+        from homeassistant.exceptions import HomeAssistantError
+        from roombapy_prime.mqtt_client import ShadowError
+        from custom_components.roomba_plus.models import RoombaData
+
+        publish = AsyncMock(return_value=outcome)
+        error = None
+        if outcome == "exception":
+            error = ShadowError("synthetic transport failure")
+        elif outcome == "cancelled":
+            error = asyncio.CancelledError()
+        if error is not None:
+            publish.side_effect = error
+        robot = SimpleNamespace(
+            send_routine_command_via_cmd_topic=publish,
+            send_simple_command=AsyncMock(),
+        )
+        data = RoombaData(
+            blid="0123456789ABCDEF", prime_robot=robot,
+            connection_type=ConnectionType.CLOUD_ONLY,
+            prime_status_coordinator=SimpleNamespace(data={"ro-currentstate": {
+                "cap": {"oMode": 38},
+                "cleanMissionStatus": {"cycle": "none", "phase": "charge"},
+            }}),
+        )
+        entry = SimpleNamespace(runtime_data=data, options={}, title="Robot")
+        vacuum = IRobotVacuum(None, data.blid, entry)
+        vacuum.hass = MagicMock()
+        backend = vac.PrimeRoomCleaning(data, entry)
+        monkeypatch.setattr(backend, "whole_home_room_ids", AsyncMock(return_value=["MAP/12", "MAP/13"]))
+        monkeypatch.setattr(backend, "where_the_robot_is", AsyncMock(return_value=("MAP", False)))
+        plan = Mock()
+        monkeypatch.setattr(backend, "_note_mission_plan", plan)
+        monkeypatch.setattr(vac, "async_get_room_cleaning_backend", lambda *_a: backend)
+        monkeypatch.setattr(vac, "_selected_cleaning_mode", lambda _e: 2)
+
+        if error is not None:
+            with pytest.raises(type(error)) as err:
+                await vacuum.async_start()
+            assert err.value is error
+        elif outcome is False:
+            with pytest.raises(HomeAssistantError) as err:
+                await vacuum.async_start()
+            assert err.value.translation_key == "command_not_delivered"
+        else:
+            await vacuum.async_start()
+        publish.assert_awaited_once()
+        robot.send_simple_command.assert_not_called()
+        if outcome is True:
+            plan.assert_called_once_with("MAP", ["12", "13"])
+        else:
+            plan.assert_not_called()
+        if error is None:
+            assert data.sent_commands[-1]["ok"] is outcome
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("published", [False, True])
+    async def test_region_publish_result_reaches_the_registered_ha_service(self, hass, monkeypatch, published):
+        """The actual local HA service registry must receive the error too.
+
+        No integration/cloud setup: the robot and map lookup are synthetic.
+        """
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        from homeassistant.components import vacuum as vacuum_domain
+        from homeassistant.exceptions import HomeAssistantError
+        from homeassistant.setup import async_setup_component
+        from pytest_homeassistant_custom_component.common import MockConfigEntry
+        from custom_components.roomba_plus.models import RoombaData
+
+        robot = SimpleNamespace(
+            send_routine_command_via_cmd_topic=AsyncMock(return_value=published),
+            send_simple_command=AsyncMock(),
+        )
+        data = RoombaData(
+            blid="0123456789ABCDEF", prime_robot=robot,
+            connection_type=ConnectionType.CLOUD_ONLY,
+            prime_status_coordinator=SimpleNamespace(
+                data={"ro-currentstate": {"cap": {"oMode": 38},
+                    "cleanMissionStatus": {"cycle": "none", "phase": "charge"}}},
+                async_add_listener=lambda _listener: lambda: None,
+            ),
+        )
+        entry = MockConfigEntry(domain="roomba_plus", title="Synthetic robot", data={})
+        entry.add_to_hass(hass)
+        entry.runtime_data = data
+        entity = IRobotVacuum(None, data.blid, entry)
+        entity.entity_id = "vacuum.synthetic_robot"
+        backend = vac.PrimeRoomCleaning(data, entry)
+        monkeypatch.setattr(backend, "whole_home_room_ids", AsyncMock(return_value=["MAP/12"]))
+        monkeypatch.setattr(backend, "where_the_robot_is", AsyncMock(return_value=("MAP", False)))
+        plan = Mock()
+        monkeypatch.setattr(backend, "_note_mission_plan", plan)
+        monkeypatch.setattr(vac, "async_get_room_cleaning_backend", lambda *_a: backend)
+        monkeypatch.setattr(vac, "_selected_cleaning_mode", lambda _e: 2)
+        assert await async_setup_component(hass, "vacuum", {})
+        await hass.data[vacuum_domain.DATA_COMPONENT].async_add_entities([entity])
+
+        async def call():
+            await hass.services.async_call(
+                "vacuum", "start", {"entity_id": entity.entity_id}, blocking=True,
+            )
+
+        if published:
+            await call()
+            plan.assert_called_once_with("MAP", ["12"])
+        else:
+            with pytest.raises(HomeAssistantError) as err:
+                await call()
+            assert err.value.translation_key == "command_not_delivered"
+            assert "not confirmed" in str(err.value)
+            assert "never" not in str(err.value)
+            plan.assert_not_called()
+        robot.send_routine_command_via_cmd_topic.assert_awaited_once()
+        robot.send_simple_command.assert_not_called()
+        assert data.sent_commands[-1]["ok"] is published
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("case", ["running", "no_rooms", "vacuum_only"])

@@ -2354,7 +2354,7 @@
       "message": "Nie udało się zmienić harmonogramu robota: {reason}"
     },
     "command_not_delivered": {
-      "message": "Polecenie „{command}” nie zostało przyjęte do wysłania — nie dotarło do chmury iRobot, więc robot go nie otrzymał. To problem z połączeniem, a nie odmowa robota."
+      "message": "Publikacja polecenia „{command}” nie została potwierdzona. Nie wiadomo, czy zostało dostarczone; przed ponowną próbą sprawdź stan robota."
     },
     "schedules_unreadable": {
       "message": "Nie udało się odczytać harmonogramów z chmury iRobot — nic nie zostało zapisane."

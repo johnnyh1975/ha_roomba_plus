@@ -1779,10 +1779,17 @@ class PrimeRoomCleaning(RoomCleaningBackend):
         )
         if _ok is False:
             _LOGGER.warning(
-                "roomba_plus: the region command for %s was NOT published "
-                "-- the robot never saw it. This is a transport failure, "
-                "not a refusal by the robot",
-                self._data.blid,
+                "Roomba+: region command publication was not confirmed; "
+                "delivery to the robot is unknown",
+            )
+            # Match simple commands: an unconfirmed publish must fail
+            # the action before a mission plan is recorded.
+            raise HomeAssistantError(
+                "Publication of the region command was not confirmed. "
+                "Delivery is unknown; check the robot's state before retrying.",
+                translation_domain=DOMAIN,
+                translation_key="command_not_delivered",
+                translation_placeholders={"command": "start (regions)"},
             )
 
         # THE PLAN GETS THE IDS THE ROBOT WILL REPORT.

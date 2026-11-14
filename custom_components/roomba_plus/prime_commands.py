@@ -26,13 +26,13 @@ async def _send_confirmed(robot: Any, command: str) -> None:
     locate and dry pad alike -- three controls, one silent transport, and
     four days spent looking at the controls.
 
-    False here is not an error condition on the robot's side; it means we
-    could not hand the command over. Saying so is the whole point.
+    False means publication was not confirmed. It can also mean a lost
+    PUBACK after delivery, so it does not prove the robot never received
+    the command and must not cause an automatic retry.
     """
     published = await robot.send_simple_command(command)
     if published is False:
         raise HomeAssistantError(
-            f"The '{command}' command was not accepted for delivery -- it never "
-            "reached iRobot's cloud, so the robot has not seen it. This is a "
-            "connection problem rather than a refusal by the robot.", translation_domain=DOMAIN, translation_key="command_not_delivered", translation_placeholders={"command": str(command)}
+            f"Publication of the '{command}' command was not confirmed. "
+            "Delivery is unknown; check the robot's state before retrying.", translation_domain=DOMAIN, translation_key="command_not_delivered", translation_placeholders={"command": str(command)}
         )
