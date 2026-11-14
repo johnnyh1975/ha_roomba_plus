@@ -13,8 +13,8 @@ from functools import partial
 from typing import Any, cast
 
 from homeassistant.components.sensor import (
+    RestoreSensor,
     SensorDeviceClass,
-    SensorEntity,
     SensorEntityDescription,
     SensorStateClass,
 )
@@ -1874,8 +1874,33 @@ _MISSION_STORE_SENSORS: frozenset[str] = frozenset({
     "last_error_code", "last_error_at", "last_error_zone",
 })
 
-class RoombaSensor(IRobotEntity, SensorEntity):
+class RoombaSensor(IRobotEntity, RestoreSensor):
     """A sensor entity for Roomba+, driven by the EntityDescription pattern."""
+
+    #: LIFETIME COUNTERS, KEPT ACROSS A RESTART (4.6.0, #240).
+    #:
+    #: These read the robot's own lifetime blocks (`bbrun`, `bbmssn`,
+    #: `bbchg3`, `batInfo`), which change only while it runs. A 600 does
+    #: not send them again when Home Assistant reconnects; it sends them
+    #: with its next mission (@tankdeer, R694020: *Total time* and the
+    #: other counters read Unknown after every restart, for days on a
+    #: robot that runs twice a week). Until the robot reports the block
+    #: again, these show the value they had before the restart -- which is
+    #: the robot's value, since nothing changed it in between. A real
+    #: reading replaces it at once.
+    #:
+    #: NOT FOR ANYTHING LIVE: battery, phase, signal, per-mission figures
+    #: are not here. A stale battery level is wrong; a lifetime count from
+    #: before the restart is not.
+    _KEPT_ACROSS_RESTARTS = frozenset({
+        "total_cleaning_time", "total_cleaned_area", "average_mission_time",
+        "total_missions", "successful_missions", "canceled_missions",
+        "failed_missions", "lifetime_completion_rate",
+        "battery_cycles", "battery_cycle_count_bms",
+        "scrubs_count", "nav_panics", "cliff_events_front", "cliff_events_rear",
+        "optical_dirt_detections", "piezo_dirt_detections", "nav_orientations",
+    })
+    _kept_value: StateType | dt_stdlib.datetime = None
 
     entity_description: RoombaSensorDescription
 
@@ -1966,6 +1991,13 @@ class RoombaSensor(IRobotEntity, SensorEntity):
     async def async_added_to_hass(self) -> None:
         """Register MQTT callback and start the 60-second countdown tick."""
         await super().async_added_to_hass()
+
+        if self.entity_description.key in self._KEPT_ACROSS_RESTARTS:
+            last = await self.async_get_last_sensor_data()
+            kept = last.native_value if last is not None else None
+            # A restored number comes back as a number; anything else is
+            # not a count and is not kept.
+            self._kept_value = kept if isinstance(kept, (int, float)) else None
 
         # MISSION-STORE SENSORS REFRESH ON THE STORE, NOT ONLY ON A DELTA.
         #
@@ -2094,6 +2126,9 @@ class RoombaSensor(IRobotEntity, SensorEntity):
             return self._calc_next_clean()
 
         value = self.entity_description.value_fn(self)
+        if value is None and key in self._KEPT_ACROSS_RESTARTS:
+            # Not reported since the restart: the count from before it.
+            return self._kept_value
 
         # F6b — cache battery retention value to RoombaData
         if key == "battery_capacity_retention":

@@ -7135,3 +7135,27 @@ class TestAClassicMissionIsReassessedWithTheCloudsNumbers:
             hass, config_entry, store, [(record, "incomplete_coverage")],
         ) == 0
         hass.bus.async_fire.assert_not_called()
+
+
+class TestTheMeterInAMessageOfItsOwn:
+    """#240 (4.6.0): `bbrun` arrives as its own delta. Remembered only
+    beside a mission status, a 600 that docks, reports its hours and goes
+    quiet kept the reading unremembered, and a restart reset the parts."""
+
+    def _run(self, reported):
+        hass, entry, _recorded, _store = _make_callback_env()
+        cb_ = make_mission_callback(hass, entry)
+        with patch.object(cb, "_seed_maintenance_baselines") as seed:
+            cb_({"state": {"reported": reported}})
+        return seed
+
+    def test_bbrun_alone_is_noted(self):
+        seed = self._run({"bbrun": {"hr": 291, "min": 9}})
+        seed.assert_called_once()
+        assert seed.call_args.args[1] == {"bbrun": {"hr": 291, "min": 9}}
+
+    def test_runtime_stats_alone_is_noted(self):
+        self._run({"runtimeStats": {"hr": 12}}).assert_called_once()
+
+    def test_another_delta_is_not(self):
+        self._run({"batPct": 90}).assert_not_called()

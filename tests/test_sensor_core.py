@@ -1325,3 +1325,64 @@ class TestNextCareSensor:
 
         desc = next(d for d in SENSORS if d.key == "next_care")
         assert desc.entity_registry_enabled_default is True
+
+
+class TestLifetimeCountersSurviveARestart:
+    """#240 (4.6.0): a 600 does not send its lifetime blocks again after
+    Home Assistant reconnects; the counters show their value from before
+    the restart until the robot reports again (@tankdeer)."""
+
+    @staticmethod
+    def _sensor(key, vacuum_state):
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.sensor_core import SENSORS, RoombaSensor
+
+        description = next(d for d in SENSORS if d.key == key)
+        entry = MagicMock()
+        entry.options = {}
+        sensor = RoombaSensor(None, "BLID", description, entry)
+        sensor.vacuum_state = vacuum_state
+        return sensor
+
+    @staticmethod
+    async def _added(sensor, restored):
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, patch
+
+        from custom_components.roomba_plus.entity import IRobotEntity
+
+        last = SimpleNamespace(native_value=restored) if restored is not None else None
+        with patch.object(IRobotEntity, "async_added_to_hass", AsyncMock()), \
+                patch.object(type(sensor), "async_get_last_sensor_data", AsyncMock(return_value=last)):
+            await sensor.async_added_to_hass()
+
+    async def test_the_count_from_before_until_the_robot_reports(self):
+        sensor = self._sensor("total_cleaning_time", {})
+        await self._added(sensor, 291)
+        assert sensor.native_value == 291
+        # The robot's own reading wins as soon as it is there.
+        sensor.vacuum_state = {"bbrun": {"hr": 292}}
+        assert sensor.native_value == 292
+
+    async def test_mission_counts_too(self):
+        sensor = self._sensor("average_mission_time", {})
+        await self._added(sensor, 10)
+        assert sensor.native_value == 10
+
+    async def test_nothing_from_before_is_unknown(self):
+        sensor = self._sensor("total_cleaning_time", {})
+        await self._added(sensor, None)
+        assert sensor.native_value is None
+
+    async def test_a_live_value_is_never_kept(self):
+        sensor = self._sensor("battery", {})
+        await self._added(sensor, 80)
+        assert sensor.native_value is None
+
+    def test_only_lifetime_counters(self):
+        from custom_components.roomba_plus.sensor_core import SENSORS, RoombaSensor
+
+        keys = {d.key for d in SENSORS}
+        assert RoombaSensor._KEPT_ACROSS_RESTARTS <= keys
+        assert not RoombaSensor._KEPT_ACROSS_RESTARTS & {"battery", "phase", "rssi", "nav_quality"}

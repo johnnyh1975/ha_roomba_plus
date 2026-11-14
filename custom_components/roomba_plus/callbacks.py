@@ -2588,6 +2588,14 @@ def make_mission_callback(
         elif getattr(getattr(entry, "runtime_data", None), "mission_command", None) is None:
             _hold_mission_command(entry, _cached_last_command(entry))
         if "cleanMissionStatus" not in reported:
+            # THE HOUR METER IN A MESSAGE OF ITS OWN (4.6.0, #240). A
+            # robot sends `bbrun` as its own delta; seen only beside a
+            # mission status, a 600 that docks, sends its hours and then
+            # stays silent on the dock for most of an hour kept the
+            # reading unremembered until its next mission -- and a restart
+            # in between put every part back to new (@tankdeer, 4.5.4b2).
+            if "bbrun" in reported or "runtimeStats" in reported:
+                _seed_maintenance_baselines(entry, reported)
             return
 
         # MAINTENANCE BASELINES, SEEDED WHEN THE HOURS FIRST ARRIVE.
