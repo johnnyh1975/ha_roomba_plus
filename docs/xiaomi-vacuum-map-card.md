@@ -153,7 +153,7 @@ only one of them is the card source:
 | Entity | Use it for |
 |---|---|
 | `image.{prefix}_rooms_map` | **The card.** Carries `calibration_points` and selectable rooms |
-| `image.{prefix}_cleaning_map` | A picture-entity showing the clean in progress. Deliberately carries no calibration points, so it cannot be a card source |
+| `image.{prefix}_prime_cleaning_map` | A picture-entity showing the clean in progress. Deliberately carries no calibration points, so it cannot be a card source |
 | `image.{prefix}_map` | The raw live map, before rendering |
 
 The Rooms Map draws the live cleaning layers as well, so you do not lose the

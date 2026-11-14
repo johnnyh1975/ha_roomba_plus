@@ -281,7 +281,7 @@ off the server; with the container stopped its config entry fails to load
 and those entities never appear, so there is nothing left to import from.
 Existing entities are safe — the room data sits on the entity and survives
 the server going away. It is only the next start that cannot recreate them.
-See [Migration](../README.md#from-roomba_rest980).
+See [Moving to Roomba+](MIGRATING.md#from-roomba_rest980).
 
 This is the same constraint behind the entry below and behind "mqtt
 slot" errors: **one slot, and whoever holds it wins.** A robot that
@@ -1106,39 +1106,8 @@ Fixed in v2.9.0. A genuine, benign Wi-Fi gap of a few minutes right after undock
 
 **Replacing or selling your robot**
 
-Roomba+ stores months of learned data — mission history, coverage baselines, maintenance timers, and health trends — inside HA. Before removing or selling a robot, back up that data so you can restore it if you reinstall later, or hand it off to the new owner.
-
-**Step 1 — Export your history (optional but recommended)**
-
-```bash
-curl -H "Authorization: Bearer <token>" \
-     "https://<ha>/api/roomba_plus/<entry_id>/mission_history?format=export" \
-     -o roomba_backup.json
-```
-
-The `entry_id` is in Settings → Devices → your Roomba → ⋮ → System information.
-
-**Step 2 — Remove the integration**
-
-Go to Settings → Devices & Services → Roomba+ → Delete. This removes the config entry, all associated entities, and every file this integration stored on disk for this robot *(v3.4.0+)* — mission history, coverage baselines, maintenance timers, robot profile, and the rest. Nothing lingers after deletion; this is why Step 1's export matters if you want to keep the history.
-
-**Step 3 — Factory reset (if selling)**
-
-A factory reset on the robot is done through the **iRobot app** (not this integration): open the app → your robot → Settings → Factory Reset. This clears the robot's stored map and account link. Roomba+ has no factory-reset command — the robot's firmware handles this directly.
-
-**Setting up a replacement robot**
-
-Add a new config entry for the new robot (Settings → Add Integration → Roomba+). The new entry starts fresh. If you want to restore history from a previous robot, use the import endpoint after setup:
-
-```bash
-curl -X POST \
-     -H "Authorization: Bearer <token>" \
-     -H "Content-Type: application/json" \
-     -d @roomba_backup.json \
-     "https://<ha>/api/roomba_plus/<new_entry_id>/mission_history/import"
-```
-
-Import deduplicates by `id` — safe to run multiple times.
+Back up first, then delete the entry; the steps, and how to carry the mission history over to
+a new robot, are in [Moving to Roomba+ → Replacing or selling a robot](MIGRATING.md#replacing-or-selling-a-robot).
 
 ---
 

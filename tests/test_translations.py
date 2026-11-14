@@ -702,17 +702,17 @@ class TestLifecycleDoc:
     """LIFECYCLE-DOC (v3.1.0) — verify lifecycle section exists in TROUBLESHOOTING."""
 
     def test_troubleshooting_contains_lifecycle_section(self):
-        """TROUBLESHOOTING.md must contain the robot replacement section."""
+        """The robot replacement steps live in MIGRATING.md since 4.6.0,
+        and TROUBLESHOOTING.md still leads there."""
         import os
-        path = os.path.join(
-            os.path.dirname(__file__),
-            "..", "docs", "TROUBLESHOOTING.md"
-        )
-        with open(path) as f:
+        docs = os.path.join(os.path.dirname(__file__), "..", "docs")
+        with open(os.path.join(docs, "MIGRATING.md")) as f:
             content = f.read()
-        assert "Replacing or selling your robot" in content
+        assert "Replacing or selling a robot" in content
         assert "Factory reset" in content
         assert "format=export" in content
+        with open(os.path.join(docs, "TROUBLESHOOTING.md")) as f:
+            assert "MIGRATING.md#replacing-or-selling-a-robot" in f.read()
 
 
 class TestLocalesAreActuallyTranslated:

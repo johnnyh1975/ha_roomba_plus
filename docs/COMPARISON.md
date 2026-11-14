@@ -70,7 +70,7 @@ comparison below does not apply to those robots at all.
 Its persistent floor plan with room boundaries, keep-out zones and obstacles
 was the reason to pick it in earlier versions of this page. Roomba+ draws the
 same from the same cloud data (*Rooms map*), without the container. Moving
-over: [From roomba_rest980](../README.md#from-roomba_rest980).
+over: [From roomba_rest980](MIGRATING.md#from-roomba_rest980).
 
 ---
 
@@ -174,17 +174,17 @@ over: [From roomba_rest980](../README.md#from-roomba_rest980).
 | Which room is being cleaned, live | ✅ advances when a travel leg ends, from the robot's own `Traveling` signal — works on firmware that emits no phase between rooms (v4.1.7) | ❌ | ❌ |
 | Plan versus observation, told apart | ✅ `room_progress_observed` says whether the robot has been seen to move on, or the name is still the first planned room (v4.1.7) | ❌ | ❌ |
 | Zones told apart from rooms | ✅ read from the robot's own `region_type`, so a zone is never commanded as a room (v4.1.6) | ❌ | ❌ |
-| Room outline — 900-series | ✅ progressive edge detection (v2.4+) ★ | ❌ | ❌ |
+| Room outline — 900-series | ✅ from the coverage of its missions, walls and doors drawn (4.5) ★ | ❌ | ❌ |
 | Zone / room selection | ✅ local via `region_id` | ❌ | ✅ select per room with real names ★ |
 | Zone selection — fully local | ✅ ★ | ❌ | ❌ cloud required |
 | Real room names from cloud | ⚠️ cloud credentials required | ❌ | ✅ directly from cloud pmaps ★ |
-| Room names without cloud (900) | ✅ automatic zone detection ★ | ❌ | ❌ |
+| Room names without cloud (900) | ✅ rooms found from coverage, named by you; tracked, not targeted — the robot cannot be sent to a room ★ | ❌ | ❌ |
 | Keep-out zone visibility | ✅ (v2.2+) | ❌ | ✅ rendered on map ★ |
 | Observed obstacle zone overlay | ✅ orange circles from UMF observed_zones (v3.0.0) | ❌ | ❌ |
 | Observed zone visibility | ✅ (v2.2+) | ❌ | ✅ rendered on map ★ |
 | Per-room history | ✅ last cleaned per room, time spent, typical time over the last 10 cleans — charging excluded (v4.2.21/22) ★ | ❌ | ❌ |
 | HA area mapping (`vacuum.clean_area`) | ✅ v2.4+, HA 2026.3+, SMART + cloud | ❌ | ❌ |
-| Automatic room detection (900-series) | ✅ gap segmentation + EMA confidence ★ | ❌ | ❌ |
+| Automatic room detection (900-series) | ✅ distance transform and watershed over the coverage of three or more missions ★ | ❌ | ❌ |
 | Door-width calibration | ✅ ★ | ❌ | ❌ |
 | xiaomi-vacuum-map-card support | ✅ `calibration_points` + `rooms` on both map entities, auto-detected by card (v2.7+) ★ | ❌ | ✅ calibration + rooms on floor plan ★ |
 | **Prime-generation map** | ✅ floor plan with walls, doorway cut-outs and furniture; live coverage and trajectories composited over it ★ | ❌ no support for these robots | ❌ no support for these robots |

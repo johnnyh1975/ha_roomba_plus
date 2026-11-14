@@ -4,8 +4,10 @@
 
 Full reference for every entity, service, and configuration option. For a
 quick "does this work on my robot" overview, see the capability matrix in
-the [README](../README.md#supported-hardware--capability-matrix). For
+the [README](../README.md#supported-robots). For
 copy-paste automation examples, see **[Automations & dashboards →](AUTOMATIONS.md)**.
+
+![The device page of a Roomba 980 in Home Assistant: device info, controls, the sensors and the activity log](images/device-page.png)
 
 ## Contents
 
@@ -16,6 +18,10 @@ copy-paste automation examples, see **[Automations & dashboards →](AUTOMATIONS
 - [Mission history & room intelligence](#mission-history--room-intelligence)
 - [Presence & scheduling](#presence--scheduling)
 - [Connectivity, mop & configuration reference](#connectivity-mop--configuration-reference)
+- [Prime robots: what Classic already had](#prime-robots-what-classic-already-had-460)
+- [The words on your screen come from iRobot](#the-words-on-your-screen-come-from-irobot)
+- [Every option, and what it costs you to leave it off](#every-option-and-what-it-costs-you-to-leave-it-off)
+- [Known limitations](#known-limitations)
 - [Events & device triggers](#events--device-triggers)
 
 ## Tier legend
@@ -295,7 +301,7 @@ gets its pair at the robot's next mission end.
 
 #### Send home after a pause *(4.6.0, opt-in)*
 
-Configure → Settings → *Send home after a pause (minutes)*. A robot that
+Configure → Connection settings → *Send home after a pause (minutes)*. A robot that
 stands paused that long is sent back to its base through
 `vacuum.return_to_base`. 0, the default, turns it off. By the vacuum's state,
 so both generations behave the same; the timer restarts on every change of
@@ -482,6 +488,9 @@ nobody can match to a room.
 
 #### Zone management
 
+<img src="images/zone-management.png" alt="The Zone management dialog: a map of five detected rooms, each in its own colour with its name, and the list of rooms to rename or hide" width="420">
+
+
 Configure: Settings → Devices & Services → Roomba+ → Configure → **Zone management**
 
 - Browse all zones in a structured index, with the area map above it on a 900-series: each area in its colour with its name or number (since 4.3.2)
@@ -542,7 +551,7 @@ this, that phase fell through to the active branch and the tracker read
 
 #### Room detection — 900-series (v2.10.0)
 
-Automatic room segmentation from the same coverage data used for the heatmap (distance-transform + watershed, the same core technique iRobot's own room-segmentation patent describes), not from travel-gap detection — the previous gap-based approach proved unreliable in the field and has been removed. Rooms and the doorways between them are identified from accumulated visit-density data across missions, with identity kept stable as more missions accumulate so a name you've assigned doesn't reset. New rooms surface via a Repair Issue for naming through the Options Flow; renaming also confirms a room so it appears in `select.{name}_select_zone`.
+Automatic room segmentation from the same coverage data used for the heatmap (distance-transform + watershed, the same core technique iRobot's own room-segmentation patent describes), not from travel-gap detection — the previous gap-based approach proved unreliable in the field and has been removed. Rooms and the doorways between them are identified from accumulated visit-density data across missions, with identity kept stable as more missions accumulate so a name you've assigned doesn't reset. New rooms surface via a Repair Issue for naming through the Options Flow; renaming also confirms a room so it appears in `select.{name}_zone_select`.
 
 What the areas learn from *(4.3.1)*:
 - **Only missions that started on the dock.** Positions count from where a mission starts, so a mission started elsewhere lands turned and shifted against all the others (a tester: an area outside the house). Whether it started on the dock is read from the robot's own phase before the start (charging = on the dock). Such a mission is still drawn live; it is left out of the coverage grid, the areas and the doors, and counted in diagnostics as `position_chain.missions_kept_out_of_grid`. A start Roomba+ did not see (Home Assistant started mid-mission) counts as on the dock, as before.
@@ -586,7 +595,10 @@ A Repair Issue (`battery_contact_suspect`) fires on two independent signals that
 
 #### Cleaning map
 
-`image.{name}_cleaning_map` — live map rendered as a HA image entity. White background, blue travel path, light-blue cleaned area, dock marker, robot position with direction arrow. Stuck events marked on the map. Map state persists across HA restarts.
+<img src="images/live-map.png" alt="The live map during a clean: room outlines with names, the robot's path in blue over the floor it has covered, and the robot's position" width="360">
+
+
+`image.{name}_map` (shown as *Cleaning path*; an installation from an older version may call it `image.{name}_cleaning_map`) — live map rendered as a HA image entity. White background, blue travel path, light-blue cleaned area, dock marker, robot position with direction arrow. Stuck events marked on the map. Map state persists across HA restarts.
 
 **Robots that don't report live position ☁️** — a robot can have persistent Smart Maps and still
 never send pose data over local MQTT. The live renderer has nothing to draw from on those, so this
@@ -653,7 +665,7 @@ compositor scaled to its own extent.
 
 ```yaml
 type: picture-entity
-entity: image.roomba_cleaning_map
+entity: image.roomba_map
 show_name: false
 show_state: false
 ```
@@ -726,7 +738,7 @@ same way round.
 
 **Turn the map to suit you** *(4.3.2)*: the map has no north. Its top is
 the way the robot faced as it left the dock, so it depends on how the
-dock stands. Configure → Settings → *Rotate the map picture* (called *Map rotation* before 4.4.2) turns every picture
+dock stands. Configure → Connection settings → *Rotate the map picture* (called *Map rotation* before 4.4.2) turns every picture
 clockwise by 90, 180 or 270 degrees — the cleaning path with the robot's
 heading, doors and overlays, the area map, the coverage map and, on a
 Smart Map robot, the cloud coverage the map shows when it has no path,
@@ -744,6 +756,38 @@ area has. Until 4.3.2 only growth counted, and a coverage map that had
 once been larger froze the areas as they were. An area the coverage no
 longer has goes at the next recompute, unless you named or hid it: a
 named room behind a door kept shut keeps its name and place.
+
+### Where the robot is: the device tracker
+
+`device_tracker.<robot>` reports the room the robot is in, on both generations.
+On Prime the room comes from the mission timeline, so it is reported whether
+Home Assistant started the mission or the robot ran on its own schedule.
+
+| Attribute | What it is |
+|---|---|
+| `room` | The robot's own name for the room |
+| `area_id` | The matching **Home Assistant area**: the segment-to-area mapping you set up for `vacuum.clean_area` first, then a name match |
+
+`area_id` is the better target for automations: it survives renaming the room in
+the iRobot app and does not depend on your language. The same area, by the same
+rule, is on `sensor.<robot>_current_room`, in the `roomba_plus_room_completed` and
+`roomba_plus_mission_started` events, and in `get_rooms` (4.6.0).
+
+**Match the attribute, not the state.** The state shows the room name too, and
+Home Assistant stops supporting that for device trackers in Core 2027.7. Roomba+
+will drop it a release before, with a repair notice. An automation that matches
+the state should move to the attribute now:
+
+```yaml
+# before
+condition: state
+entity_id: device_tracker.roomba
+state: "Kitchen"
+
+# after
+condition: template
+value_template: "{{ state_attr('device_tracker.roomba', 'area_id') == 'kitchen' }}"
+```
 
 ### What the colours on the map mean
 
@@ -778,7 +822,7 @@ type: custom:xiaomi-vacuum-map-card
 entity: vacuum.roomba
 vacuum_platform: roomba_plus        # XVMC v2.4.1+; then use "Generate Room Configs"
 map_source:
-  camera: image.roomba_rooms_map    # or image.roomba_cleaning_map
+  camera: image.roomba_rooms_map
 calibration_source:
   camera: true                      # reads calibration_points automatically
 ```
@@ -786,6 +830,9 @@ calibration_source:
 On older XVMC versions (no Roomba+ platform in the dropdown), define `map_modes` with explicit `predefined_selections` manually — the full fallback example is in [xiaomi-vacuum-map-card.md](xiaomi-vacuum-map-card.md).
 
 #### Coverage map (v2.2+)
+
+<img src="images/coverage-map.png" alt="The coverage heatmap: the floor as a grid of cells, coloured by how often the robot has cleaned each one" width="300">
+
 
 `image.{name}_coverage_map` — EMA-weighted occupancy heatmap, updated at each mission end.
 
@@ -1044,7 +1091,7 @@ name, following the same reasoning as the Prime path's `_KNOWN_PARTS`.
 
 #### Status
 
-`sensor.{name}_status` reports what the robot is doing, translated into
+`sensor.{name}_phase` (shown as *Status*) reports what the robot is doing, translated into
 your Home Assistant language. Both robot generations report the same set
 of states *(v4.0.0a46)* — the wording differs from what the robot itself
 sends, and automations should match the state value rather than the
@@ -1092,7 +1139,7 @@ Two states are worth knowing about:
 
 **Off by default.** Configure → Maintenance → Settings → *Cleaning reminders* (Configure → Settings before 4.5.0) switches them on; off, there is no reminder sensor, no "cleaned" buttons above and no cleaning items in the to-do list. Replacement reminders do not depend on it.
 
-`sensor.{name}_maintenance_next_cleaning_due` — when the next cleaning is due, by iRobot's care calendar: filter and main brushes once a week (twice a week with *Pets in the household* on, Configure → Settings), side brush once a month, wheels every two weeks, cliff sensors and charging contacts once a month. A Braava has the last two only. The state is the earliest date; attributes: `task` (which one), `overdue` (the tasks past due), `pets`, and `schedule` (each task with `last_done`, `due`, `interval_days`, `overdue`).
+`sensor.{name}_next_care` — when the next cleaning is due, by iRobot's care calendar: filter and main brushes once a week (twice a week with *Pets in the household* on, Configure → Settings), side brush once a month, wheels every two weeks, cliff sensors and charging contacts once a month. A Braava has the last two only. The state is the earliest date; attributes: `task` (which one), `overdue` (the tasks past due), `pets`, and `schedule` (each task with `last_done`, `due`, `interval_days`, `overdue`).
 
 Each task counts from its last "cleaned" button press or from the moment the option was switched on, whichever is later — so switching it on does not open with every task overdue, also not after a wheels cleaning recorded years ago. Switched off and on again, they start afresh. Replacing a filter, the main brushes or the side brush counts as cleaning it. A cleaning moves no replacement counter.
 
@@ -1262,8 +1309,8 @@ source; one that is happy with an estimate carries on unchanged.
 | `mission_elapsed_min` | Minutes elapsed in the current mission |
 | `mission_recharge_minutes` | Countdown until robot resumes after mid-mission dock |
 | `mission_expire_minutes` | Countdown until the mission expires |
-| `binary_sensor.mission_active` | ON for the entire mission arc including mid-mission recharge |
-| `binary_sensor.mid_mission_recharge` | ON only during the mid-mission charge phase |
+| `binary_sensor.{name}_mission_active` | ON for the entire mission arc including mid-mission recharge |
+| `binary_sensor.{name}_mid_mission_recharge` | ON only during the mid-mission charge phase |
 
 #### Room intelligence — Smart Map robots
 
@@ -1366,6 +1413,9 @@ The `.../mission/{n_mssn}/path` endpoint (v3.2.0) reconstructs a mission's room-
 ## Presence & scheduling
 
 #### Cleaning schedule calendar (v3.4.0)
+
+![The robot's cleaning schedule in Home Assistant's calendar, as recurring cleaning events on three weekdays](images/schedule-calendar.png)
+
 
 `calendar.{name}_schedule` — your robot's cleaning schedule (`cleanSchedule2` on i/s/j-series, legacy `cleanSchedule` on 900/600-series) as recurring Home Assistant calendar events. Always created on every tier — an empty calendar just means no schedule is currently set. Each event uses a fixed 60-minute placeholder duration, since iRobot's schedule data carries a start time only, never a planned duration.
 
@@ -1492,14 +1542,14 @@ regions to this one.
 
 #### Pad washing allowed (V4/Prime)
 
-`switch.{name}_pad_wash_allowed` turns pad washing on and off, gated on the
+`switch.{name}_prime_pad_wash_allowed` turns pad washing on and off, gated on the
 dock's wash capability. Its sibling — pad **drying** allowed — has been there
 since a20; this one was withheld until iRobot's newer app showed it is written
 on its own rather than as part of a bundle.
 
 #### Pad wash interval: what the numbers mean
 
-`select.{name}_pad_wash_area_interval` carries bare numbers — 6, 8, 10, 15, 20 —
+`select.{name}_prime_pad_wash_area_interval` carries bare numbers — 6, 8, 10, 15, 20 —
 and the unit is **tens of square feet**:
 
 | Value | Robot cleans before washing |
@@ -1529,7 +1579,7 @@ its own set — which has no position to name.
 
 #### Pad wetness (V4/Prime, a35)
 
-`select.{name}_pad_wetness` writes `padWetness.padPlate`, gated on
+`select.{name}_prime_pad_wetness` writes `padWetness.padPlate`, gated on
 `cap.ppWetLvl`. A robot reporting `0` there has no wetness control and gets no
 entity — which is a real difference between two robots of the same model with
 different docks.
@@ -1648,7 +1698,7 @@ the robot.
 
 #### Start blocked (V4/Prime, a34)
 
-`binary_sensor.{name}_start_blocked` turns on when one of four faults would
+`binary_sensor.{name}_prime_start_blocked` turns on when one of four faults would
 stop a mission from starting, and says what still works:
 
 ```
@@ -1727,7 +1777,7 @@ a Prime history does not have.
 | `stuck_count_30d` | A Prime mission record has no stuck result: the history's end codes say completed or cancelled, and a stuck mission ends as `unknown` |
 | `dock_charge_aborts` | `bbchg.aborts` is declared by the app and not seen from a robot |
 | `problem_zone`, `consecutive_clean_skips` | No room per stuck mission; no schedule skip detection on Prime |
-| `mqtt_stale`, `cloud_connected` | A Prime robot has no local connection to fall silent; `binary_sensor.*_robot_connectivity` covers the cloud side |
+| `mqtt_stale`, `cloud_connected` | A Prime robot has no local connection to fall silent; `binary_sensor.*_connected` covers the cloud side |
 
 ## Connectivity, mop & configuration reference
 
@@ -1761,7 +1811,7 @@ Settings → Devices → Roomba+ → Configure
 | 🗓 Scheduling | Blocking sensors · Presence-aware scheduling · Demand cleaning |
 | 🗺 Map | Zone management · Rooms & zones |
 
-*Smart Map robots also show a conditional* **Import rooms from roomba_rest980** *entry (v2.9.0+) when an existing roomba_rest980 installation is detected — see [Migration](../README.md#migration).*
+*Smart Map robots also show a conditional* **Import rooms from roomba_rest980** *entry (v2.9.0+) when an existing roomba_rest980 installation is detected — see [Moving to Roomba+](MIGRATING.md).*
 
 #### Diagnostics download
 
@@ -1809,6 +1859,9 @@ saying "60 evacuations remaining" beside an app saying "Dust Collection Left" re
 measurements of two different things.
 
 ## Every option, and what it costs you to leave it off
+
+<img src="images/connection-settings.png" alt="The Connection settings step of the Configure dialog, with the map options, wall thickness and door width, the repeat for an ignored command and the pause timeout" width="420">
+
 
 Settings → Devices & Services → Roomba+ → **Configure**. Nothing here is required; the defaults are
 what a robot does out of the box.
@@ -1901,6 +1954,28 @@ Classic robots only — this comes from the cloud mission history.
 the record itself reports none. On one tester's robot the mission-level field was empty on **all 49
 records** while the timelines held 111 error events — sixteen missions ended stuck and the records
 said nothing was wrong.
+
+## Known limitations
+
+- **Room shapes on 900-series robots follow coverage, not walls.** A room is
+  built from where the robot drove: furniture leaves holes, edges stop about one
+  robot radius short of the wall, and boundaries land at narrow points rather
+  than at doorways. More missions settle the number of rooms, not their shape.
+  Rooms appear after three completed missions — see
+  [Troubleshooting](TROUBLESHOOTING.md#rooms-are-wrong-or-fewer-than-expected).
+- **600-series robots have no map**, so nothing that needs a position works on
+  them: live map, rooms, room cleaning.
+- **Stuck hotspots on i/s/j robots (lewis firmware)** are wired up but have not
+  been seen with a real stuck incident yet. The coverage heatmap and
+  layout-change detection on that firmware are confirmed.
+- **No voice sentences of its own.** A custom integration has no supported way
+  to ship Assist sentences that work without a file you create yourself. The
+  response actions (`get_rooms`, `plan_clean` and the others) are there for
+  scripts that Assist can run.
+- **No "retrain your Smart Map" reminder.** No signal was reliable enough at
+  the level of the whole map.
+- **Prime robots**: what is missing and what is not yet confirmed on a robot is
+  listed in [V4/Prime robots](PRIME.md#what-is-not-there).
 
 ## Events & device triggers
 

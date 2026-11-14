@@ -62,18 +62,32 @@ stays local, and you can turn the trail off in the options.
 Credentials are held by Home Assistant's config entry storage, the same as
 every other integration.
 
-## How often it talks to the cloud
+## How data is updated, and how often it talks to the cloud
 
-The library polls nothing on its own. Roomba+ decides, and the intervals are:
+**Classic robots, local connection.** The robot pushes its state over the local
+connection and Home Assistant updates the moment it reports; there is no
+polling. If the connection drops, the entities that show the robot's live state
+become unavailable until it reconnects, rather than showing old values as
+current.
 
-- **Live state** — pushed by the robot, not polled. No interval
-- **Named shadows (Prime)** — every 2 minutes
-- **Cloud enrichment (Classic)** — once a day, and once after each mission;
-  only if you entered credentials
-- **Schedules** — every 6 hours
-- **Mission history** — every 24 hours
+**Classic robots with an iRobot account (optional).** Mission history, Smart
+Map rooms, favourites and consumable parts are read from iRobot's cloud once a
+day and right after each mission: about 90 seconds after it ends, and once more
+10 minutes after the end if iRobot's cloud had not caught up by then. A change made only in the
+iRobot app, such as a renamed room, can therefore take up to a day to appear.
+The robot itself stays on the local connection either way.
 
-A robot that is idle and cloud-disabled generates no outbound traffic beyond
+**Prime robots (cloud only):**
+
+| Data | How it updates |
+|---|---|
+| Status, activity, live map and position | Pushed by iRobot's cloud as they change |
+| Mission history | At startup, after each mission and every 6 hours |
+| Consumable parts | Every 6 hours |
+| Schedules, room names, quiet hours, favourites | Every 15 minutes |
+
+A command from Home Assistant goes out at once; the state change it causes
+arrives by push. A Classic robot without an account generates no traffic beyond
 its own local connection.
 
 ## What is in a diagnostics download

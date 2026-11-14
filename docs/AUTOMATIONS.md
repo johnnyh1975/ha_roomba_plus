@@ -314,7 +314,7 @@ Two attributes are worth knowing about, both on the mission event sensor:
 ```yaml
 # Rooms the last run left undone, with the mission that skipped them.
 # A room still waiting looks different from one picked up on the next pass.
-{{ state_attr('sensor.robot_mission_event', 'unfinished_rooms') }}
+{{ state_attr('sensor.robot_prime_mission_event', 'unfinished_rooms') }}
 # -> {"Kitchen": 61}
 ```
 
@@ -325,25 +325,25 @@ shows as its code rather than a blank, so it can be quoted in a report.
 ### Asking before you send (a34)
 
 Four faults stop a mission before it starts, and three of them leave one half
-of the robot working. `binary_sensor.{name}_start_blocked` says which:
+of the robot working. `binary_sensor.{name}_prime_start_blocked` says which:
 
 ```yaml
 # Mop when the pad plate is fitted, vacuum when it is not, and say why
 # when neither is possible.
 - choose:
     - conditions: >
-        {{ 'mop' in state_attr('binary_sensor.robot_start_blocked',
+        {{ 'mop' in state_attr('binary_sensor.robot_prime_start_blocked',
                                'available_modes') | default([], true) }}
       sequence:
         - action: roomba_plus.clean_room
           target: {entity_id: vacuum.robot}
           data: {room_name: Kitchen}
-    - conditions: "{{ is_state('binary_sensor.robot_start_blocked', 'on') }}"
+    - conditions: "{{ is_state('binary_sensor.robot_prime_start_blocked', 'on') }}"
       sequence:
         - action: notify.mobile_app
           data:
             message: >
-              {{ state_attr('binary_sensor.robot_start_blocked',
+              {{ state_attr('binary_sensor.robot_prime_start_blocked',
                             'blocked_reason') }}
 ```
 
@@ -418,17 +418,18 @@ mission history and maintenance with one-tap resets in one card, the
 fuller option.
 
 Two entities below depend on your setup:
-- **`todo.roomba_maintenance` is opt-in.** Switch it on under Configure →
-  Connection settings → *Show maintenance as a to-do list*, or drop the
-  last card.
-- **The map is `image.roomba_cleaning_map` on Classic robots** and
+- **`todo.roomba_maintenance`** is on for a robot added from 4.5.0. For an
+  older one, switch it on under Configure → Maintenance → *Show maintenance
+  as a to-do list*, or drop the last card.
+- **The map is `image.roomba_map` on Classic robots** (an installation from
+  an older version may call it `image.roomba_cleaning_map`) and
   `image.roomba_prime_cleaning_map` on Prime ones.
 
 ```yaml
 type: vertical-stack
 cards:
   - type: picture-entity
-    entity: image.roomba_cleaning_map
+    entity: image.roomba_map
     show_name: false
     show_state: false
 
@@ -450,7 +451,7 @@ cards:
         name: Progress
     columns: 4
 
-  # Opt-in: Configure → Connection settings → Show maintenance as a to-do list
+  # Robots added before 4.5.0: Configure → Maintenance → Show maintenance as a to-do list
   - type: todo-list
     entity: todo.roomba_maintenance
 ```

@@ -69,9 +69,9 @@ rules:
   docs-installation-parameters:
     status: done
     comment: >
-      README 'First-time setup' lists every setup field and what to enter:
-      robot or IP address, password, iRobot email and password (optional for
-      Classic, required for V4/Prime), robot choice for V4/Prime.
+      README 'Setup' lists each way to set a robot up and what to enter:
+      the iRobot account (recommended, required for V4/Prime), a robot found
+      on the network with the HOME button, or a manual IP address.
   entity-event-setup:
     status: done
     comment: >
@@ -123,9 +123,9 @@ rules:
   docs-supported-functions:
     status: done
     comment: >
-      README features section documents all 69 local + 28 cloud sensors,
-      binary sensors, controls, maps, zones, and v2.0 cloud diagnostics.
-      REST API section documents both format=summary and format=records.
+      docs/FEATURES.md documents every entity, action, event and option and
+      which robots support it; README 'Supported robots' summarises it;
+      docs/PRIME.md covers V4/Prime robots; docs/API.md the REST API.
   entity-translations:
     status: done
     comment: >
@@ -181,8 +181,8 @@ rules:
   docs-high-level-description:
     status: done
     comment: >
-      README introduction: what the integration does, local-push architecture
-      for Classic robots, cloud-only V4/Prime support.
+      README introduction and 'Highlights': what the integration does,
+      local push for Classic robots, cloud-only V4/Prime support.
   entity-category:
     status: done
     comment: >
@@ -245,11 +245,13 @@ rules:
   docs-data-update:
     status: done
     comment: >
-      README section 'How data is updated': Classic local MQTT push without
-      polling; optional iRobot cloud every 24 hours plus right after each
-      mission; V4/Prime state and live map by push, consumable parts every 6
-      hours, schedules, room names, quiet hours and favourites every 15
-      minutes. Taken from the coordinators' update intervals.
+      docs/DATA_PRIVACY.md 'How data is updated, and how often it talks to
+      the cloud' (also docs/PRIME.md): Classic local MQTT push without
+      polling; optional iRobot cloud every 24 hours plus 90 s and 10 min
+      after each mission; V4/Prime state and live map by push, mission
+      history and consumable parts every 6 hours, schedules, room names,
+      quiet hours and favourites every 15 minutes. Taken from the
+      coordinators' update intervals.
   docs-examples:
     status: done
     comment: >
@@ -259,14 +261,13 @@ rules:
   docs-known-limitations:
     status: done
     comment: >
-      README section 'Known limitations'. Some entries there record
-      confirmations rather than limitations and should be moved to the feature
-      status.
+      docs/FEATURES.md 'Known limitations'; for V4/Prime robots
+      docs/PRIME.md 'What is not there' and 'Not yet confirmed on a robot'.
   docs-supported-devices:
     status: done
     comment: >
-      README section 'Supported hardware & capability matrix' and 'V4/Prime
-      support'.
+      README 'Supported robots' (models, connection, what works on which)
+      and docs/PRIME.md.
   docs-troubleshooting:
     status: done
     comment: >
