@@ -58,12 +58,13 @@ rules:
   docs-installation-instructions:
     status: done
     comment: >
-      README: installation via HACS and manually, first-time setup steps.
+      README: installation from the Marketplace (HACS before 2026.11) and
+      manually, first-time setup steps.
   docs-removal-instructions:
     status: done
     comment: >
       README section 'Removal': deleting the entry (which also deletes
-      everything Roomba+ stored for the robot), removing the files via HACS or
+      everything Roomba+ stored for the robot), removing the files via the Marketplace, HACS or
       manually, and what stays on the robot.
   docs-installation-parameters:
     status: done

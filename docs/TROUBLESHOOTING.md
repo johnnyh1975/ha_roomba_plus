@@ -6,7 +6,28 @@
 
 ## Installing
 
-**HACS shows only `main`, and downloading it hangs**
+From Home Assistant 2026.11, Roomba+ is installed and updated from the
+**Marketplace** (Settings → Marketplace), which is HACS built into Home
+Assistant. On older versions it is HACS. The catalog, the releases and
+Roomba+'s `hacs.json` are the same for both.
+
+**The Marketplace does not offer the new release yet**
+
+The Marketplace reads its catalog every 6 hours, and the catalog itself is
+rebuilt every 4 hours, so a release can take most of a day to appear. A
+pre-release appears only if you switched on **Include pre-releases** in the
+menu of the Roomba+ page, and only while it is newer than the latest stable
+release.
+
+**The Marketplace says `hacs.json` is missing**
+
+It is not: `hacs.json` is in the root of the repository, and every release
+carries the `ha_roomba_plus.zip` it names. If you see this, open an issue with
+the lines from your log around the message (Settings → System → Logs), so the
+error underneath can be found.
+
+**HACS shows only `main`, and downloading it hangs** *(HACS before Home
+Assistant 2026.11)*
 
 The log carries a 404:
 
@@ -31,11 +52,11 @@ to offer at all.
 
 The rest of this section is kept because the mechanism will recur the next time
 a long pre-release series runs — and because it explains why the problem
-appeared when it did.
+appeared when it did. (Found by @pk-1966, who worked it out unaided.)
 
-The rest of this section explains why, because it will recur.
-
-**The mechanism, read from HACS's own source** rather than guessed:
+**The mechanism, read from HACS's own source** rather than guessed (the source
+of HACS before Home Assistant 2026.11; whether the Marketplace reads releases
+the same way has not been checked):
 `RepositoryBase.get_releases()` makes ONE call to GitHub's release list and
 filters what comes back — it does not paginate. GitHub returns 30 releases per
 page by default, so HACS only ever sees the 30 most recent.
@@ -254,7 +275,7 @@ then cannot connect at all, and the setup error says nothing about why.
 roomba_rest980 *integration* can stay installed — that is what the room
 import reads from, and it is a different thing from the server.
 
-**But do the HACS restart first, while the container is still running.**
+**But restart after installing Roomba+ first, while the container is still running.**
 roomba_rest980 builds its room entities during setup from data it fetches
 off the server; with the container stopped its config entry fails to load
 and those entities never appear, so there is nothing left to import from.

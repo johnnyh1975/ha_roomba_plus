@@ -181,6 +181,84 @@ automation:
         max_rooms: 2
 ```
 
+### Only start if it is done in time (4.6.0)
+
+`plan_clean` answers what a clean of the rooms you name would take if it
+started now, without starting it. With `end_by` the answer says whether it
+`fits`. Travel between rooms and recharges are not in the room estimates;
+`plan.past_error` says how far recent missions' estimates were off. A room
+without an estimate leaves `plan.total_sec` empty and `plan.fits` with it, so
+the script below then does not start.
+
+```yaml
+script:
+  roomba_kitchen_before_five:
+    sequence:
+      - action: roomba_plus.plan_clean
+        data:
+          entity_id: vacuum.roomba
+          room_name: [Kitchen, Hall]
+          end_by: "{{ today_at('17:00') }}"
+        response_variable: plan
+      - if: "{{ plan.fits }}"
+        then:
+          - action: roomba_plus.clean_room
+            target:
+              entity_id: vacuum.roomba
+            data:
+              room_name: [Kitchen, Hall]
+```
+
+### Clean the rooms a mission missed (4.6.0)
+
+`roomba_plus_mission_result` fires when a mission's result is stored. Its
+`type` is `completed_with_skips` when rooms were skipped or not reached, and
+`retry_missed_rooms` cleans exactly those. Prime robots, and Classic robots
+with a Smart Map and an iRobot login.
+
+```yaml
+automation:
+  alias: "Roomba — finish the rooms it missed"
+  trigger:
+    - platform: event
+      event_type: roomba_plus_mission_result
+      event_data:
+        type: completed_with_skips
+  condition:
+    - condition: time
+      after: "09:00:00"
+      before: "20:00:00"
+  action:
+    - action: roomba_plus.retry_missed_rooms
+      data:
+        entity_id: vacuum.roomba
+```
+
+With more than one robot, add the robot's `entry_id` to `event_data` so each
+automation reacts to its own robot only.
+
+### Tell me when a start did not arrive (4.6.0)
+
+Sometimes a robot accepts a start and stays on the dock.
+`roomba_plus_command_not_delivered` fires when the robot has not started
+20 s (Classic) or 60 s (Prime) after a start Roomba+ sent. `resent` says
+whether Roomba+ already sent it a second time. The same moment shows on
+`event.<robot>_command`, which users without admin rights can see too.
+
+```yaml
+automation:
+  alias: "Roomba — start did not arrive"
+  trigger:
+    - platform: event
+      event_type: roomba_plus_command_not_delivered
+  action:
+    - action: notify.mobile_app
+      data:
+        message: >-
+          {{ trigger.event.data.name }} did not start
+          ({{ trigger.event.data.command }}{{ ', sent twice' if trigger.event.data.resent }}).
+```
+
 ---
 
 ## Zone cleaning on demand (Prime)
@@ -378,6 +456,18 @@ cards:
 ```
 
 ---
+
+## Blueprints are already there (4.6.0)
+
+From 4.6.0 every blueprint below is copied to Settings → Automations &
+Scenes → Blueprints when Home Assistant starts, under `roomba_plus/`. Create
+an automation from it there; the import step is only needed before 4.6.0.
+
+- A file you already have is never overwritten.
+- A blueprint you delete stays deleted: each one is copied once.
+- One you imported through its link before is not copied a second time.
+- A newer version of a blueprint does not replace your copy. The release notes
+  say when one changed; importing it from its link again updates it.
 
 ## Notification blueprint
 

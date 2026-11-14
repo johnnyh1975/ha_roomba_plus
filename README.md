@@ -1,6 +1,6 @@
 # Roomba+ — Enhanced iRobot Integration for Home Assistant
 
-[![HACS](https://img.shields.io/badge/HACS-Default-blue.svg)](https://github.com/hacs/default)
+[![Marketplace](https://img.shields.io/badge/Marketplace%20%2F%20HACS-Default-blue.svg)](https://github.com/hacs/default)
 [![Version](https://img.shields.io/badge/Version-4.6.0b1-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2025.5%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Platinum-blueviolet.svg)](https://www.home-assistant.io/docs/quality_scale/)
@@ -13,7 +13,7 @@
 [![Downloads](https://img.shields.io/github/downloads/johnnyh1975/ha_roomba_plus/total?label=downloads)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![Last commit](https://img.shields.io/github/last-commit/johnnyh1975/ha_roomba_plus)](https://github.com/johnnyh1975/ha_roomba_plus/commits/main)
 
-[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=johnnyh1975&repository=ha_roomba_plus&category=integration)
+[![Open your Home Assistant instance and show Roomba+ in the Marketplace (HACS before Home Assistant 2026.11).](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=johnnyh1975&repository=ha_roomba_plus&category=integration)
 
 Roomba+ is a Platinum-quality Home Assistant custom integration for iRobot Roomba and Braava robots. It connects directly over local Wi-Fi MQTT — no cloud account required, no polling, no subscription — and exposes far more sensors, intelligence, and controls than the built-in HA integration.
 
@@ -21,14 +21,11 @@ Roomba+ is a Platinum-quality Home Assistant custom integration for iRobot Roomb
 
 | Your robot | Install | Why |
 |---|---|---|
-| **Any supported robot** | **v4.5.4** (stable) — the default in HACS | One line for both generations, and one iRobot login for all the robots of an account. No beta channel needed. |
+| **Any supported robot** | **v4.5.4** (stable) — the default in the Marketplace (HACS before Home Assistant 2026.11) | One line for both generations, and one iRobot login for all the robots of an account. No pre-releases needed. |
 | **Roomba Max · Combo/Plus 400-series** and other newer cloud robots | **v4.5.4** | Lines before 4.0 **cannot connect to your robot at all** |
 | Still on the 4.1 or 4.2 line | **v4.5.4** | Everything fixed through 4.2.22 is in it. 4.2.22 was the last 4.2 release; that line has ended, as has 4.1 |
+| Want to try what comes next | **v4.6.0b1** (pre-release) — *Include pre-releases* for Roomba+ in the Marketplace, *Show beta versions* in HACS | Prime robots get the entities Classic robots already had, and missions become visible to automations: when one starts, how it ended, which rooms it missed, what it would take. None of it has run on a robot yet; see [what 4.6 adds](#new-in-460-beta) |
 | Not sure | Check your model number against the [supported hardware](#supported-hardware--capability-matrix) table below | |
-
-> ⚠️ If HACS shows you only `main` and downloading it hangs, see
-> [Troubleshooting → Installing](docs/TROUBLESHOOTING.md#installing). Nothing is wrong
-> with your setup.
 
 > 🔬 **V4/Prime is a separate path.** These robots don't speak the local MQTT
 > protocol everything below is built on — no local control, and a handful of
@@ -41,7 +38,7 @@ Roomba+ is a Platinum-quality Home Assistant custom integration for iRobot Roomb
 - **Full automation support** — replace `vacuum.start` with `smart_start`: it waits if a blocking sensor fires (a door contact, a baby monitor) and can pause and resume around your presence; `auto_clean_dirty_rooms` and `clean_overdue_rooms` pick only the rooms that need it — all from automations you already have, no new workarounds needed.
 - **Comprehensive monitoring** — 100+ entities covering maintenance life, wear rates, 365-entry mission history, performance trends, and error detail with recommended actions.
 - **Self-calibrating** — maintenance thresholds, navigation health, battery degradation, and per-room cleaning rhythms all adapt to your robot's own usage history rather than fixed thresholds or manual configuration.
-- **Platinum quality scale**, Home Assistant's highest — every rule checked against the code in 4.2.11 ([quality_scale.yaml](custom_components/roomba_plus/quality_scale.yaml) says where each is met). 8,200+ tests with every module above 95% coverage, 8 languages, full config entry migration chain, CI/CD.
+- **Platinum quality scale**, Home Assistant's highest — every rule checked against the code in 4.2.11 ([quality_scale.yaml](custom_components/roomba_plus/quality_scale.yaml) says where each is met). 10,000+ tests with every module above 95% coverage, 8 languages, full config entry migration chain, CI/CD.
 
 > 📊 **[Full feature comparison with HA Core and roomba_rest980 →](docs/COMPARISON.md)**
 
@@ -51,6 +48,7 @@ Roomba+ is a Platinum-quality Home Assistant custom integration for iRobot Roomb
 
 - [What you get](#what-you-get)
 - [Feature status](#feature-status)
+- [New in 4.6.0 (beta)](#new-in-460-beta)
 - [Supported hardware & capability matrix](#supported-hardware--capability-matrix)
 - [V4/Prime support](#v4prime-support)
 - [How data is updated](#how-data-is-updated)
@@ -77,6 +75,7 @@ Roomba+ is a Platinum-quality Home Assistant custom integration for iRobot Roomb
 - **Room intelligence** *(SMART + cloud)* — per-room cleaning rhythms, overdue-room catch-up cleaning, dirt ↔ sensor correlation
 - **Scheduling & presence** — presence-aware auto-scheduling, demand cleaning, your cleaning schedule as a native HA calendar
 - **Automation-ready** — 8+ copy-paste recipes in [Automations & dashboards →](docs/AUTOMATIONS.md), a REST API, device triggers, HA Long-Term Statistics
+- **Missions for automations and scripts** *(4.6.0, beta)* — events when a mission starts and how it ended, the rooms it missed, the room it is in now and when it will end, and actions that answer a script: which rooms there are, what past missions did, and whether a clean started now would be done in time
 
 Full reference, tagged by which robots support what: **[Feature reference →](docs/FEATURES.md)**
 
@@ -95,7 +94,7 @@ deliberately not built:
 | Room rhythms, overdue-room cleaning, mission cleaning maps *(SMART + cloud)* | ✅ Shipped |
 | Cleaning schedule as HA calendar, maintenance as HA to-do list | ✅ Shipped *(v3.4.0)* |
 | Coverage analytics for pose-less lewis-firmware robots | ✅ Shipped *(v3.4.0)* |
-| Six blueprints: curated notifications, demand-clean alert, vacuum-then-mop, smart-start-on-away, robot-went-silent, exception notifications *(v3.4.2 onwards)* | ✅ Shipped — see [Automations](docs/AUTOMATIONS.md) |
+| Seven blueprints: curated notifications, demand-clean alert, vacuum-then-mop, smart-start-on-away, robot-went-silent, exception notifications *(v3.4.2 onwards)*, maintenance notifications with Done/Later buttons *(v4.5.0)*; from 4.6.0 they are in your blueprint list without importing them | ✅ Shipped — see [Automations](docs/AUTOMATIONS.md) |
 | Multi-robot fleet health rollup *(v3.4.3)* | ✅ Shipped — see [API → GET /household](docs/API.md#get-household) |
 | Gentle mode switch *(v3.4.3)* | ✅ Shipped |
 | Braava mop-pad wear & water-level sensors | ✅ Shipped *(pre-existing — `pad_days_until_due`, `tank_level`; no separate water-consumption field exists, `tank_level` already covers it, see [Release notes →](https://github.com/johnnyh1975/ha_roomba_plus/releases/tag/v3.4.3))* |
@@ -103,6 +102,10 @@ deliberately not built:
 | Repairs redesign — 20 of 29 Repair Issues removed, converted to events, or merged *(v3.5.0)* | ✅ Shipped — see [Release notes →](https://github.com/johnnyh1975/ha_roomba_plus/releases/tag/v3.5.0) |
 | Device tracker — which room the robot is in, and the matching Home Assistant **area** *(v2.9.0, areas in v4.0.0a14)* | ✅ Shipped — see [Device tracker](#device-tracker) |
 | V4/Prime support — cloud-only robots (400-series) *(v4.0.0)* | ✅ Shipped — see [V4/Prime support](#v4prime-support) |
+| Prime robots get the entities Classic already had, where the robot reports the data *(v4.6.0)* | 🧪 Beta — see [New in 4.6.0](#new-in-460-beta) |
+| Mission started and mission result events, missed rooms and `retry_missed_rooms`, a command the robot ignored *(v4.6.0)* | 🧪 Beta — see [New in 4.6.0](#new-in-460-beta) |
+| Current room and estimated end as sensors, last vacuumed and mopped per Home Assistant area *(v4.6.0)* | 🧪 Beta — see [New in 4.6.0](#new-in-460-beta) |
+| Response actions for scripts and Assist: `get_rooms`, `get_missions`, `get_mission`, `plan_clean` *(v4.6.0)* | 🧪 Beta — see [New in 4.6.0](#new-in-460-beta) |
 | Furniture-change detection from cloud map deltas | 🔲 Backlog, not yet scheduled |
 | Room shape / door-position export | 🔲 Backlog, not yet scheduled |
 | Voice commands ("clean the kitchen", etc.) | ❌ Evaluated, not pursued — see [Known limitations](#known-limitations) |
@@ -122,17 +125,68 @@ Full version-by-version history: **[GitHub Releases →](https://github.com/john
 
 ---
 
+## New in 4.6.0 (beta)
+
+4.6.0 is a pre-release: switch on *Include pre-releases* for Roomba+ in the
+Marketplace (*Show beta versions* in HACS) to get it. Everything in it is
+additive: existing entities, events and their fields stay as they were. None of
+it has run on a robot yet, so reports are welcome, working or not.
+
+**Prime robots get what Classic robots already had**, each entity once the
+robot reports its data: the mission sensors (start, elapsed, recharge and
+expiry), lifetime and 30-day figures, the last mission and last error, the
+presence sensors, the binary sensors for an active mission, a mid-mission
+recharge, a firmware update and maintenance due, the stuck event, room
+progress for missions started in the app or by a schedule, and a mission
+archive of up to 800 missions. What still differs, and why, is listed per
+section in [Which generation, section by section](docs/FEATURES.md#which-generation-section-by-section-460).
+
+**Missions become visible to automations**, on both generations:
+
+- **When a mission starts** — `roomba_plus_mission_started` and
+  `event.<robot>_mission_started`: who started it, the whole home or which
+  rooms, and their Home Assistant areas.
+- **How it ended** — `roomba_plus_mission_result` and
+  `event.<robot>_mission_result`: `completed`, `completed_with_skips`,
+  `cancelled`, `stuck_abandoned` or `error`, with the rooms skipped or not
+  reached. `roomba_plus.retry_missed_rooms` cleans exactly those (Prime, and
+  Classic robots with a Smart Map and an iRobot login).
+- **A command the robot ignored** — when a start does not arrive,
+  `event.<robot>_command` says so, and Roomba+ sends it once more if the robot
+  is idle and reports no reason to refuse it.
+- **Where the running mission is** — `sensor.<robot>_current_room`, with each
+  room of the run as pending, operating, skipped or completed, and
+  `sensor.<robot>_estimated_end_time`.
+- **When each area was last cleaned** — one pair of sensors per Home Assistant
+  area, last vacuumed and last mopped, across all your robots (off by default).
+- **Answers for scripts and Assist** — `get_rooms`, `get_missions`,
+  `get_mission` and `plan_clean`. `plan_clean` says what a clean of the rooms
+  you name would take if started now, and with `end_by` whether it fits.
+- **Battery per mission and the quality of each time estimate** — in the
+  stored mission and in `get_mission`, which also says why a room's time was
+  or was not learned.
+- **Send home after a pause** — an option that sends a robot left paused
+  back to its base after the minutes you set (off by default).
+- **The blueprints install themselves** — they are copied to your blueprint
+  list when Home Assistant starts. A file you already have is not
+  overwritten, and one you delete stays deleted.
+
+Details: [Feature reference](docs/FEATURES.md#missions-for-scripts-and-assist-460) ·
+[Upgrade notes](docs/UPGRADING.md) · [Release notes](release-notes/v4.6.0b1.md)
+
+---
+
 ## Supported hardware & capability matrix
 
 | Series | Examples | Tested |
 |---|---|---|
-| **600** (Bump & run) | Roomba 694, 692 | ⚠️ untested |
+| **600** (Bump & run) | Roomba 694, 692, 671 | ✅ **Roomba 694** (field tester; a 600 is Classic since 4.5.3) |
 | **900** (VSLAM) | Roomba 980, 985 | ✅ **Roomba 980** |
 | **i-series** | i3, i7, i7+ | ✅ **i7+** |
 | **s-series** | s9+ | ✅ **S9+** |
-| **j-series** | j7, j7+ | ✅ **j-series** |
+| **j-series** | j7, j7+, j8+, Combo j7+/j9+ | ✅ **j7+**, **Combo j9+** (the j8+ is Classic since 4.5.4; its local connection is not yet confirmed) |
 | **Braava** | m6 | ✅ **Braava jet m6** |
-| **V4/Prime** *(v4.0.0)* | Combo/Plus 400-series; Roomba Max 705 Vac (W155042) | ✅ multiple field testers — see below |
+| **V4/Prime** *(v4.0.0)* | Combo 105, Plus 405/410/416 Combo, Combo 505; Roomba Max 705 Vac (W155042) | ✅ multiple field testers — see below |
 
 **What works on your robot** — the fast answer to the most common setup question:
 
@@ -180,6 +234,9 @@ It exposes two attributes worth automating on:
 `area_id` is the better target: it survives renaming a room in the iRobot app, and it is the same
 regardless of your Home Assistant language. Home Assistant *areas* are rooms — not to be confused
 with *zones*, which are geographic and meant for presence detection.
+
+From 4.6.0 the same area, by the same rule, is also on `sensor.<robot>_current_room`, in the
+`roomba_plus_room_completed` and `roomba_plus_mission_started` events, and in `get_rooms`.
 
 Works for Classic and V4/Prime robots. For Prime, the room comes from the mission timeline, so it is
 reported whether Home Assistant started the mission or the robot ran on its own schedule.
@@ -258,14 +315,14 @@ Everything else listed below works.
   working before this one was found to be the correct one
 - Live activity (cleaning/paused/docked/returning/idle), derived from the robot's real-time
   mission stream — plus current room, area, and pass-count as attributes when available
-- Live cleaning map — an occupancy-grid image, updated as the robot cleans (no pose trail or
-  room-outline overlay yet, unlike the Classic map entity)
+- **Live cleaning map and room map** — the robot's path drawn as it cleans, on the map it is
+  using. Where the robot labels its paths with the cleaning mode (4.5.4), vacuumed, mopped and
+  both are drawn in their own colours, and paths it only drove along are grey
 - Battery percentage, bin present, mop tank present, detected pad, lifetime runtime hours,
   firmware version, and the robot's own reported connectivity to AWS IoT —
-  real, live-confirmed values, not placeholders (see the latest release notes for the evidence
-  trail). Live-updating via a push subscription that itself isn't confirmed live-tested yet —
-  seeded with a real value at startup either way, so this works even if the push side turns out
-  not to (see PrimeStatusCoordinator's own docstring)
+  real, live-confirmed values, not placeholders. They update by push from iRobot's cloud. All the
+  Prime robots of one iRobot account share one cloud connection (4.5.4); before that, two of them
+  took turns knocking each other off
 - Dock, pad-wash, and pad-dry status — human-readable labels from a fully confirmed, 86-value
   enum (mostly error states; not translated into all 8 languages given how rarely most of them
   actually appear). Configured suction level (a genuine device_class=ENUM sensor, 5 confirmed
@@ -295,7 +352,7 @@ Everything else listed below works.
   individual sensors already showing the same data correctly (a separate code path that had
   never been fixed for Prime at all)
 
-**Added in v4.0.0a14:**
+**Also:**
 - **A room map** with room outlines and room names, plus xiaomi-vacuum-map-card calibration. Ready
   immediately rather than after the first mission, because the cloud hands over finished polygons.
   The existing map (iRobot's own rendered image, showing where the robot actually cleaned) stays
@@ -315,18 +372,28 @@ Everything else listed below works.
 - **Room preferences** — profile, suction, two-pass, carpet boost per room, as set in the iRobot app —
   exposed as a map attribute so automations can honour them instead of overriding them.
 
-**What's not there yet:**
-- **Pad wetness.** `padPlate` has its own value table, separate from the other pad types, so a control
-  writing one level across all three would be wrong for at least one — silently, since the robot
-  accepts it. Waiting on a capture from a robot whose `ppWetLvl` capability is nonzero.
-- **Evacuate, power off, spot clean, map training.** No Prime command has been identified for any of
+- **Cleaning mode, pad wetness and SmartScrub** — a cleaning mode select (vacuum, mop, both)
+  that the next start uses for every room; pad wetness for the pad plate, offered where the robot
+  reports a wetness range (`ppWetLvl` above 0); SmartScrub per room through `clean_room`.
+- **Maintenance** (4.5.0) — the maintenance list, calendar and events of Classic robots, with the
+  parts and intervals from iRobot's cloud. Marking a part done resets it at iRobot, as the app
+  does; that reset has not yet been confirmed on a robot.
+- **Empty bin**, as a button, where the dock reports that it can empty the robot.
+- **What Classic already had** *(4.6.0, beta)* — mission, history and presence sensors, the
+  binary sensors for an active mission and maintenance due, the stuck event and room progress
+  for missions started in the app, each once the robot reports its data. Four diagnostic sensors
+  (off by default) say when each cloud stream last delivered. See
+  [New in 4.6.0](#new-in-460-beta).
+
+**What's not there:**
+- **Power off, spot clean, map training.** No Prime command has been identified for any of
   them. Absent rather than non-functional.
-- **Maintenance to-do items**, which depend on the Classic consumable model.
-- **Repair issues.** All nine of Classic's are tied to the local MQTT stream, pose maps or zone
-  naming; none has a Prime equivalent. Checked rather than assumed.
-- Everything else on this page that depends on local MQTT or pose data.
-  Classic robots use — room intelligence, mission history, maintenance tracking, and more are
-  simply a different, not-yet-built facade for V4/Prime robots specifically
+- **Sensors whose data a Prime robot does not send**: Wi-Fi signal and IP address (no `signal` or
+  `netinfo` in the Prime state), and navigation statistics, which have not been seen from a Prime
+  robot so far.
+- **Repair issues that need the local connection or position data** — layout changes, the zone
+  naming prompt, the conflict with the built-in Roomba integration. The maintenance repairs (a
+  part a week overdue, the care task of an error) work on Prime.
 
 Full detail, architecture, and the evidence trail behind every confirmed piece of the
 protocol: [Release notes →](release-notes/)
@@ -363,7 +430,6 @@ the resulting state change arrives by push.
 ## Known limitations
 
 - **Room shapes on 900-series follow coverage, not walls** — a room is built from where the robot drove, so furniture leaves holes, edges stop about one robot radius short of the wall, and boundaries land at narrow points in the coverage rather than at doorways. More missions settle the room *count*; they do not change the shape, because the furniture is in the same place every time. Wall-accurate outlines would need obstacle data these robots do not report. Rooms are not derived at all until three missions have completed — see [Troubleshooting →](docs/TROUBLESHOOTING.md#rooms-are-wrong-or-fewer-than-expected).
-- **600-series is untested** — should work (same local MQTT protocol), but no field confirmation yet. See the capability matrix above for what it does and doesn't support by design.
 - **Stuck-hotspot detection on lewis firmware is structurally wired up but not field-confirmed** — the coverage heatmap and layout-change detection this same release adds for lewis firmware *do* work; whether the cloud data actually populates for a genuine stuck incident on this specific firmware is still an open question. See [Release notes →](https://github.com/johnnyh1975/ha_roomba_plus/releases).
 - **No voice commands ("clean the kitchen", etc.)** — evaluated for this release and dropped, not delayed: there's currently no supported way for a third-party integration to ship Assist voice sentences that work without you creating a file yourself. See [Release notes →](https://github.com/johnnyh1975/ha_roomba_plus/releases).
 - **No "time to retrain your Smart Map" reminder** — considered for the new to-do list, dropped: no existing signal was reliable enough at the right granularity (the closest one fires per-furniture-item, not map-wide). See [Release notes →](https://github.com/johnnyh1975/ha_roomba_plus/releases).
@@ -372,45 +438,42 @@ the resulting state change arrives by push.
   effect has not been observed independently. Schedule hold is deliberately **not** offered: the write
   succeeds, the read-back confirms it, and the schedule stays active regardless — a switch the robot
   accepts and ignores would make the UI state something false.
-- **V4/Prime + Classic robots on the same Home Assistant instance simultaneously** — each is independently confirmed working, but running both types at once hasn't been specifically tested.
 
 ---
 
 ## Installation
 
-**Requirements:** Home Assistant 2025.5 or newer (which itself needs Python 3.13.2+) · HACS installed (for recommended install)
+**Requirements:** Home Assistant 2025.5 or newer (which itself needs Python 3.13.2+). From Home Assistant 2026.11 the Marketplace is built in; on older versions the recommended install needs HACS.
 
 > Both CI test jobs run against versions you can actually have: the supported minimum (HA 2025.5 on Python 3.13) and a much newer one (HA 2026.10 on Python 3.14). Until v4.2 the first of those pinned HA 2025.1.4 on Python 3.12 — a combination no installation can be in, since 2025.5 requires 3.13.2.
 
-### HACS (recommended)
+### Marketplace (Home Assistant 2026.11 and later, recommended)
+
+1. Settings → **Marketplace** → search for **Roomba+**
+2. Install the newest release → restart Home Assistant if it asks you to
+
+Roomba+ is in the catalog every Marketplace user sees (it comes from the
+HACS default list), so there is no repository to add and no GitHub account
+to connect. If you had Roomba+ from HACS before updating Home Assistant, it
+moves to the Marketplace by itself and keeps receiving updates.
+
+### HACS (Home Assistant before 2026.11)
 
 1. HACS → search for **Roomba+**
-2. Download the newest release → restart HA
+2. Download the newest release → restart Home Assistant
 
-Roomba+ is in the **HACS default store**, so there is no custom repository to
-add. If an older guide told you to add one, that step is obsolete — it does no
-harm, but it is not needed.
+HACS can no longer be installed on 2026.11 and later; there it is the
+Marketplace above.
 
-> ℹ️ **No beta channel needed for the stable line.** Earlier v4 releases were
-> pre-releases and required *Show beta versions*; every stable release from
-> 4.0.0 on is a normal one and HACS offers it by default. Leaving the setting
-> on is harmless — it simply also offers pre-releases when one exists.
+> ℹ️ **Pre-releases are off by default, and the stable line needs none.**
+> A beta is offered only when you switch it on for Roomba+: in the
+> Marketplace with **Include pre-releases** in the menu of the Roomba+ page,
+> in HACS with *Show beta versions*. Leaving it on is harmless; you get a
+> pre-release only while it is newer than the latest stable release.
 >
-> **There is none right now.** The betas `4.5.4b1` and `b2` became
-> 4.5.4, the current stable line.
->
-> If HACS offers you only **`main`** and downloading it hangs, you are on a
-> checkout from before v3.5.2 was tagged. Selecting `main` fails with a 404:
->
-> ```
-> Download failed - Got status code 404 when trying to download
-> .../releases/download/main/ha_roomba_plus.zip
-> ```
->
-> That is HACS looking for a release asset on a tag called `main`, which does
-> not exist. Nothing is wrong with your setup.
->
-> (Found by @pk-1966, who worked it out unaided.)
+> If HACS offers you only **`main`** and downloading it hangs, see
+> [Troubleshooting → Installing](docs/TROUBLESHOOTING.md#installing). Nothing
+> is wrong with your setup.
 
 ### Manual
 
@@ -458,8 +521,11 @@ Settings → Devices → Roomba+ → ⋮ → **Reconfigure** — no need to remo
 **[ha_roomba_plus_card](https://github.com/johnnyh1975/ha_roomba_plus_card)** — a dashboard card built for
 this integration: the map, room buttons and mission history in one place.
 
-Install it through HACS as a custom repository of type **Dashboard** (older HACS versions call it
-*Lovelace*). It is a separate project with its own releases, which is why it is not part of this
+Install it as a custom repository of type **Dashboard**: in the Marketplace (Home Assistant 2026.11
+and later) by adding the repository's link, which needs a connected GitHub account, or in HACS on
+older versions (older HACS versions call the type *Lovelace*). The Marketplace checks a repository
+added by link for updates every 48 hours, so a new card release can take up to two days to be
+offered. It is a separate project with its own releases, which is why it is not part of this
 download — keeping a card and an integration in step across two release schedules would be work for
 no benefit.
 
@@ -499,7 +565,7 @@ Your cleaning schedule appears automatically as a calendar — `calendar.{name}_
 
 1. Settings → Devices & Services → iRobot Roomba and Braava → Delete
 2. Restart Home Assistant
-3. Install and set up Roomba+ via HACS
+3. Install Roomba+ from the Marketplace (HACS before Home Assistant 2026.11) and set it up
 
 ### From roomba_rest980
 
@@ -517,7 +583,8 @@ entities exist because the container was running the last time Home Assistant
 started. Keeping them alive through the steps below is what the second note
 is about.
 
-1. Install Roomba+ through HACS and **restart Home Assistant** — but don't set it up yet
+1. Install Roomba+ from the Marketplace (HACS before 2026.11) and **restart Home Assistant**, even
+   if the Marketplace does not ask you to — but don't set it up yet
 2. **Stop the rest980 server container.** Leave the integration installed
 3. Set Roomba+ up — it connects directly to the robot without middleware
 4. Enter your iRobot credentials in the setup flow to restore cloud zone names and favorites
@@ -533,8 +600,8 @@ is about.
 >
 > Once they exist they are safe: the room data sits on the entity itself and
 > does not go away when the server stops. It is only the **next start** that
-> cannot recreate them. That is why the HACS restart comes first, while the
-> container is still running.
+> cannot recreate them. That is why the restart after installing comes first,
+> while the container is still running.
 >
 > If you restart by accident, start the container again, restart Home
 > Assistant, and pick up from step 2.
@@ -594,8 +661,9 @@ Roomba+ is a local-first integration. Here's exactly what talks to what.
    Roomba+ stored for it in Home Assistant: mission history, maps, coverage data and maintenance
    timers. If you want to keep that data, export it first (see
    [Replacing or selling your robot](#replacing-or-selling-your-robot)).
-2. **Remove the files:** in HACS, open Roomba+ and choose **Remove**; for a manual install, delete
-   `custom_components/roomba_plus`. Then restart Home Assistant.
+2. **Remove the files:** open Roomba+ in the Marketplace (HACS before Home Assistant 2026.11) and
+   remove it there; for a manual install, delete `custom_components/roomba_plus`.
+   Then restart Home Assistant.
 
 The robot itself is not changed: it keeps its schedules and settings, and the iRobot app works as
 before.
@@ -648,15 +716,17 @@ Roomba+ is maintained by one person — field-tester reports and pull requests a
 
 ## Credits
 
-**Field testing** — real-device reports from these community members have directly driven bug fixes, cancelled features that didn't hold up, and shaped the version plan: **Thonno** (i7+), **veronoicc** (i7+, i8+), **boutXIII** (Braava jet m6), **ronluna** (S9+), **KingAntDesigns** (Braava jet m6, j7+), **mdarocha** (i3+), **chairstacker**, **jayjay13011**, **DaRealGuGu**, **arielgr**, **utkjmitch**, **jadestar1864** (V4/Prime). Thank you all.
+**Field testing** — real-device reports from these community members have directly driven bug fixes, cancelled features that didn't hold up, and shaped the version plan: **Thonno** (i7+), **veronoicc** (i7+, i8+), **boutXIII** (Braava jet m6), **ronluna** (S9+), **KingAntDesigns** (Braava jet m6, j7+), **mdarocha** (i3+), **chairstacker**, **jayjay13011**, **DaRealGuGu**, **arielgr**, **utkjmitch**, **jadestar1864** (V4/Prime), and since 4.3 among others **Baby-scarf** (two Prime robots on one account), **tankdeer** (600), **rodelero1** (i7), **AdamVig** (j7+), **AlbertoMPinto** (Combo j9+), **kyoheimukaida** (Combo j9+), **homux-tech** (Combo 505), **pk-1966**, **nareso** (j7+), **ScenicSystemsLLC**, **molnarpeterhu** and **mattdmrc**. Thank you all.
 
 Some findings were only possible because two people reported the same thing differently: a mode number that meant "normal" on one robot and "smart" on another, or a room name the app showed and the API did not. Neither would have been caught from a single account.
 
 **Code** — **[@jouwdan](https://github.com/jouwdan)** found that the V4/Prime map stream carries a second URL alongside the raw occupancy grid, and that room outlines live in the map bundle rather than in the metadata endpoint — which fixed a rooms map that was unavailable on three separate models. Also brought the Roomba Max 705 (W155042) into the tested set.
 
+**[@mdarocha](https://github.com/mdarocha)** contributed i3+ support, Prime maintenance parity and presence fixes; **[@tar-gezed](https://github.com/tar-gezed)** the Prime mission history without a `missionId` and the Prime map colours by cleaning mode; **[@JoshHobbs](https://github.com/JoshHobbs)** the same room on two maps; **[@Rickeeh](https://github.com/Rickeeh)** the inner rings of Prime map borders.
+
 **Translation** — **mdarocha** contributed the Polish (`pl`) translation, **boutXIII** contributed the French (`fr`) translation.
 
-**[roombapy](https://github.com/pschmitt/roombapy)** — Python library for local MQTT/TLS communication with Roomba robots. Roomba+ has used it since the beginning and pins `2.0.2`, the async rewrite; this project contributed the RRTP position protocol and its reply-shape fix back to it.
+**[roombapy](https://github.com/pschmitt/roombapy)** — Python library for local MQTT/TLS communication with Roomba robots. Roomba+ has used it since the beginning and needs `2.0.2` or newer, the async rewrite; this project contributed the RRTP position protocol and its reply-shape fix back to it.
 
 **[dorita980](https://github.com/koalazak/dorita980)** by Facu ZAK (koalazak) — Pioneering work documenting the local MQTT protocol, the iRobot cloud login (Gigya → iRobot), and Smart Map commands.
 

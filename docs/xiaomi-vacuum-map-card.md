@@ -4,7 +4,7 @@
 
 [lovelace-xiaomi-vacuum-map-card](https://github.com/PiotrMachowski/lovelace-xiaomi-vacuum-map-card) (XVMC) by PiotrMachowski renders a live vacuum map with interactive room-cleaning support. This guide covers setting it up with Roomba+.
 
-> **Requires:** Roomba+ v2.7.1+, cloud credentials configured, UmfAligner confidence ≥ 0.70 (typically after 2–4 missions with room crossings), xiaomi-vacuum-map-card installed via HACS.
+> **Requires:** Roomba+ v2.7.1+, cloud credentials configured, UmfAligner confidence ≥ 0.70 (typically after 2–4 missions with room crossings), xiaomi-vacuum-map-card installed from the Marketplace (HACS before Home Assistant 2026.11).
 
 ---
 
@@ -37,7 +37,7 @@ There are two ways to set up the room overlay, depending on your XVMC version:
   `rooms` attribute — no measurement needed. See
   **[Path B](#path-b--xvmc-before-v241-manual)**.
 
-To check your version: HACS → Frontend → Xiaomi Vacuum Map Card. If "Roomba+"
+To check your version, open Xiaomi Vacuum Map Card in the Marketplace (in HACS: HACS → Frontend). If "Roomba+"
 appears in the card editor's `vacuum_platform` dropdown, you're on v2.4.1+ and
 can use Path A.
 
@@ -288,7 +288,7 @@ The `rooms` attribute and calibration are only accurate once UmfAligner confiden
 
 **No room overlay at all, and you're on XVMC v2.4.1+ (Path A):**
 - Confirm **Roomba+** is selected as `vacuum_platform`. If it's not in the
-  dropdown, you're on an XVMC older than v2.4.1 — update XVMC via HACS, or use
+  dropdown, you're on an XVMC older than v2.4.1 — update XVMC from the Marketplace (or HACS), or use
   [Path B](#path-b--xvmc-before-v241-manual) instead.
 - After selecting Roomba+, you should see three room modes ("Clean room",
   "Clean room (two pass)", "Clean room (smart start)"). If you don't, the
