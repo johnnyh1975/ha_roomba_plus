@@ -1,6 +1,6 @@
-# Roomba+ — V4/Prime robots
+[Roomba+](../README.md) › [Documentation](README.md) › V4/Prime robots
 
-[← Roomba+](../README.md)
+# Roomba+ — V4/Prime robots
 
 iRobot's newer robots — the Combo and Plus 400 series, the Combo 105 and 505,
 the Roomba Max 705 and similar — use a different protocol, called *Prime* or
@@ -160,3 +160,7 @@ connection (since 4.5.4).
 
 The protocol work behind each confirmed piece is in the
 [release notes](../release-notes/).
+
+---
+
+[Documentation home](README.md) · [Troubleshooting](TROUBLESHOOTING.md) · [Questions and reports](https://github.com/johnnyh1975/ha_roomba_plus/issues)

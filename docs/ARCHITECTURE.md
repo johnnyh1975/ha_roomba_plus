@@ -1,3 +1,5 @@
+[Roomba+](../README.md) › [Documentation](README.md) › Architecture
+
 # Architecture
 
 Written after a review in July 2026, at ~45,000 lines of integration code and 4,282 tests. It
@@ -373,3 +375,7 @@ Two worth knowing:
 - **Watch for over-broad `suppress`/`except`.** Three separate bugs in one session were hidden by
   error handling wide enough to swallow the evidence — including a test that suppressed the very
   exception proving it called a function that did not exist.
+
+---
+
+[Documentation home](README.md) · [Troubleshooting](TROUBLESHOOTING.md) · [Questions and reports](https://github.com/johnnyh1975/ha_roomba_plus/issues)

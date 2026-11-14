@@ -1,4 +1,4 @@
-[← Roomba+](../README.md)
+[Roomba+](../README.md) › [Documentation](README.md) › xiaomi-vacuum-map-card integration
 
 # xiaomi-vacuum-map-card integration
 
@@ -348,4 +348,4 @@ card editor, your card is older than v2.4.1; update it or use
 
 ---
 
-*[Roomba+](../README.md) · [Features](FEATURES.md) · [Automations](AUTOMATIONS.md) · [API](API.md) · [Troubleshooting](TROUBLESHOOTING.md)*
+[Documentation home](README.md) · [Troubleshooting](TROUBLESHOOTING.md) · [Questions and reports](https://github.com/johnnyh1975/ha_roomba_plus/issues)

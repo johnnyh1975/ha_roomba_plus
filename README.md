@@ -25,6 +25,7 @@ history are made up.</sub>
 
 ## Contents
 
+- [Where to start](#where-to-start)
 - [Highlights](#highlights)
 - [Supported robots](#supported-robots)
 - [How it compares](#how-it-compares)
@@ -32,11 +33,26 @@ history are made up.</sub>
 - [Setup](#setup)
 - [First steps](#first-steps)
 - [What's new in 4.6 (beta)](#whats-new-in-46-beta)
+- [V4/Prime robots](#v4prime-robots)
+- [Known limitations](#known-limitations)
+- [Data privacy](#data-privacy)
 - [Documentation](#documentation)
 - [Removal](#removal)
 - [Help and contributing](#help-and-contributing)
 - [Credits](#credits)
 - [License](#license)
+
+## Where to start
+
+| I want to … | Go to |
+|---|---|
+| Install Roomba+ | [Installation](#installation) |
+| Set up my robot | [Setup](#setup), then [First steps](#first-steps) |
+| Know what works on my robot | [Supported robots](#supported-robots) · Prime: [V4/Prime robots](#v4prime-robots) |
+| Clean rooms, start on conditions, get notified | [Automations & dashboards](docs/AUTOMATIONS.md) |
+| Fix a problem | [Troubleshooting](docs/TROUBLESHOOTING.md) |
+| Look up an entity, action or option | [Feature reference](docs/FEATURES.md) |
+| See everything | [Documentation home](docs/README.md) |
 
 ## Highlights
 
@@ -192,10 +208,40 @@ yet, so reports are welcome.
 
 Details: release notes [b1](release-notes/v4.6.0b1.md), [b2](release-notes/v4.6.0b2.md) · [upgrade notes](docs/UPGRADING.md#v460--from-v45x).
 
+## V4/Prime robots
+
+The newer robots — Combo and Plus 400 series, Combo 105 and 505, Roomba Max — have no
+local connection; Roomba+ reaches them through iRobot's cloud, so they need your iRobot
+account and internet. Rooms, zones, favourites, the live map, maintenance and mission
+history work on them, and since 4.6 they get the entities Classic robots have wherever the
+robot reports the data. Power off, spot cleaning and map training have no Prime command.
+Details, and what is not yet confirmed on a robot: [V4/Prime robots](docs/PRIME.md).
+
+## Known limitations
+
+- **A 900-series robot cannot be sent to a room.** Roomba+ finds its rooms from where it
+  cleaned and tracks them, but the robot only cleans the whole home. Its room shapes follow
+  coverage, not walls.
+- **A 600-series robot has no map**, so the live map and everything about rooms do not
+  apply to it.
+- **No voice sentences of its own.** Scripts that use the response actions can be run from
+  Assist.
+
+All of them, and why: [Known limitations](docs/FEATURES.md#known-limitations).
+
+## Data privacy
+
+Classic robots are reached on your own network; nothing leaves your Home Assistant unless
+you add an iRobot account, and then only to iRobot, the same servers the app uses. Roomba+
+has no server of its own, no analytics and no telemetry. A diagnostics download is made only
+when you click it, and carries no password, address or account details. Everything stored,
+how often the cloud is asked, and what a download contains: [Data privacy](docs/DATA_PRIVACY.md).
+
 ## Documentation
 
 | | |
 |---|---|
+| [Documentation home](docs/README.md) | Every page, by what you want to do |
 | [Feature reference](docs/FEATURES.md) | Every entity, action, event and option, and which robots support it |
 | [V4/Prime robots](docs/PRIME.md) | What works on the cloud robots, what does not, and why |
 | [Automations & dashboards](docs/AUTOMATIONS.md) | Recipes and the shipped blueprints |

@@ -1,14 +1,23 @@
+[Roomba+](../README.md) › [Documentation](README.md) › Upgrade Notes
+
 # Roomba+ — Upgrade Notes
 
-[← Roomba+](../README.md)
+What changes for you when you update, version by version. Only versions with
+something to do, a change you will notice, or a sensor that needs time to learn
+are listed; most releases need nothing beyond updating.
 
-Per-version upgrade notes and config entry migrations, oldest relevant
-first appears last. Only versions with a genuine migration step, a
-behaviour change, or a "why is this sensor still Unknown" learning-period
-note are listed — most releases need zero action beyond updating.
+**Coming from:**
+
+| Your version | Read |
+|---|---|
+| 4.5.x | [4.6.0](#v460--from-v45x) |
+| 4.4.x | [4.5.0](#v450--from-v44x), then 4.5.3, 4.5.4 and 4.6.0 below |
+| 4.3.x or older | The notes of your line under [Older versions](#older-versions), then everything above them |
+
+Release notes, with everything that changed in each version:
+[GitHub Releases](https://github.com/johnnyh1975/ha_roomba_plus/releases).
 
 ---
-
 ## v4.6.0 — from v4.5.x
 
 Nothing to do. What you will notice:
@@ -85,7 +94,6 @@ Nothing to do. What you will notice:
   phase, signal) are not kept.
 
 ---
-
 ## v4.5.4 — from v4.5.x
 
 Nothing to do. Two visible changes:
@@ -129,7 +137,6 @@ Two maintenance fixes take effect by themselves:
   had mapped such a duplicate to an area, map the zone entry instead.
 
 ---
-
 ## v4.5.3 — from v4.5.x
 
 - **A 600-series Roomba added through the iRobot account** (SKU starting
@@ -144,7 +151,6 @@ Two maintenance fixes take effect by themselves:
   4 = full).
 
 ---
-
 ## v4.5.0 — from v4.4.x
 
 Maintenance was rebuilt around one set of entries (see
@@ -210,6 +216,12 @@ an existing installation:
   automations up again.
 
 ---
+## Older versions
+
+Click a line to open its notes.
+
+<details>
+<summary><b>4.4.x</b> — 5 versions with notes (4.4.0 to 4.4.4)</summary>
 
 ## v4.4.4 — from v4.4.3
 
@@ -230,8 +242,6 @@ when nothing was. It now says whether the robot is registered to
 another iRobot account, or that the account returned no robots. Needs
 roombapy-prime 0.7.1, which Home Assistant installs with this version.
 
----
-
 ## v4.4.3 — from v4.4.2
 
 **The *Cleaning mode* selector now actually reaches the robot**: the
@@ -239,8 +249,6 @@ Start button, and room or zone cleaning that names no mode of its own.
 Until now the selector was never read. If you set it once and forgot
 it, check what it shows before the next run, especially on a robot that
 mops. Nothing else to change.
-
----
 
 ## v4.4.2 — from v4.4.1
 
@@ -266,8 +274,6 @@ setting to change; the second only turns the whole picture.
 debug logging is on for Roomba+ (the integration page, *Enable debug
 logging*), because it shows the floor plan of your home.
 
----
-
 ## v4.4.1 — from v4.4.0
 
 **Turn of the live path turns the path already drawn.** A path saved
@@ -282,8 +288,6 @@ reload is needed any more.
 4.4.1 that clears the old pack's baseline, and the next reading with the
 pack charged to 95 % or more sets the new one.
 
----
-
 ## v4.4.0 — from v4.3.7
 
 **A map turned in the iRobot app:** the live path is turned back by the
@@ -297,7 +301,10 @@ source documents them; their labels were made up. If an automation
 compares the last error's description or action for one of these codes,
 it now sees an empty string. The sensor still reports the code.
 
----
+</details>
+
+<details>
+<summary><b>4.3.x</b> — 6 versions with notes (4.3.0 to 4.3.6)</summary>
 
 ## v4.3.6 — from v4.3.5
 
@@ -306,8 +313,6 @@ first pause or resume before, so it never changed anything. With it
 switched on, your schedules are now switched off in the iRobot app while
 somebody is home and back on once everyone has been away for the set
 time; only the schedules Roomba+ switched off are switched back on.
-
----
 
 ## v4.3.4 — from v4.3.3
 
@@ -337,8 +342,6 @@ the new text.
 by copying files rather than through the Marketplace or HACS: 4.3.4 no longer has it, and
 nothing reads it.
 
----
-
 ## v4.3.3 — from v4.3.2
 
 **`clean_room` sends a room on another map to that map.** Room names
@@ -365,8 +368,6 @@ the rooms map too. If you set a rotation in 4.3.2 to make one of these
 pictures match, check it again: the same setting now turns all three
 alike. A card placing points on the coverage map reads `mirror_x` from
 `render_extent_mm`, which is false again on these robots.
-
----
 
 ## v4.3.2 — from v4.3.1
 
@@ -416,8 +417,6 @@ date. An automation keyed on `filter_maintenance` or
 `brush_maintenance` still finds them; `brush_maintenance` reads
 "Replace the main brushes" now, which is what ticking it always did.
 
----
-
 ## v4.3.1 — from v4.3.0
 
 **A 900-series' maps turn the right way round.** The cleaning path, the
@@ -446,8 +445,6 @@ minute that cleaned nothing is no longer recorded. Ones already stored
 stay. A mission stored twice under two ids (same start and end within
 two minutes) is folded into one when Home Assistant starts; a 900-series'
 recharge segments are not touched.
-
----
 
 ## v4.3.0 — from v4.2.x
 
@@ -509,7 +506,10 @@ Home Assistant now ends a Prime robot's cloud connection for good.
 Before, a hidden connection could stay behind and compete with the next
 one.
 
----
+</details>
+
+<details>
+<summary><b>4.2.x</b> — 29 versions with notes (4.2.0 to 4.2.21)</summary>
 
 ## v4.2.21 — from v4.2.20
 
@@ -524,8 +524,6 @@ earlier than before. An automation comparing these times against a
 fixed hour may need a look. On Classic, *Last cleaned – room* may jump
 forward: it showed the oldest clean still in the history until now.
 
----
-
 ## v4.2.20 — from v4.2.19
 
 **Nothing to do.** New attributes only:
@@ -538,8 +536,6 @@ forward: it showed the oldest clean still in the history until now.
 attribute too.** If you regenerate a xiaomi-vacuum-map-card room
 configuration, its ids follow the new names. An existing configuration
 keeps working: `clean_room` still accepts the original name.
-
----
 
 ## v4.2.19 — from v4.2.18
 
@@ -576,8 +572,6 @@ Before, a zone went out as a room with the zone's number, and the robot
 cleaned whatever room had that number, or nothing. If an automation
 pressed it for a zone and you worked around the result, check it.
 
----
-
 ## v4.2.18 — from v4.2.17
 
 **Switching the maintenance list on works without a restart.** In 4.2.17
@@ -587,8 +581,6 @@ it failed the reload; a restart had already set that right.
 always were; the feature guide had said otherwise. Switch them on under
 Configure → Connection settings → *Draw room names on the map image*.
 
----
-
 ## v4.2.17 — from v4.2.16
 
 **The maintenance to-do list is opt-in on Classic robots too.** Switch
@@ -597,16 +589,12 @@ to-do list*. Left-over `unavailable` to-do entities from before it
 became opt-in are removed at start; a dashboard card that points at one
 shows *Entity not found* until the list is switched on.
 
----
-
 ## v4.2.16 — from v4.2.15
 
 **Cleaned rooms are listed in the order they were cleaned.** They were
 listed last room first: the vacuum's `last_cleaned_rooms`, the REST
 mission list and the export. A template that took the first entry as
 the first room cleaned got the last one; it now gets the first.
-
----
 
 ## v4.2.15 — from v4.2.14
 
@@ -620,16 +608,12 @@ missing.
 and overdue rooms can list a room fewer for missions that only reached
 into it.
 
----
-
 ## v4.2.14 — from v4.2.13
 
 **The rooms recorded for a mission follow the cloud's room events** once
 they arrive, in the REST export and the diagnostics too. A mission can
 therefore list fewer rooms than room tracking saw, for example a room
 behind a closed door.
-
----
 
 ## v4.2.13 — from v4.2.12
 
@@ -644,8 +628,6 @@ last room of a mission counts only if the robot cleaned there. Room
 history and overdue rooms can therefore list one room fewer than before
 for missions that ended early.
 
----
-
 ## v4.2.12 — from v4.2.11
 
 **Mission elapsed time reads *Unknown* on the dock.** It kept a number
@@ -658,8 +640,6 @@ recharge.** Mission start used to read *Unknown* while the robot topped
 up on the dock. An automation that treated that as "mission over" should
 use the **Mission active** binary sensor, which has always stayed on
 through a recharge.
-
----
 
 ## v4.2.11 — from v4.2.10
 
@@ -805,8 +785,6 @@ you could otherwise notice.
   and new code: identical room changes, identical refusals, identical
   end
 
----
-
 ## v4.2.10 — from v4.2.9
 
 One new sensor appears on its own: **Missions – Last area**, the square
@@ -820,8 +798,6 @@ the most recent one, separately per cleaning mode. Anything measured
 before this release counts as a single run, so the figures move for a
 mission or two and then steady.
 
----
-
 ## v4.2.9 — from v4.2.8
 
 Nothing to do.
@@ -834,8 +810,6 @@ shorter than the estimate they replaced.
 visible**, that notice was counting entries that never load — an ignored
 discovery or a disabled entry. It will not reappear.
 
----
-
 ## v4.2.8 — from v4.2.7
 
 Nothing to do.
@@ -843,8 +817,6 @@ Nothing to do.
 **If your room display moved but the percentage stayed at 0%**, that is
 this release. It affected any robot that cleans a room faster than its
 estimate.
-
----
 
 ## v4.2.7 — from v4.2.6
 
@@ -858,8 +830,6 @@ began with no time estimates**, that is this release. The measurements
 rooms of whichever mission last resolved successfully — often a much
 older one. It now lists the rooms the robot actually worked in.
 
----
-
 ## v4.2.6 — from v4.2.5
 
 Nothing to do.
@@ -868,8 +838,6 @@ Nothing to do.
 one this release repairs. The first mission after upgrading also gives
 your robot a real time for each room it finishes, so the second one
 tracks better than the first.
-
----
 
 ## v4.2.5 — from v4.2.4
 
@@ -892,8 +860,6 @@ whose buttons already existed.
 now accepts `cleaning_mode`, `smart_scrub` and `pad_wetness`. Existing
 `room_passes` blocks keep working unchanged.
 
----
-
 ## v4.2.4 — from v4.2.3
 
 Nothing to do.
@@ -902,8 +868,6 @@ Nothing to do.
 that addresses it. It now follows the robot's own report that it
 finished a room and drove away, rather than waiting for a time estimate
 to agree.
-
----
 
 ## v4.2.3 — from v4.2.2
 
@@ -914,8 +878,6 @@ robot was holding the bad value rather than us sending it. This clears
 it — or one cleaning started from the iRobot app on that map clears it
 immediately, on any version.
 
----
-
 ## v4.2.2 — from v4.2.1
 
 Nothing to do.
@@ -923,13 +885,9 @@ Nothing to do.
 **If your robot has more than one map** and cleaning rooms on the
 second one used to fail with a localisation error, that is fixed.
 
----
-
 ## v4.2.1 — from v4.2.0
 
 Nothing to do.
-
----
 
 ## v4.2.0 — from any 4.1.x
 
@@ -948,8 +906,6 @@ cannot perform it — the selection was being quietly ignored before.
 never worked on i7/s9/j7-class robots. They do now; you may want to set
 them again.
 
----
-
 ## v4.2.0b7 — from v4.2.0b6
 
 **The readiness sensor changes its values — check your automations.**
@@ -961,27 +917,19 @@ stops silently. Compare to `"ready"` instead.
 
 Otherwise the same fixes as 4.1.8.
 
----
-
 ## v4.2.0b6 — from v4.2.0b5
 
 Nothing to do. Same changes as 4.1.7 — see those notes.
 
----
-
 ## v4.2.0b5 — from v4.2.0b4
 
 Nothing to do. Three fixes, also in 4.1.6 — see those notes.
-
----
 
 ## v4.2.0b4 — from v4.2.0b3
 
 **Take this one.** b3 stopped every entity from loading on Home
 Assistant 2026.x. If your robots disappeared after updating to b3, this
 restores them; nothing needs reconfiguring.
-
----
 
 ## v4.2.0b3 — from v4.2.0b2
 
@@ -995,8 +943,6 @@ exactly the same. The same value now also appears as `pick_events`,
 which is what it actually measures — the old key is not going away
 without notice.
 
----
-
 ## v4.2.0b2 — from v4.2.0b1
 
 A straight update. Four field fixes and one that needed a library
@@ -1006,8 +952,6 @@ release; see the release notes.
 never did: the firmware reads each pair as one value and dropped both
 halves when they arrived separately, while reporting success. If you had
 given up on those two controls, try them again.
-
----
 
 ## v4.2.0b1 — from v4.1.2
 
@@ -1038,15 +982,16 @@ exists to find.
 3.13.2+), which is what the manifest has claimed since 4.0. CI had been
 testing 2025.1.4 on Python 3.12 — a combination no installation can be in.
 
----
+</details>
+
+<details>
+<summary><b>4.1.x</b> — 2 versions with notes (4.1.0 to 4.1.4)</summary>
 
 ## v4.1.4 — from v4.1.x
 
 Nothing to do. Four field fixes; see the 4.1.2 release notes. Several
 were silent failures, so an automation written to work around one may
 behave differently now.
-
----
 
 ## v4.1.0 — from v4.0.x
 
@@ -1059,7 +1004,10 @@ rooms, the zone button ignored selections from non-active maps, and
 `clean_room` could not name rooms on other maps. An automation written to
 work around any of those may behave differently now that they work.
 
----
+</details>
+
+<details>
+<summary><b>4.0.x</b> — 1 version with notes (4.0.0 to 4.0.0)</summary>
 
 ## v4.0.0 (alpha) — from any v3.x
 
@@ -1183,6 +1131,8 @@ Config entry migration (24 → 25): if your current-room `device_tracker` entity
 
 **Coordinate-system fix, EPHEMERAL-tier (900-series) only — a genuine discontinuity, not silent:** a confirmed axis-convention bug in live-map/room-detection pose handling has been corrected. This changes how X/Y map to real-world directions for all data recorded from this update onward — GridStore, room detection, and outline data accumulated *before* this update will not spatially line up with data recorded *after* it. If your room map looks scrambled right after upgrading, this is why. There is currently no dedicated action to reset just the spatial/room data (removing and re-adding the integration does **not** clear it either — Home Assistant doesn't delete a removed integration's storage files automatically); the practical effect will fade out on its own as new missions' data outweighs the old, though a proper reset option is worth adding — feedback welcome. Also improved in this release: room-recognition data is no longer discarded after a stuck event — it's corrected against the dock position once the robot returns, instead of being thrown away for the rest of the mission.
 
+</details>
+
 ---
 
-*[Roomba+](../README.md) · [Features](FEATURES.md) · [Troubleshooting](TROUBLESHOOTING.md)*
+[Documentation home](README.md) · [Troubleshooting](TROUBLESHOOTING.md) · [Questions and reports](https://github.com/johnnyh1975/ha_roomba_plus/issues)

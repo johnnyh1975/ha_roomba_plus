@@ -1,6 +1,6 @@
-# Roomba+ — Moving to Roomba+, and moving robots
+[Roomba+](../README.md) › [Documentation](README.md) › Moving to Roomba+, and moving robots
 
-[← Roomba+](../README.md)
+# Roomba+ — Moving to Roomba+, and moving robots
 
 - [From the built-in Roomba integration](#from-the-built-in-roomba-integration)
 - [From roomba_rest980](#from-roomba_rest980)
@@ -128,3 +128,7 @@ twice does no harm.
 A Home Assistant backup carries everything Roomba+ stored. If you move without
 one, call `roomba_plus.create_backup` for each robot before, and
 `roomba_plus.restore_backup` after the move.
+
+---
+
+[Documentation home](README.md) · [Troubleshooting](TROUBLESHOOTING.md) · [Questions and reports](https://github.com/johnnyh1975/ha_roomba_plus/issues)

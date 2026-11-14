@@ -261,8 +261,9 @@ rules:
   docs-known-limitations:
     status: done
     comment: >
-      docs/FEATURES.md 'Known limitations'; for V4/Prime robots
-      docs/PRIME.md 'What is not there' and 'Not yet confirmed on a robot'.
+      README 'Known limitations' (the main ones) and docs/FEATURES.md
+      'Known limitations'; for V4/Prime robots docs/PRIME.md 'What is not
+      there' and 'Not yet confirmed on a robot'.
   docs-supported-devices:
     status: done
     comment: >

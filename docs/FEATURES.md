@@ -1,6 +1,6 @@
-# Roomba+ — Feature Reference
+[Roomba+](../README.md) › [Documentation](README.md) › Feature Reference
 
-[← Roomba+](../README.md)
+# Roomba+ — Feature Reference
 
 Full reference for every entity, service, and configuration option. For a
 quick "does this work on my robot" overview, see the capability matrix in
@@ -80,7 +80,6 @@ protocol does not give the data. Where that is so, the reason is in
 | Area last vacuumed / mopped, pause timeout, shipped blueprints | ✓ | ✓ |
 | Cloud stream times | — (one local connection, `mqtt_stale`) | ✓ |
 
-
 ---
 
 ## Status, control & error intelligence
@@ -128,8 +127,6 @@ protocol does not give the data. Where that is so, the reason is in
 > A zone can also be missing simply because no map has been drawn yet.
 > Since v4.1.2 the list refills itself when the map arrives; before that
 > it needed a restart.
-
-
 
 **Actions** (Settings → Automations → Actions → Roomba+):
 
@@ -378,7 +375,7 @@ Before v4.2.5 only `two_pass` could be set per room, although the code underneat
 
 The iRobot app's *Skip*: the robot leaves the room it is cleaning and goes on to the next room of the mission.
 
-- **Button** `button.{name}_skip_current_room` (*Skip current room*), on Classic robots that offer skipping. It can be pressed only while the robot cleans.
+- **Button** `button.{name}_skip_room` (*Skip current room*), on Classic robots that offer skipping. It can be pressed only while the robot cleans.
 - **Command**, for automations and scripts:
 
 ```yaml
@@ -490,7 +487,6 @@ nobody can match to a room.
 
 <img src="images/zone-management.png" alt="The Zone management dialog: a map of five detected rooms, each in its own colour with its name, and the list of rooms to rename or hide" width="420">
 
-
 Configure: Settings → Devices & Services → Roomba+ → Configure → **Zone management**
 
 - Browse all zones in a structured index, with the area map above it on a 900-series: each area in its colour with its name or number (since 4.3.2)
@@ -596,7 +592,6 @@ A Repair Issue (`battery_contact_suspect`) fires on two independent signals that
 #### Cleaning map
 
 <img src="images/live-map.png" alt="The live map during a clean: room outlines with names, the robot's path in blue over the floor it has covered, and the robot's position" width="360">
-
 
 `image.{name}_map` (shown as *Cleaning path*; an installation from an older version may call it `image.{name}_cleaning_map`) — live map rendered as a HA image entity. White background, blue travel path, light-blue cleaned area, dock marker, robot position with direction arrow. Stuck events marked on the map. Map state persists across HA restarts.
 
@@ -832,7 +827,6 @@ On older XVMC versions (no Roomba+ platform in the dropdown), define `map_modes`
 #### Coverage map (v2.2+)
 
 <img src="images/coverage-map.png" alt="The coverage heatmap: the floor as a grid of cells, coloured by how often the robot has cleaned each one" width="300">
-
 
 `image.{name}_coverage_map` — EMA-weighted occupancy heatmap, updated at each mission end.
 
@@ -1416,7 +1410,6 @@ The `.../mission/{n_mssn}/path` endpoint (v3.2.0) reconstructs a mission's room-
 
 ![The robot's cleaning schedule in Home Assistant's calendar, as recurring cleaning events on three weekdays](images/schedule-calendar.png)
 
-
 `calendar.{name}_schedule` — your robot's cleaning schedule (`cleanSchedule2` on i/s/j-series, legacy `cleanSchedule` on 900/600-series) as recurring Home Assistant calendar events. Always created on every tier — an empty calendar just means no schedule is currently set. Each event uses a fixed 60-minute placeholder duration, since iRobot's schedule data carries a start time only, never a planned duration.
 
 **Writable on every generation**, from the calendar itself: create, move or delete a cleaning and it reaches the robot.
@@ -1862,7 +1855,6 @@ measurements of two different things.
 
 <img src="images/connection-settings.png" alt="The Connection settings step of the Configure dialog, with the map options, wall thickness and door width, the repeat for an ignored command and the pause timeout" width="420">
 
-
 Settings → Devices & Services → Roomba+ → **Configure**. Nothing here is required; the defaults are
 what a robot does out of the box.
 
@@ -2067,4 +2059,4 @@ Classic it had never fired before 4.6.0.
 
 ---
 
-*[Roomba+](../README.md) · [Automations](AUTOMATIONS.md) · [API](API.md) · [Comparison](COMPARISON.md) · [Troubleshooting](TROUBLESHOOTING.md)*
+[Documentation home](README.md) · [Troubleshooting](TROUBLESHOOTING.md) · [Questions and reports](https://github.com/johnnyh1975/ha_roomba_plus/issues)

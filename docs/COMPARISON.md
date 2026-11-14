@@ -1,4 +1,4 @@
-[← Roomba+](../README.md)
+[Roomba+](../README.md) › [Documentation](README.md) › Roomba Integrations — Feature Comparison
 
 # Roomba Integrations — Feature Comparison
 
@@ -261,4 +261,4 @@ no reference to the newer cloud protocol anywhere in the component.
 
 ---
 
-*[Roomba+](../README.md) · [Features](FEATURES.md) · [Automations](AUTOMATIONS.md) · [API](API.md) · [Troubleshooting](TROUBLESHOOTING.md)*
+[Documentation home](README.md) · [Troubleshooting](TROUBLESHOOTING.md) · [Questions and reports](https://github.com/johnnyh1975/ha_roomba_plus/issues)

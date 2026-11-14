@@ -1,3 +1,5 @@
+[Roomba+](../README.md) › [Documentation](README.md) › Data privacy & data flow
+
 # Data privacy & data flow
 
 What Roomba+ sends where, what it keeps on your disk, and what is in a
@@ -137,3 +139,7 @@ What Roomba+ cannot remove is anything held by **iRobot** — mission history,
 maps and schedules live on their servers, and this integration only reads
 them. Deleting the integration does not delete anything from your iRobot
 account.
+
+---
+
+[Documentation home](README.md) · [Troubleshooting](TROUBLESHOOTING.md) · [Questions and reports](https://github.com/johnnyh1975/ha_roomba_plus/issues)

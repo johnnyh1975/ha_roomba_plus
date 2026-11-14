@@ -416,6 +416,14 @@ jobs:
       - name: Check relative markdown links
         run: python3 scripts/check_markdown_links.py
 
+      # 4.6.0: about twenty names in the docs did not exist in the code
+      # (entity ids, an action, Prime ids without their prefix), and the
+      # product links into docs/ must survive a reorganised doc folder.
+      - name: Check names in the docs and links from the product
+        run: |
+          pip install pyyaml
+          python3 scripts/check_doc_names.py
+
       # STAGE 0 GUARDS. Each was written after a real bug of its own
       # shape, and each found another on its first run.
       - name: Check generation parity

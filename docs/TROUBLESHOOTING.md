@@ -1,17 +1,107 @@
-[← Roomba+](../README.md)
+[Roomba+](../README.md) › [Documentation](README.md) › Troubleshooting
 
 # Troubleshooting
+
+Find the area of your problem below, then the symptom. Each entry says which robots it
+applies to. If nothing here matches, open an [issue](https://github.com/johnnyh1975/ha_roomba_plus/issues)
+with a [diagnostics download](#sending-a-diagnostics-download).
+
+## Find your problem
+
+**[Installing](#installing)**
+
+- [The Marketplace does not offer the new release yet](#the-marketplace-does-not-offer-the-new-release-yet)
+- [The Marketplace says hacs.json is missing](#the-marketplace-says-hacsjson-is-missing)
+- [Adding Roomba+ fails with cannot import name 'RoombaClient' from 'roombapy'](#adding-roomba-fails-with-cannot-import-name-roombaclient-from-roombapy)
+- [Error occurred loading flow for integration roomba in your log, or a Roomba card you cannot dismiss](#error-occurred-loading-flow-for-integration-roomba-in-your-log-or-a-roomba-card-you-cannot-dismiss)
+- [A robot set up in two integrations (Home Assistant 2026.11 and later)](#a-robot-set-up-in-two-integrations-home-assistant-202611-and-later)
+
+**[Setup & connection](#setup--connection)**
+
+- ["Failed to connect" during setup](#failed-to-connect-during-setup)
+- [Setup fails and a rest980 server is still running](#setup-fails-and-a-rest980-server-is-still-running)
+- [The iRobot app loses connection when Roomba+ is running](#the-irobot-app-loses-connection-when-roomba-is-running)
+- [A Classic robot was set up cloud-only](#a-classic-robot-was-set-up-cloud-only)
+- [Setup cannot find the robot password](#setup-cannot-find-the-robot-password)
+- [Replacing or selling your robot](#replacing-or-selling-your-robot)
+
+**[The robot does not do what you asked](#the-robot-does-not-do-what-you-asked)**
+
+- [I want to clean one zone on demand, and the app no longer lets me](#i-want-to-clean-one-zone-on-demand-and-the-app-no-longer-lets-me)
+- [The robot accepts a room clean, then sits on the dock](#the-robot-accepts-a-room-clean-then-sits-on-the-dock)
+- [smart_start queues forever / never starts](#smart_start-queues-forever--never-starts)
+- [The robot accepts a command and does nothing](#the-robot-accepts-a-command-and-does-nothing)
+- [Why does my robot keep stopping?](#why-does-my-robot-keep-stopping)
+- [A paused mission disappeared on its own](#a-paused-mission-disappeared-on-its-own)
+- [The robot will not drive home on a low battery](#the-robot-will-not-drive-home-on-a-low-battery)
+- [I sent it to a room on another floor and it got lost](#i-sent-it-to-a-room-on-another-floor-and-it-got-lost)
+- [The robot emptied its bin and I did not ask it to](#the-robot-emptied-its-bin-and-i-did-not-ask-it-to)
+
+**[Map and rooms](#map-and-rooms)**
+
+- [Smart Map zones not appearing (i/s/j-series)](#smart-map-zones-not-appearing-isj-series)
+- [Zone management — changes not reflected in dropdown immediately](#zone-management--changes-not-reflected-in-dropdown-immediately)
+- [clean_room says "rooms from different maps" after deleting the old map](#clean_room-says-rooms-from-different-maps-after-deleting-the-old-map)
+- [clean_room or vacuum.clean_area raises no_valid_segments immediately after setup](#clean_room-or-vacuumclean_area-raises-no_valid_segments-immediately-after-setup)
+- ["Map vacuum segments to areas" repair fires — what do I do?](#map-vacuum-segments-to-areas-repair-fires--what-do-i-do)
+- ["Map vacuum segments to areas" dialog shows no rooms on the left](#map-vacuum-segments-to-areas-dialog-shows-no-rooms-on-the-left)
+- [The live map does not match the room](#the-live-map-does-not-match-the-room)
+- [Rooms are wrong, or fewer than expected](#rooms-are-wrong-or-fewer-than-expected)
+- [cleaned_rooms is empty on a mission that definitely cleaned rooms](#cleaned_rooms-is-empty-on-a-mission-that-definitely-cleaned-rooms)
+- [Room names show as boxes on the map](#room-names-show-as-boxes-on-the-map)
+
+**[Sensors, status and maintenance](#sensors-status-and-maintenance)**
+
+- [filter_last_replaced / brush_last_replaced shows Unknown](#filter_last_replaced--brush_last_replaced-shows-unknown)
+- [Wear Intelligence sensors show Unknown](#wear-intelligence-sensors-show-unknown)
+- [optimal_clean_window shows Unknown](#optimal_clean_window-shows-unknown)
+- [Mission log sensors show Unknown after upgrading](#mission-log-sensors-show-unknown-after-upgrading)
+- [last_error_code shows a stale error after the robot has recovered](#last_error_code-shows-a-stale-error-after-the-robot-has-recovered)
+- [Recent cleaned area / cleaning time show lower values than expected](#recent-cleaned-area--cleaning-time-show-lower-values-than-expected)
+- [Dock contact / Wi-Fi channel / optical dirt detection sensors aren't showing up at all](#dock-contact--wi-fi-channel--optical-dirt-detection-sensors-arent-showing-up-at-all)
+- [Self-calibrating filter/brush thresholds: when do they activate?](#self-calibrating-filterbrush-thresholds-when-do-they-activate)
+- [Mission anomaly detection](#mission-anomaly-detection)
+- [The status says "No contact"](#the-status-says-no-contact)
+- [The status says "Charging mid-mission"](#the-status-says-charging-mid-mission)
+
+**[Schedules, presence and demand cleaning](#schedules-presence-and-demand-cleaning)**
+
+- [demand_clean_blocked stays ON even though the robot is idle](#demand_clean_blocked-stays-on-even-though-the-robot-is-idle)
+- [Demand cleaning never triggers despite being enabled](#demand-cleaning-never-triggers-despite-being-enabled)
+- [Demand cleaning triggers too often / not often enough](#demand-cleaning-triggers-too-often--not-often-enough)
+- [Presence-aware scheduling step not visible in options menu](#presence-aware-scheduling-step-not-visible-in-options-menu)
+
+**[iRobot account, cloud and Prime robots](#irobot-account-cloud-and-prime-robots)**
+
+- [Cloud authentication fails](#cloud-authentication-fails)
+- [The iRobot account lists no robots](#the-irobot-account-lists-no-robots)
+- [Cloud mission history not available for my Roomba 980](#cloud-mission-history-not-available-for-my-roomba-980)
+- [No favourite buttons](#no-favourite-buttons)
+- [A Prime robot that says it is cleaning and is not](#a-prime-robot-that-says-it-is-cleaning-and-is-not)
+- [Mission history export](#mission-history-export)
+- [Mission history import](#mission-history-import)
+
+**[Reporting a problem](#reporting-a-problem)**
+
+- [Before you send a diagnostics download](#before-you-send-a-diagnostics-download)
+- [Sending a diagnostics download](#sending-a-diagnostics-download)
+
+**[Older versions](#older-versions)**: problems fixed before 4.4, for anyone still running an older version.
 
 ---
 
 ## Installing
+
+Installing and updating Roomba+ from the Marketplace or HACS, and the built-in Roomba integration.
 
 From Home Assistant 2026.11, Roomba+ is installed and updated from the
 **Marketplace** (Settings → Marketplace), which is HACS built into Home
 Assistant. On older versions it is HACS. The catalog, the releases and
 Roomba+'s `hacs.json` are the same for both.
 
-**The Marketplace does not offer the new release yet**
+### The Marketplace does not offer the new release yet
+
+**Applies to:** Every robot
 
 The Marketplace reads its catalog every 6 hours, and the catalog itself is
 rebuilt every 4 hours, so a release can take most of a day to appear. A
@@ -19,68 +109,18 @@ pre-release appears only if you switched on **Include pre-releases** in the
 menu of the Roomba+ page, and only while it is newer than the latest stable
 release.
 
-**The Marketplace says `hacs.json` is missing**
+### The Marketplace says `hacs.json` is missing
+
+**Applies to:** Every robot
 
 It is not: `hacs.json` is in the root of the repository, and every release
 carries the `ha_roomba_plus.zip` it names. If you see this, open an issue with
 the lines from your log around the message (Settings → System → Logs), so the
 error underneath can be found.
 
-**HACS shows only `main`, and downloading it hangs** *(HACS before Home
-Assistant 2026.11)*
-
-The log carries a 404:
-
-```
-Download failed - Got status code 404 when trying to download
-.../releases/download/main/ha_roomba_plus.zip
-```
-
-**Fixed by v4.0.0.** Update normally — no beta channel, no manual download.
-4.0.0 is a normal release rather than a pre-release, so it is the newest thing
-HACS can see and offer, and the fallback that produced the 404 no longer
-happens.
-
-**Why `main` used to fail:** with betas off HACS found no eligible release and
-offered the default branch instead. It then looked for a release asset on a tag
-called `main`, which does not exist — so the download 404'd and the wheel spun
-forever. Nothing was wrong with your setup.
-
-**Every v4 release before 4.0.0 was a pre-release**, because the whole v4 line
-ran through alphas and betas. With betas off, HACS had nothing in the v4 line
-to offer at all.
-
-The rest of this section is kept because the mechanism will recur the next time
-a long pre-release series runs — and because it explains why the problem
-appeared when it did. (Found by @pk-1966, who worked it out unaided.)
-
-**The mechanism, read from HACS's own source** rather than guessed (the source
-of HACS before Home Assistant 2026.11; whether the Marketplace reads releases
-the same way has not been checked):
-`RepositoryBase.get_releases()` makes ONE call to GitHub's release list and
-filters what comes back — it does not paginate. GitHub returns 30 releases per
-page by default, so HACS only ever sees the 30 most recent.
-
-By the end of the beta there were **49 v4 pre-releases** on top of v3.5.2. All
-thirty HACS saw were pre-releases, every one skipped when betas were off, and
-it ended up with an empty list — hence the fallback to the default branch.
-
-This is also why it used to work: the stable release stayed reachable until the
-**thirtieth** alpha pushed it out of the window. And it is why publishing 4.0.0
-fixes it outright rather than merely improving it — there is a non-pre-release
-inside the window again.
-
-**Install v3.5.1 manually:** download the `ha_roomba_plus.zip` asset from the
-[v3.5.1 release](https://github.com/johnnyh1975/ha_roomba_plus/releases), unpack
-it into `config/custom_components/roomba_plus/`, and restart. HACS will then
-show it as installed but will not offer updates for it.
-
-That is a consequence of running a long alpha in the same repository as the
-stable line, not something you did wrong.
-
----
-
 ### Adding Roomba+ fails with `cannot import name 'RoombaClient' from 'roombapy'`
+
+**Applies to:** Classic robots · Home Assistant 2026.10 and earlier
 
 The setup dialog stops with "Roomba+ needs the asynchronous `roombapy`
 2.x", and restarting does not help, even after deleting the built-in
@@ -120,9 +160,9 @@ If this error appears on 2026.11 or later all the same, the old library
 comes from somewhere else: look in `custom_components` for an integration
 that requires an older `roombapy`.
 
----
-
 ### `Error occurred loading flow for integration roomba` in your log, or a Roomba card you cannot dismiss
+
+**Applies to:** Classic robots · Home Assistant 2026.10 and earlier
 
 Two symptoms of the same cause. In the log:
 
@@ -209,7 +249,6 @@ built-in one, and nothing installs the old library.
 ```python
 from homeassistant import config_entries
 
-
 class ConfigFlow(config_entries.ConfigFlow, domain="roomba"):
     """Dummy config flow for the overridden Roomba integration."""
 
@@ -235,10 +274,9 @@ integration with an empty one:
   through discovery, or who cannot add Roomba+ because of it (previous
   section).
 
-
----
-
 ### A robot set up in two integrations (Home Assistant 2026.11 and later)
+
+**Applies to:** Classic robots · Home Assistant 2026.11 and later
 
 Roomba+ shows this notice when a robot it runs is also set up in Home
 Assistant's built-in Roomba integration.
@@ -257,15 +295,19 @@ robot in each integration is fine, and gets no notice.
 
 ## Setup & connection
 
-**"Failed to connect" during setup**
+Adding a robot, its local connection, and moving a robot.
+
+### "Failed to connect" during setup
+
+**Applies to:** Classic robots
 
 Press the physical **Clean** button on the robot to start a manual cleaning job, then immediately retry credential retrieval in HA. Some models only respond while actively running.
 
 If automatic pairing fails entirely: → [Retrieve iRobot credentials manually](https://www.home-assistant.io/integrations/roomba/#retrieving-your-credentials)
 
----
+### Setup fails and a rest980 server is still running
 
-**Setup fails and a rest980 server is still running**
+**Applies to:** Classic robots
 
 The robot accepts **one local connection at a time**, and the rest980
 server holds it on port 8883 for as long as its container runs. Roomba+
@@ -288,33 +330,17 @@ slot" errors: **one slot, and whoever holds it wins.** A robot that
 refuses a connection is usually not broken; something else is already
 connected to it.
 
----
+### The iRobot app loses connection when Roomba+ is running
 
-**The iRobot app loses connection when Roomba+ is running**
+**Applies to:** Classic robots
 
 Expected — the robot only allows one local MQTT connection, and Roomba+ holds it. The iRobot app uses the cloud path meanwhile, which works normally.
 
 This used to suggest turning off continuous mode to free the slot. **That option is gone as of v4.2**: roombapy 2.x keeps one supervised connection and has no polling mode to fall back to. To hand the slot to something else — a rest980 container during a migration, say — disable or reload the Roomba+ entry instead.
 
----
+### A Classic robot was set up cloud-only
 
-**Cloud authentication fails**
-
-Since 4.3 the message says which of these it is, in your language:
-
-- **The login was rejected:** check the email address and password of your iRobot account.
-- **The account is temporarily locked:** do *not* re-enter your password. The lock clears by itself, usually within minutes, and every new attempt can extend it. Disable the Roomba+ entries of that account, wait about ten minutes, then enable them again.
-- **Too many active sessions:** close the iRobot app on all devices and wait a few minutes before retrying.
-- **Home Assistant cannot check iRobot's certificate:** the certificate store of the system Home Assistant runs on is missing or out of date. Waiting does not fix this one; updating the system's CA certificates does.
-- **iRobot's certificate has expired**, or **iRobot's cloud has a problem of its own:** on iRobot's side, usually fixed within hours.
-
-All robots on one iRobot account share one cloud login since 4.3, so a failed login is tried once for all of them, not once per robot.
-
-**After changing the iRobot password**, every robot of the account asks for the new one. Enter it for any one of them: the others that had the same old password take the new one and restart by themselves.
-
----
-
-**A Classic robot was set up cloud-only**
+**Applies to:** Classic robots set up from an iRobot account
 
 Until 4.4.3 a Combo j7+ or j9+ added from the iRobot account was set up
 as a cloud-only robot: their SKUs were not in the Classic table, and an
@@ -330,41 +356,38 @@ The same works for any Classic robot that ended up cloud-only. A Prime
 robot has no local connection, so for it the check fails and nothing
 changes.
 
----
+### Setup cannot find the robot password
 
-**The iRobot account lists no robots**
+**Applies to:** Classic robots
 
-The login works, but the setup ends without a robot to pick. Since 4.4.4
-the message says which case it is:
+Choose **"Set up with my iRobot account"**. It is required for
+Combo/V4-generation robots, which have no local setup — and it is also
+the right choice for any robot whose password could not be retrieved
+automatically, whatever its model.
 
-- **The robot is registered to another iRobot account.** Usual with a
-  second-hand robot that the previous owner never removed. Remove it from
-  that account in the iRobot app (or ask the previous owner to), add it
-  to your own account, and run the setup again. Do not retry the setup
-  over and over in the meantime: every attempt is a login, and nothing
-  changes until the robot is moved.
-- **The account returned no robots.** Check that you signed in with the
-  account the robot was added to in the iRobot app. The country is an
-  unlikely cause: every country checked so far reaches the same iRobot
-  servers.
-- **The cloud lists robots the login did not return.** Not seen on a
-  real account yet. Please open an issue with a debug log of the setup
-  attempt; it contains only counts, no robot ids.
+The wording before v4.0.0a47 suggested the option was only for newer
+models. It was not.
 
-"Every robot is already configured" means exactly that: each robot of
-the account already has its entry here.
+Since 4.3 a robot found on your network needs no password at all when
+another robot of the same iRobot account is already running here: the
+password comes from the account.
 
----
+### Replacing or selling your robot
 
-**Cloud mission history not available for my Roomba 980**
+**Applies to:** Every robot
 
-Go to Settings → Roomba+ → Configure → iRobot cloud credentials, re-save your credentials, then restart HA.
+Back up first, then delete the entry; the steps, and how to carry the mission history over to
+a new robot, are in [Moving to Roomba+ → Replacing or selling a robot](MIGRATING.md#replacing-or-selling-a-robot).
 
 ---
 
-## Zones & rooms
+## The robot does not do what you asked
 
-**I want to clean one zone on demand, and the app no longer lets me**
+A start, a room clean or a command that is accepted and then nothing happens, or something else happens.
+
+### I want to clean one zone on demand, and the app no longer lets me
+
+**Applies to:** Prime robots
 
 The iRobot app dropped zone favourites — rooms only. Use
 `roomba_plus.clean_zone` instead (4.0.0a42 and later):
@@ -383,87 +406,9 @@ map card shows. If a zone has no name there, use its numeric id.
 An unknown name raises an error listing the ones that exist, rather than
 skipping it silently: a partial clean looks like a successful one.
 
----
-
-**Before you send a diagnostics download**
-
-Credentials and your BLID are removed automatically. Room names, zone names,
-schedules, map geometry and mission history are **not** — the download is
-useless without them. [What is in it, in full →](DATA_PRIVACY.md)
-
-A partial download is more useful than none: send the block that matters if
-the rest gives you pause.
-
-**If a command seemed to do nothing**, three fields answer most of it, and
-a download taken *while it is still broken* is worth far more than one
-taken after a restart:
-
-- `map.sent_commands` — what Roomba+ actually sent, when, and which rooms
-  or zones it named *(v4.2.5; all robots from v4.2.6)*
-- `push_freshness` — how long since the robot last said anything. "No push
-  message since startup" after a mission means nothing is arriving
-- `map.active_map_versions` and `smart_map.last_command_summary` — which
-  map a command named, which is what a localisation failure turns on
-
----
-
-**Smart Map zones not appearing (i/s/j-series)**
-
-Check the diagnostics download for `"position"` carrying actual
-coordinates, **not** `"cap": {"pose": ...}`.
-
-`cap.pose` is a compile-time constant on lewis firmware — it says
-nothing about whether a robot publishes a position. Four robots across
-three firmware families report `pose: 2` and have never sent one; a
-900-series reports `pose: 1` and sends them continuously. The split
-looks like cause and is a correlation with model generation. If cloud credentials are configured, zone names come directly from the cloud and the naming repair flow is suppressed.
-
----
-
-**Zone management — changes not reflected in dropdown immediately**
-
-Alias and hidden changes are written immediately, but the zone select dropdown may take one MQTT message cycle to refresh. Typically resolves within seconds when the robot is active.
-
----
-
-**`clean_room` says "rooms from different maps" after deleting the old map**
-
-The iRobot cloud cache may take up to 24 hours to clear. Re-save the cloud credentials step in Configure to force an immediate coordinator refresh.
-
----
-
-**`clean_room` or `vacuum.clean_area` raises `no_valid_segments` immediately after setup**
-
-The active pmap ID may not yet be available — typically happens on fresh install or immediately after adding cloud credentials before the first cloud fetch completes. Wait a few minutes and retry. If it persists, check that `region_count_active` in diagnostics is > 0.
-
----
-
-**"Map vacuum segments to areas" repair fires — what do I do?**
-
-This is a one-time HA setup step for `vacuum.clean_area` (HA 2026.3+). Open the vacuum entity → ⚙ Entity settings → "Map vacuum segments to areas", match each robot room to a Home Assistant area, and save. See [Room cleaning setup](FEATURES.md#room-cleaning-setup--ha-areas-vacuumclean_area-ha-20263) in the Feature reference for full instructions.
-
-If you don't use `vacuum.clean_area`, dismiss the repair — `roomba_plus.clean_room` works without it.
-
----
-
-**"Map vacuum segments to areas" dialog shows no rooms on the left**
-
-The left column is populated from the iRobot cloud, so an empty list means the integration has no room data to offer yet. Check, in order:
-
-- **Cloud credentials configured?** Room segments require the cloud coordinator (Settings → Configure → iRobot cloud credentials). Local-only setups have no room names to map.
-- **SMART robot?** Only i/s/j-series robots expose cloud rooms. 900-series (EPHEMERAL) robots have no cloud pmap, so they list no segments here and don't support room- or area-targeted cleaning at all (`clean_room` and `vacuum.clean_area` are SMART-only) — they clean the whole floor.
-- **Map finalized in the iRobot app?** If rooms aren't named/saved in the iRobot app, the cloud returns none. Open the app, confirm the room layout, then re-save the cloud credentials step in Configure to force a coordinator refresh.
-- **First fetch completed?** On a fresh install, wait a few minutes for the first cloud poll, then reopen the dialog. Check `region_count_active` in the diagnostics download is > 0.
-
----
-
-**Mission progress gets stuck reporting a completed room as still in progress**
-
-On lewis-firmware robots (i7+/s9+), the robot occasionally reports a brief non-cleaning phase between rooms that can confuse the progress sensor. As of v2.8.0, Roomba+ detects these transitions automatically using your robot's real per-room cloud time estimates, so this should self-correct within the next room change. If it doesn't, call `roomba_plus.advance_room` to manually move to the next room — it's a no-op if the robot is actively cleaning or already at the last planned room, so it's safe to call speculatively.
-
----
-
 ### The robot accepts a room clean, then sits on the dock
+
+**Applies to:** Smart Map robots
 
 The log shows the command accepted and no mission started, with
 `error=224` — a localisation failure. The robot could not work out
@@ -495,323 +440,15 @@ the right floor too).
 localise: it may have been moved while docked, or the map may need
 re-learning in the iRobot app.
 
-### Rooms from another floor appear in the list
+### `smart_start` queues forever / never starts
 
-Fixed in v4.2.4 for rooms and v4.2.5 for zones. Before those, every map
-the robot knew was merged into one flat list, so a room from a map the
-robot was not on could be selected — and produced the 224 above.
-
-## Mission sensors on Prime robots
-
-**`clean_streak` or `area_cleaned_today` only updates after a reload**
-
-Fixed in 4.0.0a42. Mission records for Prime robots come from the cloud
-history sync, and that sync used to run at setup and then every six
-hours — so a mission finishing at 07:00 was invisible to these sensors
-until the next tick or the next reload.
-
-It now syncs the moment the robot reaches `charge` on the dock. If you
-still see a delay after a mission ends, that is worth reporting.
-
----
-
-**`clean_streak` drops to 0 after midnight**
-
-Also fixed in 4.0.0a42. The count was tied to "today", so an unbroken run
-of any length read 0 every night until the day's first mission.
-
-A streak may now end today **or** yesterday: not having cleaned yet today
-does not break it, but a whole missed day does.
-
----
-
-**`clean_streak` shows a decimal like 9.89725**
-
-Fixed in 4.0.0a41 — the sensor was declared as a measurement, so history
-graphs interpolated between whole numbers. If you still see decimals,
-the old statistics remain in the database; they will age out, or you can
-clear them under Developer tools > Statistics.
-
----
-
-## Sensors showing Unknown
-
-**`filter_last_replaced` / `brush_last_replaced` shows Unknown**
-
-These sensors are Unknown until the first reset is performed. Press the reset button on the device page or call the reset action to populate them.
-
----
-
-**Wear Intelligence sensors show Unknown**
-
-Wear sensors need at least 3 days of mission data since the last reset to calculate a meaningful rate. They populate automatically.
-
----
-
-**`optimal_clean_window` shows Unknown**
-
-Requires at least 5 completed missions since integration setup. Updates automatically within minutes of the next mission end once 5 missions have recorded.
-
----
-
-**Mission log sensors show Unknown after upgrading**
-
-The mission log is populated going forward only. Streak, completion rate, and area sensors will be Unknown until the first mission completes after upgrading — this is expected.
-
----
-
-**`last_error_code` shows a stale error after the robot has recovered**
-
-The error state clears automatically when the next mission completes successfully. If it persists, restart HA to force re-reading the mission log from storage.
-
----
-
-**Lifetime energy went backwards, or utilisation read above 100%**
-
-Fixed in v4.0.0b4. Both sensors could violate their own contracts: the
-lifetime energy figure is a `total_increasing` statistic, and one that
-decreases corrupts long-run history in a way that only shows up months
-later as a wrong-looking graph.
-
-Energy now floors at a persisted high-water mark, so a source value that
-drops no longer drags the total down with it. Utilisation is capped at
-100%.
-
-If your history already contains a dip, the statistic will pick up from
-the high-water mark rather than repairing the recorded past — Home
-Assistant's own statistics tools can adjust historical values if that
-matters to you.
-
-**Total energy consumed shows an unexpected value after upgrading to v2.5 on a Roomba 980**
-
-Expected — v2.5 corrects the energy calculation for 900-series robots. The 980/985 firmware reports a raw BMS value approximately 3.73× the actual mAh; previous versions used this raw value directly. After upgrading, the sensor shows the correct lower value and continues accumulating from that point.
-
----
-
-**Recent cleaned area / cleaning time show lower values than expected**
-
-These sensors aggregate data from the iRobot API window (~30 recent missions). The iRobot API does not expose a lifetime accumulator for area or time — the `source: recent_mission_window` attribute documents this. The **total missions** sensor is different: it reads the lifetime counter embedded in every cloud record.
-
----
-
-**Dock contact / Wi-Fi channel / optical dirt detection sensors aren't showing up at all**
-
-These (and most other diagnostic-category sensors) are disabled by default to keep the entity list manageable — they don't show as `Unknown`, they simply aren't enabled. Go to the device page → entity list → filter by "Diagnostic" → enable the ones you want. Availability also depends on your robot's series: navigation landmark quality is 9-series only, optical/piezo dirt detection and dock contact counters are i/s-series only.
-
----
-
-## Demand cleaning & scheduling
-
-**`demand_clean_blocked` stays ON even though the robot is idle**
-
-Check all four gates: (1) robot cycle state — `vacuum.{name}` must be `docked` or `idle`; (2) blocking sensors — any configured blocking sensor is ON; (3) presence — all tracked persons must be away if presence mode is `away_only`; (4) minimum gap — 6 hours must have elapsed since the last demand trigger. The `blocking_reason` attribute on the sensor names the active gate.
-
----
-
-**Demand cleaning never triggers despite being enabled**
-
-Check `binary_sensor.{name}_demand_clean_blocked` — it shows whether the robot is busy, a blocking sensor is active, or the 6-hour minimum gap has not elapsed. Also ensure cloud credentials are configured and at least 5 cloud mission records exist (check diagnostics for `region_count_active`).
-
----
-
-**Demand cleaning triggers too often / not often enough**
-
-Adjust the trigger multiplier in Configure → Demand cleaning. `1.5` (default) fires when dirt density is 50 % above the baseline for today's weekday. Lower the multiplier for more frequent triggers; raise it to require dirtier conditions. After v2.5 the baseline is weekday-specific — Monday's threshold is set by Monday's history — so the multiplier applies relative to each day's normal level.
-
----
-
-**Self-calibrating filter/brush thresholds: when do they activate?**
-
-After two or more resets of a given component, Roomba+ computes the median interval between resets and uses that as the effective threshold. Until two resets have been performed, the configured threshold is used. The learned values are visible in diagnostics under `learned_maintenance`.
-
----
-
-**Presence-aware scheduling step not visible in options menu**
-
-The presence scheduling step only appears for robots that report `schedHold` in their MQTT state (i/s/j/Braava m6). It will not appear for 900-series or 600-series robots.
-
-**Prime robots take a different route to the same result.** A Prime robot carries `schedHold` in its
-shadow, accepts a write to it, and runs anyway — iRobot's own app has no consumer for the field at
-all. Presence scheduling therefore disables each schedule instead, which is what the app does. One
-visible difference: a paused Classic schedule still looks scheduled in the iRobot app, while a
-paused Prime one looks switched off. It is — but it is not what Classic does.
-
----
-
-**`smart_start` queues forever / never starts**
+**Applies to:** Every robot with blocking sensors
 
 Check that the blocking sensors are reporting correctly. Unavailable or unknown sensors are treated as non-blocking. If the queue expires, `roomba_plus_start_timeout` is fired — automate on this event to alert or retry.
 
----
+### The robot accepts a command and does nothing
 
-## Mission anomaly detection
-
-**"Unusual cleaning patterns" Repair Issue fires for normal short cleans**
-
-The anomaly detection (v2.5+) uses your robot's personal performance history as the baseline. If the flag fires for a normal targeted single-room clean, the single-room area is far smaller than your typical full-home baseline — which is technically correct. The issue self-resolves: if the next mission is normal, the counter resets and the issue clears. Two consecutive anomalous missions are required to fire the issue.
-
----
-
-## No favourite buttons
-
-Favourites from the iRobot app appear as one button each on Prime robots. If they are missing,
-**download diagnostics** — the `favourites` block reports how many reached the integration and
-whether the buttons are switched on, which tells apart the two reasons they could be absent.
-
-A count of zero on an account that has favourites is worth reporting. Versions before v4.0.0a32
-returned nothing when the server wrapped the list in an object rather than sending a bare array.
-
-## A Prime robot that says it is cleaning and is not
-
-**Symptoms.** The vacuum shows `cleaning` for hours or days. Scheduled missions stop running and
-nothing reports an error. Commands from Home Assistant — start, stop, dock, find — are accepted and
-have no effect. The iRobot app shows the same phantom mission and its End Job button does not clear
-it.
-
-**What is happening.** A mission that ends in an error can leave the robot's cloud document stuck at
-`{phase: "run"}` with no terminal state ever written. The robot is fine and still talking — it keeps
-reporting its battery — but every consumer reading that document, including iRobot's own app, sees a
-mission that never ended.
-
-Observed on a Roomba Combo (Y351020) for **61 hours** after an error 48 mission, during which two
-daily schedules were skipped silently and every remote command was swallowed.
-
-**How to recognise it.** Roomba+ reports `phase` as **`stale`** when the robot's battery is rising
-while the document claims it is running, and has been running for more than ten minutes — charging and cleaning are mutually exclusive, and the
-robot supplies both numbers. `readiness` will read `NONE` throughout: the sensor whose job is "why
-won't it start" has no answer, because the robot claims nothing is blocking.
-
-**Why this matters beyond the display.** In this state the robot ignores commands from everywhere —
-Home Assistant, the app, an automation — while accepting every one of them. A `vacuum.start` that
-does nothing is not a broken integration; it is a robot whose cloud document has stopped tracking
-it. If `phase` reads `stale`, that is the explanation, and the fix below is the whole of it.
-
-**What does not fix it:**
-
-- `vacuum.stop` from Home Assistant — delivered, no effect
-- End Job in the iRobot app — no write is even attempted
-- Running a mission with the physical button — a locally started mission appears nowhere in this
-  document, before, during or after
-- Docking at the end of that mission
-
-**What does fix it: power cycle the robot.** Hold the power button until the light ring goes dark,
-then wake it. On reconnect it re-reports its true state, and the cloud finalises the stuck record —
-in the observed case closing a 61-hour phantom as `ok` at a timestamp matching the reboot to the
-minute.
-
-Nothing softer reaches it, and no integration can do this for you.
-
-**Why ten minutes.** A robot that recharges mid-mission and resumes enters `run` while its battery
-is still climbing from the charge — genuinely running and genuinely rising, the one case where this
-test would lie. The freeze rises for hours, so the delay costs nothing; without it, an automation
-watching for `stale` would be woken by a healthy robot finishing a recharge.
-
-**The error text is on the error sensor.** `error_title` and `error_description` carry iRobot's own
-wording as attributes, so an automation can say what went wrong rather than quoting a number;
-`help_url` links iRobot's article for the error. Error
-48 reads "An obstacle blocked the entrance to a room" — on one tester's robot that single code
-accounted for 93 of 111 timeline errors and every incomplete mission in the archive.
-
-## The live map does not match the room
-
-Two things behave differently since v4.0.0a43, and both are deliberate.
-
-**Gaps in the trail.** The path now breaks where the robot's reported
-position jumped further than it could have driven — a relocalisation, or
-someone picking it up. Previously the line was drawn straight through,
-which asserted travel that did not happen. A gap is the honest picture
-of "the robot was here, then it was there, and nothing connects them".
-
-Frequent gaps during ordinary cleaning are worth reporting: the
-threshold measures itself from the robot's own message rate, so it
-should only trigger on genuine discontinuities.
-
-**Coverage after a pickup may be missing.** If the robot is moved
-mid-mission, the stretch before the move sits in an unknown position.
-Roomba+ tries to place it by matching its coverage pattern against area
-it already knows, and leaves it out of the stored map when the match is
-not clear. It still appears in the live view for that mission. Losing a
-stretch costs coverage the next mission re-drives; storing it at the
-wrong offset would corrupt the map permanently.
-
-## Rooms are wrong, or fewer than expected
-
-**Rooms need three completed missions.** Nothing appears before that,
-and this is on purpose — see [Room detection](FEATURES.md#room-detection--900-series-v2100)
-for why an early map produces rooms that later disappear.
-
-**The shape follows coverage, not walls.** Room outlines are built from
-where the robot drove, so furniture leaves holes and edges fall short of
-the wall by roughly the robot's radius. Boundaries land at narrow points
-in the coverage, which usually but not always means a doorway. More
-missions improve the count; they do not change the shape.
-
-If a room is split that should be one, check whether the doorway between
-them has actually been driven through — an uncrossed threshold reads as
-a wall. Merging is available in the Options Flow.
-
-## The coverage heatmap does not line up with the room map
-
-Fixed in v4.0.0a45. It was drawn upside down against every other map —
-measuring upward from the bottom of the grid while the rest measure
-downward from the top. A row of cells at one edge was also always
-missing, for a related reason.
-
-If the two still disagree after updating, that is a different problem
-and worth reporting: mark two or three known places on both images (the
-dock is the easiest) and say where each one landed.
-
-## `cleaned_rooms` is empty on a mission that definitely cleaned rooms
-
-That field is built from the cloud's own account of the mission
-(`timeline.finEvents`). Empty means **the cloud data has not arrived**,
-not that no rooms were cleaned — the two look identical from outside.
-
-Enrichment usually lands within a few minutes of docking. If it is
-consistently absent for one robot while another on the same account gets
-it, that is worth reporting with a diagnostics download: it now records
-whether each stored mission carries a timeline at all.
-
-## The status says "No contact"
-
-The robot has not sent anything for over an hour. Every other entity is
-still showing whatever it last reported, which can be days old — a
-battery percentage from before the robot went quiet looks exactly like a
-live one.
-
-Usual causes: the robot is off its dock with a flat battery, the dock has
-no power, or it is out of Wi-Fi range. The connectivity binary sensor
-tells you the same thing sooner, within five minutes; the status waits an
-hour so a brief dropout does not rewrite it mid-mission.
-
-## The status says "Charging mid-mission"
-
-Normal. The robot returned to top up and will resume. It is distinguished
-from plain charging because an automation reacting to "docked" or
-"charging" would otherwise fire in the middle of a clean *(v4.0.0a46)*.
-
-## Setup cannot find the robot password
-
-Choose **"Set up with my iRobot account"**. It is required for
-Combo/V4-generation robots, which have no local setup — and it is also
-the right choice for any robot whose password could not be retrieved
-automatically, whatever its model.
-
-The wording before v4.0.0a47 suggested the option was only for newer
-models. It was not.
-
-Since 4.3 a robot found on your network needs no password at all when
-another robot of the same iRobot account is already running here: the
-password comes from the account.
-
-## The per-room sensors did not appear after enabling the option
-
-Fixed in v4.0.0a47 for Prime robots, where the option created no
-entities at all. If they are still missing after updating, a diagnostics
-download will show whether the region names have arrived —
-`region_names.merged` lists every room and zone the integration knows.
-
-## The robot accepts a command and does nothing
+**Applies to:** Every robot
 
 No error, no phase change, no mission. The command appears to have been
 received — and in fact it was.
@@ -862,49 +499,9 @@ section: see [A Prime robot that says it is cleaning and is
 not](#a-prime-robot-that-says-it-is-cleaning-and-is-not). The tell is
 `phase` reading `stale`, and only a power cycle clears it.
 
-## Room names show as boxes on the map
+### Why does my robot keep stopping?
 
-The maps draw their labels with DejaVu Sans, which has no Japanese,
-Chinese or Korean characters; Roomba+ does not ship a font for them,
-which would add 5 to 20 MB to every installation. Since 4.5.0 a label
-falls back to the first font that has all its characters:
-
-1. Download a font with your script, for example **Noto Sans JP**,
-   **Noto Sans SC/TC** or **Noto Sans KR** (free, SIL Open Font License),
-   as a `.ttf`, `.otf` or `.ttc` file.
-2. Put it into the folder `roomba_plus/fonts` in your Home Assistant
-   configuration folder (the one with `configuration.yaml`; create the
-   folder), for example `/config/roomba_plus/fonts/NotoSansJP-Regular.ttf`.
-3. Restart Home Assistant.
-
-The folder is outside the integration, so an update keeps the font.
-Fonts the system already has (Noto CJK, WenQuanYi, IPA, Nanum) are used
-too; Home Assistant OS has none. Until a font is there, the log says once
-which characters it cannot draw. The diagnostics download lists the fonts
-it found under `map_fallback_fonts` (file names only).
-
-## Room names are missing on a local-only install
-
-Fixed in v4.0.0b1. Zone names you have saved live in the integration's
-own options and need no cloud — but they were being discarded when no
-cloud credentials were configured.
-
-If you have never configured cloud credentials at all, there is nothing
-stored to recover. Region ids can be discovered by sending a room clean
-with a candidate id while the robot is docked: a valid id starts a
-mission within about ten seconds, an invalid one does nothing at all.
-Recall the robot and try the next.
-
-**From the dock only, and re-dock between probes.** This is not a
-convenience — off the dock, a region-targeted start does nothing
-whatever the id, so a valid id and an invalid one look identical and
-the probe reads the entire id space as invalid. Measured across eight
-sends in four different states (@Young9898).
-
-That launches real missions and advances the robot's mission and
-evacuation counters, so it is a last resort rather than a setup step.
-
-## Why does my robot keep stopping?
+**Applies to:** Every robot
 
 The error sensor carries two attributes the robot itself provides
 *(v4.0.0b1)*:
@@ -918,7 +515,9 @@ is telling you something a single incident does not. There is no
 threshold attached: nobody has enough field data yet to say what counts
 as a lot, and a warning without one would be a guess.
 
-## A paused mission disappeared on its own
+### A paused mission disappeared on its own
+
+**Applies to:** Every robot
 
 Pausing sets an expiry, and the robot drops the mission when it runs
 out. **Ninety minutes** on the firmware this was measured on
@@ -937,7 +536,9 @@ Measured by @Young9898 on a dedicated test unit. Other firmwares may
 use a different window; the sensor reads the robot's own value rather
 than assuming ninety minutes.
 
-## The robot will not drive home on a low battery
+### The robot will not drive home on a low battery
+
+**Applies to:** Every robot
 
 Below a certain charge the robot refuses **`dock` as well as mission
 starts** — so a robot stranded mid-floor will not accept the one command
@@ -956,39 +557,9 @@ than as the boundary.
 
 Observed by @AlakazipLabs across two weeks of lossless shadow logs.
 
-## Something I asked for just did not happen (before v4.1.0)
+### I sent it to a room on another floor and it got lost
 
-Four separate faults shared one symptom: nothing happened, and no error
-appeared anywhere. A rejected command and a robot that was already where
-you wanted it look identical from Home Assistant.
-
-All four are fixed in v4.1.0. If you saw any of these on an earlier
-version, that is what it was:
-
-**A schedule created from the calendar never appeared in the iRobot
-app** — on i7, i8, s9, j7 or any other i/s/j robot. The calendar wrote
-the wrong shape under the right key and the robot discarded it. Reading
-always worked, so the calendar itself looked correct.
-
-**A zone clean went to the wrong place, or nowhere.** `clean_zone` sent
-zones as if they were rooms. Region ids are numbered per map, so the
-wrong type usually names a real but different region — the robot did
-something, just not what you asked.
-
-**The clean-zone button cleaned the wrong room.** If your selection was
-on a map the robot had not run on most recently, the button discarded it
-and repeated whatever ran last.
-
-**`clean_room` answered "unknown room" for a room that exists.** Only
-rooms on the most recently used map could be named. Households that keep
-a small secondary map — a bathroom-only map for spot cleaning, say —
-lost access to every room on their main map after using it.
-
-None of these needs any action beyond updating. If you built an
-automation around one of them, though, it is worth re-checking: an
-automation written to work around a bug can break when the bug does not.
-
-## I sent it to a room on another floor and it got lost
+**Applies to:** Robots with several maps
 
 Expected, and not something this integration can prevent.
 
@@ -1020,7 +591,9 @@ things on the two, with no overlap at all across the sixteen codes they
 share. Rather than show a Classic label that would be wrong, Roomba+
 shows the raw code. `Error 69` is the robot's own number for this.
 
-## The robot emptied its bin and I did not ask it to
+### The robot emptied its bin and I did not ask it to
+
+**Applies to:** Robots on a Clean Base
 
 Most likely you sent it home while it was already home.
 
@@ -1051,24 +624,379 @@ first thing to check. Robots with a Clean Base also have their own
 `autoevac_frequency` setting, which iRobot's own service has been known
 to ignore.
 
-## Sending a diagnostics download
+---
 
-Settings → Devices & Services → Roomba+ → the three dots → Download
-diagnostics. Sensitive values are redacted before the file is written.
+## Map and rooms
 
-**Pull it during a mission if the question is about navigation or the
-map.** The robot's navigation telemetry — pose confidence, kidnap
-detection, landmark counts, map state — only fills while it is cleaning.
-On the dock most of it reads zero, so a download taken afterwards looks
-identical to a robot that does not report those fields at all
-*(v4.0.0a45)*.
+The live map, room detection, room names, and cleaning by room or area.
 
-For anything else — entity states, settings, mission history, dock
-identity — the timing does not matter.
+### Smart Map zones not appearing (i/s/j-series)
 
-## Cloud & history
+**Applies to:** Smart Map robots (i, s, j series)
 
-**Mission history export**
+Check the diagnostics download for `"position"` carrying actual
+coordinates, **not** `"cap": {"pose": ...}`.
+
+`cap.pose` is a compile-time constant on lewis firmware — it says
+nothing about whether a robot publishes a position. Four robots across
+three firmware families report `pose: 2` and have never sent one; a
+900-series reports `pose: 1` and sends them continuously. The split
+looks like cause and is a correlation with model generation. If cloud credentials are configured, zone names come directly from the cloud and the naming repair flow is suppressed.
+
+### Zone management — changes not reflected in dropdown immediately
+
+**Applies to:** Classic robots
+
+Alias and hidden changes are written immediately, but the zone select dropdown may take one MQTT message cycle to refresh. Typically resolves within seconds when the robot is active.
+
+### `clean_room` says "rooms from different maps" after deleting the old map
+
+**Applies to:** Smart Map robots with an iRobot account
+
+The iRobot cloud cache may take up to 24 hours to clear. Re-save the cloud credentials step in Configure to force an immediate coordinator refresh.
+
+### `clean_room` or `vacuum.clean_area` raises `no_valid_segments` immediately after setup
+
+**Applies to:** Smart Map robots with an iRobot account, Prime robots
+
+The active pmap ID may not yet be available — typically happens on fresh install or immediately after adding cloud credentials before the first cloud fetch completes. Wait a few minutes and retry. If it persists, check that `region_count_active` in diagnostics is > 0.
+
+### "Map vacuum segments to areas" repair fires — what do I do?
+
+**Applies to:** Smart Map and Prime robots · Home Assistant 2026.3 and later
+
+This is a one-time HA setup step for `vacuum.clean_area` (HA 2026.3+). Open the vacuum entity → ⚙ Entity settings → "Map vacuum segments to areas", match each robot room to a Home Assistant area, and save. See [Room cleaning setup](FEATURES.md#room-cleaning-setup--ha-areas-vacuumclean_area-ha-20263) in the Feature reference for full instructions.
+
+If you don't use `vacuum.clean_area`, dismiss the repair — `roomba_plus.clean_room` works without it.
+
+### "Map vacuum segments to areas" dialog shows no rooms on the left
+
+**Applies to:** Smart Map and Prime robots · Home Assistant 2026.3 and later
+
+The left column is populated from the iRobot cloud, so an empty list means the integration has no room data to offer yet. Check, in order:
+
+- **Cloud credentials configured?** Room segments require the cloud coordinator (Settings → Configure → iRobot cloud credentials). Local-only setups have no room names to map.
+- **SMART robot?** Only i/s/j-series robots expose cloud rooms. 900-series (EPHEMERAL) robots have no cloud pmap, so they list no segments here and don't support room- or area-targeted cleaning at all (`clean_room` and `vacuum.clean_area` are SMART-only) — they clean the whole floor.
+- **Map finalized in the iRobot app?** If rooms aren't named/saved in the iRobot app, the cloud returns none. Open the app, confirm the room layout, then re-save the cloud credentials step in Configure to force a coordinator refresh.
+- **First fetch completed?** On a fresh install, wait a few minutes for the first cloud poll, then reopen the dialog. Check `region_count_active` in the diagnostics download is > 0.
+
+### The live map does not match the room
+
+**Applies to:** 900-series and Smart Map robots
+
+Two things behave differently since v4.0.0a43, and both are deliberate.
+
+**Gaps in the trail.** The path now breaks where the robot's reported
+position jumped further than it could have driven — a relocalisation, or
+someone picking it up. Previously the line was drawn straight through,
+which asserted travel that did not happen. A gap is the honest picture
+of "the robot was here, then it was there, and nothing connects them".
+
+Frequent gaps during ordinary cleaning are worth reporting: the
+threshold measures itself from the robot's own message rate, so it
+should only trigger on genuine discontinuities.
+
+**Coverage after a pickup may be missing.** If the robot is moved
+mid-mission, the stretch before the move sits in an unknown position.
+Roomba+ tries to place it by matching its coverage pattern against area
+it already knows, and leaves it out of the stored map when the match is
+not clear. It still appears in the live view for that mission. Losing a
+stretch costs coverage the next mission re-drives; storing it at the
+wrong offset would corrupt the map permanently.
+
+### Rooms are wrong, or fewer than expected
+
+**Applies to:** 900-series
+
+**Rooms need three completed missions.** Nothing appears before that,
+and this is on purpose — see [Room detection](FEATURES.md#room-detection--900-series-v2100)
+for why an early map produces rooms that later disappear.
+
+**The shape follows coverage, not walls.** Room outlines are built from
+where the robot drove, so furniture leaves holes and edges fall short of
+the wall by roughly the robot's radius. Boundaries land at narrow points
+in the coverage, which usually but not always means a doorway. More
+missions improve the count; they do not change the shape.
+
+If a room is split that should be one, check whether the doorway between
+them has actually been driven through — an uncrossed threshold reads as
+a wall. Merging is available in the Options Flow.
+
+### `cleaned_rooms` is empty on a mission that definitely cleaned rooms
+
+**Applies to:** Robots with an iRobot account
+
+That field is built from the cloud's own account of the mission
+(`timeline.finEvents`). Empty means **the cloud data has not arrived**,
+not that no rooms were cleaned — the two look identical from outside.
+
+Enrichment usually lands within a few minutes of docking. If it is
+consistently absent for one robot while another on the same account gets
+it, that is worth reporting with a diagnostics download: it now records
+whether each stored mission carries a timeline at all.
+
+### Room names show as boxes on the map
+
+**Applies to:** Every robot with a map
+
+The maps draw their labels with DejaVu Sans, which has no Japanese,
+Chinese or Korean characters; Roomba+ does not ship a font for them,
+which would add 5 to 20 MB to every installation. Since 4.5.0 a label
+falls back to the first font that has all its characters:
+
+1. Download a font with your script, for example **Noto Sans JP**,
+   **Noto Sans SC/TC** or **Noto Sans KR** (free, SIL Open Font License),
+   as a `.ttf`, `.otf` or `.ttc` file.
+2. Put it into the folder `roomba_plus/fonts` in your Home Assistant
+   configuration folder (the one with `configuration.yaml`; create the
+   folder), for example `/config/roomba_plus/fonts/NotoSansJP-Regular.ttf`.
+3. Restart Home Assistant.
+
+The folder is outside the integration, so an update keeps the font.
+Fonts the system already has (Noto CJK, WenQuanYi, IPA, Nanum) are used
+too; Home Assistant OS has none. Until a font is there, the log says once
+which characters it cannot draw. The diagnostics download lists the fonts
+it found under `map_fallback_fonts` (file names only).
+
+---
+
+## Sensors, status and maintenance
+
+Sensors that show Unknown or an unexpected value, the status, and the maintenance countdowns.
+
+### `filter_last_replaced` / `brush_last_replaced` shows Unknown
+
+**Applies to:** Classic robots
+
+These sensors are Unknown until the first reset is performed. Press the reset button on the device page or call the reset action to populate them.
+
+### Wear Intelligence sensors show Unknown
+
+**Applies to:** Classic robots
+
+Wear sensors need at least 3 days of mission data since the last reset to calculate a meaningful rate. They populate automatically.
+
+### `optimal_clean_window` shows Unknown
+
+**Applies to:** Robots with presence scheduling on
+
+Requires at least 5 completed missions since integration setup. Updates automatically within minutes of the next mission end once 5 missions have recorded.
+
+### Mission log sensors show Unknown after upgrading
+
+**Applies to:** Every robot
+
+The mission log is populated going forward only. Streak, completion rate, and area sensors will be Unknown until the first mission completes after upgrading — this is expected.
+
+### `last_error_code` shows a stale error after the robot has recovered
+
+**Applies to:** Every robot
+
+The error state clears automatically when the next mission completes successfully. If it persists, restart HA to force re-reading the mission log from storage.
+
+### Recent cleaned area / cleaning time show lower values than expected
+
+**Applies to:** Classic robots with an iRobot account
+
+These sensors aggregate data from the iRobot API window (~30 recent missions). The iRobot API does not expose a lifetime accumulator for area or time — the `source: recent_mission_window` attribute documents this. The **total missions** sensor is different: it reads the lifetime counter embedded in every cloud record.
+
+### Dock contact / Wi-Fi channel / optical dirt detection sensors aren't showing up at all
+
+**Applies to:** Classic robots
+
+These (and most other diagnostic-category sensors) are disabled by default to keep the entity list manageable — they don't show as `Unknown`, they simply aren't enabled. Go to the device page → entity list → filter by "Diagnostic" → enable the ones you want. Availability also depends on your robot's series: navigation landmark quality is 9-series only, optical/piezo dirt detection and dock contact counters are i/s-series only.
+
+### Self-calibrating filter/brush thresholds: when do they activate?
+
+**Applies to:** Classic robots
+
+After two or more resets of a given component, Roomba+ computes the median interval between resets and uses that as the effective threshold. Until two resets have been performed, the configured threshold is used. The learned values are visible in diagnostics under `learned_maintenance`.
+
+### Mission anomaly detection
+
+**Applies to:** Classic robots
+
+**"Unusual cleaning patterns" Repair Issue fires for normal short cleans**
+
+The anomaly detection (v2.5+) uses your robot's personal performance history as the baseline. If the flag fires for a normal targeted single-room clean, the single-room area is far smaller than your typical full-home baseline — which is technically correct. The issue self-resolves: if the next mission is normal, the counter resets and the issue clears. Two consecutive anomalous missions are required to fire the issue.
+
+### The status says "No contact"
+
+**Applies to:** Classic robots
+
+The robot has not sent anything for over an hour. Every other entity is
+still showing whatever it last reported, which can be days old — a
+battery percentage from before the robot went quiet looks exactly like a
+live one.
+
+Usual causes: the robot is off its dock with a flat battery, the dock has
+no power, or it is out of Wi-Fi range. The connectivity binary sensor
+tells you the same thing sooner, within five minutes; the status waits an
+hour so a brief dropout does not rewrite it mid-mission.
+
+### The status says "Charging mid-mission"
+
+**Applies to:** Every robot
+
+Normal. The robot returned to top up and will resume. It is distinguished
+from plain charging because an automation reacting to "docked" or
+"charging" would otherwise fire in the middle of a clean *(v4.0.0a46)*.
+
+---
+
+## Schedules, presence and demand cleaning
+
+Presence-aware scheduling, demand cleaning and their options.
+
+### `demand_clean_blocked` stays ON even though the robot is idle
+
+**Applies to:** Robots with demand cleaning on
+
+Check all four gates: (1) robot cycle state — `vacuum.{name}` must be `docked` or `idle`; (2) blocking sensors — any configured blocking sensor is ON; (3) presence — all tracked persons must be away if presence mode is `away_only`; (4) minimum gap — 6 hours must have elapsed since the last demand trigger. The `blocking_reason` attribute on the sensor names the active gate.
+
+### Demand cleaning never triggers despite being enabled
+
+**Applies to:** Robots with demand cleaning on
+
+Check `binary_sensor.{name}_demand_clean_blocked` — it shows whether the robot is busy, a blocking sensor is active, or the 6-hour minimum gap has not elapsed. Also ensure cloud credentials are configured and at least 5 cloud mission records exist (check diagnostics for `region_count_active`).
+
+### Demand cleaning triggers too often / not often enough
+
+**Applies to:** Robots with demand cleaning on
+
+Adjust the trigger multiplier in Configure → Demand cleaning. `1.5` (default) fires when dirt density is 50 % above the baseline for today's weekday. Lower the multiplier for more frequent triggers; raise it to require dirtier conditions. After v2.5 the baseline is weekday-specific — Monday's threshold is set by Monday's history — so the multiplier applies relative to each day's normal level.
+
+### Presence-aware scheduling step not visible in options menu
+
+**Applies to:** Every robot; the step depends on the model
+
+The presence scheduling step only appears for robots that report `schedHold` in their MQTT state (i/s/j/Braava m6). It will not appear for 900-series or 600-series robots.
+
+**Prime robots take a different route to the same result.** A Prime robot carries `schedHold` in its
+shadow, accepts a write to it, and runs anyway — iRobot's own app has no consumer for the field at
+all. Presence scheduling therefore disables each schedule instead, which is what the app does. One
+visible difference: a paused Classic schedule still looks scheduled in the iRobot app, while a
+paused Prime one looks switched off. It is — but it is not what Classic does.
+
+---
+
+## iRobot account, cloud and Prime robots
+
+Signing in, the cloud data, and what is particular to Prime robots.
+
+### Cloud authentication fails
+
+**Applies to:** Every robot with an iRobot account
+
+Since 4.3 the message says which of these it is, in your language:
+
+- **The login was rejected:** check the email address and password of your iRobot account.
+- **The account is temporarily locked:** do *not* re-enter your password. The lock clears by itself, usually within minutes, and every new attempt can extend it. Disable the Roomba+ entries of that account, wait about ten minutes, then enable them again.
+- **Too many active sessions:** close the iRobot app on all devices and wait a few minutes before retrying.
+- **Home Assistant cannot check iRobot's certificate:** the certificate store of the system Home Assistant runs on is missing or out of date. Waiting does not fix this one; updating the system's CA certificates does.
+- **iRobot's certificate has expired**, or **iRobot's cloud has a problem of its own:** on iRobot's side, usually fixed within hours.
+
+All robots on one iRobot account share one cloud login since 4.3, so a failed login is tried once for all of them, not once per robot.
+
+**After changing the iRobot password**, every robot of the account asks for the new one. Enter it for any one of them: the others that had the same old password take the new one and restart by themselves.
+
+### The iRobot account lists no robots
+
+**Applies to:** Every robot with an iRobot account
+
+The login works, but the setup ends without a robot to pick. Since 4.4.4
+the message says which case it is:
+
+- **The robot is registered to another iRobot account.** Usual with a
+  second-hand robot that the previous owner never removed. Remove it from
+  that account in the iRobot app (or ask the previous owner to), add it
+  to your own account, and run the setup again. Do not retry the setup
+  over and over in the meantime: every attempt is a login, and nothing
+  changes until the robot is moved.
+- **The account returned no robots.** Check that you signed in with the
+  account the robot was added to in the iRobot app. The country is an
+  unlikely cause: every country checked so far reaches the same iRobot
+  servers.
+- **The cloud lists robots the login did not return.** Not seen on a
+  real account yet. Please open an issue with a debug log of the setup
+  attempt; it contains only counts, no robot ids.
+
+"Every robot is already configured" means exactly that: each robot of
+the account already has its entry here.
+
+### Cloud mission history not available for my Roomba 980
+
+**Applies to:** 900-series with an iRobot account
+
+Go to Settings → Roomba+ → Configure → iRobot cloud credentials, re-save your credentials, then restart HA.
+
+### No favourite buttons
+
+**Applies to:** Prime robots
+
+Favourites from the iRobot app appear as one button each on Prime robots. If they are missing,
+**download diagnostics** — the `favourites` block reports how many reached the integration and
+whether the buttons are switched on, which tells apart the two reasons they could be absent.
+
+A count of zero on an account that has favourites is worth reporting. Versions before v4.0.0a32
+returned nothing when the server wrapped the list in an object rather than sending a bare array.
+
+### A Prime robot that says it is cleaning and is not
+
+**Applies to:** Prime robots
+
+**Symptoms.** The vacuum shows `cleaning` for hours or days. Scheduled missions stop running and
+nothing reports an error. Commands from Home Assistant — start, stop, dock, find — are accepted and
+have no effect. The iRobot app shows the same phantom mission and its End Job button does not clear
+it.
+
+**What is happening.** A mission that ends in an error can leave the robot's cloud document stuck at
+`{phase: "run"}` with no terminal state ever written. The robot is fine and still talking — it keeps
+reporting its battery — but every consumer reading that document, including iRobot's own app, sees a
+mission that never ended.
+
+Observed on a Roomba Combo (Y351020) for **61 hours** after an error 48 mission, during which two
+daily schedules were skipped silently and every remote command was swallowed.
+
+**How to recognise it.** Roomba+ reports `phase` as **`stale`** when the robot's battery is rising
+while the document claims it is running, and has been running for more than ten minutes — charging and cleaning are mutually exclusive, and the
+robot supplies both numbers. `readiness` will read `NONE` throughout: the sensor whose job is "why
+won't it start" has no answer, because the robot claims nothing is blocking.
+
+**Why this matters beyond the display.** In this state the robot ignores commands from everywhere —
+Home Assistant, the app, an automation — while accepting every one of them. A `vacuum.start` that
+does nothing is not a broken integration; it is a robot whose cloud document has stopped tracking
+it. If `phase` reads `stale`, that is the explanation, and the fix below is the whole of it.
+
+**What does not fix it:**
+
+- `vacuum.stop` from Home Assistant — delivered, no effect
+- End Job in the iRobot app — no write is even attempted
+- Running a mission with the physical button — a locally started mission appears nowhere in this
+  document, before, during or after
+- Docking at the end of that mission
+
+**What does fix it: power cycle the robot.** Hold the power button until the light ring goes dark,
+then wake it. On reconnect it re-reports its true state, and the cloud finalises the stuck record —
+in the observed case closing a 61-hour phantom as `ok` at a timestamp matching the reboot to the
+minute.
+
+Nothing softer reaches it, and no integration can do this for you.
+
+**Why ten minutes.** A robot that recharges mid-mission and resumes enters `run` while its battery
+is still climbing from the charge — genuinely running and genuinely rising, the one case where this
+test would lie. The freeze rises for hours, so the delay costs nothing; without it, an automation
+watching for `stale` would be woken by a healthy robot finishing a recharge.
+
+**The error text is on the error sensor.** `error_title` and `error_description` carry iRobot's own
+wording as attributes, so an automation can say what went wrong rather than quoting a number;
+`help_url` links iRobot's article for the error. Error
+48 reads "An obstacle blocked the entrance to a room" — on one tester's robot that single code
+accounted for 93 of 111 timeline errors and every incomplete mission in the archive.
+
+### Mission history export
+
+**Applies to:** Every robot
 
 ```bash
 curl -H "Authorization: Bearer <token>" \
@@ -1076,7 +1004,9 @@ curl -H "Authorization: Bearer <token>" \
      -o roomba_backup.json
 ```
 
-**Mission history import**
+### Mission history import
+
+**Applies to:** Every robot
 
 ```bash
 curl -X POST \
@@ -1092,23 +1022,269 @@ The `entry_id` is found in Settings → Devices → Roomba+ → ⋮ → System i
 
 ---
 
-**`clean_room` says "rooms from different maps" after deleting the old map**
+## Reporting a problem
 
-The iRobot cloud cache may take up to 24 hours to clear. Re-save the cloud credentials step in Configure to force an immediate coordinator refresh.
+What to send with a report, and what is in it.
+
+### Before you send a diagnostics download
+
+**Applies to:** Every robot
+
+Credentials and your BLID are removed automatically. Room names, zone names,
+schedules, map geometry and mission history are **not** — the download is
+useless without them. [What is in it, in full →](DATA_PRIVACY.md)
+
+A partial download is more useful than none: send the block that matters if
+the rest gives you pause.
+
+**If a command seemed to do nothing**, three fields answer most of it, and
+a download taken *while it is still broken* is worth far more than one
+taken after a restart:
+
+- `map.sent_commands` — what Roomba+ actually sent, when, and which rooms
+  or zones it named *(v4.2.5; all robots from v4.2.6)*
+- `push_freshness` — how long since the robot last said anything. "No push
+  message since startup" after a mission means nothing is arriving
+- `map.active_map_versions` and `smart_map.last_command_summary` — which
+  map a command named, which is what a localisation failure turns on
+
+### Sending a diagnostics download
+
+**Applies to:** Every robot
+
+Settings → Devices & Services → Roomba+ → the three dots → Download
+diagnostics. Sensitive values are redacted before the file is written.
+
+**Pull it during a mission if the question is about navigation or the
+map.** The robot's navigation telemetry — pose confidence, kidnap
+detection, landmark counts, map state — only fills while it is cleaning.
+On the dock most of it reads zero, so a download taken afterwards looks
+identical to a robot that does not report those fields at all
+*(v4.0.0a45)*.
+
+For anything else — entity states, settings, mission history, dock
+identity — the timing does not matter.
 
 ---
 
-**"Robot MQTT connection lost during mission" fires right after starting a mission**
+## Older versions
+
+Problems that a version before 4.4 had, kept for anyone still running one.
+
+<details>
+<summary>Show the entries for older versions</summary>
+
+### HACS shows only `main`, and downloading it hangs
+
+**Applies to:** Every robot · HACS before Home Assistant 2026.11 · fixed by 4.0.0
+
+The log carries a 404:
+
+```
+Download failed - Got status code 404 when trying to download
+.../releases/download/main/ha_roomba_plus.zip
+```
+
+**Fixed by v4.0.0.** Update normally — no beta channel, no manual download.
+4.0.0 is a normal release rather than a pre-release, so it is the newest thing
+HACS can see and offer, and the fallback that produced the 404 no longer
+happens.
+
+**Why `main` used to fail:** with betas off HACS found no eligible release and
+offered the default branch instead. It then looked for a release asset on a tag
+called `main`, which does not exist — so the download 404'd and the wheel spun
+forever. Nothing was wrong with your setup.
+
+**Every v4 release before 4.0.0 was a pre-release**, because the whole v4 line
+ran through alphas and betas. With betas off, HACS had nothing in the v4 line
+to offer at all.
+
+The rest of this section is kept because the mechanism will recur the next time
+a long pre-release series runs — and because it explains why the problem
+appeared when it did. (Found by @pk-1966, who worked it out unaided.)
+
+**The mechanism, read from HACS's own source** rather than guessed (the source
+of HACS before Home Assistant 2026.11; whether the Marketplace reads releases
+the same way has not been checked):
+`RepositoryBase.get_releases()` makes ONE call to GitHub's release list and
+filters what comes back — it does not paginate. GitHub returns 30 releases per
+page by default, so HACS only ever sees the 30 most recent.
+
+By the end of the beta there were **49 v4 pre-releases** on top of v3.5.2. All
+thirty HACS saw were pre-releases, every one skipped when betas were off, and
+it ended up with an empty list — hence the fallback to the default branch.
+
+This is also why it used to work: the stable release stayed reachable until the
+**thirtieth** alpha pushed it out of the window. And it is why publishing 4.0.0
+fixes it outright rather than merely improving it — there is a non-pre-release
+inside the window again.
+
+**Install v3.5.1 manually:** download the `ha_roomba_plus.zip` asset from the
+[v3.5.1 release](https://github.com/johnnyh1975/ha_roomba_plus/releases), unpack
+it into `config/custom_components/roomba_plus/`, and restart. HACS will then
+show it as installed but will not offer updates for it.
+
+That is a consequence of running a long alpha in the same repository as the
+stable line, not something you did wrong.
+
+### Mission progress gets stuck reporting a completed room as still in progress
+
+**Applies to:** i/s series · handled since 2.8.0
+
+On lewis-firmware robots (i7+/s9+), the robot occasionally reports a brief non-cleaning phase between rooms that can confuse the progress sensor. As of v2.8.0, Roomba+ detects these transitions automatically using your robot's real per-room cloud time estimates, so this should self-correct within the next room change. If it doesn't, call `roomba_plus.advance_room` to manually move to the next room — it's a no-op if the robot is actively cleaning or already at the last planned room, so it's safe to call speculatively.
+
+### Rooms from another floor appear in the list
+
+**Applies to:** Robots with several maps · fixed in 4.2.4 and 4.2.5
+
+Fixed in v4.2.4 for rooms and v4.2.5 for zones. Before those, every map
+the robot knew was merged into one flat list, so a room from a map the
+robot was not on could be selected — and produced the 224 above.
+
+### Mission sensors on Prime robots
+
+**Applies to:** Prime robots · fixed in 4.0.0a41 and a42
+
+**`clean_streak` or `area_cleaned_today` only updates after a reload**
+
+Fixed in 4.0.0a42. Mission records for Prime robots come from the cloud
+history sync, and that sync used to run at setup and then every six
+hours — so a mission finishing at 07:00 was invisible to these sensors
+until the next tick or the next reload.
+
+It now syncs the moment the robot reaches `charge` on the dock. If you
+still see a delay after a mission ends, that is worth reporting.
+
+---
+
+**`clean_streak` drops to 0 after midnight**
+
+Also fixed in 4.0.0a42. The count was tied to "today", so an unbroken run
+of any length read 0 every night until the day's first mission.
+
+A streak may now end today **or** yesterday: not having cleaned yet today
+does not break it, but a whole missed day does.
+
+---
+
+**`clean_streak` shows a decimal like 9.89725**
+
+Fixed in 4.0.0a41 — the sensor was declared as a measurement, so history
+graphs interpolated between whole numbers. If you still see decimals,
+the old statistics remain in the database; they will age out, or you can
+clear them under Developer tools > Statistics.
+
+### Lifetime energy went backwards, or utilisation read above 100%
+
+**Applies to:** Classic robots · fixed in 4.0.0b4
+
+Fixed in v4.0.0b4. Both sensors could violate their own contracts: the
+lifetime energy figure is a `total_increasing` statistic, and one that
+decreases corrupts long-run history in a way that only shows up months
+later as a wrong-looking graph.
+
+Energy now floors at a persisted high-water mark, so a source value that
+drops no longer drags the total down with it. Utilisation is capped at
+100%.
+
+If your history already contains a dip, the statistic will pick up from
+the high-water mark rather than repairing the recorded past — Home
+Assistant's own statistics tools can adjust historical values if that
+matters to you.
+
+### Total energy consumed shows an unexpected value after upgrading to v2.5 on a Roomba 980
+
+**Applies to:** 900-series · upgrading to 2.5
+
+Expected — v2.5 corrects the energy calculation for 900-series robots. The 980/985 firmware reports a raw BMS value approximately 3.73× the actual mAh; previous versions used this raw value directly. After upgrading, the sensor shows the correct lower value and continues accumulating from that point.
+
+### The coverage heatmap does not line up with the room map
+
+**Applies to:** Classic robots · fixed in 4.0.0a45
+
+Fixed in v4.0.0a45. It was drawn upside down against every other map —
+measuring upward from the bottom of the grid while the rest measure
+downward from the top. A row of cells at one edge was also always
+missing, for a related reason.
+
+If the two still disagree after updating, that is a different problem
+and worth reporting: mark two or three known places on both images (the
+dock is the easiest) and say where each one landed.
+
+### The per-room sensors did not appear after enabling the option
+
+**Applies to:** Prime robots · fixed in 4.0.0a47
+
+Fixed in v4.0.0a47 for Prime robots, where the option created no
+entities at all. If they are still missing after updating, a diagnostics
+download will show whether the region names have arrived —
+`region_names.merged` lists every room and zone the integration knows.
+
+### Room names are missing on a local-only install
+
+**Applies to:** Classic robots without an account · fixed in 4.0.0b1
+
+Fixed in v4.0.0b1. Zone names you have saved live in the integration's
+own options and need no cloud — but they were being discarded when no
+cloud credentials were configured.
+
+If you have never configured cloud credentials at all, there is nothing
+stored to recover. Region ids can be discovered by sending a room clean
+with a candidate id while the robot is docked: a valid id starts a
+mission within about ten seconds, an invalid one does nothing at all.
+Recall the robot and try the next.
+
+**From the dock only, and re-dock between probes.** This is not a
+convenience — off the dock, a region-targeted start does nothing
+whatever the id, so a valid id and an invalid one look identical and
+the probe reads the entire id space as invalid. Measured across eight
+sends in four different states (@Young9898).
+
+That launches real missions and advances the robot's mission and
+evacuation counters, so it is a last resort rather than a setup step.
+
+### Something I asked for just did not happen (before v4.1.0)
+
+**Applies to:** Every robot · fixed in 4.1.0
+
+Four separate faults shared one symptom: nothing happened, and no error
+appeared anywhere. A rejected command and a robot that was already where
+you wanted it look identical from Home Assistant.
+
+All four are fixed in v4.1.0. If you saw any of these on an earlier
+version, that is what it was:
+
+**A schedule created from the calendar never appeared in the iRobot
+app** — on i7, i8, s9, j7 or any other i/s/j robot. The calendar wrote
+the wrong shape under the right key and the robot discarded it. Reading
+always worked, so the calendar itself looked correct.
+
+**A zone clean went to the wrong place, or nowhere.** `clean_zone` sent
+zones as if they were rooms. Region ids are numbered per map, so the
+wrong type usually names a real but different region — the robot did
+something, just not what you asked.
+
+**The clean-zone button cleaned the wrong room.** If your selection was
+on a map the robot had not run on most recently, the button discarded it
+and repeated whatever ran last.
+
+**`clean_room` answered "unknown room" for a room that exists.** Only
+rooms on the most recently used map could be named. Households that keep
+a small secondary map — a bathroom-only map for spot cleaning, say —
+lost access to every room on their main map after using it.
+
+None of these needs any action beyond updating. If you built an
+automation around one of them, though, it is worth re-checking: an
+automation written to work around a bug can break when the bug does not.
+
+### "Robot MQTT connection lost during mission" fires right after starting a mission
+
+**Applies to:** Classic robots · fixed in 2.9.0
 
 Fixed in v2.9.0. A genuine, benign Wi-Fi gap of a few minutes right after undocking (the robot reassociating with your router while it physically moves away) was previously misreported as a sustained connectivity problem — this affected any robot, but was more common on older robots with weaker Wi-Fi hardware or an aftermarket battery. The watchdog now waits at least 7 minutes after a mission starts before it can fire at all, regardless of silence duration; a genuine outage later in the mission is still caught normally. If you still see this fire within the first 7 minutes of a mission on v2.9.0 or later, that's unexpected — please open an issue with the last known phase and silence duration shown in the message.
 
----
-
-**Replacing or selling your robot**
-
-Back up first, then delete the entry; the steps, and how to carry the mission history over to
-a new robot, are in [Moving to Roomba+ → Replacing or selling a robot](MIGRATING.md#replacing-or-selling-a-robot).
+</details>
 
 ---
 
-*[Roomba+](../README.md) · [Features](FEATURES.md) · [Automations](AUTOMATIONS.md) · [API](API.md) · [Troubleshooting](TROUBLESHOOTING.md)*
+[Documentation home](README.md) · [Troubleshooting](TROUBLESHOOTING.md) · [Questions and reports](https://github.com/johnnyh1975/ha_roomba_plus/issues)

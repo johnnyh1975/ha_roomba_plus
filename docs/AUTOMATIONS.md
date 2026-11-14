@@ -1,6 +1,6 @@
-# Roomba+ — Automations & Dashboards
+[Roomba+](../README.md) › [Documentation](README.md) › Automations & Dashboards
 
-[← Roomba+](../README.md)
+# Roomba+ — Automations & Dashboards
 
 Copy-paste automation recipes and a starter dashboard. For the full list of
 available events, device triggers, and services, see the
@@ -106,7 +106,7 @@ automation:
   alias: "Roomba — clean kitchen after map save"
   trigger:
     - platform: state
-      entity_id: binary_sensor.roomba_smart_map_saving
+      entity_id: binary_sensor.roomba_map_saving
       to: "off"
   condition:
     - condition: state
@@ -645,4 +645,4 @@ everyone's away, cleaning starts immediately instead of not at all.
 
 ---
 
-*[Roomba+](../README.md) · [Features](FEATURES.md) · [API](API.md) · [Troubleshooting](TROUBLESHOOTING.md)*
+[Documentation home](README.md) · [Troubleshooting](TROUBLESHOOTING.md) · [Questions and reports](https://github.com/johnnyh1975/ha_roomba_plus/issues)

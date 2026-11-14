@@ -131,6 +131,51 @@ class TestMarkdownLinkGuard:
         assert guard.main() == 1
 
 
+class TestDocNameGuard:
+    """A name in the docs the code does not have, or a product link to a
+    file the repository does not have (scripts/check_doc_names.py, 4.6.0).
+    The docs review for 4.6.0 found about twenty such names by hand."""
+
+    def test_it_reports_names_the_code_does_not_have(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        guard = _load("check_doc_names")
+        (tmp_path / "docs").mkdir()
+        (tmp_path / "README.md").write_text(
+            "Call `roomba_plus.reset_battery`, listen for `roomba_plus_mission_done`,\n"
+            "and show `image.<robot>_mapp`.\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(guard, "ROOT", tmp_path)
+
+        found = guard.problems()
+        assert len(found) == 3, found
+
+    def test_real_names_pass(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        guard = _load("check_doc_names")
+        (tmp_path / "docs").mkdir()
+        (tmp_path / "README.md").write_text(
+            "Call `roomba_plus.clean_room`, listen for `roomba_plus_mission_result`,\n"
+            "and show `image.<robot>_map` or `event.{name}_command`.\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(guard, "ROOT", tmp_path)
+
+        assert guard.problems() == []
+
+    def test_it_reports_a_product_link_to_a_missing_doc(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        guard = _load("check_doc_names")
+        monkeypatch.setattr(guard, "ROOT", tmp_path)  # a repository without docs/
+
+        found = guard.broken_product_links()
+        assert any("docs/TROUBLESHOOTING.md" in f for f in found), found
+        assert any("docs/care/de/README.md" in f for f in found), found
+
+
 class TestBlueprintGuard:
     """`!input` inside a template: Home Assistant does not substitute it
     there, and the automation does not load. The guard replaced it with
