@@ -8,6 +8,8 @@ A 900-series keeps no map of its own. Roomba+ divides the floor it has driven in
 
 ## How the areas are found
 
+**Applies to:** 900-series
+
 Every mission adds the floor the robot drove over to a coverage grid, the same grid the coverage map shows. The areas are found in that grid by its narrow points: a distance transform and a watershed, the core technique iRobot's own room-segmentation patent describes. Doors are where two areas meet.
 
 - **Three missions first.** No areas are made until the grid has learned from three missions since it was last emptied. On incomplete coverage the method is unstable: a threshold the robot has not crossed yet looks like a wall, so it splits a room that is not split, and the split goes once a later mission drives through. One real archive showed 7 rooms after one mission, 6 after four and 5 once coverage settled; two of the seven were never rooms.
@@ -22,9 +24,13 @@ A new area raises a repair issue asking for a name (Configure → *Rooms & zones
 
 ## Straight walls, doors and furniture
 
+**Applies to:** 900-series
+
 Where the robot's lanes run along two axes, the map draws each room as a rectangle at the outermost floor driven, one wall between two neighbouring rooms, doors as gaps where the robot went through (an opening much wider than a door as an open passage), and floor inside a room that was never driven as furniture. *Wall thickness* and *Door width* under Configure → Connection settings tune which sides are one wall and how wide a door is drawn. The diagnostics' `rooms.layout` says whether it is drawn and why not.
 
 ## What this can and cannot give you
+
+**Applies to:** 900-series
 
 A room here is the set of cells the robot drove over, so its shape follows coverage rather than walls: furniture leaves holes, edges sit about one robot radius short of the wall, and boundaries fall at narrow points in the coverage rather than at doorways. More missions fix the *count*; they do not fix the shape, because the sofa is in the same place every time. Outlines along the walls would need obstacle data the 900-series does not export.
 

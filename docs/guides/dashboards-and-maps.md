@@ -8,6 +8,8 @@ The map images Roomba+ draws, what their colours mean, where the robot is, and h
 
 ## On a dashboard
 
+**Applies to:** all robots; the map cards on robots that have maps
+
 - **Home Assistant's own cards** are enough for the controls: a tile or the vacuum card for the robot, a *picture entity* card for a map image.
 - **The companion card**, [ha_roomba_plus_card](https://github.com/johnnyh1975/ha_roomba_plus_card), puts the map, room buttons and mission history in one card. Add it as a custom repository of type *Dashboard* (Marketplace: add from link, with a connected GitHub account).
 - **xiaomi-vacuum-map-card** has a Roomba+ platform (card version 2.4.1 or newer): pick **Roomba+** as `vacuum_platform` in the card editor and press **Generate Room Configs**; it reads the map's `rooms` attribute and builds the room overlay. Full setup: [xiaomi-vacuum-map-card](../xiaomi-vacuum-map-card.md).
@@ -78,6 +80,8 @@ Once the positions are lined up with the floor plan, both also carry:
 
 ## What the colours on the map mean
 
+**Applies to:** Smart Map robots with the iRobot account · Prime
+
 Four kinds of zone are drawn, and the distinction that matters is not visible from the map itself: **two of them you created, two the robot worked out on its own.**
 
 | Colour | Zone | Origin |
@@ -100,6 +104,8 @@ Clean zones and keep-out zones are outlines, because they have shapes you drew. 
 **Placing something on it.** The image is square, the floor usually is not. `x_min_mm` … `y_max_mm` are the bounding box of the visited cells; the attribute `render_extent_mm` (`x_min`, `x_max`, `y_min`, `y_max`, `size_px`) is the frame the picture is drawn in. A point at (x, y) mm sits at pixel `((x − x_min) · s, (y_max − y) · s)` with `s = size_px / (x_max − x_min)`, or at `((x_max − x) · s, (y_max − y) · s)` when `mirror_x` is true ([why](../explanations/maps.md#frames-mirroring-and-rotation)). `quarter_turns` is the rotation chosen in the options: with `p` and `q` the pixel position divided by `size_px`, each clockwise quarter turn takes `(p, q)` to `(1 − q, p)`.
 
 ## Room names in Japanese, Chinese or Korean
+
+**Applies to:** all robots that have a map
 
 The labels are drawn with DejaVu Sans. For names in a script it lacks, a label uses the first font that has all its characters: the fonts in `roomba_plus/fonts` in the configuration folder, then the system's. Roomba+ ships none for these scripts; see [Troubleshooting](../TROUBLESHOOTING.md#room-names-show-as-boxes-on-the-map).
 

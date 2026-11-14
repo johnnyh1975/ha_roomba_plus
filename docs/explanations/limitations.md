@@ -28,6 +28,8 @@ What Roomba+ cannot do, and the ideas kept for later.
 
 ## Planned, not scheduled
 
+**Applies to:** Smart Map robots (furniture changes from the cloud map) · all robots (export)
+
 Ideas that are kept but have no release yet:
 
 - **Furniture changes from the cloud map.** Detecting moved furniture from the

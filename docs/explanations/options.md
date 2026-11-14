@@ -8,6 +8,8 @@ Nothing under **Configure** is required; the defaults are what a robot does out 
 
 ## The map
 
+**Applies to:** Classic robots with position sensing; rotation, names and zone layers on every map
+
 | Option | Default | What it costs, or why it is set so |
 |---|---|---|
 | Enable live map | on | Robots with position sensing only (900, i, s, j, Braava m). Off: no cleaning path, no room tracking by position, no areas on a 900-series |
@@ -17,6 +19,8 @@ Nothing under **Configure** is required; the defaults are what a robot does out 
 | Draw clean zones, keep-out zones, no-mop zones | off | They clutter a small canvas. They do not need a running mission |
 
 ## Entities that take space
+
+**Applies to:** all robots; the favourite buttons option on Prime
 
 | Option | Default | What it costs, or why it is set so |
 |---|---|---|
@@ -32,6 +36,8 @@ Nothing under **Configure** is required; the defaults are what a robot does out 
 The calendar and the to-do list are the same kind of thing and default differently on purpose: the calendar existed before its option did, and switching it off for people already using it would have taken something away. **Both take a place in Home Assistant's sidebar**, which is the user's space rather than an integration's; that is why the list is asked for.
 
 ## Presence, demand cleaning and blocking sensors
+
+**Applies to:** all robots; presence on robots with a schedule hold and on Prime; demand cleaning on Smart Map robots with the account and Prime
 
 | Option | What it does |
 |---|---|

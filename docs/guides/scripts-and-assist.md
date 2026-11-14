@@ -112,6 +112,8 @@ gets its pair at the robot's next mission end.
 
 ## Which robots each action works on
 
+**Applies to:** per action, in the table
+
 Every field of every action, and which return data: [Actions](../reference/actions.md). Most act on one robot: target its vacuum entity, or give `entity_id`.
 
 | Action | Robots | What it is for |

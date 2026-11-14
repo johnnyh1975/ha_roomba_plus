@@ -59,7 +59,8 @@ versions, the supported minimum (2025.5, Python 3.13) and a current one
    option changes, `python scripts/build_reference.py`: the pages under
    `docs/reference/` named `entities`, `actions` and `options` are
    generated, never edited by hand, and a test fails when they are out of
-   date. Every section starts with an **Applies to** line. History goes in
+   date. Every section starts with an **Applies to** line (the robots
+   page and the generated reference say it per row). History goes in
    the release notes, what a user must do in `docs/UPGRADING.md`.
    `scripts/check_doc_names.py` checks every name and menu path in the
    docs against the code.

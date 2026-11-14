@@ -10,6 +10,8 @@ What is recorded about each mission, and what Roomba+ learns from the history. R
 
 ## The mission log
 
+**Applies to:** all robots; the team id on Classic
+
 Every mission is recorded in a log of up to 365 missions that survives a restart. Each also writes a Logbook entry and fires `roomba_plus_mission_completed` ([Events](../reference/events.md)).
 
 | Sensor | What it says |
@@ -84,6 +86,8 @@ On a Classic robot the dirt count arrives with iRobot's mission history, minutes
 **Why the floor is getting dirtier.** `dirt_trend` is rising, stable or falling, from the median of the five newest missions against the ten before. While it rises, `dirt_cause` says why: `brush_wear` (more dirt and *slower*: the sensor fires again on debris the brush does not pick up, and the robot slows down) or `floor_dirty` (more dirt at the same speed: the floor is dirtier). The first cleans after a gap of more than a week are left out: they run on an unusually dirty floor and would read as brush wear.
 
 ## Long-term statistics
+
+**Applies to:** all robots
 
 Roomba+ fills up to 365 days of mission history into Home Assistant's long-term statistics at every start: area cleaned, mission duration and missions completed, under `roomba_plus:` in a *Statistics graph* card.
 

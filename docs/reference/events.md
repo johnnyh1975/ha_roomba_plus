@@ -10,6 +10,8 @@ Roomba+ fires events on Home Assistant's event bus, for automations with an *Eve
 
 ## Event bus
 
+**Applies to:** all robots; the row says where an event or field differs
+
 | Event | Fires when | Payload |
 |---|---|---|
 | `roomba_plus_mission_completed` | A mission ends (any result) | `entry_id`, `name`, `rooms_cleaned` (a count), `area_sqft`, `stuck_count`, `result`, `mission_id`, `missions_added`, and `is_anomalous`, `anomaly_reason`, `recommended_action`, `robot_lifted`, always present (`null`/`false` for an ordinary mission), so a notification gets the reason without calling an action. On Prime `stuck_count` is `null`, and a sync that imports several missions at once (the first after setup imports the history) fires once, for the newest, with `missions_added` saying how many |
@@ -40,6 +42,8 @@ more* (on by default, under *Settings*) turns this off.
 
 ## Event entities
 
+**Applies to:** all robots
+
 The moments a dashboard most wants to react to are also **event entities**:
 
 | Entity | Mirrors | Robots |
@@ -55,6 +59,8 @@ Each changes state when its bus event fires for that robot, with the event's pay
 **Why both.** Home Assistant lets only administrators subscribe to an integration's own bus events from the frontend. A dashboard card opened by any other user never heard a mission end; an entity state reaches every user who can see the robot.
 
 ## Device triggers
+
+**Applies to:** all robots; only the triggers the robot can fire are offered
 
 In the automation editor: **Add trigger → Device**, then the robot.
 

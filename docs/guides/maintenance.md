@@ -10,6 +10,8 @@ Know when a part is due, mark it done, get reminded, and follow a care guide. Th
 
 ## The maintenance entries
 
+**Applies to:** all robots
+
 Every part and care task is one **maintenance entry**, worked out once and shown the same everywhere. `sensor.{name}_maintenance` gives the worst level of the entries that are not snoozed (`ok`, `soon`, `due`, `overdue`) and lists them in `items`:
 
 | Field | Meaning |
@@ -36,6 +38,8 @@ On Prime, a part gets its name from iRobot's part name, as in the app: the first
 
 ## Configure → Maintenance
 
+**Applies to:** all robots; the hour options and *Forget learned intervals* on Classic
+
 One page for maintenance, on both generations:
 
 - **The overview**: every entry with its level, what is left and where the interval comes from.
@@ -60,6 +64,8 @@ One page for maintenance, on both generations:
 
 ## The to-do list
 
+**Applies to:** all robots
+
 `todo.{name}_maintenance` shows the maintenance entries as Home Assistant to-do items, in Home Assistant's language. Configure → Maintenance → Settings → *Show maintenance as a to-do list*.
 
 - **One item per entry**: every part the robot has (filter, main brushes, side brush, Clean Base bag or dust bag, the mop pad on a Braava; on Prime every part the robot reports), and with care reminders on every care task.
@@ -72,6 +78,8 @@ One page for maintenance, on both generations:
 Smart Map robots also get a **Reconfigure rooms** item while a room on the map has no name anywhere. It cannot be ticked off: it goes by itself once every room has a name (Configure → *Rooms & zones*).
 
 ## Care guides
+
+**Applies to:** all robots
 
 A guide for every care task and part (filter, main brushes, side brush, wheels, cliff sensors, charging contacts, bin, camera window, Clean Base bag, battery, mop pad, roller mop, detergent and the wash dock), written and drawn for Roomba+, in all eight languages. Each says what the part does, how to clean or replace it in three or four steps and what not to do, with a drawing of the robot's underside, bin, Home Base, Clean Base or wash dock and the part highlighted. iRobot's own guide for the model is linked below where the parts catalogue has one.
 
@@ -100,6 +108,8 @@ data:
 **The link opens without signing in**, in the browser and in the companion app: it is a path signed with this installation's own secret, valid for 31 to 37 days, and the page holds nothing private. An expired link says where to get a new one, and links to the guides on GitHub. The link is relative (`/api/roomba_plus/care/...`); outside Home Assistant's own apps put your Home Assistant address in front.
 
 ## Reminders, repairs and the calendar
+
+**Applies to:** all robots; care reminders for a Braava only cliff sensors and contacts
 
 ### Care reminders
 
@@ -130,6 +140,8 @@ Both under Configure → Maintenance → Settings, off by default; the list says
 `calendar.{name}_maintenance` is read-only and separate from the schedule calendar: every due date as an all-day event, titled like the list item, with the guide link. A part's date is an estimate from its wear rate and moves with every run, and its description says so; a care task's date stands. Off by default, because a calendar entity puts the calendar in the sidebar.
 
 ## Where an interval comes from
+
+**Applies to:** Classic robots; on Prime the robot's own counters are the intervals
 
 Best first: iRobot's own counter for this robot (`cloud`), the interval learned from your own replacements (`learned`), an hour option (`configured`), the robot's series (`profile`), and a last fallback (`irobot_budget`). The part sensor's `interval_source` says which. Series values, in hours of use:
 
@@ -176,6 +188,8 @@ Robots or accounts that report no parts keep the local estimate. Parts with no l
 
 ## The part sensors
 
+**Applies to:** Classic robots; Prime robots have the part sensors under [Parts counted by iRobot](#parts-counted-by-irobot)
+
 | Sensor | Notes |
 |---|---|
 | Filter remaining hours | `threshold_hours` attribute |
@@ -189,6 +203,8 @@ Robots or accounts that report no parts keep the local estimate. Parts with no l
 All remaining-hours sensors read the maintenance entries' calculation, the same figure the due check uses. Attributes: `level`, `used`, `due`, `last_replaced`, `wear_rate`, `buy_url`.
 
 ## Robot health
+
+**Applies to:** Classic robots; on Prime the navigation resets and the dock counters once the robot reports them
 
 Signals that something other than a consumable needs attention. Each raises a repair issue and clears it on its own once the signal is back to normal.
 

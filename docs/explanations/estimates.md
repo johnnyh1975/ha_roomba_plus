@@ -8,6 +8,8 @@ How mission progress, the current room and the remaining time are worked out, an
 
 ## Mission progress
 
+**Applies to:** Smart Map robots with the iRobot account · Prime · 900-series with areas
+
 `sensor.{name}_mission_progress` is the mission's progress in percent, from per-room time estimates and the mission's effective time. It survives a restart of Home Assistant.
 
 **Effective time.** `elapsed_run_min` is `mission_duration_min` (time since the mission started) minus `recharge_min` (the mid-mission charging the robot reported). Driving between rooms counts as cleaning time; only charging is left out. Both parts are attributes too.
@@ -23,6 +25,8 @@ A robot that decides its number of passes while running (auto pass mode) gets no
 Attributes: `current_room`, `current_room_source`, `next_room`, `elapsed_run_min`, `estimated_remaining_min`, `room_sequence`, `mission_duration_min`, `recharge_min`.
 
 ## The current room
+
+**Applies to:** Smart Map robots with the iRobot account · Prime · 900-series with areas; by position only on robots that report or are asked for it
 
 **The room follows the robot, not the clock**, where Roomba+ can tell where the robot is. Otherwise it is worked out from the elapsed time against the room estimates, and a room that takes longer or shorter than estimated moves the value on while the robot has not.
 
@@ -43,6 +47,8 @@ A new start command while a mission runs replaces its room plan. If the progress
 An automation that should act only on a verified room can check the source.
 
 ## Progress is an estimate, not coverage
+
+**Applies to:** all robots with mission progress; area on robots that report it
 
 `sensor.{name}_mission_progress` has two modes, and neither measures how much floor has been cleaned:
 

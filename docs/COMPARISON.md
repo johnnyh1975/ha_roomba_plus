@@ -2,14 +2,13 @@
 
 # Roomba Integrations — Feature Comparison
 
-> **All three columns read from source.** Roomba+ and roomba_rest980 were
-> re-read in October 2026; HA Core in August 2026.
+> **All three columns read from source**, in November 2026.
 >
 > | Column | Version | How it was checked |
 > |---|---|---|
-> | **Roomba+** | v4.3.0 | this repository |
-> | **HA Core** `roomba` | ships with Home Assistant, `roombapy==1.8.1` | the installed component |
-> | **roomba_rest980** | v1.20.0-beta4 (`ia74/roomba_rest980`) | cloned from GitHub in October 2026: unchanged since the August reading, last commit 30 July 2026 |
+> | **Roomba+** | 4.6.0 | this repository; the entity counts come from the [generated entity list](reference/entities.md) |
+> | **HA Core** `roomba` | Home Assistant 2026.10.3, `roombapy==1.9.1` | the installed component. Home Assistant 2026.11 moves it to `roombapy` 2.0.2; its entities were not re-read for that |
+> | **roomba_rest980** | v1.20.0-beta4 (`ia74/roomba_rest980`) | cloned from GitHub: last commit 5 October 2026 (a licence file), version unchanged |
 >
 > Counts below are entity and feature counts read out of each codebase, not
 > estimates. Where a row says ❌ it means the code has no such thing, not that it
@@ -28,8 +27,7 @@ other robots on iRobot's newer cloud protocol do not speak the local MQTT
 protocol that the built-in HA integration and rest980 are built on — there is
 nothing for those paths to connect to.
 
-Roomba+ talks to iRobot's cloud instead, in its stable releases since 4.0.
-That is a different trade rather than a free win: it needs your iRobot
+Roomba+ talks to iRobot's cloud instead. That is a different trade rather than a free win: it needs your iRobot
 credentials and it needs internet. But it is the only option, and the
 comparison below does not apply to those robots at all.
 
@@ -40,11 +38,11 @@ comparison below does not apply to those robots at all.
 | Theme | Roomba+ | HA Core | roomba_rest980 |
 |---|---|---|---|
 | 🔌 [Setup & prerequisites](#setup--prerequisites) | Local MQTT push, auto-discovery, no extras | Local MQTT push, built-in | HTTP poll to Docker container, cloud required |
-| 🗺️ [Map & rooms](#map--rooms) | Live path + UMF polygons + zone overlays, automatic room detection (900-series), per-room cleaning history | None | Static UMF floor plan + zone overlays, no live path |
+| 🗺️ [Map & rooms](#map--rooms) | Live path, floor plan with rooms, walls and doors, zone overlays, rooms found on a 900-series, per-room history | None | Static UMF floor plan + zone overlays, no live path |
 | 🎮 [Control](#controls) | Room targeting, blocking sensors, favourites, sequences | Start / stop / return | Per-room staging select + cloud routines |
 | 🧠 [Intelligence](#intelligence--scheduling) | Presence scheduling, demand cleaning, anomaly detection, learned per-room rhythms, mission maps | None | None |
-| 📊 [Monitoring](#sensors--monitoring) | 100+ entities — maintenance, performance, error detail | 13 entities | ~29 base sensors + dynamic room selects and favourite buttons |
-| 🏆 [HA quality](#ha-integration-quality) | Platinum, 10,000+ tests, 8 languages, CI/CD | Silver, built-in | Bronze, EN only |
+| 📊 [Monitoring](#sensors--monitoring) | 270+ entity types across both generations: maintenance, performance, error detail | 13 entities | ~29 base sensors + dynamic room selects and favourite buttons |
+| 🏆 [HA quality](#ha-integration-quality) | Platinum, 10,000+ tests, 8 languages, CI/CD | built-in, no quality scale declared | Bronze, EN only |
 
 ---
 
@@ -70,8 +68,8 @@ comparison below does not apply to those robots at all.
 - ⚠️ Requires a Docker container running 24/7, cloud credentials, and a Smart Map capable robot (i/s/j-series only)
 
 Its persistent floor plan with room boundaries, keep-out zones and obstacles
-was the reason to pick it in earlier versions of this page. Roomba+ draws the
-same from the same cloud data (*Rooms map*), without the container. Moving
+is what it is known for. Roomba+ draws the same from the same cloud data
+(*Rooms map*), without the container. Moving
 over: [From roomba_rest980](MIGRATING.md#from-roomba_rest980).
 
 ---
@@ -88,7 +86,7 @@ over: [From roomba_rest980](MIGRATING.md#from-roomba_rest980).
 | Setup effort | ✅ Low — auto-discovery ★ | ✅ Low — auto-discovery | ❌ High — manual Docker + credential config, no auto-discovery |
 | Supported models | ✅ 600–900, i, s, j, Braava m6, **and Prime-generation** ★ | ⚠️ 690, 890, 960, 980, s9+, Braava m6 | ⚠️ Smart Map robots (i/s/j-series) only |
 | HA Long-Term Statistics backfill | ✅ area, duration, completions — auto-backfilled on startup ★ | ❌ | ❌ |
-| Unit tests | ✅ **10,000+ tests** ★ | ✅ in the HA core suite | ❌ none in the repository |
+| Unit tests | ✅ **10,000+ tests** ★ | ✅ in the HA core suite | ⚠️ one test file, 8 tests |
 | Quality Scale | **Platinum ★** | not declared in its manifest | **Bronze** (rules file present, several `todo`) |
 | Translations | ✅ 8 languages, complete and enforced by a check | ✅ **38 languages ★** — it ships with Home Assistant | ⚠️ 1 |
 
@@ -98,13 +96,13 @@ over: [From roomba_rest980](MIGRATING.md#from-roomba_rest980).
 
 | Feature | Roomba+ | HA Core | roomba_rest980 |
 |---|---|---|---|
-| **Entity count** | **245 entity types ★** — 151 sensors, 22 binary sensors, 27 buttons, 18 selects, 16 switches, 5 images, 3 events, calendar, to-do, device tracker; created as the robot supports them | **11** — 10 sensors, 1 binary sensor | ~51 sensor descriptions, 4 selects, 2 buttons, 1 camera |
+| **Entity count** | **277 entity types ★** across both generations: 172 sensors, 22 binary sensors, 31 buttons, 17 selects, 16 switches, 6 images, 7 events, 3 calendars, to-do, device tracker; created as the robot supports them | **13**: 12 sensors, 1 binary sensor | ~51 sensor descriptions, 4 selects, 2 buttons, 1 camera |
 | Battery | ✅ | ✅ | ✅ + dynamic icon + `batInfo` attributes |
 | Battery cycles | ✅ | ✅ | ✅ |
 | Phase / status | ✅ dedicated sensor + idle/stopped detection ★ | ⚠️ via vacuum state only | ✅ idle/stopped detection |
-| Error codes | ✅ **112 codes in iRobot's own wording**, eight languages, with description and recommended action ★ | ❌ | ✅ mapped text label — no raw code, description or action |
+| Error codes | ✅ in the wording of the robot's own iRobot app (Classic or Prime), eight languages, with description, recommended action and iRobot's article ★ | ❌ | ✅ mapped text label — no raw code, description or action |
 | Readiness / not-ready | ✅ | ❌ | ✅ dedicated sensor with mapped labels |
-| Job initiator | ✅ 25 values ★ | ❌ | ✅ |
+| Job initiator | ✅ ★ | ❌ | ✅ |
 | Next scheduled clean | ✅ ★ | ❌ | ❌ |
 | Per-mission history | ✅ 365 entries with full breakdown ★ | ⚠️ totals only: missions, successful, cancelled, failed | ❌ lifetime totals only |
 | Lifetime stats (area, time, jobs) | ✅ | ✅ total cleaning time, area, average mission time | ✅ from local MQTT |
@@ -119,17 +117,18 @@ over: [From roomba_rest980](MIGRATING.md#from-roomba_rest980).
 | Wi-Fi — RSSI / SNR / noise | ✅ all three, opt-in | ❌ | ✅ all three, on by default ★ |
 | Bin full / present | ✅ | ✅ binary sensor | ✅ |
 | Clean Base status | ✅ | ❌ | ✅ 12 state codes |
-| Mop sensors — Braava m6 | ✅ 5 sensors ★ | ❌ | ✅ 5 sensors ★ |
+| Mop sensors — Braava m6 | ✅ 5 sensors ★ | ⚠️ tank level, dock tank level | ✅ 5 sensors ★ |
 | Cloud diagnostics | ✅ 4 consolidated sensors ★ | ❌ | ❌ |
 | Map learning / completeness | ✅ SMART + cloud ★ | ❌ | ❌ |
 | Zone summary (clean / keep-out / observed) | ✅ SMART + cloud ★ | ❌ | ❌ |
 | Raw state dump as a sensor | ❌ diagnostics download instead | ❌ | ✅ local + cloud raw dumps ★ |
 | Cloud pmap sensor | ❌ | ❌ | ✅ one per saved map ★ |
 
-> **HA Core's ten sensors** are battery, battery cycles, total cleaning time,
-> average mission time, total missions, successful missions, cancelled missions,
-> failed missions, scrub count, total cleaned area and last mission — plus one
-> binary sensor. That is the whole set, read from its `strings.json`.
+> **HA Core's twelve sensors** are battery cycles, total cleaning time, average
+> mission time, total missions, successful missions, cancelled missions, failed
+> missions, scrub count, total cleaned area, last mission, tank level and dock tank
+> level, plus one binary sensor and the vacuum's own battery. That is the whole
+> set, read from its `strings.json` in 2026.10.3.
 
 ---
 
@@ -143,7 +142,7 @@ over: [From roomba_rest980](MIGRATING.md#from-roomba_rest980).
 | Send raw command | ✅ | ✅ | ✅ `action` service |
 | Clean a specific room | ✅ by name or HA area ★ | ❌ | ✅ `clean` service + selects |
 | Clean a specific zone | ✅ by name (`clean_zone`), or zone select + button ★ | ❌ | ✅ select per zone |
-| Room and zone sharing an id | ✅ each sent as what it is (v4.2.22) ★ | ❌ | ✅ separate selects |
+| Room and zone sharing an id | ✅ each sent as what it is ★ | ❌ | ✅ separate selects |
 | Cleaning passes per room | ✅ Select, fully local ★ | ❌ | ⚠️ staging Select — stages the value, you press Start |
 | Edge cleaning | ✅ Switch ★ | ❌ | ❌ REST only |
 | Always finish (`binPause`) | ✅ Switch ★ | ❌ | ❌ REST only |
@@ -170,25 +169,25 @@ over: [From roomba_rest980](MIGRATING.md#from-roomba_rest980).
 | Feature | Roomba+ | HA Core | roomba_rest980 |
 |---|---|---|---|
 | Floor plan map | ✅ local MQTT `pose` stream ¹, and the *Rooms map* from iRobot's cloud floor plan on Smart Map robots | ❌ | ✅ UMF from iRobot cloud (static) ³ |
-| Live cleaning path during mission | ✅ local MQTT `pose` stream ★; robots without it are asked for their position (4.3) | ❌ | ❌ |
+| Live cleaning path during mission | ✅ local MQTT `pose` stream ★; robots without it are asked for their position | ❌ | ❌ |
 | Map survives HA restart | ✅ hass.storage persistence ★ | ❌ | ❌ |
-| Room outline — Smart Map robots | ✅ UMF polygon overlay, per-room colour palette, embedded font, cached per map version (v2.9.0) | ❌ | ✅ rendered on UMF floor plan ³ |
-| Which room is being cleaned, live | ✅ advances when a travel leg ends, from the robot's own `Traveling` signal — works on firmware that emits no phase between rooms (v4.1.7) | ❌ | ❌ |
-| Plan versus observation, told apart | ✅ `room_progress_observed` says whether the robot has been seen to move on, or the name is still the first planned room (v4.1.7) | ❌ | ❌ |
-| Zones told apart from rooms | ✅ read from the robot's own `region_type`, so a zone is never commanded as a room (v4.1.6) | ❌ | ❌ |
-| Room outline — 900-series | ✅ from the coverage of its missions, walls and doors drawn (4.5) ★ | ❌ | ❌ |
+| Room outline — Smart Map robots | ✅ floor plan with rooms in their own colours, walls and doors | ❌ | ✅ rendered on UMF floor plan ³ |
+| Which room is being cleaned, live | ✅ advances when a travel leg ends, from the robot's own `Traveling` signal — works on firmware that emits no phase between rooms; by position where the robot reports one | ❌ | ❌ |
+| Plan versus observation, told apart | ✅ `room_progress_observed` says whether the robot has been seen to move on, or the name is still the first planned room | ❌ | ❌ |
+| Zones told apart from rooms | ✅ read from the robot's own `region_type`, so a zone is never commanded as a room | ❌ | ❌ |
+| Room outline — 900-series | ✅ from the coverage of its missions, walls and doors drawn ★ | ❌ | ❌ |
 | Zone / room selection | ✅ local via `region_id` | ❌ | ✅ select per room with real names ★ |
 | Zone selection — fully local | ✅ ★ | ❌ | ❌ cloud required |
 | Real room names from cloud | ⚠️ cloud credentials required | ❌ | ✅ directly from cloud pmaps ★ |
 | Room names without cloud (900) | ✅ rooms found from coverage, named by you; tracked, not targeted — the robot cannot be sent to a room ★ | ❌ | ❌ |
-| Keep-out zone visibility | ✅ (v2.2+) | ❌ | ✅ rendered on map ★ |
-| Observed obstacle zone overlay | ✅ orange circles from UMF observed_zones (v3.0.0) | ❌ | ❌ |
-| Observed zone visibility | ✅ (v2.2+) | ❌ | ✅ rendered on map ★ |
-| Per-room history | ✅ last cleaned per room, time spent, typical time over the last 10 cleans — charging excluded (v4.2.21/22) ★ | ❌ | ❌ |
-| HA area mapping (`vacuum.clean_area`) | ✅ v2.4+, HA 2026.3+, SMART + cloud | ❌ | ❌ |
+| Keep-out zone visibility | ✅ | ❌ | ✅ rendered on map ★ |
+| Observed obstacle zone overlay | ✅ orange circles | ❌ | ❌ |
+| Observed zone visibility | ✅ | ❌ | ✅ rendered on map ★ |
+| Per-room history | ✅ last cleaned per room, time spent, typical time over the last 10 cleans, charging excluded ★ | ❌ | ❌ |
+| HA area mapping (`vacuum.clean_area`) | ✅ HA 2026.3+, Smart Map with the account, and Prime | ❌ | ❌ |
 | Automatic room detection (900-series) | ✅ distance transform and watershed over the coverage of three or more missions ★ | ❌ | ❌ |
 | Door-width calibration | ✅ ★ | ❌ | ❌ |
-| xiaomi-vacuum-map-card support | ✅ `calibration_points` + `rooms` on both map entities, auto-detected by card (v2.7+) ★ | ❌ | ✅ calibration + rooms on floor plan ★ |
+| xiaomi-vacuum-map-card support | ✅ `calibration_points` + `rooms` on both map entities, and a Roomba+ platform in the card ★ | ❌ | ✅ calibration + rooms on floor plan ★ |
 | **Prime-generation map** | ✅ floor plan with walls, doorway cut-outs and furniture; live coverage and trajectories composited over it ★ | ❌ no support for these robots | ❌ no support for these robots |
 | **Stable room ids** | ✅ renaming a room in the iRobot app does not break a saved card configuration ★ | ❌ | ❌ names only |
 | **Several maps, zones follow the selected one** | ✅ ★ | ❌ | ⚠️ one sensor per saved map, no selection |
@@ -201,25 +200,25 @@ over: [From roomba_rest980](MIGRATING.md#from-roomba_rest980).
 |---|---|---|---|
 | Presence-aware scheduling | ✅ `PresenceManager`, both generations ★ | ❌ | ❌ |
 | Blocking sensors (prevent start) | ✅ configurable queue / abort ★ | ❌ | ❌ |
-| Demand cleaning (dirt threshold) | ✅ v2.4+, SMART + cloud ★ | ❌ | ❌ |
-| Weekday-aware dirt baseline | ✅ v2.5+ ★ | ❌ | ❌ |
-| Optimal clean window sensor | ✅ v2.4+ ★ | ❌ | ❌ |
-| Mission anomaly detection | ✅ v2.5+ ★ | ❌ | ❌ |
-| Stuck pattern time-correlation | ✅ v2.7+ — Repair Issue when same spot/time recurs ★ | ❌ | ❌ |
-| Robot health score (0–100) | ✅ v2.7+ — composite battery/nav/trend/anomaly/stuck ★ | ❌ | ❌ |
-| Self-calibrating maintenance thresholds | ✅ v2.5+ ★ | ❌ | ❌ |
+| Demand cleaning (dirt threshold) | ✅ Smart Map with the account, and Prime ★ | ❌ | ❌ |
+| Weekday-aware dirt baseline | ✅ ★ | ❌ | ❌ |
+| Optimal clean window sensor | ✅ ★ | ❌ | ❌ |
+| Mission anomaly detection | ✅ ★ | ❌ | ❌ |
+| Stuck pattern time-correlation | ✅ Repair Issue when the same spot and time recur ★ | ❌ | ❌ |
+| Robot health score (0–100) | ✅ from battery, navigation, trend, anomalies and stuck rate ★ | ❌ | ❌ |
+| Self-calibrating maintenance thresholds | ✅ ★ | ❌ | ❌ |
 | Performance sensors (speed, dirt density, coverage) | ✅ cloud, opt-in ★ | ❌ | ❌ |
 | Wear rate anomaly detection | ✅ ★ | ❌ | ❌ |
 | Mission log REST API | ✅ ★ | ❌ | ❌ |
 | Per-mission records (cloud + local) | ✅ unified schema ★ | ❌ | ❌ |
-| Mission history export / import | ✅ v2.5+ ★ | ❌ | ❌ |
-| Self-calibrated per-room cleaning rhythm | ✅ v3.3.0, SMART + cloud ★ | ❌ | ❌ |
-| One-call overdue/dirty-room cleaning, route-optimized | ✅ v3.3.0, SMART + cloud ★ | ❌ | ❌ |
-| Mission cleaning maps (per-mission coordinate replay) | ✅ v3.3.0, SMART + cloud ★ | ❌ | ❌ |
-| Dirt ↔ external-sensor correlation (opt-in, local) | ✅ v3.3.0, SMART + cloud ★ | ❌ | ❌ |
-| Cleaning schedule as native HA calendar | ✅ v3.4.0 ★ | ❌ | ❌ |
-| Maintenance tasks as native HA to-do list | ✅ v3.4.0 ★ | ❌ | ❌ |
-| Coverage analytics on pose-less lewis-firmware robots | ✅ v3.4.0, cloud-sourced ★ | ❌ — no coverage analytics at all | ❌ |
+| Mission history export / import | ✅ ★ | ❌ | ❌ |
+| Self-calibrated per-room cleaning rhythm | ✅ Smart Map with the account, and Prime ★ | ❌ | ❌ |
+| One-call overdue/dirty-room cleaning, route-optimized | ✅ Smart Map with the account, and Prime ★ | ❌ | ❌ |
+| Mission cleaning maps (per-mission coordinate replay) | ✅ Smart Map with the account ★ | ❌ | ❌ |
+| Dirt ↔ external-sensor correlation (opt-in, local) | ✅ Smart Map with the account ★ | ❌ | ❌ |
+| Cleaning schedule as native HA calendar | ✅ editable, both generations ★ | ❌ | ❌ |
+| Maintenance tasks as native HA to-do list | ✅ both generations, with care guides ★ | ❌ | ❌ |
+| Coverage analytics on Smart Map robots that send no position | ✅ from the cloud's data ★ | ❌ — no coverage analytics at all | ❌ |
 
 ---
 
@@ -227,14 +226,14 @@ over: [From roomba_rest980](MIGRATING.md#from-roomba_rest980).
 
 | Feature | Roomba+ | HA Core | roomba_rest980 |
 |---|---|---|---|
-| Quality Scale | **Platinum ★** | Silver | **Bronze** — self-declared; `quality_scale.yaml` marks `config-flow-test-coverage`, `test-before-configure`, `test-before-setup`, `has-entity-name`, `unique-config-entry`, `docs-installation-instructions`, `docs-removal-instructions` as `todo`, even within Bronze tier |
+| Quality Scale | **Platinum ★** | not declared in its manifest | **Bronze** — self-declared; `quality_scale.yaml` marks `config-flow-test-coverage`, `test-before-configure`, `test-before-setup`, `has-entity-name`, `unique-config-entry`, `docs-installation-instructions`, `docs-removal-instructions` as `todo`, even within Bronze tier |
 | `async_migrate_entry` | ✅ v1→v25 ★ | ✅ | ❌ |
 | `reconfiguration-flow` | ✅ ★ | ✅ | ❌ |
-| `icon-translations` | ✅ 238 entity icons ★ | ✅ | ❌ |
+| `icon-translations` | ✅ 252 entity icons ★ | ✅ | ❌ |
 | `stale-devices` | ✅ ★ | ✅ | ❌ |
 | `strict-typing` | ✅ ★ | ✅ | ❌ |
 | Device triggers | ✅ 13 triggers ★ | ❌ | ❌ |
-| Repair Issues | ✅ 16 issue types ★ | ❌ | ❌ |
+| Repair Issues | ✅ 17 issue types ★ | ❌ | ❌ |
 | Diagnostics download | ✅ map + zone + cloud + robot profile ★ | ⚠️ basic | ❌ |
 | Multi-robot support | ✅ BLID-based, separate stores per entry ★ | ✅ | ⚠️ one container per robot |
 | Integration tests | ✅ 10,000+ pytest tests ★ | ✅ | ❌ |
@@ -244,7 +243,7 @@ over: [From roomba_rest980](MIGRATING.md#from-roomba_rest980).
 
 ## Notes
 
-**¹ Roomba+ map approach** renders entirely in-process using the local MQTT `pose` stream with no external container. From v2.7.0, robots on lewis firmware (i7+/i8+ on 22.x) that do not broadcast local pose data are now bootstrapped automatically from cloud traversal events.  It stopped working on firmware 3.20+ for robots where iRobot removed local `pose` reporting entirely. For robots on older firmware the live cleaning path renders accurately and persists across HA restarts via `hass.storage`. Smart Map robots gain UMF room polygon overlays from v2.3+.
+**¹ Roomba+ map approach** renders in-process, with no external container, from the robot's own position over the local connection. A Smart Map robot that sends no position is asked for it about once a second while it cleans; one that does not answer shows the last mission's coverage from iRobot's cloud. Smart Map robots get the floor plan with their rooms under the path. The map survives a restart. How it works: [How the maps are drawn](explanations/maps.md).
 
 **² roomba_rest980 controls:** Cleaning passes are exposed as a staging `CleanRoomPasses` Select entity — one per room and one per zone. Selecting "One Pass" or "Two Passes" stages the value locally but does NOT send a command to the robot; cleaning only begins when the user presses Start. Edge cleaning, always finish, and carpet boost have no HA entity at all — REST API only.
 

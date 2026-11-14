@@ -38,6 +38,8 @@ A Combo that washes its pad *during* a clean is doing a dock task, not cleaning,
 
 ### Missions and errors
 
+**Applies to:** all robots; `stuck_count_30d` and `problem_zone` on Classic
+
 | Entity | What it says |
 |---|---|
 | `sensor.{name}_mission_elapsed_time`, `_mission_start_time` | When the mission started and how long it has run |
@@ -92,6 +94,8 @@ Four diagnostic sensors: when the state shadows, the mission timeline, the live 
 Prime robots have their own settings (suction, pad wetness, washing, drying, auto-empty frequency): [Mopping robots](robots.md#mopping-robots) and [Entities](entities.md#selects).
 
 ## Diagnostics
+
+**Applies to:** all robots
 
 ### Debug capture
 

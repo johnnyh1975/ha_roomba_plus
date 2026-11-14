@@ -8,6 +8,8 @@ Get told when a mission ends, the robot is stuck or a part is due: with a shippe
 
 ## The quickest way: a blueprint
 
+**Applies to:** all robots; *Vacuum then Mop* needs a vacuum and a mop robot, *Demand Clean Alert* demand cleaning
+
 *New in 4.6:* the blueprints come with the integration. Open **Settings → Automations & scenes → Blueprints**, pick one and fill in the robot and your notification action.
 
 | Blueprint | What it does |
@@ -24,13 +26,19 @@ The blueprints are copied to `blueprints/automation/roomba_plus/` when Home Assi
 
 ## Without YAML: a device trigger
 
+**Applies to:** all robots; the map retrain triggers on Classic Smart Map robots
+
 In the automation editor, **Add trigger → Device**, pick the robot and one of its triggers: cleaning started, cleaning finished, stuck, bin full, start blocked, docked, error, room completed, maintenance due, health score drop, map retrain started or completed, firmware updated. Only the triggers that can fire on your robot are offered.
 
 ## On a dashboard, for every user: event entities
 
+**Applies to:** all robots
+
 `event.<robot>_mission_completed`, `_mission_started`, `_room_completed`, `_stuck`, `_mission_result`, `_maintenance` and `_command` change state when their moment happens, with the details as attributes. Unlike the bus events, which only administrators can subscribe to from the frontend, an entity reaches every user who can see the robot, and works as a *State* trigger in an automation.
 
 ## With all the details: an event
+
+**Applies to:** all robots
 
 Every moment is also an event on the bus (`roomba_plus_mission_completed`, `roomba_plus_stuck`, …) with everything Roomba+ knows about it: the rooms, the area, the result, why a mission was unusual. Use an *Event* trigger:
 
@@ -49,6 +57,8 @@ actions:
 `entry_id` and `name` say which robot. The fields of every event: [Events](../reference/events.md#event-bus).
 
 ## A command that did not arrive
+
+**Applies to:** all robots
 
 A start that the robot never begins is the failure nobody notices. Roomba+ watches every start it sends; if no mission begins within 20 seconds (Classic) or 60 seconds (Prime), it fires `roomba_plus_command_not_delivered`, sends the command once more if the robot is idle, and `event.<robot>_command` changes state. The recipe: [Tell me when a start did not arrive](../AUTOMATIONS.md#tell-me-when-a-start-did-not-arrive-460).
 

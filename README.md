@@ -108,7 +108,7 @@ Prime robots have their own page: [V4/Prime robots](docs/PRIME.md).
 | Robots | 600, 900, i, s, j, Braava m6 and Prime | Classic robots; it lists 690, 890, 960, 980, s9+, Braava m6 | Smart Map robots (i, s, j) |
 | Map and rooms | Live path, rooms map, cleaning by room and area | — | Floor plan from the cloud, no live path |
 | Automation | Blocking sensors, presence, demand cleaning, mission events, response actions | Start, stop, return | Room selection, cloud routines |
-| Entities | 100+, maintenance and history included | 13 | About 30, plus room selects and favourite buttons |
+| Entities | 270+ kinds across both generations, maintenance and history included | 13 | About 30, plus room selects and favourite buttons |
 
 Neither of the other two supports Prime robots. The full comparison, with when to choose
 which: [Roomba+, the built-in integration and roomba_rest980](docs/COMPARISON.md).
@@ -169,28 +169,16 @@ Every option and what it does: [Options](docs/reference/options.md); what leavin
 
 ## First steps
 
-Step by step, with pictures: [Getting started](docs/getting-started.md).
+Step by step, with pictures: **[Getting started](docs/getting-started.md)**. In short:
 
-1. **Open the robot's device page.** The live map is `image.<robot>_map` on 900-series and
-   Smart Map robots; an installation from an older version may call it
-   `image.<robot>_cleaning_map`.
-2. **Name your rooms.** A 900-series robot's rooms are found from its missions after three
-   of them, and a repair notice asks you to name them (Configure → *Rooms & zones*). Smart
-   Map and Prime robots take the names from your iRobot account.
-3. **Map rooms to Home Assistant areas** (Home Assistant 2026.3 and later): vacuum entity →
-   settings → *Map vacuum segments to areas*. Then `vacuum.clean_area`, the device tracker
-   and the area sensors know which room is which.
-4. **Use `roomba_plus.smart_start` instead of `vacuum.start`** in automations if you want
-   starts to wait for a door, a sleeping baby or an empty home
-   (Configure → *Blocking sensors*).
-5. **Mark parts done when you replace them** — in the to-do list `todo.<robot>_maintenance`,
-   with the reset buttons, or with the Done button of the maintenance notification. Your
-   schedule is `calendar.<robot>_schedule` (`calendar.<robot>_prime_schedule` on Prime),
-   and you can edit it there.
-
-The blueprints Roomba+ ships — notifications, maintenance with Done and Later buttons,
-vacuum-then-mop and more — are already in Settings → Automations & scenes → Blueprints
-from 4.6. Recipes: [automations & dashboards](docs/AUTOMATIONS.md).
+1. **Look at the device page**: the controls, *Status*, *Readiness*, the parts, and the map.
+2. **Name your rooms.** Smart Map and Prime robots take the names from your iRobot account; a
+   900-series asks after three missions (Configure → *Rooms & zones*).
+3. **Clean a room** with `roomba_plus.clean_room`, or by area with `vacuum.clean_area` once
+   the rooms are matched to areas (Home Assistant 2026.3 and later).
+4. **Pick a blueprint** under Settings → Automations & scenes → Blueprints: notifications,
+   maintenance with Done and Later buttons, a start when everyone has left.
+5. **Mark parts done** in `todo.<robot>_maintenance` when you replace or clean them.
 
 ## What's new in 4.6 (beta)
 

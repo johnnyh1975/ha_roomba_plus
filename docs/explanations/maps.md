@@ -8,6 +8,8 @@ Frames, mirroring and rotation, the path of a robot that is asked for its positi
 
 ## Frames, mirroring and rotation
 
+**Applies to:** Classic robots with position sensing; rotation on every map picture
+
 **Two orders of x and y.** The maps draw the robot's position with x and y swapped, as the firmware's own client does. The tracker's `x_mm`/`y_mm` keep the firmware's order; `map_x_mm`/`map_y_mm` are the same point in the frame of the maps, the cleaning path and the stuck pins, and are the pair to use when placing the robot on a map.
 
 **That frame is a mirror image of the floor**: swapping two axes reflects, it does not turn. So the pictures in the robot's own frame are drawn mirrored back in x (the cleaning path, the coverage map on a 900-series, the areas in *Rooms & zones*) and show the floor the right way round. The millimetres are not touched: `map_x_mm`, `rooms`, the hazards and everything stored keep their frame; only the step to pixels mirrors. Pictures in the cloud map's frame (the rooms map, the coverage of the last mission and the coverage map of a Smart Map robot) are not mirrored. The coverage map's `mirror_x` attribute says which applies.
@@ -17,6 +19,8 @@ Frames, mirroring and rotation, the path of a robot that is asked for its positi
 **Turn the map to suit you.** The map has no north: its top is the way the robot faced as it left the dock, so it depends on how the dock stands. Configure → Connection settings → *Rotate the map picture* turns every picture clockwise by 90, 180 or 270 degrees: the cleaning path with the robot's heading, doors and overlays, the area map, the coverage map, the cloud coverage, and the rooms map with its published pixel positions. Nothing stored moves. A Smart Map's pictures start in the map's own orientation, the one it had right after mapping, not the turn set in the iRobot app; this option is how to match the app.
 
 ## The path of a robot that is asked for its position
+
+**Applies to:** Smart Map robots that send no position of their own
 
 Some Smart Map robots send no position of their own; Roomba+ asks them about once a second while they clean ([Maps and dashboards](../guides/dashboards-and-maps.md#the-cleaning-map)).
 
@@ -29,9 +33,13 @@ Some Smart Map robots send no position of their own; Roomba+ asks them about onc
 
 ## Map drift
 
+**Applies to:** 900-series
+
 A repair issue (`map_drift_detected`) comes when the robot's recent missions end clearly further from where the dock should be than usual, judged over the last 10 missions rather than the robot's whole life, and goes once that is back to normal. It usually means the dock was moved or the robot has trouble finding itself; put it back on the dock and let it run a fresh mission if it stays.
 
 ## Layout changes
+
+**Applies to:** Classic robots that report their position, and Smart Map robots with the iRobot account
 
 `binary_sensor.{name}_layout_change_detected` turns on when a spot that was reliably covered for 20 or more missions has been missed by 3 in a row: new furniture or another obstacle may be in the way. Only missions sent everywhere count; a mission sent to rooms or zones says nothing about the rest of the house.
 

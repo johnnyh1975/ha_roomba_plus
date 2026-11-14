@@ -1,211 +1,171 @@
-[Roomba+](../README.md) › [Documentation](README.md) › xiaomi-vacuum-map-card integration
+[Roomba+](../README.md) › [Documentation](README.md) › xiaomi-vacuum-map-card
 
-# xiaomi-vacuum-map-card integration
-
-[lovelace-xiaomi-vacuum-map-card](https://github.com/PiotrMachowski/lovelace-xiaomi-vacuum-map-card) (XVMC) by PiotrMachowski renders a live vacuum map with interactive room-cleaning support. This guide covers setting it up with Roomba+.
+# Room cleaning from the xiaomi-vacuum-map-card
 
 **Applies to:** Smart Map robots with the iRobot account · Prime
 
-> **Requires:** the iRobot account added, UmfAligner confidence ≥ 0.70 (typically after 2–4 missions with room crossings), xiaomi-vacuum-map-card installed from the Marketplace (HACS before Home Assistant 2026.11).
+[lovelace-xiaomi-vacuum-map-card](https://github.com/PiotrMachowski/lovelace-xiaomi-vacuum-map-card) (XVMC) by PiotrMachowski shows the robot's map on a dashboard. With Roomba+ you tap one or more rooms on it and the robot cleans them.
+
+> **You need:** the iRobot account added to Roomba+ (Configure → iRobot cloud credentials), and the card installed from the Marketplace (HACS before Home Assistant 2026.11). The room outlines appear once the robot's positions have been lined up with the floor plan, usually after two to four missions that pass through doors.
 
 ---
 
-## How it works
+## Set it up
 
-Roomba+ exposes two attributes on its map image entities that XVMC reads directly:
+**Applies to:** Smart Map robots with the iRobot account · Prime
 
-| Attribute | Read by | Description |
+<a id="path-a--xvmc-v241-recommended"></a>
+
+The card knows Roomba+ from its version 2.4.1 on; the card's own page for it is [`johnnyh1975RoombaPlus.md`](https://github.com/PiotrMachowski/lovelace-xiaomi-vacuum-map-card/blob/master/docs/templates/johnnyh1975RoombaPlus.md).
+
+1. Add the card with these basics:
+
+   ```yaml
+   type: custom:xiaomi-vacuum-map-card
+   entity: vacuum.roomba
+   vacuum_platform: roomba_plus
+   map_source:
+     camera: image.roomba_rooms_map   # your room map, see below
+   calibration_source:
+     camera: true                     # reads calibration_points from the map
+   ```
+
+2. In the card editor, select **Generate Room Configs**. The card reads the room outlines, names and icons from the map and fills in the rooms. Selecting the platform alone draws no rooms; this step does.
+
+The card then offers three ways to clean the selected rooms:
+
+| Mode | Action | Shown by default |
 |---|---|---|
-| `calibration_points` | `calibration_source: { camera: true }` | 3 anchor pairs mapping vacuum mm ↔ image pixels |
-| `rooms` | `predefined_selections` (see below) | Dict of room polygons, names, MDI icons, and centroids |
+| Clean room | `roomba_plus.clean_room` | yes |
+| Clean room (two pass) | `roomba_plus.clean_room` with `two_pass: true` | no, add it to `map_modes` |
+| Clean room (smart start) | `roomba_plus.smart_start`, which checks your [blocking sensors](guides/start-conditions.md) first | yes |
 
-**Additional vector-data attributes (v3.3.1), for dashboards drawing their own overlays** — not consumed by the native XVMC platform template above, but available for custom cards/templates:
+If you see these modes after choosing Roomba+, the card is set up right. If Roomba+ is not in the `vacuum_platform` list, your card is older than 2.4.1: update it, or use [the manual setup](#path-b--xvmc-before-v241-manual).
 
-| Attribute | Description |
+## Which map to use
+
+**Applies to:** Smart Map robots with the iRobot account · Prime
+
+Use the **Room map**, `image.<robot>_rooms_map`. It is the only image that tells the card where the rooms are. An installation from an older version may call it `image.<robot>_rooms_cleaning_map`; it is the same entity. Find yours under Developer Tools → States by filtering for `image.`. The examples here use `image.roomba_rooms_map`.
+
+A Prime robot has two more images. Neither works as the card's map:
+
+| Entity | What it is for |
 |---|---|
-| `zones` | Keep-out and robot-observed obstacle zones as raw polygons/points, pose-space mm |
-| `door_markers` | Inferred door-crossing positions, pose-space mm |
-| `furniture_candidates` | Cells flagged by the FURNITURE detector as likely-moved furniture, pose-space mm |
+| `image.<robot>_prime_cleaning_map` | A picture card showing the clean in progress. It tells the card nothing about where the rooms are |
+| `image.<robot>_map` | The raw live map, before drawing |
 
-All three require the map entity to be in aligned mode (same gate as `rooms`/`calibration_points`) and are absent otherwise.
+The Room map draws the clean in progress too, so you see the robot's progress on the card as well.
 
-There are two ways to set up the room overlay, depending on your XVMC version:
+## What works and what doesn't
 
-- **XVMC v2.4.1 or newer (recommended):** the native Roomba+ platform is built
-  in. Pick it as the `vacuum_platform` and let XVMC generate the room config for
-  you — no manual coordinates. See **[Path A](#path-a--xvmc-v241-recommended)**.
-- **XVMC older than v2.4.1:** the Roomba+ platform isn't available, so you define
-  `predefined_selections` manually. The coordinates come straight from the
-  `rooms` attribute — no measurement needed. See
-  **[Path B](#path-b--xvmc-before-v241-manual)**.
+**Applies to:** Smart Map robots with the iRobot account · Prime
 
-To check your version, open Xiaomi Vacuum Map Card in the Marketplace (in HACS: HACS → Frontend). If "Roomba+"
-appears in the card editor's `vacuum_platform` dropdown, you're on v2.4.1+ and
-can use Path A.
+<a id="what-works--and-what-doesnt"></a>
 
-## What works — and what doesn't
+The card also has zone and go-to-point modes. iRobot robots clean whole rooms only: they have no command to clean a drawn rectangle or drive to a point. Set up only the room modes.
 
-XVMC is built for vacuums that expose **zone**, **go-to-point**, and **room**
-cleaning. iRobot's protocol only supports **room (segment) cleaning**, so only
-the room mode is usable here. This is an iRobot limitation, not a Roomba+ one —
-no integration can add zone or pin-and-go to a robot whose firmware doesn't
-offer it.
-
-| XVMC mode | `selection_type` | Works with Roomba+? |
+| Card mode | `selection_type` | With Roomba+ |
 |---|---|---|
-| Room / segment | `ROOM` | ✅ Yes — via `roomba_plus.clean_room` (smart-map robots) |
-| Zone rectangle | `MANUAL_RECTANGLE` / `PREDEFINED_RECTANGLE` | ❌ No — iRobot has no coordinate-zone command |
-| Pin & Go | `MANUAL_POINT` / `PREDEFINED_POINT` | ❌ No — iRobot has no go-to-point command |
+| Room | `ROOM` | ✅ cleans the rooms |
+| Zone rectangle | `MANUAL_RECTANGLE`, `PREDEFINED_RECTANGLE` | ❌ the robot has no such command |
+| Pin and go | `MANUAL_POINT`, `PREDEFINED_POINT` | ❌ the robot has no such command |
 
-So configure **only** a `ROOM` map mode. Don't add Zone or Pin & Go modes — they
-have no valid service to call and will appear broken:
+- `roomba_plus.clean_sequence` is not a zone action. It starts one robot after another has finished.
+- `vacuum.send_command` with `goto` does nothing.
 
-- A common mistake is wiring "Zone cleanup" to `roomba_plus.clean_sequence`. That
-  is **not** a zone service — it's a multi-robot orchestration action ("start
-  robot B when robot A finishes"). It has no concept of a rectangle.
-- Likewise `vacuum.send_command` with `goto` does nothing — the local iRobot
-  protocol exposed by this integration has no go-to-point command.
+Two things the room mode needs:
 
-Two more requirements for the room mode to actually clean:
+- **A Smart Map robot.** `clean_room` works on i, s and j robots, the Braava jet m6 and Prime robots. On a 900 series or another robot without Smart Maps it stops with an error: those robots clean the whole floor.
+- **Room names the robot knows.** The name the card sends must be a room on the robot's map, as listed under Configure → **Rooms & zones**. A name only typed into the card is refused.
 
-- **Smart-map robot only.** `clean_room` works on i7 / s9 / j-series and the
-  Braava jet m6. On 900-series and other non-smart robots it raises a
-  `ServiceValidationError` by design — those robots clean the whole floor.
-- **Room names must match your Roomba+ Options.** The name passed to
-  `clean_room` has to match a room saved on the robot's map (Roomba+ Options →
-  Rooms & zones), not just a label you typed in the card YAML. An unknown name
-  raises a `ServiceValidationError`.
+## Room names and ids
 
----
+**Applies to:** Smart Map robots with the iRobot account · Prime
 
-## Path A — XVMC v2.4.1+ (recommended)
-
-xiaomi-vacuum-map-card has a native Roomba+ platform: it is listed among the
-card's supported platforms, with its own page in the card's documentation
-([`johnnyh1975RoombaPlus.md`](https://github.com/PiotrMachowski/lovelace-xiaomi-vacuum-map-card/blob/master/docs/templates/johnnyh1975RoombaPlus.md)).
-It reads this integration's `rooms` attribute directly and supplies the
-`clean_room` / `smart_start` service wiring.
-
-*Corrected in 4.2.19:* this page said the platform was "not yet in the
-upstream card, a PR is pending", while the card's own release notes credited
-it to v2.4.1. The card's repository now carries it, so the page was the
-outdated side.
-
-1. Add the card and set the basics:
+To list the rooms the map knows, paste this in Developer Tools → Template:
 
 ```yaml
-type: custom:xiaomi-vacuum-map-card
-entity: vacuum.roomba
-vacuum_platform: roomba_plus
-map_source:
-  camera: image.roomba_rooms_map   # your actual entity name; or rooms_cleaning_map
-calibration_source:
-  camera: true                     # reads calibration_points automatically
+{{ state_attr('image.roomba_rooms_map', 'rooms').keys() | list }}
 ```
 
-2. In the card editor, click **"Generate Room Configs"**. XVMC reads the `rooms`
-   attribute and builds the `predefined_selections` (outlines, labels, icons)
-   for you. That's it — no manual coordinate entry.
+Each room is listed by the name the room select shows, your own name for it first. Each room also carries `room_id`, a plain-letters version of the name (`Küche` → `kuche`), and `region_id`, the robot's number for it. Use `room_id` as the card's id. `clean_room` accepts the name, the `room_id` and the account's original name alike, upper or lower case, and keeps working after the robot relearns its map.
 
-The merged template provides three room-cleaning modes:
+On a Prime robot, renaming a room in the iRobot app does not break a saved card: the card sends the room's id, not its name.
 
-- **Clean room** — `roomba_plus.clean_room` (`room_name`, `ordered`).
-- **Clean room (two pass)** — `roomba_plus.clean_room` with `two_pass: true`.
-- **Clean room (smart start)** — `roomba_plus.smart_start` (`rooms`), which
-  applies blocking-sensor checks before starting.
+## Is the map lined up yet?
 
-"Clean room" and "Clean room (smart start)" are shown by default; "Clean room
-(two pass)" is available but not in the default mode list — add it to your
-`map_modes` if you want it shown without switching modes.
+**Applies to:** Smart Map robots with the iRobot account · Prime
 
-Seeing those three modes after selecting Roomba+ confirms the platform is
-registered correctly.
+```yaml
+{{ state_attr('image.roomba_rooms_map', 'alignment_pending') }}
+```
 
----
+`true` means Roomba+ has not yet lined up the robot's positions with the floor plan: the outlines may be turned or missing, and `calibration_points` is not there yet. It usually takes two to four missions that pass through doors. On i robots with firmware 22 or newer the positions come from the iRobot account, so no mission of your own is needed for it. How the map comes together: [maps](explanations/maps.md).
 
-## Path B — XVMC before v2.4.1 (manual)
+## Troubleshooting
 
-On XVMC versions older than v2.4.1 the Roomba+ platform isn't in the dropdown
-and the generate button can't read Roomba+ rooms, so you define
-`predefined_selections` by hand. The good news: every value you need is already
-in the `rooms` attribute, so this is copy-paste, not measurement.
+**Applies to:** Smart Map robots with the iRobot account · Prime
 
-First confirm your map entity name (below — this applies to both paths), then
-follow Path B steps 1 and 2.
+**The card shows no rooms**
+- Roomba+ must be the card's `vacuum_platform`, and you must have selected **Generate Room Configs**.
+- Check that the map has calibration: `{{ state_attr('image.roomba_rooms_map', 'calibration_points') }}` should not be empty. If it is, see [Is the map lined up yet?](#is-the-map-lined-up-yet).
+- Check that the iRobot account is added (Configure → iRobot cloud credentials).
+- On Classic robots, the **Map learning** sensor shows how far the map has come; more missions through doors raise it.
 
-## Finding your map entity name
+**The outlines sit in the wrong place or are turned**
+- The map is not lined up yet (`alignment_pending` is `true`). Wait for a few more missions.
 
-*(Needed for both Path A and Path B — this is the entity name you put in
-`map_source`.)*
+**Tapping a room does nothing or shows an error**
+- Run the action on its own to see the real message: Developer Tools → Actions → `roomba_plus.clean_room` with `room_name: <your room>`.
+- *Unknown room*: the name is not a room on the robot's map. Check the spelling under Configure → Rooms & zones. Accents and spaces are forgiven (`kuche` finds `Küche`); a room that is not on the map is not.
+- *Not supported*: the robot has no Smart Maps (see [What works and what doesn't](#what-works-and-what-doesnt)).
 
-Roomba+ creates a `Rooms Map` image entity. Depending on when the integration was first installed, this entity may appear under one of two names:
+**A zone or pin-and-go mode does nothing**
+- Expected: iRobot robots have neither. Keep only the room modes.
 
-| Installed | Entity ID |
-|---|---|
-| v2.7.1+ (fresh install) | `image.{prefix}_rooms_map` |
-| Upgraded from earlier version | `image.{prefix}_rooms_cleaning_map` |
+**Generate Room Configs makes ids the card rejects, such as `Küche`**
+- Older card versions took the room's name as its id. Replace each `id:` with the room's `room_id` from the map's attributes.
 
-Both are the same entity with the same attributes. Check **Developer Tools → States** and filter for `image.` to find yours. The examples below use `image.roomba_rooms_map` — substitute your actual entity name.
+**Generate Room Configs shows rooms of another robot**
+- Each robot's Room map carries only that robot's rooms. Check that `entity` and `map_source` in the card point at the same robot.
 
-### If you have a Prime robot
+**You can select only five rooms**
+- Some card versions limit the Roomba+ modes to five rooms; Roomba+ has no such limit. Set up the rooms by hand ([below](#path-b--xvmc-before-v241-manual)) without `max_selections`.
 
-**Applies to:** Prime
+## Manual setup
 
-Prime robots (Roomba Max, Combo 400-series) create **three** image entities, and
-only one of them is the card source:
+**Applies to:** Smart Map robots with the iRobot account · Prime
 
-| Entity | Use it for |
-|---|---|
-| `image.{prefix}_rooms_map` | **The card.** Carries `calibration_points` and selectable rooms |
-| `image.{prefix}_prime_cleaning_map` | A picture-entity showing the clean in progress. Deliberately carries no calibration points, so it cannot be a card source |
-| `image.{prefix}_map` | The raw live map, before rendering |
+<a id="path-b--xvmc-before-v241-manual"></a>
 
-The Rooms Map draws the live cleaning layers as well, so you do not lose the
-progress view by using it — the card takes one raster source and cannot stack a
-second image on top.
+For a card older than 2.4.1, or to get past the five-room limit, write the rooms into the card yourself. Every value is in the map's `rooms` attribute, so this is copying, not measuring.
 
-**Room ids are stable on Prime.** Renaming a room in the iRobot app does not
-break a saved card configuration: the card sends the room's id, not its name.
-Room and zone names both come from the robot's own map data.
+<details>
+<summary>The <code>rooms</code> attribute and a matching card configuration</summary>
 
----
-
-## Path B, step 1 — Getting room coordinates
-
-Open **Developer Tools → States**, find `image.roomba_rooms_map` (or `rooms_cleaning_map`), and look at the **Attributes** section. The `rooms` attribute contains everything you need:
+Under Developer Tools → States, open `image.roomba_rooms_map`. Its `rooms` attribute looks like this (coordinates in millimetres from the dock, the same space as `calibration_points`):
 
 ```json
 {
   "Dining Room": {
     "outline": [[200.5, 310.2], [460.1, 310.2], [460.1, 490.8], [200.5, 490.8]],
-    "x": 330.3,
-    "y": 400.5,
-    "name": "Dining Room",
+    "x": 330.3, "y": 400.5,
+    "name": "Dining Room", "room_id": "dining_room",
     "icon": "mdi:silverware-fork-knife"
-  },
-  "Kitchen": {
-    "outline": [[460.1, 310.2], [700.0, 310.2], [700.0, 490.8], [460.1, 490.8]],
-    "x": 580.0,
-    "y": 400.5,
-    "name": "Kitchen",
-    "icon": "mdi:fridge"
   }
 }
 ```
 
-All coordinates are in **vacuum mm** (dock-relative, same space as `calibration_points.vacuum`). Copy `outline` and the centroid `x`/`y` for each room into `predefined_selections`.
-
----
-
-## Path B, step 2 — Manual config
+Copy `outline`, `x`, `y` and `icon` of each room into the card:
 
 ```yaml
 type: custom:xiaomi-vacuum-map-card
 entity: vacuum.roomba
 map_source:
-  camera: image.roomba_rooms_map          # use your actual entity name
+  camera: image.roomba_rooms_map
 calibration_source:
-  camera: true                            # reads calibration_points automatically
+  camera: true
 map_modes:
   - template: vacuum_clean_segment
     service_call_schema:
@@ -215,140 +175,47 @@ map_modes:
         room_name: "[[selection]]"
         ordered: true
     predefined_selections:
-      - id: "Dining Room"
+      - id: "dining_room"                # the room's room_id
         outline:
-          - [200.5, 310.2]               # from rooms.Dining Room.outline
+          - [200.5, 310.2]
           - [460.1, 310.2]
           - [460.1, 490.8]
           - [200.5, 490.8]
         label:
           text: "Dining Room"
-          x: 330.3                        # from rooms.Dining Room.x
-          y: 400.5                        # from rooms.Dining Room.y
-        icon:
-          name: mdi:silverware-fork-knife # from rooms.Dining Room.icon
           x: 330.3
           y: 400.5
-      - id: "Kitchen"
-        outline:
-          - [460.1, 310.2]
-          - [700.0, 310.2]
-          - [700.0, 490.8]
-          - [460.1, 490.8]
-        label:
-          text: "Kitchen"
-          x: 580.0
-          y: 400.5
         icon:
-          name: mdi:fridge
-          x: 580.0
+          name: mdi:silverware-fork-knife
+          x: 330.3
           y: 400.5
 ```
 
-`predefined_selections.id` must exactly match the room name in Roomba+ (same string passed to `clean_room`). Multi-room selection works automatically — `[[selection]]` passes a list when multiple rooms are tapped.
-
----
-
-## Using `smart_start` with blocking sensors
-
-If you use Roomba+'s blocking sensor feature, substitute `smart_start` so door/occupancy checks are applied before cleaning starts:
+Selecting several rooms sends them all as a list. To check your blocking sensors before starting, call `smart_start` instead:
 
 ```yaml
-service_call_schema:
-  service: roomba_plus.smart_start
-  service_data:
-    entity_id: "[[entity_id]]"
-    rooms: "[[selection]]"
+    service_call_schema:
+      service: roomba_plus.smart_start
+      service_data:
+        entity_id: "[[entity_id]]"
+        rooms: "[[selection]]"
 ```
 
----
+</details>
 
-## Finding room names
+## For dashboard authors
 
-Room names come from Roomba+ Options → **Rooms & Zones**. To list all configured names:
+**Applies to:** Smart Map robots with the iRobot account · Prime
 
-```yaml
-# Developer Tools → Template:
-{{ state_attr('image.roomba_rooms_map', 'rooms').keys() | list }}
-```
+The Room map carries these attributes once the map is lined up. The card uses the first two; the others are for cards that draw their own layers.
 
-Names are case-insensitive in `clean_room` and survive map retraining (unlike `{pmap_id}_{region_id}` segment IDs). Since 4.2.20 each room is named as the room select names it — your alias first — and also carries `region_id`; keep using `room_id` as the XVMC id. A configuration generated before 4.2.20 keeps working: `clean_room` still accepts the account's original name and its slug.
-
----
-
-## Alignment status
-
-The `rooms` attribute and calibration are only accurate once UmfAligner confidence ≥ 0.70. Check:
-
-```yaml
-{{ state_attr('image.roomba_rooms_map', 'alignment_pending') }}
-```
-
-`true` means alignment is still in progress — room polygons shown use the fallback UMF coordinate space and may be rotated relative to robot orientation. Once 2–4 missions complete with room crossings, full alignment activates. On lewis firmware robots (i7+/i8+ firmware 22.x+), cloud traversal data bootstraps alignment automatically — no local pose data required.
-
----
-
-## Troubleshooting
-
-**No room overlay at all, and you're on XVMC v2.4.1+ (Path A):**
-- Confirm **Roomba+** is selected as `vacuum_platform`. If it's not in the
-  dropdown, you're on an XVMC older than v2.4.1 — update XVMC from the Marketplace (or HACS), or use
-  [Path B](#path-b--xvmc-before-v241-manual) instead.
-- After selecting Roomba+, you should see three room modes ("Clean room",
-  "Clean room (two pass)", "Clean room (smart start)"). If you don't, the
-  platform isn't registered — recheck the version.
-- Run the **"Generate Room Configs"** button — selecting the platform alone does
-  not draw the overlay; the generate step is what reads the `rooms` attribute
-  and builds it.
-
-**Outlines appear but at wrong positions / wrong scale:**
-- Confirm you are on Roomba+ v2.7.1+. Prior versions emitted `rooms.outline` in image pixel space instead of vacuum mm, causing XVMC to misplace overlays at ~36% of the correct size.
-- Check `alignment_pending`. If `true`, outlines use the fallback UMF space which may be rotated. Wait for full alignment.
-
-**Card shows no rooms / blank map:**
-- Check `calibration_points` is not null: `{{ state_attr('image.roomba_rooms_map', 'calibration_points') }}`
-- Verify cloud credentials are configured (Settings → Configure → iRobot cloud credentials).
-- Check `sensor.roomba_map_learning` — if below 80%, more cleaning missions with room crossings are needed.
-
-**`outline` is not in `rooms` attribute:**
-- Alignment may not have completed yet. The `rooms` attribute only populates after at least one successful render. Trigger a map refresh by starting and stopping a brief cleaning mission.
-
-**A Zone or Pin & Go mode does nothing:**
-- Expected — iRobot supports neither. See [What works — and what doesn't](#what-works--and-what-doesnt). Remove those modes and keep only a `ROOM` mode. In particular, `roomba_plus.clean_sequence` is a multi-robot orchestration action, not a zone service, and `vacuum.send_command` with `goto` has no effect.
-
-**Tapping a room throws an error / nothing cleans:**
-- Run the underlying action directly to see the real error: Developer Tools → Actions → `roomba_plus.clean_room` with `room_name: <your room>`.
-- `ServiceValidationError: unknown room` → the name doesn't match a room saved on the robot's map. Check the exact spelling in Roomba+ Options → Rooms & zones; the name in the card must match (accent/slug variants like `kuche`→`Küche` are handled, but a name that isn't saved can't resolve).
-- `ServiceValidationError` about capability → the robot isn't a smart-map model. `clean_room` needs i7 / s9 / j-series or the Braava jet m6; other robots clean the whole floor instead.
-
-**Room names don't match card options:**
-- Names come from Roomba+ Options → Rooms & zones. Update labels there — changes take effect on next cloud refresh.
-
-**`rooms_cleaning_map` vs `rooms_map`:**
-- Both names refer to the same entity. If you have `rooms_cleaning_map` (older install), use that name in your config. It has identical attributes. You can rename it manually via Settings → Entities if preferred.
-
-**"Generate Room Configs" produces IDs XVMC rejects (e.g. non-ASCII names like "Küche"):**
-- Older card versions' generic room-config generator used the `rooms` attribute's object key (a display name) as the id, ignoring the `room_id` field this integration provides for exactly this — an ASCII-safe slug (`"Küche"` → `"kuche"`, `"Test ü"` → `"test_u"`). The card's Roomba+ documentation now names `room_id` as the id to use. If your version still generates display names, replace the `id:` values with the matching `room_id` from the attribute (Developer Tools → States → your `rooms_map` entity). `clean_room` accepts the display name and the slug alike.
-
-**"Generate Room Configs" includes rooms from a different robot:**
-- Not a data issue on this integration's side — each robot's `rooms_map` entity attribute is scoped strictly to that robot's own config entry (verified against the source; no shared/global state involved). The card's generic room-config generator is also confirmed correctly scoped to the configured `map_source` entity only — it does not aggregate across entities. The remaining suspect is the `roomba_plus`-specific platform template itself; if you hit this, double-check your card config's `map_source`/`entity` first, then report it to the card.
-
-**Room selection stops working after 5 rooms are selected:**
-- Root cause confirmed: the `roomba_plus` platform template hard-coded `max_selections: 5` on all three `ROOM` modes. This integration's own `clean_room`/`smart_start` actions have no such limit. If your card version still stops at five, define `map_modes`/`predefined_selections` manually ([Path B](#path-b--xvmc-before-v241-manual)) with no `max_selections` set.
-
----
-
-## XVMC platform template (reference)
-
-The native `roomba_plus` platform template is what
-[Path A](#path-a--xvmc-v241-recommended) uses; it ships with the card. It
-defines three `selection_type: ROOM` modes — `vacuum_clean_segment`
-(→ `clean_room`), `vacuum_clean_segment_two_pass` (→ `clean_room` with
-`two_pass`), and `vacuum_clean_segment_with_blocking` (→ `smart_start`). It
-contains no coordinates itself: the geometry is read from this integration's
-`rooms` attribute at runtime. If Roomba+ does not appear as a platform in the
-card editor, your card is older than v2.4.1; update it or use
-[Path B](#path-b--xvmc-before-v241-manual).
+| Attribute | What it holds |
+|---|---|
+| `calibration_points` | Three pairs of points matching robot millimetres to image pixels |
+| `rooms` | Each room's outline, centre, name, `room_id`, `region_id` and icon |
+| `zones` | Keep-out zones and obstacles the robot met, in robot millimetres |
+| `door_markers` | Where the robot passed through doors |
+| `furniture_candidates` | Spots where furniture probably moved |
 
 ---
 

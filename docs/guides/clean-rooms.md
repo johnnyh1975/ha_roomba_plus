@@ -8,6 +8,8 @@ Send the robot to one room, several rooms in an order, a saved zone or a Home As
 
 ## Two ways to clean a room
 
+**Applies to:** Smart Map robots · Prime
+
 | | `roomba_plus.clean_room` | `vacuum.clean_area` |
 |---|---|---|
 | Home Assistant | any version | 2026.3 or newer |
