@@ -69,6 +69,12 @@ Nothing to do. What you will notice:
 - **Blueprints appear under `blueprints/automation/roomba_plus/`** after the
   first start. If you imported them before, nothing is doubled.
 - **A new option**, *Send home after a pause*, off by default.
+- **Lifetime counters keep their value across a restart** (*Total time*,
+  mission counts, average duration, charge cycles and the other lifetime
+  counters). A robot that does not send them again on reconnect, such as a
+  600, showed *Unknown* until its next mission; now they show the count from
+  before the restart until the robot reports again. Live values (battery,
+  phase, signal) are not kept.
 
 ---
 
