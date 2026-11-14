@@ -46,7 +46,7 @@
     "roombapy>=2.0.2",
     "roombapy-prime[map]==0.9.1"
   ],
-  "version": "4.6.0b1",
+  "version": "4.6.0b2",
   "zeroconf": [
     {
       "name": "irobot-*",
