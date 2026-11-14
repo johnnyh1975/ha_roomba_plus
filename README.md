@@ -18,7 +18,7 @@ network, with no cloud account and no polling, and to the newer V4/Prime robots 
 Plus 400 series, Combo 505, Roomba Max) through iRobot's cloud. It is a custom integration
 at Home Assistant's highest quality level, Platinum, in eight languages.
 
-![A Home Assistant dashboard with Roomba+: the robot cleaning, its live path on the room map, status, history and maintenance](https://raw.githubusercontent.com/johnnyh1975/ha_roomba_plus/main/docs/images/dashboard.png)
+![A Home Assistant dashboard with Roomba+: the robot cleaning, its live path on the room map, status, history and maintenance](docs/images/dashboard.png)
 
 <sub>Screenshots come from a demo Home Assistant with a simulated Roomba 980; the rooms and
 history are made up.</sub>
@@ -127,7 +127,7 @@ Settings → Devices & services → **Add integration** → **Roomba+**.
 You can add or change the iRobot account later: Roomba+ → **Configure** → *iRobot cloud
 credentials*. A new IP address or password: ⋮ → **Reconfigure**.
 
-<img src="https://raw.githubusercontent.com/johnnyh1975/ha_roomba_plus/main/docs/images/options-menu.png" alt="The Configure dialog of Roomba+ with its sections: connection settings, iRobot cloud credentials, blocking sensors, presence-aware scheduling, zone management, rooms and zones, maintenance" width="480">
+<img src="docs/images/options-menu.png" alt="The Configure dialog of Roomba+ with its sections: connection settings, iRobot cloud credentials, blocking sensors, presence-aware scheduling, zone management, rooms and zones, maintenance" width="480">
 
 Every option and what it does: [every option, and what it costs you to leave it off](docs/FEATURES.md#every-option-and-what-it-costs-you-to-leave-it-off).
 
