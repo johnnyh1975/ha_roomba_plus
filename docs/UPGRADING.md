@@ -854,7 +854,8 @@ automation calling `roomba_plus.reset_pad`, `reset_wheel_cleaning`,
 `reset_contact_cleaning` or `reset_bin_cleaning` has been failing with
 "service not found" — press the button or call `button.press` instead.
 The same applies to `reset_filter`, `reset_brush` and `reset_battery`,
-whose buttons already existed.
+whose buttons already existed. In 4.6 all seven are registered as
+actions as well, next to the buttons, and both work.
 
 **`room_passes` takes more per room.** Alongside `two_pass`, each entry
 now accepts `cleaning_mode`, `smart_scrub` and `pad_wetness`. Existing

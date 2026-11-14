@@ -1,7 +1,7 @@
 # Roomba+ for Home Assistant
 
 [![Marketplace](https://img.shields.io/badge/Marketplace%20%2F%20HACS-Default-blue.svg)](https://github.com/hacs/default)
-[![Version](https://img.shields.io/badge/Version-4.6.0b2-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-4.6.0b3-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2025.5%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Platinum-blueviolet.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
@@ -139,7 +139,7 @@ it moved to the Marketplace by itself and keeps getting updates.
 
 **Betas** are offered only when you switch them on for Roomba+: *Include pre-releases* in
 the menu of its Marketplace page, or *Show beta versions* in HACS. The current beta is
-**4.6.0b2** — see [what 4.6 adds](#whats-new-in-46-beta).
+**4.6.0b3** — see [what 4.6 adds](#whats-new-in-46-beta).
 
 ### Manual
 
@@ -182,7 +182,7 @@ Step by step, with pictures: **[Getting started](docs/getting-started.md)**. In 
 
 ## What's new in 4.6 (beta)
 
-4.6.0b2 is a pre-release. Everything in it is additive, and none of it has run on a robot
+4.6.0b3 is a pre-release. Everything in it is additive, and none of it has run on a robot
 yet, so reports are welcome.
 
 - **Prime robots get the entities Classic robots already had** — mission and history
@@ -197,7 +197,7 @@ yet, so reports are welcome.
 - **Send home after a pause**, battery used per mission, and blueprints that install
   themselves.
 
-Details: release notes [b1](release-notes/v4.6.0b1.md), [b2](release-notes/v4.6.0b2.md) · [upgrade notes](docs/UPGRADING.md#v460--from-v45x).
+Details: release notes [b1](release-notes/v4.6.0b1.md), [b2](release-notes/v4.6.0b2.md), [b3](release-notes/v4.6.0b3.md) · [upgrade notes](docs/UPGRADING.md#v460--from-v45x).
 
 ## V4/Prime robots
 
