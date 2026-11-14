@@ -23,6 +23,21 @@ at Home Assistant's highest quality level, Platinum, in eight languages.
 <sub>Screenshots come from a demo Home Assistant with a simulated Roomba 980; the rooms and
 history are made up.</sub>
 
+## Contents
+
+- [Highlights](#highlights)
+- [Supported robots](#supported-robots)
+- [How it compares](#how-it-compares)
+- [Installation](#installation)
+- [Setup](#setup)
+- [First steps](#first-steps)
+- [What's new in 4.6 (beta)](#whats-new-in-46-beta)
+- [Documentation](#documentation)
+- [Removal](#removal)
+- [Help and contributing](#help-and-contributing)
+- [Credits](#credits)
+- [License](#license)
+
 ## Highlights
 
 - **Live map and rooms.** The path is drawn as the robot cleans, on a map with your rooms.
