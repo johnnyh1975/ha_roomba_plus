@@ -20,9 +20,13 @@ troubleshooting page, the blueprints' own source) must exist, so that a
 reorganised doc folder cannot leave a link in the product pointing at
 nothing.
 
-Checked: README.md and docs/*.md. Not checked: docs/UPGRADING.md and the
-release notes, which record names as they were, and docs/ARCHITECTURE.md,
-which names code. A suffix written with a placeholder of its own
+And every menu path, `Configure → <entry> → <sub entry or option>`: each
+step must be one the Configure dialog has (strings.json), so a renamed
+or moved option cannot leave the docs pointing at nothing.
+
+Checked: README.md and every page under docs/ but the care guides. Not
+checked: docs/UPGRADING.md and the release notes, which record names as
+they were, and docs/ARCHITECTURE.md, which names code. A suffix written with a placeholder of its own
 (`floor_plan_{map}`) is matched by its fixed part.
 """
 from __future__ import annotations
@@ -66,16 +70,87 @@ def code_names() -> tuple[set[str], set[str], set[str]]:
         for body in re.findall(r"def suggested_object_id\(self\)[^:]*:(.*?)(?=\n    def |\n    @|\nclass |\Z)",
                                text, re.S):
             suffixes |= set(re.findall(r'"([a-z0-9_]+)"', body))
+    # The generated entity reference (scripts/build_reference.py) knows
+    # the ids the code builds at run time: per part, room, area, stream.
+    # Its own test keeps it current.
+    reference = ROOT / "docs" / "reference" / "entities.md"
+    if reference.exists():
+        for suffix in re.findall(r"`[a-z_]+\.<robot>_([a-z0-9_]+(?:<[a-z ]+>)?)`",
+                                 reference.read_text(encoding="utf-8")):
+            suffixes.add(re.sub(r"<[a-z ]+>", "{x}", suffix))
     # Blueprint file names, named in the docs without .yaml.
     prefixed |= {p.stem for p in (ROOT / "blueprints" / "automation").glob("*.yaml")}
     return actions, prefixed, suffixes | LEGACY_SUFFIXES
 
 
+#: Words after "Configure →" that are not a menu entry: the dialog's
+#: own buttons and the menu of an option step that only leads on.
+MENU_WORDS: set[str] = set()
+
+
+def _clean(segment: str) -> str:
+    return segment.strip().strip("*").strip()
+
+
+def menu_paths() -> tuple[dict[str, dict[str, set[str]]], set[str]]:
+    """{menu entry: {sub entry or option: set()}} and all step titles,
+    from strings.json, as the Configure dialog shows them."""
+    import json  # noqa: PLC0415
+
+    steps = json.loads((CC / "strings.json").read_text(encoding="utf-8"))["options"]["step"]
+    tree: dict[str, dict[str, set[str]]] = {}
+    for key, label in steps["init"]["menu_options"].items():
+        step = steps.get(key, {})
+        children = dict.fromkeys(
+            [*(step.get("menu_options") or {}).values(), *(step.get("data") or {}).values()],
+        )
+        for sub_key, sub_label in (step.get("menu_options") or {}).items():
+            children[sub_label] = None
+            tree.setdefault(f"{label} → {sub_label}", {}).update(
+                dict.fromkeys((steps.get(sub_key, {}).get("data") or {}).values())
+            )
+        tree.setdefault(label, {}).update(children)  # type: ignore[arg-type]
+    titles = {step.get("title", "") for step in steps.values()}
+    return tree, titles
+
+
+_MENU = re.compile(r"Configure\s*→\s*((?:\*{1,2}[^*]+\*{1,2}|[^→.,;:)(|*\n]+)"
+                   r"(?:\s*→\s*(?:\*{1,2}[^*]+\*{1,2}|[^→.,;:)(|*\n]+))*)")
+
+
+def menu_problems(line: str) -> list[str]:
+    """A menu path written in the docs that the dialog does not have."""
+    tree, titles = menu_paths()
+    found = []
+    for match in _MENU.finditer(line):
+        parts = [_clean(p) for p in match.group(1).split("→") if _clean(p)]
+        if not parts:
+            continue
+        first = parts[0]
+        entries = {k for k in tree if "→" not in k}
+        if not any(first == e or first.startswith(e) for e in entries):
+            found.append(f"menu path 'Configure → {first}' -- no such entry in the Configure menu")
+            continue
+        entry = next(e for e in sorted(entries, key=len, reverse=True) if first.startswith(e))
+        node = entry
+        for part in parts[1:]:
+            children = tree.get(node, {})
+            if not any(part == c or c.startswith(part) or part.startswith(c) for c in children):
+                found.append(f"menu path '... {node} → {part}' -- '{part}' is not in '{node}'")
+                break
+            child = next(c for c in children if part == c or c.startswith(part) or part.startswith(c))
+            node = f"{node} → {child}"
+    return found
+
+
 def problems() -> list[str]:
     actions, prefixed, suffixes = code_names()
     found: list[str] = []
-    docs = [ROOT / "README.md", *sorted((ROOT / "docs").glob("*.md"))]
-    entity = re.compile(rf"\b({PLATFORMS})\.{ROBOT}_([a-z0-9_{{}}]+)")
+    docs = [ROOT / "README.md", *sorted(
+        p for p in (ROOT / "docs").rglob("*.md")
+        if p.relative_to(ROOT / "docs").parts[0] != "care"
+    )]
+    entity = re.compile(rf"\b({PLATFORMS})\.{ROBOT}_([a-z0-9_{{}}]+(?:<[a-z ]+>)?)")
     for doc in docs:
         if doc.name in SKIP:
             continue
@@ -92,8 +167,10 @@ def problems() -> list[str]:
                 if any(p.startswith(name) for p in prefixed):
                     continue  # a store or file name cut where an id follows
                 found.append(f"{where}: {name} is not a name the code uses")
+            found.extend(f"{where}: {p}" for p in menu_problems(line))
             for m in entity.finditer(line):
-                suffix = m.group(2)
+                # `<area id>` is a placeholder as `{area}` is.
+                suffix = re.sub(r"<[a-z ]+>", "{x}", m.group(2))
                 fixed = suffix.split("{")[0].rstrip("_")
                 if suffix in suffixes or suffix in FILE_SUFFIXES:
                     continue

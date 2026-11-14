@@ -13,7 +13,7 @@ Prime support has been stable since 4.0.0 and is tested by field testers on
 several models and accounts. Since 4.6.0 a Prime robot gets the entities a
 Classic robot has wherever it reports the data; what still differs, and why,
 is listed per section in
-[Which generation, section by section](FEATURES.md#which-generation-section-by-section-460).
+[Which generation has what](reference/robots.md#which-generation-has-what).
 
 ---
 
@@ -21,6 +21,7 @@ is listed per section in
 
 - [Setting one up](#setting-one-up)
 - [What works](#what-works)
+- [What Prime shares with Classic](#what-prime-shares-with-classic)
 - [What is not there](#what-is-not-there)
 - [Not yet confirmed on a robot](#not-yet-confirmed-on-a-robot)
 - [How data is updated](#how-data-is-updated)
@@ -107,6 +108,49 @@ There is nothing to discover on your network for a Prime robot, so the
 **Capability-gated entities.** An entity your robot cannot support — a mop pad
 on a vacuum-only model, a pad-wash dock it does not have — is not created at
 all. The diagnostics download names the flag that decided it.
+
+## What Prime shares with Classic
+
+Feature parity is the goal: a Prime robot gets every entity whose data it reports, built
+from the same descriptions as on Classic. Each is created once its field has arrived;
+several are declared by the Prime app and not yet seen from a robot.
+
+- **Sensors** from the robot's state: mission start time, mission elapsed time, mission
+  id, recharge and expiry time (time and minutes), average mission time, lifetime
+  completion rate, dock contact chatters, dock knockoffs. From the mission history:
+  missions in the last 30 days, 30-day completion rate, last mission area, the last
+  mission summary (rooms named as on the map), the last error code and time, and the
+  presence sensors. Also the optional raw state (the shadows, merged as the diagnostics
+  show them).
+- **The last error** is the newest stored mission that ended in error: a Prime mission
+  record has no error result of its own, only the end code `unknown` with the error the
+  mission timeline raised. It is read at startup and after each history sync. The error
+  the robot reports right now is `sensor.*_prime_error`.
+- **Binary sensors**: mission active, mid-mission recharge, firmware updated (the version
+  read at startup is the baseline), maintenance due, start blocked (blocking sensors
+  configured), demand clean blocked (demand cleaning on). The Prime start-blocked sensor
+  that reads the robot's own blocking codes stays beside the blocking-sensor one.
+- **Events**: all of them, `roomba_plus_stuck` included (the robot reports
+  `phase: stuck`); the map retrain events are Classic only.
+- **Room progress for missions started elsewhere**: the rooms the mission timeline names
+  become the list, in the order the robot enters them; there is no forecast of the
+  rooms still to come ([Progress and time estimates](explanations/estimates.md)).
+- **Mission archive and path**: up to 800 missions from the cloud history, filled at
+  each history sync, in the backup (`create_backup`/`restore_backup`) and removed with
+  the entry. `GET /mission/{n_mssn}/path` answers from it, with the rooms named as on
+  the map.
+- **A floor plan for each map**: [Maps and dashboards](guides/dashboards-and-maps.md#a-floor-plan-for-each-map).
+
+**Still Classic only, with the reason:**
+
+| Entity | Why not on Prime |
+|---|---|
+| `stuck_count_30d` | A Prime mission record has no stuck result: the history's end codes say completed or cancelled, and a stuck mission ends as `unknown` |
+| `dock_charge_aborts` | `bbchg.aborts` is declared by the app and not seen from a robot |
+| `problem_zone`, `consecutive_clean_skips` | No room per stuck mission; no schedule skip detection on Prime |
+| `mqtt_stale`, `cloud_connected` | A Prime robot has no local connection to fall silent; `binary_sensor.*_connected` covers the cloud side |
+
+Every entity and the robots that get it: [Entities](reference/entities.md).
 
 ---
 

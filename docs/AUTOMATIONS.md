@@ -4,7 +4,7 @@
 
 Copy-paste automation recipes and a starter dashboard. For the full list of
 available events, device triggers, and services, see the
-**[Feature reference →](FEATURES.md#events--device-triggers)**.
+**[Events and device triggers →](reference/events.md)**.
 
 ---
 
@@ -125,7 +125,9 @@ automation:
 
 ---
 
-### Daily catch-up clean for overdue rooms (v3.3.0)
+<a id="daily-catch-up-clean-for-overdue-rooms-v330"></a>
+
+### Daily catch-up clean for overdue rooms
 
 Fires safely every day — does nothing when no room is actually due.
 
@@ -181,7 +183,11 @@ automation:
         max_rooms: 2
 ```
 
-### Only start if it is done in time (4.6.0)
+<a id="only-start-if-it-is-done-in-time-460"></a>
+
+### Only start if it is done in time
+
+*New in 4.6.*
 
 `plan_clean` answers what a clean of the rooms you name would take if it
 started now, without starting it. With `end_by` the answer says whether it
@@ -209,7 +215,11 @@ script:
               room_name: [Kitchen, Hall]
 ```
 
-### Clean the rooms a mission missed (4.6.0)
+<a id="clean-the-rooms-a-mission-missed-460"></a>
+
+### Clean the rooms a mission missed
+
+*New in 4.6.*
 
 `roomba_plus_mission_result` fires when a mission's result is stored. Its
 `type` is `completed_with_skips` when rooms were skipped or not reached, and
@@ -237,7 +247,11 @@ automation:
 With more than one robot, add the robot's `entry_id` to `event_data` so each
 automation reacts to its own robot only.
 
-### Tell me when a start did not arrive (4.6.0)
+<a id="tell-me-when-a-start-did-not-arrive-460"></a>
+
+### Tell me when a start did not arrive
+
+*New in 4.6.*
 
 Sometimes a robot accepts a start and stays on the dock.
 `roomba_plus_command_not_delivered` fires when the robot has not started
@@ -322,7 +336,9 @@ Two attributes are worth knowing about, both on the mission event sensor:
 Prime robot refuses a start silently**, and this is the only place that says why. An unmapped reason
 shows as its code rather than a blank, so it can be quoted in a report.
 
-### Asking before you send (a34)
+<a id="asking-before-you-send-a34"></a>
+
+### Asking before you send
 
 Four faults stop a mission before it starts, and three of them leave one half
 of the robot working. `binary_sensor.{name}_prime_start_blocked` says which:
@@ -389,7 +405,9 @@ the kitchen on deep because the automation says so"*.
 ran in. If your `room_preferences` is empty, that is worth reporting — a
 diagnostics download now says which of the two reasons applies.
 
-### Quiet hours (a34)
+<a id="quiet-hours-a34"></a>
+
+### Quiet hours
 
 ```yaml
 # Do not start a clean during a scheduled quiet-hours window.
@@ -451,14 +469,18 @@ cards:
         name: Progress
     columns: 4
 
-  # Robots added before 4.5.0: Configure → Maintenance → Show maintenance as a to-do list
+  # Robots added before 4.5.0: Configure → Maintenance → Settings → Show maintenance as a to-do list
   - type: todo-list
     entity: todo.roomba_maintenance
 ```
 
 ---
 
-## Blueprints are already there (4.6.0)
+<a id="blueprints-are-already-there-460"></a>
+
+## Blueprints are already there
+
+*New in 4.6.*
 
 From 4.6.0 every blueprint below is copied to Settings → Automations &
 Scenes → Blueprints when Home Assistant starts, under `roomba_plus/`. Create
@@ -494,7 +516,9 @@ https://raw.githubusercontent.com/johnnyh1975/ha_roomba_plus/main/blueprints/aut
 
 One blueprint import covers all your robots — repeat step 1 to create one automation instance per robot, each pointing at that robot's own entities.
 
-## Maintenance (4.5.0)
+<a id="maintenance-450"></a>
+
+## Maintenance
 
 A notification when a part or care task is due or overdue, with the care
 guide one tap away and buttons on the phone: **Replaced** for a part,
@@ -538,7 +562,9 @@ The words ("is due", "Done", ...) are inputs, so the message can be in
 your language; the part's name comes in Home Assistant's language already
 ("Filter reinigen"). One automation per robot.
 
-## Robot went silent (v4.0.0b4)
+<a id="robot-went-silent-v400b4"></a>
+
+## Robot went silent
 
 Notifies you when the robot stops reporting — **the failure that looks
 like nothing is wrong.**
@@ -566,7 +592,9 @@ The extra wait (default 15 minutes, on top of the integration's hour)
 covers a robot carried to another room or a router restart — gaps that
 resolve themselves. Set it to zero to be told immediately.
 
-## Exception notifications (rewritten in 4.5.0)
+<a id="exception-notifications-rewritten-in-450"></a>
+
+## Exception notifications
 
 The opposite of the curated set: **nothing after a normal mission**, and
 a notification only when something is actually wrong:
@@ -598,7 +626,9 @@ the skips sensor left empty Home Assistant did not load it. An
 automation made from the old version has to be made again: re-import the
 blueprint, then open the automation and pick the robot and the action.
 
-## Three more blueprints (v3.4.3)
+<a id="three-more-blueprints-v343"></a>
+
+## Three more blueprints
 
 ### Demand clean alert
 

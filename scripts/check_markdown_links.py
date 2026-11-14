@@ -81,14 +81,29 @@ def slugify(heading: str) -> str:
 
 def heading_slugs(path: Path) -> set[str]:
     text = path.read_text(encoding="utf-8")
-    return {slugify(h) for h in HEADING_PATTERN.findall(text)}
+    # GitHub numbers a repeated heading: demand-cleaning, demand-cleaning-1.
+    slugs: set[str] = set()
+    counts: dict[str, int] = {}
+    for heading in HEADING_PATTERN.findall(text):
+        slug = slugify(heading)
+        slugs.add(slug if slug not in counts else f"{slug}-{counts[slug]}")
+        counts[slug] = counts.get(slug, 0) + 1
+    # An explicit anchor, kept where a section moved away:
+    # <a id="old-section"></a>. GitHub keeps it (as user-content-...,
+    # which its links resolve).
+    slugs |= set(re.findall(r'<a (?:id|name)="([^"]+)"', text))
+    return slugs
 
 
 def files_to_check() -> list[Path]:
     files = [ROOT / "README.md"]
     docs_dir = ROOT / "docs"
     if docs_dir.exists():
-        files.extend(sorted(docs_dir.glob("*.md")))
+        # Every page, also in the folders (reference/, guides/, ...);
+        # the care guides have their own check (check_care_guides).
+        files.extend(sorted(
+            p for p in docs_dir.rglob("*.md") if p.relative_to(docs_dir).parts[0] != "care"
+        ))
     return files
 
 

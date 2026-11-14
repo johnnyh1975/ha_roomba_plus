@@ -165,6 +165,26 @@ class TestDocNameGuard:
 
         assert guard.problems() == []
 
+    def test_it_reports_a_menu_path_the_dialog_does_not_have(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The to-do list option is under Maintenance → Settings; the
+        dashboard example put it straight under Maintenance."""
+        guard = _load("check_doc_names")
+        (tmp_path / "docs").mkdir()
+        (tmp_path / "README.md").write_text(
+            "Configure → Maintenance → Show maintenance as a to-do list\n"
+            "Configure → Settings → *Cleaning reminders*\n"
+            "Configure → Maintenance → Settings → *Cleaning reminders* and\n"
+            "Configure → Connection settings → *Send home after a pause (minutes)*.\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(guard, "ROOT", tmp_path)
+
+        found = guard.problems()
+        assert len(found) == 2, found
+        assert "README.md:1" in found[0] and "README.md:2" in found[1]
+
     def test_it_reports_a_product_link_to_a_missing_doc(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

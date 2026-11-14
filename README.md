@@ -47,11 +47,12 @@ history are made up.</sub>
 | I want to … | Go to |
 |---|---|
 | Install Roomba+ | [Installation](#installation) |
-| Set up my robot | [Setup](#setup), then [First steps](#first-steps) |
+| Set up my robot | [Getting started](docs/getting-started.md), step by step |
 | Know what works on my robot | [Supported robots](#supported-robots) · Prime: [V4/Prime robots](#v4prime-robots) |
-| Clean rooms, start on conditions, get notified | [Automations & dashboards](docs/AUTOMATIONS.md) |
+| Clean rooms, set schedules, keep up with maintenance | [Features](docs/FEATURES.md), one page per task |
+| Get notified, use it in automations | [Notifications](docs/guides/notifications.md) · [Automations](docs/AUTOMATIONS.md) |
 | Fix a problem | [Troubleshooting](docs/TROUBLESHOOTING.md) |
-| Look up an entity, action or option | [Feature reference](docs/FEATURES.md) |
+| Look up an entity, action or option | [Entities](docs/reference/entities.md) · [Actions](docs/reference/actions.md) · [Options](docs/reference/options.md) |
 | See everything | [Documentation home](docs/README.md) |
 
 ## Highlights
@@ -96,7 +97,7 @@ history are made up.</sub>
 | Mop sensors: tank and pad | — | — | Combo models | ✅ | Combo models |
 | Works without internet | ✅ | ✅ | ✅ | ✅ | — |
 
-Each feature, and which robots it needs, is in the [feature reference](docs/FEATURES.md).
+Each feature, and which robots it needs: [Features](docs/FEATURES.md) and [which generation has what](docs/reference/robots.md#which-generation-has-what).
 Prime robots have their own page: [V4/Prime robots](docs/PRIME.md).
 
 ## How it compares
@@ -160,13 +161,15 @@ credentials*. A new IP address or password: ⋮ → **Reconfigure**.
 
 <img src="docs/images/options-menu.png" alt="The Configure dialog of Roomba+ with its sections: connection settings, iRobot cloud credentials, blocking sensors, presence-aware scheduling, zone management, rooms and zones, maintenance" width="480">
 
-Every option and what it does: [every option, and what it costs you to leave it off](docs/FEATURES.md#every-option-and-what-it-costs-you-to-leave-it-off).
+Every option and what it does: [Options](docs/reference/options.md); what leaving one off costs: [here](docs/explanations/options.md).
 
 > **Coming from the built-in Roomba integration or roomba_rest980?** Remove or stop it
 > first — a robot takes one local connection at a time. Step by step:
 > [moving to Roomba+](docs/MIGRATING.md).
 
 ## First steps
+
+Step by step, with pictures: [Getting started](docs/getting-started.md).
 
 1. **Open the robot's device page.** The live map is `image.<robot>_map` on 900-series and
    Smart Map robots; an installation from an older version may call it
@@ -227,7 +230,7 @@ Details, and what is not yet confirmed on a robot: [V4/Prime robots](docs/PRIME.
 - **No voice sentences of its own.** Scripts that use the response actions can be run from
   Assist.
 
-All of them, and why: [Known limitations](docs/FEATURES.md#known-limitations).
+All of them, and why: [Known limitations](docs/explanations/limitations.md).
 
 ## Data privacy
 
@@ -242,7 +245,9 @@ how often the cloud is asked, and what a download contains: [Data privacy](docs/
 | | |
 |---|---|
 | [Documentation home](docs/README.md) | Every page, by what you want to do |
-| [Feature reference](docs/FEATURES.md) | Every entity, action, event and option, and which robots support it |
+| [Getting started](docs/getting-started.md) | From installing to the first automatic clean |
+| [Features](docs/FEATURES.md) | Everything Roomba+ does, by task, with a page for each |
+| [Entities](docs/reference/entities.md) · [Actions](docs/reference/actions.md) · [Options](docs/reference/options.md) | Generated from the code: every id, field and setting |
 | [V4/Prime robots](docs/PRIME.md) | What works on the cloud robots, what does not, and why |
 | [Automations & dashboards](docs/AUTOMATIONS.md) | Recipes and the shipped blueprints |
 | [Moving to Roomba+](docs/MIGRATING.md) | From the built-in integration or roomba_rest980, more robots, replacing a robot |

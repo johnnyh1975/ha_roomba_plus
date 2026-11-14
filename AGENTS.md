@@ -14,7 +14,8 @@ integration for iRobot robots: Classic models over the local connection
 | Tests | `tests/test_<module>.py`, one file per module |
 | Repository checks | `scripts/check_*.py` |
 | Release notes, one file per version | `release-notes/` |
-| Feature and upgrade docs | `docs/FEATURES.md`, `docs/UPGRADING.md` |
+| Docs: guides, reference, explanations | `docs/guides/`, `docs/reference/`, `docs/explanations/` |
+| Upgrade notes | `docs/UPGRADING.md` |
 
 ## Before you open a pull request
 
@@ -53,7 +54,16 @@ versions, the supported minimum (2025.5, Python 3.13) and a current one
 8. **No text or images from the iRobot apps.** Explanations and drawings
    here are written for this project. iRobot's error texts come from
    roombapy-prime.
-9. **Leave versions to the maintainer.** No version bump in
+9. **Docs say how things are now.** A visible change updates the one
+   guide for its task (`docs/guides/`) and, where an entity, action or
+   option changes, `python scripts/build_reference.py`: the pages under
+   `docs/reference/` named `entities`, `actions` and `options` are
+   generated, never edited by hand, and a test fails when they are out of
+   date. Every section starts with an **Applies to** line. History goes in
+   the release notes, what a user must do in `docs/UPGRADING.md`.
+   `scripts/check_doc_names.py` checks every name and menu path in the
+   docs against the code.
+10. **Leave versions to the maintainer.** No version bump in
    `manifest.json`, no new release-notes file; describe the change in the
    pull request and it is written up at release.
 
