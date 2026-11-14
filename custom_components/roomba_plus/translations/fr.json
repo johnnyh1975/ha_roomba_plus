@@ -2354,7 +2354,7 @@
       "message": "Impossible de modifier la programmation du robot : {reason}"
     },
     "command_not_delivered": {
-      "message": "La commande « {command} » n'a pas été acceptée pour l'envoi : elle n'a jamais atteint le cloud iRobot, le robot ne l'a donc pas reçue. C'est un problème de connexion, pas un refus du robot."
+      "message": "La publication de la commande « {command} » n’a pas été confirmée. Sa remise est inconnue ; vérifiez l’état du robot avant de réessayer."
     },
     "schedules_unreadable": {
       "message": "Impossible de lire les programmations depuis le cloud iRobot : rien n'a été enregistré."
