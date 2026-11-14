@@ -35,19 +35,24 @@ FOLDER = "roomba_plus"
 _STORE_KEY = "roomba_plus_blueprints_installed"
 
 
-def _copy(source: Path, root: Path, done: set[str]) -> list[str]:
+def _copy(source: Path, root: Path, done: set[str]) -> tuple[list[str], set[str]]:
     """Copy each blueprint not copied before and not present anywhere
-    under `root`; return the names copied."""
+    under `root`; return the names copied and the names shipped.
+
+    Runs in the executor: listing a folder is file I/O, and Home
+    Assistant reports any of it on the event loop (4.6.0b1 listed the
+    shipped folder there, found by the documentation demo)."""
     target_dir = root / FOLDER
     present = {p.name for p in root.rglob("*.yaml")} if root.exists() else set()
+    shipped = sorted(source.glob("*.yaml"))
     copied: list[str] = []
-    for blueprint in sorted(source.glob("*.yaml")):
+    for blueprint in shipped:
         if blueprint.name in done or blueprint.name in present:
             continue
         target_dir.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(blueprint, target_dir / blueprint.name)
         copied.append(blueprint.name)
-    return copied
+    return copied, {p.name for p in shipped}
 
 
 async def async_install_blueprints(hass: HomeAssistant) -> list[str]:
@@ -57,10 +62,10 @@ async def async_install_blueprints(hass: HomeAssistant) -> list[str]:
         saved = await store.async_load() or {}
         done = {str(n) for n in saved.get("installed") or []}
         root = Path(hass.config.path("blueprints", "automation"))
-        copied = await hass.async_add_executor_job(_copy, SOURCE, root, done)
+        copied, shipped = await hass.async_add_executor_job(_copy, SOURCE, root, done)
         # Every shipped name counts as handled once seen -- copied now, or
         # already there under some folder -- so a later delete sticks.
-        handled = done | {p.name for p in SOURCE.glob("*.yaml")}
+        handled = done | shipped
         if handled != done:
             await store.async_save({"installed": sorted(handled)})
     except Exception:  # noqa: BLE001 -- a blueprint copy must never stop the integration

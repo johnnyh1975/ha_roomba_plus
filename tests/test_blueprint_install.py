@@ -18,25 +18,25 @@ def _source(tmp_path: Path) -> Path:
 class TestCopy:
     def test_new_ones_are_copied(self, tmp_path):
         root = tmp_path / "blueprints" / "automation"
-        assert bi._copy(_source(tmp_path), root, set()) == ["a.yaml", "b.yaml", "c.yaml"]
+        assert bi._copy(_source(tmp_path), root, set())[0] == ["a.yaml", "b.yaml", "c.yaml"]
         assert (root / "roomba_plus" / "a.yaml").read_text() == "blueprint: a.yaml\n"
 
     def test_an_existing_file_is_left_alone(self, tmp_path):
         root = tmp_path / "blueprints" / "automation"
         (root / "roomba_plus").mkdir(parents=True)
         (root / "roomba_plus" / "a.yaml").write_text("edited\n")
-        assert bi._copy(_source(tmp_path), root, set()) == ["b.yaml", "c.yaml"]
+        assert bi._copy(_source(tmp_path), root, set())[0] == ["b.yaml", "c.yaml"]
         assert (root / "roomba_plus" / "a.yaml").read_text() == "edited\n"
 
     def test_one_imported_under_another_folder_is_not_doubled(self, tmp_path):
         root = tmp_path / "blueprints" / "automation"
         (root / "johnnyh1975").mkdir(parents=True)
         (root / "johnnyh1975" / "b.yaml").write_text("imported\n")
-        assert bi._copy(_source(tmp_path), root, set()) == ["a.yaml", "c.yaml"]
+        assert bi._copy(_source(tmp_path), root, set())[0] == ["a.yaml", "c.yaml"]
 
     def test_one_copied_before_is_not_brought_back(self, tmp_path):
         root = tmp_path / "blueprints" / "automation"
-        assert bi._copy(_source(tmp_path), root, {"a.yaml", "b.yaml"}) == ["c.yaml"]
+        assert bi._copy(_source(tmp_path), root, {"a.yaml", "b.yaml"})[0] == ["c.yaml"]
 
 
 class TestInstall:
@@ -48,6 +48,26 @@ class TestInstall:
             (tmp_path / "blueprints" / "automation" / "roomba_plus" / "a.yaml").unlink()
             assert await bi.async_install_blueprints(hass) == []
         assert not (tmp_path / "blueprints" / "automation" / "roomba_plus" / "a.yaml").exists()
+
+    async def test_no_file_access_on_the_event_loop(self, hass, tmp_path):
+        """4.6.0b1 listed the shipped folder on the loop, which Home
+        Assistant reports as a blocking call. Every listing must happen
+        in the executor."""
+        import threading  # noqa: PLC0415
+
+        loop_thread = threading.current_thread()
+        listed_on: list[threading.Thread] = []
+        source = _source(tmp_path)
+        real_glob = Path.glob
+
+        def glob(self: Path, pattern: str, *a: object, **kw: object):
+            listed_on.append(threading.current_thread())
+            return real_glob(self, pattern, *a, **kw)
+
+        hass.config.config_dir = str(tmp_path)
+        with patch.object(bi, "SOURCE", source), patch.object(Path, "glob", glob):
+            assert await bi.async_install_blueprints(hass) == ["a.yaml", "b.yaml", "c.yaml"]
+        assert listed_on and loop_thread not in listed_on
 
     async def test_a_failure_is_logged_not_raised(self, hass, caplog):
         with patch.object(bi, "_copy", side_effect=OSError("read-only")):
