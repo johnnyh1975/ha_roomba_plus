@@ -18,6 +18,8 @@ answered below.
 
 ## Where your data goes
 
+**Applies to:** all robots; a Classic robot without the iRobot account talks to nothing but Home Assistant
+
 **Only to iRobot's own infrastructure, and to your own Home Assistant.**
 There is no analytics, telemetry, crash reporting, or intermediary server of
 any kind, in either the integration or the library.
@@ -37,6 +39,8 @@ Nothing is sent to the maintainer, to this project, or anywhere else. A
 diagnostics download goes wherever *you* send it — see below.
 
 ## What Roomba+ keeps on your disk
+
+**Applies to:** all robots
 
 The library writes nothing. Roomba+ does, and this is the list:
 
@@ -66,6 +70,8 @@ every other integration.
 
 ## How data is updated, and how often it talks to the cloud
 
+**Applies to:** Classic and Prime, each in its own part
+
 **Classic robots, local connection.** The robot pushes its state over the local
 connection and Home Assistant updates the moment it reports; there is no
 polling. If the connection drops, the entities that show the robot's live state
@@ -94,6 +100,8 @@ its own local connection.
 
 ## What is in a diagnostics download
 
+**Applies to:** all robots
+
 This is the part worth reading before you send one to anybody, including to
 this project.
 
@@ -119,7 +127,7 @@ where it is a key — including inside topic strings and URLs.
 - **Map geometry** — room outlines and sizes, which is a floor plan
 - **Mission history** — when the robot ran, for how long, and where
 - **Capability flags and firmware versions** — identifies the model, not you
-- **Commands Roomba+ sent** (v4.2.5+) — the last dozen, with their time,
+- **Commands Roomba+ sent**: the last dozen, with their time,
   the rooms or zones named, and whether each reached the broker. This is
   what makes "it did nothing and reported no error" diagnosable at all
 
@@ -131,6 +139,8 @@ The one thing worth saying plainly: nothing in a diagnostics download
 identifies you personally unless your own room or zone names do.
 
 ## Getting rid of it
+
+**Applies to:** all robots
 
 Deleting the config entry removes every store listed above. Nothing survives
 in the integration's own files.

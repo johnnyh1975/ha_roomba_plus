@@ -12,6 +12,8 @@ available events, device triggers, and services, see the
 
 ### Start cleaning when everyone leaves
 
+**Applies to:** all robots
+
 ```yaml
 automation:
   alias: "Roomba — start when all away"
@@ -30,6 +32,8 @@ automation:
 ```
 
 ### Clean specific rooms on a schedule
+
+**Applies to:** Smart Map robots · Prime
 
 Wrap this in your own `trigger: time` (or `time_pattern`) — this recipe
 is the *action*, not the schedule itself:
@@ -61,6 +65,8 @@ nothing separate to change.
 
 ### Presence-aware cleaning with full timing control
 
+**Applies to:** Smart Map robots and Braava · Prime · presence-aware scheduling in *Fire event* mode
+
 ```yaml
 # Set Presence-aware scheduling to "Fire event" mode, then:
 automation:
@@ -84,6 +90,8 @@ automation:
 
 ### Pause when someone comes home mid-clean
 
+**Applies to:** Smart Map robots and Braava · Prime · presence-aware scheduling on
+
 ```yaml
 automation:
   alias: "Roomba — pause when someone arrives mid-clean"
@@ -100,6 +108,8 @@ automation:
 ```
 
 ### Wait for map save before cleaning
+
+**Applies to:** Classic Smart Map robots
 
 ```yaml
 automation:
@@ -129,6 +139,8 @@ automation:
 
 ### Daily catch-up clean for overdue rooms
 
+**Applies to:** Smart Map robots with the iRobot account · Prime
+
 Fires safely every day — does nothing when no room is actually due.
 
 ```yaml
@@ -145,7 +157,9 @@ automation:
 
 ### Send the mission map after cleaning
 
-Uses the v3.3.0 mission-map image endpoint directly — no card required.
+**Applies to:** Smart Map robots with the iRobot account
+
+Uses the mission-map image endpoint directly, no card required.
 
 ```yaml
 automation:
@@ -165,7 +179,9 @@ automation:
 
 ### Clean the dirtiest rooms when it's raining (indirect maintenance day)
 
-Combines `auto_clean_dirty_rooms` (v3.3.0) with a simple weather condition —
+**Applies to:** Smart Map robots with the iRobot account · Prime
+
+Combines `auto_clean_dirty_rooms` with a simple weather condition:
 no dirt-correlation setup required for this one, just the per-room dirt index.
 
 ```yaml
@@ -188,6 +204,8 @@ automation:
 ### Only start if it is done in time
 
 *New in 4.6.*
+
+**Applies to:** Smart Map robots with the iRobot account · Prime
 
 `plan_clean` answers what a clean of the rooms you name would take if it
 started now, without starting it. With `end_by` the answer says whether it
@@ -221,6 +239,8 @@ script:
 
 *New in 4.6.*
 
+**Applies to:** Smart Map robots with the iRobot account · Prime
+
 `roomba_plus_mission_result` fires when a mission's result is stored. Its
 `type` is `completed_with_skips` when rooms were skipped or not reached, and
 `retry_missed_rooms` cleans exactly those. Prime robots, and Classic robots
@@ -253,6 +273,8 @@ automation reacts to its own robot only.
 
 *New in 4.6.*
 
+**Applies to:** all robots
+
 Sometimes a robot accepts a start and stays on the dock.
 `roomba_plus_command_not_delivered` fires when the robot has not started
 20 s (Classic) or 60 s (Prime) after a start Roomba+ sent. `resent` says
@@ -276,6 +298,8 @@ automation:
 ---
 
 ## Zone cleaning on demand (Prime)
+
+**Applies to:** Smart Map robots · Prime
 
 The iRobot app no longer lets you save a zone as a favourite — only
 rooms. `roomba_plus.clean_zone` is how you send the robot to a zone from
@@ -318,10 +342,10 @@ id.
 
 ## Prime robots: what changed for automations
 
-Until v4.0.0a31 a Prime robot had **no `phase` sensor**, and every device trigger that watches
-robot state — "starts cleaning", "finishes cleaning", "docks", "gets stuck" — reads exactly that
-sensor. So those triggers did not appear in the automation editor at all for Prime users, with no
-error and no explanation. They work now.
+**Applies to:** Prime
+
+The device triggers that watch the robot's state ("starts cleaning", "finishes cleaning", "docks",
+"gets stuck") work on Prime as on Classic; they read the *Status* sensor.
 
 Two attributes are worth knowing about, both on the mission event sensor:
 
@@ -339,6 +363,8 @@ shows as its code rather than a blank, so it can be quoted in a report.
 <a id="asking-before-you-send-a34"></a>
 
 ### Asking before you send
+
+**Applies to:** Prime
 
 Four faults stop a mission before it starts, and three of them leave one half
 of the robot working. `binary_sensor.{name}_prime_start_blocked` says which:
@@ -370,11 +396,13 @@ that will be refused.
 There is a device trigger for it too, *Start blocked by a fault*, which fires
 when a block appears rather than being polled.
 
-**Since 4.4.2 a start that the fault rules out is refused** (mopping
+**A start that the fault rules out is refused** (mopping
 without the plate, vacuuming with it fitted, anything off the floor), with
 the reason in the error. Docking, stopping and pausing always go out.
 
 ### Cleaning a room the way it is set up
+
+**Applies to:** Prime · not yet confirmed on a robot
 
 The Rooms Map image carries a `room_preferences` attribute: the settings each
 room already has in the iRobot app.
@@ -409,6 +437,8 @@ diagnostics download now says which of the two reasons applies.
 
 ### Quiet hours
 
+**Applies to:** Prime
+
 ```yaml
 # Do not start a clean during a scheduled quiet-hours window.
 condition:
@@ -427,6 +457,8 @@ accepted and reads back, and whether it is honoured is a separate question no
 field report has answered yes. The condition above is the reliable half.
 
 ## Dashboard example
+
+**Applies to:** all robots; the maps on robots that have them
 
 A minimal dashboard combining the map, vacuum card, key sensors, and the
 maintenance to-do list. Built from Home Assistant's own cards, it works
@@ -482,9 +514,11 @@ cards:
 
 *New in 4.6.*
 
+**Applies to:** all robots
+
 From 4.6.0 every blueprint below is copied to Settings → Automations &
 Scenes → Blueprints when Home Assistant starts, under `roomba_plus/`. Create
-an automation from it there; the import step is only needed before 4.6.0.
+an automation from it there; the import links below are for an installation before 4.6.
 
 - A file you already have is never overwritten.
 - A blueprint you delete stays deleted: each one is copied once.
@@ -494,7 +528,9 @@ an automation from it there; the import step is only needed before 4.6.0.
 
 ## Notification blueprint
 
-v3.4.2 ships a ready-made automation blueprint covering a curated core set of
+**Applies to:** all robots; map retrain on Classic Smart Map robots
+
+A ready-made automation blueprint covering a curated core set of
 five notifications: mission complete, maintenance due, robot stuck, map
 retrain detected, and battery capacity critical. Import it directly:
 
@@ -519,6 +555,8 @@ One blueprint import covers all your robots — repeat step 1 to create one auto
 <a id="maintenance-450"></a>
 
 ## Maintenance
+
+**Applies to:** all robots
 
 A notification when a part or care task is due or overdue, with the care
 guide one tap away and buttons on the phone: **Replaced** for a part,
@@ -566,6 +604,8 @@ your language; the part's name comes in Home Assistant's language already
 
 ## Robot went silent
 
+**Applies to:** all robots
+
 Notifies you when the robot stops reporting — **the failure that looks
 like nothing is wrong.**
 
@@ -595,6 +635,8 @@ resolve themselves. Set it to zero to be told immediately.
 <a id="exception-notifications-rewritten-in-450"></a>
 
 ## Exception notifications
+
+**Applies to:** all robots; the stuck-place and cloud-numbers notifications on Classic
 
 The opposite of the curated set: **nothing after a normal mission**, and
 a notification only when something is actually wrong:
@@ -632,6 +674,8 @@ blueprint, then open the automation and pick the robot and the action.
 
 ### Demand clean alert
 
+**Applies to:** Smart Map robots with the iRobot account · Prime · demand cleaning on
+
 Notifies you when your robot starts cleaning on its own — triggered by the
 built-in dirt-sensor threshold, not your schedule or a manual start.
 
@@ -643,6 +687,8 @@ Pick this robot's `sensor.*_job_initiator` entity ("Status – Started by")
 and your notification action.
 
 ### Vacuum then mop
+
+**Applies to:** a vacuum and a mop robot in one household
 
 For two-robot households: starts a Braava mop automatically once a Roomba
 vacuum finishes.
@@ -657,6 +703,8 @@ cancelled or errored runs), and a wait time (default 5 minutes) to let
 dust settle first.
 
 ### Smart start on away
+
+**Applies to:** all robots
 
 Starts cleaning when everyone leaves — either immediately, or timed so
 cleaning is likely done before you return.

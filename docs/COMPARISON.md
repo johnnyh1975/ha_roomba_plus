@@ -15,6 +15,8 @@
 > estimates. Where a row says ❌ it means the code has no such thing, not that it
 > was not found.
 
+**Applies to:** Roomba+ on Classic robots against the built-in integration and roomba_rest980, which support Classic robots only; Prime robots in the next section.
+
 **Legend:** ✅ Supported &nbsp;·&nbsp; ⚠️ Partial / limited &nbsp;·&nbsp; ❌ Not available &nbsp;·&nbsp; ★ Best in class
 
 ---

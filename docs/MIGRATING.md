@@ -12,6 +12,8 @@
 
 ## From the built-in Roomba integration
 
+**Applies to:** Classic robots
+
 Roomba+ and Home Assistant's built-in *iRobot Roomba and Braava* integration
 cannot run side by side: a robot accepts one local connection at a time, and
 the two need different versions of the `roombapy` library.
@@ -30,6 +32,8 @@ you can do about them, including a workaround that removes the card:
 ---
 
 ## From roomba_rest980
+
+**Applies to:** Classic robots
 
 > ⚠️ **"rest980" means two things here, and they need opposite treatment.**
 > The **integration** stays installed — that is where your room names come
@@ -69,6 +73,8 @@ running the last time Home Assistant started, and the steps below keep them.
 
 ## More than one robot
 
+**Applies to:** all robots
+
 Each robot is its own integration entry, with its own device, entities and
 storage.
 
@@ -86,6 +92,8 @@ works as before.
 ---
 
 ## Replacing or selling a robot
+
+**Applies to:** all robots
 
 Roomba+ keeps what it has learned — mission history, room geometry, coverage,
 maintenance timers, health trends — in Home Assistant, not on the robot.
@@ -124,6 +132,8 @@ twice does no harm.
 ---
 
 ## Moving Home Assistant to new hardware
+
+**Applies to:** all robots
 
 A Home Assistant backup carries everything Roomba+ stored. If you move without
 one, call `roomba_plus.create_backup` for each robot before, and

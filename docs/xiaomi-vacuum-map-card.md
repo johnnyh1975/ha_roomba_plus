@@ -4,7 +4,9 @@
 
 [lovelace-xiaomi-vacuum-map-card](https://github.com/PiotrMachowski/lovelace-xiaomi-vacuum-map-card) (XVMC) by PiotrMachowski renders a live vacuum map with interactive room-cleaning support. This guide covers setting it up with Roomba+.
 
-> **Requires:** Roomba+ v2.7.1+, cloud credentials configured, UmfAligner confidence ≥ 0.70 (typically after 2–4 missions with room crossings), xiaomi-vacuum-map-card installed from the Marketplace (HACS before Home Assistant 2026.11).
+**Applies to:** Smart Map robots with the iRobot account · Prime
+
+> **Requires:** the iRobot account added, UmfAligner confidence ≥ 0.70 (typically after 2–4 missions with room crossings), xiaomi-vacuum-map-card installed from the Marketplace (HACS before Home Assistant 2026.11).
 
 ---
 
@@ -146,6 +148,8 @@ Roomba+ creates a `Rooms Map` image entity. Depending on when the integration wa
 Both are the same entity with the same attributes. Check **Developer Tools → States** and filter for `image.` to find yours. The examples below use `image.roomba_rooms_map` — substitute your actual entity name.
 
 ### If you have a Prime robot
+
+**Applies to:** Prime
 
 Prime robots (Roomba Max, Combo 400-series) create **three** image entities, and
 only one of them is the card source:

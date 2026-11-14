@@ -9,11 +9,9 @@ which is filled from the local connection on Classic robots and from iRobot's
 cloud on Prime ones. The response shape is the same either way; a field a
 particular robot never reports is absent rather than zero.
 
-Until 4.2.19 the endpoints were registered only when a Classic robot set
-up, so a household with only Prime robots had none of them. On a Prime
-robot, `format=hazards` is always empty (stuck pins come from the local
-grid, which Prime has no source for), and the mission path and mission
-map endpoints answer 404.
+On a Prime robot `format=hazards` is always empty (stuck pins come from the
+local grid, which Prime has no source for), and the mission map endpoint
+answers 404. Each section says which robots it applies to.
 
 ---
 
@@ -76,15 +74,15 @@ Prime maintenance in `maintenance_due`.
 |---|---|---|
 | `GET` | `/api/roomba_plus/{entry_id}/mission_history` | Mission history (summary / records / hazards / export / zone_coverage_health) |
 | `POST` | `/api/roomba_plus/{entry_id}/mission_history/import` | Import a history export bundle |
-| `GET` | `/api/roomba_plus/{entry_id}/digest` | One-day summary for a single robot (v2.9.0) |
-| `GET` | `/api/roomba_plus/{entry_id}/maintenance` | Maintenance entries of a single robot (4.5.0) |
-| `GET` | `/api/roomba_plus/care/{entry_id}/{guide}` | A care guide page, signed link, no token (4.5.0) |
+| `GET` | `/api/roomba_plus/{entry_id}/digest` | One-day summary for a single robot |
+| `GET` | `/api/roomba_plus/{entry_id}/maintenance` | Maintenance entries of a single robot |
+| `GET` | `/api/roomba_plus/care/{entry_id}/{guide}` | A care guide page, signed link, no token |
 | `GET` | `/api/roomba_plus/household` | Household aggregate across all robots |
-| `GET` | `/api/roomba_plus/{entry_id}/mission/{mission_id}/explain` | Anomaly explanation for a specific mission (v3.2.0) |
-| `GET` | `/api/roomba_plus/{entry_id}/mission/{n_mssn}/path` | Room-granular path reconstruction for a mission (v3.2.0) |
-| `GET` | `/api/roomba_plus/{entry_id}/missions/{record_id}/map.json` | Coordinate-level coverage for one finished mission (v3.3.0) |
-| `GET` | `/api/roomba_plus/{entry_id}/missions/{record_id}/map.png` | Rendered coverage image for one finished mission (v3.3.0) |
-| `GET` | `/api/roomba_plus/{entry_id}/naming_map.png` | The map the room-naming form shows (4.2.19). Internal: reached through a signed link from the form, not part of the stable API |
+| `GET` | `/api/roomba_plus/{entry_id}/mission/{mission_id}/explain` | Anomaly explanation for a specific mission |
+| `GET` | `/api/roomba_plus/{entry_id}/mission/{n_mssn}/path` | Room-granular path reconstruction for a mission |
+| `GET` | `/api/roomba_plus/{entry_id}/missions/{record_id}/map.json` | Coordinate-level coverage for one finished mission |
+| `GET` | `/api/roomba_plus/{entry_id}/missions/{record_id}/map.png` | Rendered coverage image for one finished mission |
+| `GET` | `/api/roomba_plus/{entry_id}/naming_map.png` | The map the room-naming form shows. Internal: reached through a signed link from the form, not part of the stable API |
 
 ### HTTP status codes
 
@@ -111,6 +109,8 @@ GET /api/roomba_plus/{entry_id}/mission_history
 ---
 
 ### format=summary
+
+**Applies to:** all robots
 
 Day-aggregated view. Always available — uses local MissionStore, no cloud required.
 
@@ -156,6 +156,8 @@ curl -H "Authorization: Bearer <token>" \
 
 ### format=records
 
+**Applies to:** all robots; the cloud's records with the iRobot account
+
 Per-mission unified records. Source is cloud when credentials are configured and coordinator is healthy; falls back to local MissionStore.
 
 **Ordering:** ascending by `started_at` (oldest first).
@@ -198,7 +200,7 @@ Per-mission unified records. Source is cloud when credentials are configured and
 | `recharges` | int / null | `chrgs` | Always null |
 | `evacuations` | int / null | `evacs` | Always null |
 | `dirt_events` | int / null | `dirt` | null (populated from merge if credentials configured) |
-| `wifi_signal` | array / null | `wlBars` — 5-element histogram, share of the mission at 4, 3, 2, 1 and 0 bars (index 0 = strongest; read the other way round before 4.5.3) | null (populated from merge if credentials configured) |
+| `wifi_signal` | array / null | `wlBars` — 5-element histogram, share of the mission at 4, 3, 2, 1 and 0 bars (index 0 = strongest) | null (populated from merge if credentials configured) |
 | `room_coverage` | object / null | Per-room fraction from timeline | null |
 | `alignment_confidence` | float / null | UmfAligner confidence 0.0–1.0 | null |
 | `source` | string | `"cloud"` | `"local"` |
@@ -214,12 +216,11 @@ curl -H "Authorization: Bearer <token>" \
 
 ### format=hazards
 
+**Applies to:** Classic robots that report their position (empty on Prime)
+
 Obstacle pin array from GridStore stuck hotspots and UMF-detected obstacle centroids.
 
-**One frame (4.2.19).** Until 4.2.18 the obstacles and keep-out zones
-from the map arrived in the map's own units under `x_mm`/`y_mm`, next to
-stuck pins in dock-relative millimetres, with a bearing and distance
-computed from the map's origin. Place pins only where `space` is `pose`.
+**One frame.** Place pins only where `space` is `pose`.
 
 **Gate:** requires map capability ≠ NONE. Returns `[]` for 600-series robots.
 
@@ -246,15 +247,15 @@ computed from the map's origin. Place pins only where `space` is `pose`.
 |---|---|---|---|
 | `gx`, `gy` | int | Yes — null for `robot_learned` | GridStore grid cell coordinates |
 | `x_mm`, `y_mm` | float | Never | Dock-relative mm (pose space) when `space` is `pose`. When `space` is `umf`, the map's own units — see below |
-| `space` | string | Never | (4.2.19) `pose` or `umf`. Stuck pins are always `pose`. Pins from the map (`robot_learned`, `keepout`) are converted to `pose` once the map is aligned with the robot's own coordinates; before that they stay in the map's units and say `umf` |
-| `x_umf`, `y_umf` | float | Absent on stuck pins | (4.2.19) The map's own coordinates of a `robot_learned` or `keepout` pin, whatever `space` says |
+| `space` | string | Never | `pose` or `umf`. Stuck pins are always `pose`. Pins from the map (`robot_learned`, `keepout`) are converted to `pose` once the map is aligned with the robot's own coordinates; before that they stay in the map's units and say `umf` |
+| `x_umf`, `y_umf` | float | Absent on stuck pins | The map's own coordinates of a `robot_learned` or `keepout` pin, whatever `space` says |
 | `stuck_count` | int | Yes — null for `robot_learned` | Accumulated stuck events in this cell |
 | `room_name` | string | Yes — null without UMF alignment | Room from UmfAligner (confidence ≥ 0.70) |
 | `bearing_deg` | int | Yes — null when `space` is `umf` | Compass bearing from dock |
 | `distance_mm` | int | Yes — null when `space` is `umf` | Euclidean distance from dock |
 | `source` | string | Never | `stuck_events` / `robot_learned` / `keepout` |
-| `dominant_weekday` | int | Yes | (v3.3.1) 0=Monday..6=Sunday. Only set for `stuck_events` pins with ≥8 stuck events and a ≥60% dominant time slot — pins with fewer (down to the 3-event display threshold) always show `null` here, that's expected |
-| `dominant_hour` | int | Yes | (v3.3.1) 0-23, paired with `dominant_weekday` — always both-null or both-set |
+| `dominant_weekday` | int | Yes | 0=Monday..6=Sunday. Only set for `stuck_events` pins with ≥8 stuck events and a ≥60% dominant time slot — pins with fewer (down to the 3-event display threshold) always show `null` here, that's expected |
+| `dominant_hour` | int | Yes | 0-23, paired with `dominant_weekday` — always both-null or both-set |
 
 ```bash
 curl -H "Authorization: Bearer <token>" \
@@ -264,6 +265,8 @@ curl -H "Authorization: Bearer <token>" \
 ---
 
 ### format=export
+
+**Applies to:** all robots
 
 Full mission log as a versioned JSON bundle for backup and migration.
 
@@ -286,6 +289,8 @@ curl -H "Authorization: Bearer <token>" \
 ---
 
 ### format=zone_coverage_health
+
+**Applies to:** Smart Map robots with the iRobot account · Prime (empty on a 600-series)
 
 Per-room cleaning-cadence health, self-calibrated against each room's own historical rhythm — not a fixed schedule. A room is `overdue` only relative to its own typical interval between cleans, learned from `last_cleaned_rooms` timestamps over the last 90 days.
 
@@ -321,6 +326,8 @@ curl -H "Authorization: Bearer <token>" \
 
 ## POST /mission_history/import
 
+**Applies to:** all robots
+
 Import a bundle produced by `format=export`. Records are deduplicated by `id` — existing records are never overwritten. Safe to run multiple times.
 
 ```
@@ -349,6 +356,8 @@ curl -X POST \
 ---
 
 ## GET /digest
+
+**Applies to:** all robots
 
 Compact one-day summary for a single robot — built for a card's "Today" status slot.
 
@@ -386,8 +395,10 @@ curl -H "Authorization: Bearer <token>" \
 
 ## GET /maintenance
 
+**Applies to:** all robots
+
 The robot's maintenance entries, as `sensor.{name}_maintenance` lists them
-in `items` (4.5.0). Both generations. Read-only: an entry is marked done
+in `items`. Both generations. Read-only: an entry is marked done
 with the `roomba_plus.maintenance_done` action.
 
 ```
@@ -417,7 +428,9 @@ GET /api/roomba_plus/{entry_id}/maintenance
 
 ## GET /care/{entry_id}/{guide}
 
-A care guide as a web page (4.5.0): the drawing with the part highlighted,
+**Applies to:** all robots
+
+A care guide as a web page: the drawing with the part highlighted,
 why, how and what not to do, in the language of the link. **No access
 token**: the link is signed with the installation's own secret, and only
 signed links are answered. Get one from the maintenance list, the
@@ -438,7 +451,9 @@ second drawing (the dock beside the robot for the charging contacts).
 
 ## GET /household
 
-Household-wide aggregate across all configured Roomba+ robots. Since v3.4.3, also includes a fleet-health rollup — see below.
+**Applies to:** all robots
+
+Household-wide aggregate across all configured Roomba+ robots, with a fleet-health rollup (below).
 
 ```
 GET /api/roomba_plus/household?days=28
@@ -490,7 +505,7 @@ GET /api/roomba_plus/household?days=28
 
 `floors` is omitted when no robot has a floor label configured. `area_sqft` is null when no robot has cloud records with area data.
 
-**Fleet health (v3.4.3):** `fleet_health.robots_needing_attention` lists the `name` of every robot where `needs_attention` is `true` — useful for a multi-robot dashboard that only needs to surface robots that actually need a look. Per robot: `health_trend` (`"improving"`/`"stable"`/`"declining"`/`null` until enough history exists), `battery_capacity_retention_pct` (same value as `sensor.*_battery_capacity_retention`), `maintenance_due` (since 4.5.0: a part to replace that is due or overdue in the robot's maintenance entries, the ones `GET /maintenance` and the status sensor show; before, Classic used the check of `binary_sensor.*_maintenance_due` and Prime its own parts rule), `maintenance_level` (4.5.0: the status sensor's `ok`/`soon`/`due`/`overdue`, care tasks included; `null` while the robot is starting), and `needs_attention` (`maintenance_due` OR a declining health trend). These reuse already-computed values rather than recalculating anything — the endpoint is only ever as fresh as those values already are elsewhere in the integration.
+**Fleet health:** `fleet_health.robots_needing_attention` lists the `name` of every robot where `needs_attention` is `true` — useful for a multi-robot dashboard that only needs to surface robots that actually need a look. Per robot: `health_trend` (`"improving"`/`"stable"`/`"declining"`/`null` until enough history exists), `battery_capacity_retention_pct` (same value as `sensor.*_battery_capacity_retention`), `maintenance_due` (a part to replace that is due or overdue in the robot's maintenance entries, the ones `GET /maintenance` and the status sensor show), `maintenance_level` (the status sensor's `ok`/`soon`/`due`/`overdue`, care tasks included; `null` while the robot is starting), and `needs_attention` (`maintenance_due` OR a declining health trend). These reuse already-computed values rather than recalculating anything — the endpoint is only ever as fresh as those values already are elsewhere in the integration.
 
 ```bash
 curl -H "Authorization: Bearer <token>" \
@@ -501,7 +516,9 @@ curl -H "Authorization: Bearer <token>" \
 
 ## GET /mission/{mission_id}/explain
 
-Rule-based explanation for why a mission was (or wasn't) flagged anomalous — same logic as the `roomba_plus.explain_mission` service, exposed as REST for external tooling. `{mission_id}` accepts `latest` to explain the most recent mission regardless of whether it was anomalous. It also accepts the cloud-only `"c_{ts}"` id format that `format=records` uses for cloud-source-only rows (v3.3.1) — these previously always returned 404, since such missions were never written to local storage.
+**Applies to:** all robots
+
+Rule-based explanation for why a mission was (or wasn't) flagged anomalous — same logic as the `roomba_plus.explain_mission` service, exposed as REST for external tooling. `{mission_id}` accepts `latest` to explain the most recent mission regardless of whether it was anomalous. It also accepts the cloud-only `"c_{ts}"` id format that `format=records` uses for cloud-source-only rows.
 
 ```
 GET /api/roomba_plus/{entry_id}/mission/{mission_id}/explain
@@ -541,6 +558,8 @@ curl -H "Authorization: Bearer <token>" \
 
 ## GET /mission/{n_mssn}/path
 
+**Applies to:** Smart Map robots with the iRobot account · Prime
+
 Room-granular post-hoc reconstruction of a mission's path — not pixel-accurate pose tracking. Consecutive visits to the same room collapse into a single timeline entry (arrival time, not every individual room re-entry event).
 
 ```
@@ -565,7 +584,7 @@ GET /api/roomba_plus/{entry_id}/mission/{n_mssn}/path
 | `room` | string | Never — falls back to the raw region id | Resolved from cloud region names (SMART) or RoomSegStore names (EPHEMERAL) |
 | `time` | string | Never | ISO timestamp of arrival in that room |
 
-**Gate:** Classic requires `mission_archive` (cloud enrichment). **Prime (4.6.0)** answers from its own mission archive (up to 800 missions, filled from the cloud history at each sync) and the mission store; rooms are named as on the map. Returns `404` if `n_mssn` doesn't match any mission, or if neither source is available.
+**Gate:** Classic requires `mission_archive` (cloud enrichment). **Prime** answers from its own mission archive (up to 800 missions, filled from the cloud history at each sync) and the mission store; rooms are named as on the map. Returns `404` if `n_mssn` doesn't match any mission, or if neither source is available.
 
 ```bash
 curl -H "Authorization: Bearer <token>" \
@@ -576,10 +595,11 @@ curl -H "Authorization: Bearer <token>" \
 
 ## GET /missions/{record_id}/map.json  ·  /map.png
 
-**v3.3.0 MISSION-MAP** — coordinate-level coverage of one finished mission: the
+**Applies to:** Smart Map robots with the iRobot account
+
+Coordinate-level coverage of one finished mission: the
 official app's "Mission Cleaning Map", for every mission in your history.
-SMART robots with cloud credentials only; requires the mission record to carry
-`pmaps_info` (recorded on v3.3.0+, cloud-merged).
+The mission record must carry `pmaps_info` (from the cloud).
 
 ```
 GET /api/roomba_plus/{entry_id}/missions/{record_id}/map.json
@@ -589,13 +609,12 @@ GET /api/roomba_plus/{entry_id}/missions/{record_id}/map.png?rotate=90
 
 `{record_id}` is the local mission record id; `latest` resolves to the most
 recent mission. It also accepts the cloud-only `"c_{ts}"` id format that
-`format=records` uses for cloud-source-only rows (v3.4.2) — these previously
-always returned 404, since such missions were never written to local
-storage; same fix class as `/explain`'s `c_{ts}` support (v3.3.1). The PNG is
+`format=records` uses for rows that exist only in the cloud, as `/explain`
+does. The PNG is
 directly usable as a picture-card or notification image — room outlines
 (current map) plus this mission's real coverage points.
 
-**`rotate` query parameter** *(v3.4.1, PNG only)* — clockwise rotation in
+**`rotate` query parameter** *(PNG only)* — clockwise rotation in
 degrees: `90`, `180`, or `270`. Omit for unrotated (default). Any other
 value is treated as `0`. Useful when a Smart Map's stored orientation
 doesn't match your dashboard's expected layout — no external image
@@ -615,11 +634,11 @@ processing needed. Lossless (pixel permutation, not interpolated).
 }
 ```
 
-`escape_events` *(v3.4.0)* — stuck/obstacle events recorded during this mission, if any (usually an empty list). Unlike `coverage_mm`, poses here are **not** converted to mm — they stay in the cloud's original coordinate space.
+`escape_events`: stuck/obstacle events recorded during this mission, if any (usually an empty list). Unlike `coverage_mm`, poses here are **not** converted to mm — they stay in the cloud's original coordinate space.
 
 | Status | Meaning |
 |---|---|
-| 404 | Record unknown; record has no `pmaps_info` (EPHEMERAL, or pre-v3.3.0 record); or the cloud returned no coverage layer — confirmed working on both Braava jet m6 (sapphire firmware) and i-series lewis firmware (field-confirmed July 2026); if you still get this on another model family, that's the remaining open question, not something to troubleshoot on your end |
+| 404 | Record unknown; record has no `pmaps_info` (a 900-series, or a record from before 3.3); or the cloud returned no coverage layer — confirmed working on both Braava jet m6 (sapphire firmware) and i-series lewis firmware (field-confirmed July 2026); if you still get this on another model family, that's the remaining open question, not something to troubleshoot on your end |
 | 409 | Verification-gate mismatch — the cloud map's `map_header.nmssn` does not match the requested record; the wrong map is never served silently |
 | 502 | Cloud transport failure |
 
