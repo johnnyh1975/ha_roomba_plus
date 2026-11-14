@@ -1977,6 +1977,18 @@ said nothing was wrong.
 - **Prime robots**: what is missing and what is not yet confirmed on a robot is
   listed in [V4/Prime robots](PRIME.md#what-is-not-there).
 
+### Planned, not scheduled
+
+Ideas that are kept but have no release yet:
+
+- **Furniture changes from the cloud map.** Detecting moved furniture from the
+  differences between iRobot's own maps, for Smart Map robots. Layout-change
+  detection today works from the local position grid.
+- **Exporting room shapes and doors**, for use outside Home Assistant.
+
+Evaluated and not pursued: voice sentences of its own (see above) and a "retrain
+your Smart Map" reminder.
+
 ## Events & device triggers
 
 Roomba+ fires events on the HA event bus that automations can react to

@@ -68,9 +68,26 @@ history are made up.</sub>
 Each feature, and which robots it needs, is in the [feature reference](docs/FEATURES.md).
 Prime robots have their own page: [V4/Prime robots](docs/PRIME.md).
 
+## How it compares
+
+| | Roomba+ | Built-in Roomba integration | roomba_rest980 |
+|---|---|---|---|
+| Connection | Local push; iRobot account optional | Local push | Polls a rest980 Docker container; iRobot account required |
+| Robots | 600, 900, i, s, j, Braava m6 and Prime | Classic robots; it lists 690, 890, 960, 980, s9+, Braava m6 | Smart Map robots (i, s, j) |
+| Map and rooms | Live path, rooms map, cleaning by room and area | — | Floor plan from the cloud, no live path |
+| Automation | Blocking sensors, presence, demand cleaning, mission events, response actions | Start, stop, return | Room selection, cloud routines |
+| Entities | 100+, maintenance and history included | 13 | About 30, plus room selects and favourite buttons |
+
+Neither of the other two supports Prime robots. The full comparison, with when to choose
+which: [Roomba+, the built-in integration and roomba_rest980](docs/COMPARISON.md).
+
 ## Installation
 
 Requires **Home Assistant 2025.5** or newer.
+
+Install the current stable release, whatever your robot: one release line serves both
+generations. Releases before 4.0 cannot connect to Prime robots at all, and the 4.1 and 4.2
+lines have ended. Which version you have: Settings → Devices & services → Roomba+.
 
 ### Marketplace — Home Assistant 2026.11 and later
 
