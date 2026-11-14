@@ -506,11 +506,14 @@ class TestBatteryContactIssue:
             await async_check_battery_contact_issue(hass, entry)  # not charging yet
 
             for peak in [85.0, 60.0, 40.0, 28.0]:
-                # enter a charge cycle, ramp to the peak, then leave it
+                # enter a charge cycle, ramp to the peak, then leave it --
+                # after hours on the dock (4.6.0, #246: a short top-up is
+                # no peak)
                 entry.runtime_data.roomba_reported_state.return_value = {
                     "batPct": peak, "cleanMissionStatus": {"phase": "charge"},
                 }
                 await async_check_battery_contact_issue(hass, entry)
+                entry.runtime_data.current_charge_cycle_started -= 3 * 3600
                 entry.runtime_data.roomba_reported_state.return_value = {
                     "batPct": peak, "cleanMissionStatus": {"phase": "run"},
                 }
@@ -520,6 +523,27 @@ class TestBatteryContactIssue:
             mock_ir.async_create_issue.assert_called()
             call_kwargs = mock_ir.async_create_issue.call_args[1]
             assert call_kwargs["translation_placeholders"]["cause"] in ("declining_trend", "jump")
+
+    @pytest.mark.asyncio
+    async def test_short_top_ups_between_missions_are_no_trend(self):
+        """#246 (@azeiop): sent out again after ~5 minutes on the dock,
+        three times -- 100, 92, 89, 87 % is no contact getting worse."""
+        hass = _make_hass()
+        entry = _make_contact_entry(batpct=60.0, phase="run")
+        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
+            for peak in [100.0, 92.0, 89.0, 87.0]:
+                entry.runtime_data.roomba_reported_state.return_value = {
+                    "batPct": peak, "cleanMissionStatus": {"phase": "charge"},
+                }
+                await async_check_battery_contact_issue(hass, entry)
+                entry.runtime_data.current_charge_cycle_started -= 5 * 60
+                entry.runtime_data.roomba_reported_state.return_value = {
+                    "batPct": peak, "cleanMissionStatus": {"phase": "run"},
+                }
+                await async_check_battery_contact_issue(hass, entry)
+            # The full charge counts; the top-ups do not.
+            assert entry.runtime_data.charge_cycle_peaks == [100.0]
+            mock_ir.async_create_issue.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_stable_peaks_do_not_fire(self):
@@ -547,6 +571,7 @@ class TestBatteryContactIssue:
                     "batPct": 50.0 + i, "cleanMissionStatus": {"phase": "charge"},
                 }
                 await async_check_battery_contact_issue(hass, entry)
+                entry.runtime_data.current_charge_cycle_started -= 3 * 3600
                 entry.runtime_data.roomba_reported_state.return_value = {
                     "batPct": 50.0 + i, "cleanMissionStatus": {"phase": "run"},
                 }

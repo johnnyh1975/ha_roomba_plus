@@ -54,6 +54,15 @@ STUCK_HOTSPOT_THRESHOLD = 3
 # set — not all 20, so a robot that occasionally misses a cell for
 # unrelated reasons (mid-mission stop, brief obstacle) doesn't reset the
 # "this used to be reliably covered" signal.
+#: THE RULE THE LAYOUT-CHANGE HISTORY WAS WRITTEN UNDER (4.6.0, #246).
+#: 2: only missions sent everywhere count (4.5.4). A payload without it
+#: was written before, when a mission sent to one room counted as having
+#: missed every spot of every other room -- @azeiop's i7 kept
+#: `layout_change_detected` on with 598 such spots after the update, since
+#: room cleans no longer move that history on. Loading one drops the spots
+#: that are candidates now, once; everything else keeps its history.
+COVERAGE_HISTORY_RULE = 2
+
 _FURNITURE_RECENT_ABSENT       = 3
 _FURNITURE_ESTABLISHED_WINDOW  = 20
 _FURNITURE_ESTABLISHED_MIN_HITS = 18
@@ -341,6 +350,14 @@ class GridStore:
                 (int(k.split(",")[0]), int(k.split(",")[1])): str(v)
                 for k, v in raw_dismissed.items()
             }
+            if data.get("coverage_history_rule") != COVERAGE_HISTORY_RULE:
+                stale = self.drop_furniture_candidates()
+                if stale:
+                    _LOGGER.info(
+                        "GridStore: dropped %d layout-change spot(s) for %s, "
+                        "recorded before room cleans stopped counting as misses",
+                        stale, entry_id,
+                    )
             # v3.2.1 DUAL-GRID — additive field, same no-version-bump
             # rationale as the FURNITURE fields above: a payload saved
             # before this existed simply has no "structure_cells" key,
@@ -408,6 +425,7 @@ class GridStore:
                 f"{gx},{gy}": w for (gx, gy), w in self._structure_cells.items()
             },
             "last_processed_nmssn": self._last_processed_nmssn,
+            "coverage_history_rule": COVERAGE_HISTORY_RULE,
             "missions_learned": self._missions_learned,
             "last_valid_edge_coverage_ratio": self._last_valid_edge_coverage_ratio,
         })
@@ -1032,6 +1050,21 @@ class GridStore:
             x_mm, y_mm = _cell_to_mm(*cell)
             results.append({"cell": cell, "x_mm": x_mm, "y_mm": y_mm})
         return results
+
+    def drop_furniture_candidates(self) -> int:
+        """Forget the history of every spot that is a candidate now.
+
+        For a history written under an older rule (COVERAGE_HISTORY_RULE).
+        A real obstacle loses little: a candidate stays one only for the
+        few missions until its established hits run out anyway, and its
+        repair was raised when it qualified.
+        """
+        cells = [c["cell"] for c in self.furniture_candidates()]
+        for cell in cells:
+            self._coverage_history.pop(cell, None)
+            self._coverage_history_age.pop(cell, None)
+            self._furniture_dismissed_at.pop(cell, None)
+        return len(cells)
 
     def furniture_readiness(self) -> dict[str, Any]:
         """v3.2.0 UX fix — progress indicator for FURNITURE's learning

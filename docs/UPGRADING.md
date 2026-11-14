@@ -69,6 +69,14 @@ Nothing to do. What you will notice:
 - **Blueprints appear under `blueprints/automation/roomba_plus/`** after the
   first start. If you imported them before, nothing is doubled.
 - **A new option**, *Send home after a pause*, off by default.
+- **`binary_sensor.*_layout_change_detected` turns off** where it still
+  showed spots from 4.5.3, when room cleans counted as misses everywhere
+  else. Those spots are dropped once on the first start; the rest of the
+  layout history is kept.
+- **A short top-up on the dock no longer counts toward the battery-contact
+  trend.** A charge counts once it reached a full battery or lasted two
+  hours, so missions sent out back to back no longer raise
+  *battery contact suspect*.
 - **Lifetime counters keep their value across a restart** (*Total time*,
   mission counts, average duration, charge cycles and the other lifetime
   counters). A robot that does not send them again on reconnect, such as a

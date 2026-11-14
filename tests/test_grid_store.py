@@ -693,6 +693,53 @@ class TestPersistence:
         assert gs2._coverage_history_age == {(1, 2): 23}
 
     @pytest.mark.asyncio
+    async def test_a_history_from_before_4_5_4_loses_its_candidates_once(self):
+        """#246 (4.6.0): misses a room clean recorded under 4.5.3 stay
+        frozen, since room cleans no longer move the history on. A
+        payload without the rule marker drops today's candidates; other
+        spots keep their history, and the next save marks the rule."""
+        from custom_components.roomba_plus.grid_store import (
+            _FURNITURE_ESTABLISHED_MASK,
+            COVERAGE_HISTORY_RULE,
+        )
+
+        gs = GridStore()
+        gs._coverage_history[(1, 2)] = _FURNITURE_ESTABLISHED_MASK  # a candidate
+        gs._coverage_history_age[(1, 2)] = 30
+        gs._furniture_dismissed_at[(1, 2)] = "2026-11-01T00:00:00+00:00"
+        gs._coverage_history[(5, 5)] = 0b111  # covered lately: no candidate
+        gs._coverage_history_age[(5, 5)] = 30
+        assert gs.furniture_candidates()
+
+        saved: dict = {}
+        hass = MagicMock()
+        store_mock = AsyncMock()
+
+        async def _capture_save(data):
+            saved.update(data)
+
+        store_mock.async_save = _capture_save
+        with patch("homeassistant.helpers.storage.Store", return_value=store_mock):
+            await gs.async_save(hass, "test_entry")
+        assert saved["coverage_history_rule"] == COVERAGE_HISTORY_RULE
+
+        old = {k: v for k, v in saved.items() if k != "coverage_history_rule"}
+        before = GridStore()
+        store_mock.async_load = AsyncMock(return_value=old)
+        with patch("homeassistant.helpers.storage.Store", return_value=store_mock):
+            await before.async_load(hass, "test_entry")
+        assert before.furniture_candidates() == []
+        assert set(before._coverage_history) == {(5, 5)}
+        assert (1, 2) not in before._furniture_dismissed_at
+
+        # A payload written under the rule keeps its candidates.
+        current = GridStore()
+        store_mock.async_load = AsyncMock(return_value=saved)
+        with patch("homeassistant.helpers.storage.Store", return_value=store_mock):
+            await current.async_load(hass, "test_entry")
+        assert current.furniture_candidates()
+
+    @pytest.mark.asyncio
     async def test_coverage_history_missing_from_old_payload_defaults_empty(self):
         """A payload saved before FURNITURE existed has no
         coverage_history key at all — must load as empty, not error."""

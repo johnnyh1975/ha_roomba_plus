@@ -377,7 +377,7 @@ class RoombaData:
     # over successive cycles (intermittent contact reduces effective
     # charge transferred each cycle). Both feed the same repair issue —
     # see repairs.py::async_check_battery_contact_issue.
-    # THESE SIX ARE ONE STATE MACHINE, not six independent values.
+    # THESE SEVEN ARE ONE STATE MACHINE, not seven independent values.
     # async_check_battery_contact_issue() is their only reader AND their
     # only writer, and the invariants between them live nowhere else:
     #
@@ -411,6 +411,9 @@ class RoombaData:
     current_charge_cycle_peak: float | None = None
     charge_cycle_peaks: list[Any] = field(default_factory=list)   # bounded, most-recent-last
     was_charging: bool = False   # edge-detect charge-cycle start/end
+    #: time.monotonic() when the charge cycle in progress began (4.6.0,
+    #: #246): a short top-up between back-to-back missions is no peak.
+    current_charge_cycle_started: float | None = None
 
     # v2.2.0 — GridStore for occupancy heatmap and stuck-cell analysis (F9)
     grid_store: GridStore | None = None

@@ -621,6 +621,15 @@ _BATPCT_JUMP_MAX_MINUTES = 10.0   # within this short a window
 _CONTACT_ANOMALY_DEBOUNCE = 2     # consecutive anomalous readings before firing
 _CHARGE_PEAK_HISTORY_LEN = 5      # bounded rolling window of recent cycle peaks
 _CHARGE_PEAK_DECLINE_CYCLES = 3   # consecutive declining peaks to flag a trend
+#: A CHARGE CYCLE COUNTS FOR THE TREND only if it reached a full battery
+#: or lasted this long (4.6.0, #246). @azeiop sent his i7 out again after
+#: about five minutes on the dock, three times: peaks of 100, 92, 89 and
+#: 87 % read as a contact getting worse, when the robot had simply not had
+#: time to charge. A worn contact shows as a robot that sits on the dock
+#: for hours and still does not get full -- two hours is long enough for a
+#: healthy robot to get most of the way from a low battery.
+_CHARGE_PEAK_MIN_SECONDS = 2 * 3600
+_CHARGE_PEAK_FULL_PCT = 99.0
 
 
 async def async_check_battery_contact_issue(
@@ -703,16 +712,23 @@ async def async_check_battery_contact_issue(
 
     # ── Signal 2: declining peak-per-charge-cycle trend ─────────────────
     is_charging = phase == "charge"
+    if is_charging and not data.was_charging:
+        data.current_charge_cycle_started = now
     if is_charging:
         data.current_charge_cycle_peak = max(
             batpct, data.current_charge_cycle_peak
             if data.current_charge_cycle_peak is not None else batpct,
         )
     if data.was_charging and not is_charging and data.current_charge_cycle_peak is not None:
-        # Charge cycle just ended — finalize this cycle's peak into history.
-        data.charge_cycle_peaks.append(data.current_charge_cycle_peak)
-        data.charge_cycle_peaks = data.charge_cycle_peaks[-_CHARGE_PEAK_HISTORY_LEN:]
+        # Charge cycle just ended — finalize this cycle's peak into history,
+        # if the robot had the time to charge (_CHARGE_PEAK_MIN_SECONDS).
+        started = data.current_charge_cycle_started
+        long_enough = started is not None and now - started >= _CHARGE_PEAK_MIN_SECONDS
+        if long_enough or data.current_charge_cycle_peak >= _CHARGE_PEAK_FULL_PCT:
+            data.charge_cycle_peaks.append(data.current_charge_cycle_peak)
+            data.charge_cycle_peaks = data.charge_cycle_peaks[-_CHARGE_PEAK_HISTORY_LEN:]
         data.current_charge_cycle_peak = None
+        data.current_charge_cycle_started = None
     data.was_charging = is_charging
 
     declining_trend = False
