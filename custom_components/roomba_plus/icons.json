@@ -211,9 +211,6 @@
       "mop_ars_behavior": {
         "default": "mdi:shimmer"
       },
-      "cleaning_speed_trend": {
-        "default": "mdi:trending-up"
-      },
       "battery_capacity_retention": {
         "default": "mdi:battery-heart"
       },
@@ -498,9 +495,6 @@
       "reset_battery": {
         "default": "mdi:battery-plus-outline"
       },
-      "clean_zone": {
-        "default": "mdi:map-marker-check-outline"
-      },
       "repeat_mission": {
         "default": "mdi:repeat"
       },
@@ -509,9 +503,6 @@
       },
       "clean_smart_zone": {
         "default": "mdi:map-marker-check-outline"
-      },
-      "favorite": {
-        "default": "mdi:star-outline"
       },
       "reset_side_brush": {
         "default": "mdi:broom"
@@ -568,9 +559,6 @@
     "select": {
       "cleaning_passes": {
         "default": "mdi:replay"
-      },
-      "zone_select": {
-        "default": "mdi:map-marker-outline"
       },
       "smart_zone_select": {
         "default": "mdi:map-marker-outline"

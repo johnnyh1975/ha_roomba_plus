@@ -181,98 +181,6 @@ class TestResolveZoneName:
         ) == "Zone 7"
 
 
-class TestZoneSelectHiddenFilter:
-    """Verify the logic used in ZoneSelect.options (hidden filtering).
-
-    ROOM-SEG Stage 3 — ZoneSelect now reads from RoomSegStore/SegRoom, not
-    ZoneStore/Zone (the gap heuristic proved unreliable — see
-    ROOM_SEGMENTATION_NOTES.md). unique_id/entity_id are unchanged.
-    """
-
-    def test_hidden_room_excluded_from_options(self):
-        from custom_components.roomba_plus.room_seg_store import SegRoom
-
-        rooms = [
-            SegRoom(id="room_1", name="Kitchen", confirmed=True, hidden=False),
-            SegRoom(id="room_2", name="Bedroom", confirmed=True, hidden=True),
-        ]
-        visible = [r.name for r in rooms if r.confirmed and not r.hidden]
-        assert visible == ["Kitchen"]
-
-    def test_unconfirmed_room_excluded_from_options(self):
-        from custom_components.roomba_plus.room_seg_store import SegRoom
-
-        rooms = [
-            SegRoom(id="room_1", name="Confirmed", confirmed=True, hidden=False),
-            SegRoom(id="room_2", name="Unconfirmed", confirmed=False, hidden=False),
-        ]
-        visible = [r.name for r in rooms if r.confirmed and not r.hidden]
-        assert visible == ["Confirmed"]
-
-    def test_all_visible_rooms_in_options(self):
-        from custom_components.roomba_plus.room_seg_store import SegRoom
-
-        rooms = [
-            SegRoom(id="room_1", name="Kitchen", confirmed=True, hidden=False),
-            SegRoom(id="room_2", name="Living room", confirmed=True, hidden=False),
-        ]
-        visible = [r.name for r in rooms if r.confirmed and not r.hidden]
-        assert len(visible) == 2
-
-    def test_real_entity_options_reads_room_seg_store(self):
-        """Exercises the actual ZoneSelect.options property, not just a
-        mirrored expression -- catches a wrong attribute name or wrong
-        store reference that the logic-mirror tests above cannot."""
-        from unittest.mock import MagicMock
-        from custom_components.roomba_plus.select import ZoneSelect
-        from custom_components.roomba_plus.room_seg_store import RoomSegStore, SegRoom
-
-        rss = RoomSegStore()
-        rss.rooms = {
-            "room_1": SegRoom(id="room_1", name="Kitchen", confirmed=True, hidden=False),
-            "room_2": SegRoom(id="room_2", name="Bedroom", confirmed=True, hidden=True),
-            "room_3": SegRoom(id="room_3", name="", confirmed=False, hidden=False),
-        }
-        config_entry = MagicMock()
-        config_entry.runtime_data.room_seg_store = rss
-
-        entity = ZoneSelect.__new__(ZoneSelect)
-        entity._config_entry = config_entry
-
-        assert entity.options == ["Kitchen"]
-
-    def test_areas_sharing_a_name_are_offered_once(self):
-        """A tester's 980: four areas named "Kitchen" are one room."""
-        from unittest.mock import MagicMock
-        from custom_components.roomba_plus.select import ZoneSelect
-        from custom_components.roomba_plus.room_seg_store import RoomSegStore, SegRoom
-
-        rss = RoomSegStore()
-        rss.rooms = {
-            rid: SegRoom(id=rid, name=name, confirmed=True)
-            for rid, name in (("room_9", "Kitchen"), ("room_3", "Dining"),
-                              ("room_2", "Kitchen"), ("room_5", "Kitchen"))
-        }
-        config_entry = MagicMock()
-        config_entry.runtime_data.room_seg_store = rss
-        entity = ZoneSelect.__new__(ZoneSelect)
-        entity._config_entry = config_entry
-
-        assert entity.options == ["Kitchen", "Dining"]
-
-    def test_real_entity_options_empty_without_room_seg_store(self):
-        from unittest.mock import MagicMock
-        from custom_components.roomba_plus.select import ZoneSelect
-
-        config_entry = MagicMock()
-        config_entry.runtime_data.room_seg_store = None
-
-        entity = ZoneSelect.__new__(ZoneSelect)
-        entity._config_entry = config_entry
-
-        assert entity.options == []
-
-
 class TestUnlabelledRegionIdsHiddenExclusion:
     """Verify hidden IDs are excluded from unlabelled list (repair issue gate)."""
 
@@ -600,15 +508,13 @@ class TestZoneSelectNotCreatedForEphemeral:
 
     def test_ephemeral_does_not_create_zone_select(self):
         from custom_components.roomba_plus.models import MapCapability
-        from custom_components.roomba_plus.select import ZoneSelect
         entities = self._run_setup(MapCapability.EPHEMERAL, room_seg_store=MagicMock())
-        assert not any(isinstance(e, ZoneSelect) for e in entities)
+        assert not any(getattr(e, "_attr_translation_key", None) == "zone_select" for e in entities)
 
     def test_ephemeral_without_room_seg_store_also_does_not_create_it(self):
         from custom_components.roomba_plus.models import MapCapability
-        from custom_components.roomba_plus.select import ZoneSelect
         entities = self._run_setup(MapCapability.EPHEMERAL, room_seg_store=None)
-        assert not any(isinstance(e, ZoneSelect) for e in entities)
+        assert not any(getattr(e, "_attr_translation_key", None) == "zone_select" for e in entities)
 
     def test_harness_sanity_check_smart_map_still_creates_a_zone_select(self):
         """Positive control: proves this test harness actually exercises
@@ -681,9 +587,8 @@ class TestZoneCleanButtonNotCreatedForEphemeral:
 
     def test_ephemeral_does_not_create_zone_clean_button(self):
         from custom_components.roomba_plus.models import MapCapability
-        from custom_components.roomba_plus.button import ZoneCleanButton
         entities = self._run_setup(MapCapability.EPHEMERAL, room_seg_store=MagicMock())
-        assert not any(isinstance(e, ZoneCleanButton) for e in entities)
+        assert not any(getattr(e, "_attr_translation_key", None) == "clean_zone" for e in entities)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

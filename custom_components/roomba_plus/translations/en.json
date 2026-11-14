@@ -941,15 +941,6 @@
           "unknown": "Unknown"
         }
       },
-      "cleaning_speed_trend": {
-        "name": "Performance – Cleaning speed trend",
-        "state": {
-          "improving": "Improving",
-          "stable": "Stable",
-          "declining": "Declining",
-          "unknown": "Unknown"
-        }
-      },
       "battery_capacity_retention": {
         "name": "Maintenance – Battery capacity retention"
       },
@@ -1502,6 +1493,15 @@
       },
       "prime_stream_rejections": {
         "name": "Last refusal message"
+      },
+      "prime_part_battery": {
+        "name": "Maintenance – Battery"
+      },
+      "prime_part_dock_washing_system": {
+        "name": "Maintenance – Washing system (dock)"
+      },
+      "prime_part_mop_washing_system": {
+        "name": "Maintenance – Washing system (mop)"
       }
     },
     "binary_sensor": {
@@ -1617,9 +1617,6 @@
       "reset_battery": {
         "name": "Maintenance – Confirm battery replacement"
       },
-      "clean_zone": {
-        "name": "Clean zone"
-      },
       "repeat_mission": {
         "name": "Repeat last mission"
       },
@@ -1628,9 +1625,6 @@
       },
       "clean_smart_zone": {
         "name": "Clean zone (Smart Map)"
-      },
-      "favorite": {
-        "name": "{name}"
       },
       "spot": {
         "name": "Spot clean (experimental)"
@@ -1752,9 +1746,6 @@
     "select": {
       "cleaning_passes": {
         "name": "Setting – Cleaning passes"
-      },
-      "zone_select": {
-        "name": "Select zone"
       },
       "smart_zone_select": {
         "name": "Select Smart Map zone"
@@ -2165,11 +2156,31 @@
       "fields": {
         "room_name": {
           "name": "Room name",
-          "description": "One room name, a list of them, or several separated by commas. The names are the ones you gave your rooms in the iRobot app. If none are offered yet, run a room-targeted clean from that app once."
+          "description": "One room name, a list of them, or several separated by commas: the names the room select shows, from your iRobot account or given under Configure. Upper and lower case do not matter."
         },
         "ordered": {
           "name": "Ordered sequence",
           "description": "Clean rooms in the order supplied rather than letting the robot choose."
+        },
+        "cleaning_mode": {
+          "name": "Cleaning mode",
+          "description": "Vacuum, mop or both, for this run only. Empty: what the Cleaning mode select shows."
+        },
+        "two_pass": {
+          "name": "Two passes",
+          "description": "Two passes over each room, for this run only. Empty: the robot's own setting."
+        },
+        "smart_scrub": {
+          "name": "Smart scrub",
+          "description": "Extra scrubbing, for this run only, on mopping robots that offer it."
+        },
+        "pad_wetness": {
+          "name": "Pad wetness",
+          "description": "How wet the pad is, for this run only. Classic mopping robots."
+        },
+        "room_passes": {
+          "name": "Rooms with their own settings",
+          "description": "Instead of room name: the rooms in order, each with its own two_pass, cleaning_mode, smart_scrub and pad_wetness."
         }
       }
     },
@@ -2191,7 +2202,17 @@
     },
     "smart_start": {
       "name": "Smart start",
-      "description": "Start a clean with blocking-sensor checks."
+      "description": "Start a clean with blocking-sensor checks.",
+      "fields": {
+        "rooms": {
+          "name": "Rooms",
+          "description": "Rooms to clean, by name, on robots that clean by room. Empty: the whole home."
+        },
+        "override_blocking": {
+          "name": "Ignore blocking sensors",
+          "description": "Start at once, even if a blocking sensor is on."
+        }
+      }
     },
     "clean_sequence": {
       "name": "Start sequence clean",
@@ -2217,11 +2238,27 @@
     },
     "create_backup": {
       "name": "Create backup",
-      "description": "Export every persisted store for this robot into a single ZIP file."
+      "description": "Export every persisted store for this robot into a single ZIP file.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "The robot's vacuum entity."
+        }
+      }
     },
     "restore_backup": {
       "name": "Restore backup",
-      "description": "Restore every store in a backup ZIP. Takes effect immediately, no restart required."
+      "description": "Restore every store in a backup ZIP. Takes effect immediately, no restart required.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "The robot's vacuum entity."
+        },
+        "path": {
+          "name": "Backup file",
+          "description": "Full path of the backup ZIP, for example /config/roomba_plus_backups/backup.zip."
+        }
+      }
     },
     "set_quiet_hours": {
       "name": "Set quiet hours",
@@ -2252,6 +2289,22 @@
         "zone_id": {
           "name": "Zone ID",
           "description": "One or more numeric zone ids. Use this or zone name."
+        },
+        "cleaning_mode": {
+          "name": "Cleaning mode",
+          "description": "Vacuum, mop or both, for this run only. Empty: what the Cleaning mode select shows."
+        },
+        "two_pass": {
+          "name": "Two passes",
+          "description": "Two passes over each room, for this run only. Empty: the robot's own setting."
+        },
+        "smart_scrub": {
+          "name": "Smart scrub",
+          "description": "Extra scrubbing, for this run only, on mopping robots that offer it."
+        },
+        "pad_wetness": {
+          "name": "Pad wetness",
+          "description": "How wet the pad is, for this run only. Classic mopping robots."
         }
       }
     },
@@ -2384,6 +2437,164 @@
           "description": "When the clean has to be finished; the answer says whether it fits."
         }
       }
+    },
+    "reset_robot_profile": {
+      "name": "Reset robot profile",
+      "description": "Forget what Roomba+ has learned about the robot (dirt levels, coverage and navigation baselines, mission statistics) so it learns afresh, for example after a move. Mission history and maintenance counters are kept."
+    },
+    "advance_room": {
+      "name": "Advance room progress",
+      "description": "Move the mission's room progress on by one room when it sticks on a room the robot has finished. Only during a mission, between rooms."
+    },
+    "explain_mission": {
+      "name": "Explain mission",
+      "description": "Returns why a mission was flagged unusual: an obstacle, too much recharging, a lot of dirt or incomplete coverage, with whether the robot was lifted and its error. The latest mission unless a mission ID is given.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "The robot's vacuum entity."
+        },
+        "mission_id": {
+          "name": "Mission ID",
+          "description": "The mission to explain, its id from the mission history. Empty: the latest."
+        }
+      }
+    },
+    "clean_overdue_rooms": {
+      "name": "Clean overdue rooms",
+      "description": "Cleans every room that is due by its set or learned rhythm, worst first, on a route from the dock. Does nothing when no room is due, so it is safe to call daily.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "The robot's vacuum entity."
+        },
+        "max_rooms": {
+          "name": "Maximum rooms",
+          "description": "Clean only this many of the most overdue rooms."
+        }
+      }
+    },
+    "auto_clean_dirty_rooms": {
+      "name": "Clean dirty rooms",
+      "description": "Cleans the rooms that are dirtier than usual, on a route from the dock: on Classic the rooms above the household's average, on Prime the rooms the robot rates dirty. On Classic a whole-home clean starts when no room qualifies.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "The robot's vacuum entity."
+        },
+        "max_rooms": {
+          "name": "Maximum rooms",
+          "description": "Clean only this many of the dirtiest rooms."
+        }
+      }
+    },
+    "run_favorite": {
+      "name": "Run favorite",
+      "description": "Runs a favorite saved in the iRobot app, by its ID; needs the iRobot account. The IDs are in the vacuum's favorites attribute. A favorite carries its own map, so it reaches a room on another floor.",
+      "fields": {
+        "favorite_id": {
+          "name": "Favorite ID",
+          "description": "The favorite's ID, from the vacuum's favorites attribute."
+        }
+      }
+    },
+    "create_schedule": {
+      "name": "Create schedule",
+      "description": "Creates a cleaning schedule on a Prime robot, so it runs without Home Assistant. Needs at least one schedule in the household already.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "The Prime robot's vacuum entity."
+        },
+        "name": {
+          "name": "Name",
+          "description": "A label of your choice; the iRobot app cannot rename schedules."
+        },
+        "days": {
+          "name": "Days",
+          "description": "Weekdays the schedule runs on."
+        },
+        "time": {
+          "name": "Time",
+          "description": "When the mission starts, in the robot's time zone."
+        },
+        "frequency": {
+          "name": "Frequency",
+          "description": "Weekly, every two weeks, monthly or once: a one-off schedule is deleted by the cloud after it ran."
+        },
+        "rooms": {
+          "name": "Rooms",
+          "description": "Room names as on the schedule switches. Empty: everywhere."
+        },
+        "pad_wetness": {
+          "name": "Pad wetness",
+          "description": "1 to 3, per room. Overrides the robot's own setting for this schedule."
+        },
+        "enabled": {
+          "name": "Enabled",
+          "description": "Create it switched on, or off to switch it on later."
+        }
+      }
+    },
+    "update_schedule": {
+      "name": "Update schedule",
+      "description": "Changes a Prime schedule. Only the fields you fill in change; the rest keep their values.",
+      "fields": {
+        "entity_id": {
+          "name": "Schedule",
+          "description": "The schedule's switch."
+        },
+        "name": {
+          "name": "Name",
+          "description": "A new label."
+        },
+        "days": {
+          "name": "Days",
+          "description": "Replaces the weekdays."
+        },
+        "time": {
+          "name": "Time",
+          "description": "A new start time."
+        },
+        "frequency": {
+          "name": "Frequency",
+          "description": "Weekly, every two weeks, monthly or once."
+        },
+        "rooms": {
+          "name": "Rooms",
+          "description": "Replaces the rooms."
+        },
+        "pad_wetness": {
+          "name": "Pad wetness",
+          "description": "1 to 3, for every room of the schedule."
+        },
+        "enabled": {
+          "name": "Enabled",
+          "description": "Switch the schedule on or off."
+        }
+      }
+    },
+    "delete_schedule": {
+      "name": "Delete schedule",
+      "description": "Removes a Prime schedule. Its switch goes at the next refresh; other schedules stay.",
+      "fields": {
+        "entity_id": {
+          "name": "Schedule",
+          "description": "The switch of the schedule to delete."
+        }
+      }
+    },
+    "reset_wheel_cleaning": {
+      "name": "Wheels cleaned",
+      "description": "Record that the wheels were cleaned now."
+    },
+    "reset_contact_cleaning": {
+      "name": "Charging contacts cleaned",
+      "description": "Record that the charging contacts were cleaned now."
+    },
+    "reset_bin_cleaning": {
+      "name": "Bin cleaned",
+      "description": "Record that the bin was cleaned now."
     }
   },
   "exceptions": {
@@ -2608,9 +2819,6 @@
     },
     "cloud_part_reset_not_confirmed": {
       "message": "iRobot's cloud accepted the request but did not confirm the reset. The local counter was left unchanged."
-    },
-    "no_confirmed_room": {
-      "message": "No learned room is confirmed yet. Rooms are learned from completed missions; run a few more."
     },
     "no_last_mission": {
       "message": "The robot has not reported a previous cleaning command to repeat."

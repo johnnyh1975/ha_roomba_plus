@@ -3002,3 +3002,16 @@ class TestTheStreamSensors:
     def test_a_stream_that_said_nothing(self):
         assert self._sensor({"shadows": 1.0}).native_value is None
         assert self._sensor({"timeline": True}).native_value is None
+
+
+def test_every_known_part_has_a_name_in_every_language():
+    """Three roles (battery, dock and mop washing system) had no entry, and
+    their sensors showed the device's name only (4.6.0)."""
+    import json
+    import pathlib
+
+    pkg = pathlib.Path("custom_components/roomba_plus")
+    for path in [pkg / "strings.json", *sorted((pkg / "translations").glob("*.json"))]:
+        sensors = json.loads(path.read_text(encoding="utf-8"))["entity"]["sensor"]
+        missing = sorted({key for key in sp._KNOWN_PARTS.values() if key not in sensors})
+        assert not missing, (path.name, missing)

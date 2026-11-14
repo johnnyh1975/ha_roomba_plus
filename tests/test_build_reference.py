@@ -70,3 +70,17 @@ def test_actions_say_which_return_data() -> None:
     assert "| [`roomba_plus.get_rooms`](#roomba_plusget_rooms) |" in page
     line = next(l for l in page.splitlines() if l.startswith("| [`roomba_plus.get_rooms`]"))
     assert line.endswith("| Always |")
+
+
+def test_every_entity_name_belongs_to_an_entity_the_code_creates() -> None:
+    """Four names outlived their entities: two classes nothing created any
+    more, a button and a sensor that were gone (4.6.0). The older check
+    matched by substring and let them through."""
+    import json
+
+    created = {(r["platform"], r["key"]) for r in build_reference.entity_rows()}
+    names = json.loads((ROOT / "custom_components" / "roomba_plus" / "strings.json")
+                       .read_text(encoding="utf-8"))["entity"]
+    orphaned = sorted(f"{p}.{k}" for p, keys in names.items() for k in keys
+                      if (p, k) not in created)
+    assert not orphaned, orphaned

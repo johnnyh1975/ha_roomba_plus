@@ -141,9 +141,9 @@ An entity whose id ends in `<…>` exists once per room, area, part, favourite o
 | `sensor.<robot>_prime_part_68` or `sensor.<robot>_prime_part_72` or `sensor.<robot>_prime_part_filter` | Maintenance – High-Efficiency Filter | Prime |  | Diagnostic |
 | `sensor.<robot>_prime_part_69` or `sensor.<robot>_prime_part_71` or `sensor.<robot>_prime_part_main_brush` | Maintenance – Main Brush(es) | Prime |  | Diagnostic |
 | `sensor.<robot>_prime_part_<part id>` | Maintenance – {part} | Prime |  | Diagnostic |
-| `sensor.<robot>_prime_part_battery` | Battery | Prime |  | Diagnostic |
-| `sensor.<robot>_prime_part_dock_washing_system` | Dock Washing System | Prime |  | Diagnostic |
-| `sensor.<robot>_prime_part_mop_washing_system` | Mop Washing System | Prime |  | Diagnostic |
+| `sensor.<robot>_prime_part_battery` | Maintenance – Battery | Prime |  | Diagnostic |
+| `sensor.<robot>_prime_part_dock_washing_system` | Maintenance – Washing system (dock) | Prime |  | Diagnostic |
+| `sensor.<robot>_prime_part_mop_washing_system` | Maintenance – Washing system (mop) | Prime |  | Diagnostic |
 | `sensor.<robot>_prime_phase` | Status | Prime |  |  |
 | `sensor.<robot>_prime_readiness` | Status – Readiness | Prime |  | Diagnostic |
 | `sensor.<robot>_prime_rooms_overdue` | Rooms overdue | Prime |  |  |

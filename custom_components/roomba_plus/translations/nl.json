@@ -941,15 +941,6 @@
           "unknown": "Onbekend"
         }
       },
-      "cleaning_speed_trend": {
-        "name": "Prestaties – Trend reinigingssnelheid",
-        "state": {
-          "improving": "Verbeterend",
-          "stable": "Stabiel",
-          "declining": "Afnemend",
-          "unknown": "Onbekend"
-        }
-      },
       "battery_capacity_retention": {
         "name": "Onderhoud – Accucapaciteitsbehoud"
       },
@@ -1502,6 +1493,15 @@
       },
       "prime_stream_rejections": {
         "name": "Laatste weigeringsbericht"
+      },
+      "prime_part_battery": {
+        "name": "Onderhoud – Accu"
+      },
+      "prime_part_dock_washing_system": {
+        "name": "Onderhoud – Wassysteem (dock)"
+      },
+      "prime_part_mop_washing_system": {
+        "name": "Onderhoud – Wassysteem (mop)"
       }
     },
     "binary_sensor": {
@@ -1617,9 +1617,6 @@
       "reset_battery": {
         "name": "Onderhoud – Batterijvervanging bevestigen"
       },
-      "clean_zone": {
-        "name": "Zone schoonmaken"
-      },
       "repeat_mission": {
         "name": "Laatste missie herhalen"
       },
@@ -1628,9 +1625,6 @@
       },
       "clean_smart_zone": {
         "name": "Zone schoonmaken (Smart Map)"
-      },
-      "favorite": {
-        "name": "{name}"
       },
       "spot": {
         "name": "Spotreinigen (experimenteel)"
@@ -1752,9 +1746,6 @@
     "select": {
       "cleaning_passes": {
         "name": "Instelling – Reinigingsgangen"
-      },
-      "zone_select": {
-        "name": "Zone selecteren"
       },
       "smart_zone_select": {
         "name": "Smart Map-zone selecteren"
@@ -2165,63 +2156,109 @@
       "fields": {
         "room_name": {
           "name": "Kamernaam",
-          "description": "Eén kamernaam, een lijst, of meerdere gescheiden door komma's. Het zijn de namen die u uw kamers in de iRobot-app hebt gegeven. Verschijnt er nog geen, start dan één keer een kamergerichte reiniging vanuit die app."
+          "description": "Eén ruimtenaam, een lijst of meerdere gescheiden door komma's: de namen die de ruimtekeuze toont, uit je iRobot-account of gegeven onder Configureren. Hoofd- en kleine letters maken niet uit."
         },
         "ordered": {
           "name": "Vaste volgorde",
           "description": "Kamers schoonmaken in de opgegeven volgorde in plaats van de robot zelf te laten kiezen."
+        },
+        "cleaning_mode": {
+          "name": "Reinigingsmodus",
+          "description": "Zuigen, dweilen of beide, alleen voor deze ronde. Leeg: wat de keuze Reinigingsmodus toont."
+        },
+        "two_pass": {
+          "name": "Twee keer",
+          "description": "Twee keer over elke ruimte, alleen voor deze ronde. Leeg: de instelling van de robot."
+        },
+        "smart_scrub": {
+          "name": "Intensief schrobben",
+          "description": "Extra schrobben, alleen voor deze ronde, bij dweilrobots die het bieden."
+        },
+        "pad_wetness": {
+          "name": "Vochtigheid van de pad",
+          "description": "Hoe nat de pad is, alleen voor deze ronde. Classic-dweilrobots."
+        },
+        "room_passes": {
+          "name": "Ruimtes met eigen instellingen",
+          "description": "In plaats van ruimtenaam: de ruimtes op volgorde, elk met eigen two_pass, cleaning_mode, smart_scrub en pad_wetness."
         }
       }
     },
     "reset_filter": {
-      "name": "Reset filter",
+      "name": "Filter resetten",
       "description": "Leg het huidige tijdstip vast als vervangdatum van het filter."
     },
     "reset_brush": {
-      "name": "Reset brushes",
+      "name": "Borstels resetten",
       "description": "Leg het huidige tijdstip vast als vervangdatum van de borstel."
     },
     "reset_battery": {
-      "name": "Reset battery",
+      "name": "Batterij resetten",
       "description": "Leg het huidige tijdstip vast als vervangdatum van de accu."
     },
     "reset_pad": {
-      "name": "Reset cleaning pad",
+      "name": "Pad resetten",
       "description": "Leg het huidige tijdstip vast als vervangdatum van de doek (alleen Braava)."
     },
     "smart_start": {
-      "name": "Smart start",
-      "description": "Start een schoonmaakbeurt met controle op blokkerende sensoren."
+      "name": "Slimme start",
+      "description": "Start een schoonmaakbeurt met controle op blokkerende sensoren.",
+      "fields": {
+        "rooms": {
+          "name": "Ruimtes",
+          "description": "Te reinigen ruimtes, op naam, bij robots die per ruimte reinigen. Leeg: het hele huis."
+        },
+        "override_blocking": {
+          "name": "Blokkerende sensoren negeren",
+          "description": "Meteen starten, ook als een blokkerende sensor aan is."
+        }
+      }
     },
     "clean_sequence": {
-      "name": "Start sequence clean",
+      "name": "Reiniging na elkaar",
       "description": "Start robot B wanneer robot A zijn huidige missie voltooit. De luisteraar wordt één keer geactiveerd en verwijdert zichzelf.",
       "fields": {
         "entity_id": {
-          "name": "Trigger robot",
+          "name": "Startende robot",
           "description": "Stofzuigerentiteit voor robot A (moet eerst klaar zijn)."
         },
         "target_entity_id": {
-          "name": "Target robot",
+          "name": "Volgende robot",
           "description": "Stofzuigerentiteit voor robot B (start nadat A klaar is)."
         },
         "require_completed": {
-          "name": "Require completion",
+          "name": "Voltooiing vereisen",
           "description": "Indien waar start robot B alleen als robot A normaal is gedockt."
         },
         "delay_minutes": {
-          "name": "Delay (minutes)",
+          "name": "Vertraging (minuten)",
           "description": "Wacht zoveel minuten nadat robot A is gedockt voordat robot B start."
         }
       }
     },
     "create_backup": {
       "name": "Back-up maken",
-      "description": "Exporteert alle opgeslagen gegevens van deze robot naar één ZIP-bestand."
+      "description": "Exporteert alle opgeslagen gegevens van deze robot naar één ZIP-bestand.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "De stofzuigerentiteit van de robot."
+        }
+      }
     },
     "restore_backup": {
       "name": "Back-up herstellen",
-      "description": "Herstelt alle gegevens uit een back-up ZIP. Werkt direct, geen herstart nodig."
+      "description": "Herstelt alle gegevens uit een back-up ZIP. Werkt direct, geen herstart nodig.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "De stofzuigerentiteit van de robot."
+        },
+        "path": {
+          "name": "Back-upbestand",
+          "description": "Volledig pad van de back-up-ZIP, bijvoorbeeld /config/roomba_plus_backups/backup.zip."
+        }
+      }
     },
     "set_quiet_hours": {
       "name": "Stille uren instellen",
@@ -2252,6 +2289,22 @@
         "zone_id": {
           "name": "Zone-id",
           "description": "Een of meer numerieke zone-ids. Gebruik dit of zonenaam."
+        },
+        "cleaning_mode": {
+          "name": "Reinigingsmodus",
+          "description": "Zuigen, dweilen of beide, alleen voor deze ronde. Leeg: wat de keuze Reinigingsmodus toont."
+        },
+        "two_pass": {
+          "name": "Twee keer",
+          "description": "Twee keer over elke ruimte, alleen voor deze ronde. Leeg: de instelling van de robot."
+        },
+        "smart_scrub": {
+          "name": "Intensief schrobben",
+          "description": "Extra schrobben, alleen voor deze ronde, bij dweilrobots die het bieden."
+        },
+        "pad_wetness": {
+          "name": "Vochtigheid van de pad",
+          "description": "Hoe nat de pad is, alleen voor deze ronde. Classic-dweilrobots."
         }
       }
     },
@@ -2384,6 +2437,164 @@
           "description": "Wanneer de reiniging klaar moet zijn; het antwoord zegt of het past."
         }
       }
+    },
+    "reset_robot_profile": {
+      "name": "Robotprofiel resetten",
+      "description": "Vergeet wat Roomba+ over de robot heeft geleerd (vuilniveaus, basiswaarden voor dekking en navigatie, missiestatistieken), zodat hij opnieuw leert, bijvoorbeeld na een verhuizing. Missiegeschiedenis en onderhoudstellers blijven."
+    },
+    "advance_room": {
+      "name": "Ruimtevoortgang doorschuiven",
+      "description": "Schuift de ruimtevoortgang van de missie één ruimte door als die blijft hangen op een ruimte die de robot klaar heeft. Alleen tijdens een missie, tussen ruimtes."
+    },
+    "explain_mission": {
+      "name": "Missie uitleggen",
+      "description": "Geeft terug waarom een missie als ongewoon is gemarkeerd: een obstakel, te veel bijladen, veel vuil of onvolledige dekking, met of de robot is opgetild en zijn fout. De laatste missie, tenzij een missie-ID is opgegeven.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "De stofzuigerentiteit van de robot."
+        },
+        "mission_id": {
+          "name": "Missie-ID",
+          "description": "De uit te leggen missie, haar id uit de missiegeschiedenis. Leeg: de laatste."
+        }
+      }
+    },
+    "clean_overdue_rooms": {
+      "name": "Achterstallige ruimtes reinigen",
+      "description": "Reinigt elke ruimte die volgens haar ingestelde of geleerde ritme aan de beurt is, de meest achterstallige eerst, op een route vanaf het dock. Doet niets als geen ruimte aan de beurt is, dus dagelijks aan te roepen.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "De stofzuigerentiteit van de robot."
+        },
+        "max_rooms": {
+          "name": "Maximaal aantal ruimtes",
+          "description": "Alleen dit aantal van de meest achterstallige ruimtes reinigen."
+        }
+      }
+    },
+    "auto_clean_dirty_rooms": {
+      "name": "Vuile ruimtes reinigen",
+      "description": "Reinigt de ruimtes die vuiler zijn dan gewoonlijk, op een route vanaf het dock: bij Classic de ruimtes boven het gemiddelde van het huishouden, bij Prime de ruimtes die de robot als vuil beoordeelt. Bij Classic start een reiniging van het hele huis als geen ruimte in aanmerking komt.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "De stofzuigerentiteit van de robot."
+        },
+        "max_rooms": {
+          "name": "Maximaal aantal ruimtes",
+          "description": "Alleen dit aantal van de vuilste ruimtes reinigen."
+        }
+      }
+    },
+    "run_favorite": {
+      "name": "Favoriet uitvoeren",
+      "description": "Voert een in de iRobot-app opgeslagen favoriet uit op ID; vereist het iRobot-account. De ID's staan in het attribuut favorites van de stofzuiger. Een favoriet heeft zijn eigen kaart en bereikt zo ook een ruimte op een andere verdieping.",
+      "fields": {
+        "favorite_id": {
+          "name": "Favoriet-ID",
+          "description": "De ID van de favoriet, uit het attribuut favorites van de stofzuiger."
+        }
+      }
+    },
+    "create_schedule": {
+      "name": "Schema aanmaken",
+      "description": "Maakt een reinigingsschema op een Prime-robot dat zonder Home Assistant loopt. Er moet al minstens één schema in het huishouden zijn.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "De stofzuigerentiteit van de Prime-robot."
+        },
+        "name": {
+          "name": "Naam",
+          "description": "Een label naar keuze; de iRobot-app kan schema's niet hernoemen."
+        },
+        "days": {
+          "name": "Dagen",
+          "description": "Weekdagen waarop het schema loopt."
+        },
+        "time": {
+          "name": "Tijd",
+          "description": "Wanneer de missie start, in de tijdzone van de robot."
+        },
+        "frequency": {
+          "name": "Frequentie",
+          "description": "Wekelijks, om de twee weken, maandelijks of eenmalig: een eenmalig schema wordt na afloop door de cloud verwijderd."
+        },
+        "rooms": {
+          "name": "Ruimtes",
+          "description": "Ruimtenamen zoals op de schemaschakelaars. Leeg: overal."
+        },
+        "pad_wetness": {
+          "name": "Vochtigheid van de pad",
+          "description": "1 tot 3, per ruimte. Vervangt voor dit schema de instelling van de robot."
+        },
+        "enabled": {
+          "name": "Ingeschakeld",
+          "description": "Ingeschakeld aanmaken, of uit om later in te schakelen."
+        }
+      }
+    },
+    "update_schedule": {
+      "name": "Schema wijzigen",
+      "description": "Wijzigt een Prime-schema. Alleen de ingevulde velden veranderen; de rest houdt zijn waarden.",
+      "fields": {
+        "entity_id": {
+          "name": "Schema",
+          "description": "De schakelaar van het schema."
+        },
+        "name": {
+          "name": "Naam",
+          "description": "Een nieuw label."
+        },
+        "days": {
+          "name": "Dagen",
+          "description": "Vervangt de weekdagen."
+        },
+        "time": {
+          "name": "Tijd",
+          "description": "Een nieuwe starttijd."
+        },
+        "frequency": {
+          "name": "Frequentie",
+          "description": "Wekelijks, om de twee weken, maandelijks of eenmalig."
+        },
+        "rooms": {
+          "name": "Ruimtes",
+          "description": "Vervangt de ruimtes."
+        },
+        "pad_wetness": {
+          "name": "Vochtigheid van de pad",
+          "description": "1 tot 3, voor elke ruimte van het schema."
+        },
+        "enabled": {
+          "name": "Ingeschakeld",
+          "description": "Het schema in- of uitschakelen."
+        }
+      }
+    },
+    "delete_schedule": {
+      "name": "Schema verwijderen",
+      "description": "Verwijdert een Prime-schema. De schakelaar verdwijnt bij de volgende verversing; andere schema's blijven.",
+      "fields": {
+        "entity_id": {
+          "name": "Schema",
+          "description": "De schakelaar van het te verwijderen schema."
+        }
+      }
+    },
+    "reset_wheel_cleaning": {
+      "name": "Wielen gereinigd",
+      "description": "Legt vast dat de wielen nu zijn gereinigd."
+    },
+    "reset_contact_cleaning": {
+      "name": "Laadcontacten gereinigd",
+      "description": "Legt vast dat de laadcontacten nu zijn gereinigd."
+    },
+    "reset_bin_cleaning": {
+      "name": "Opvangbak gereinigd",
+      "description": "Legt vast dat de opvangbak nu is gereinigd."
     }
   },
   "exceptions": {
@@ -2608,9 +2819,6 @@
     },
     "cloud_part_reset_not_confirmed": {
       "message": "De iRobot-cloud heeft het verzoek aangenomen, maar de reset niet bevestigd. De lokale teller is ongewijzigd."
-    },
-    "no_confirmed_room": {
-      "message": "Er is nog geen geleerde kamer bevestigd. Kamers worden geleerd uit voltooide missies; laat de robot nog een paar keer reinigen."
     },
     "no_last_mission": {
       "message": "De robot heeft geen eerder reinigingscommando gemeld om te herhalen."

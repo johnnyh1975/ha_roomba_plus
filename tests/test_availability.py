@@ -238,7 +238,7 @@ EXPECTED_LIVE_CLASSES = {
     "RoombaMidMissionRecharge", "RoombaMissionActive",
     # Buttons that send a command to the robot: a press it cannot receive
     # would do nothing. Maintenance resets write local stores and stay.
-    "RoombaCommandButton", "ZoneCleanButton", "RepeatLastMissionButton", "SkipRoomButton",
+    "RoombaCommandButton", "RepeatLastMissionButton", "SkipRoomButton",
     "SmartZoneButton", "FavoriteButton",
     "PrimeFavoriteButton", "PrimeDockButton", "PrimeLocateButton", "PrimeZoneCleanButton",
 }

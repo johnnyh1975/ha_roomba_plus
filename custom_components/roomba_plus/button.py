@@ -387,8 +387,8 @@ async def async_setup_entry(
     # (900-series) robots too. On this tier it always sent a plain
     # "start" command regardless of what was selected (the 900-series
     # MQTT API has no coordinate/region targeting at all — see
-    # ZoneCleanButton's own docstring and the matching ZoneSelect
-    # removal in select.py for the full rationale). A button labelled
+    # the matching ZoneSelect removal in select.py; both classes were
+    # deleted in 4.6.0, nothing had created them since 3.2.1). A button labelled
     # "clean this zone" that silently cleans the whole floor instead is
     # worse than no button — it promises targeted-room cleaning on
     # hardware that architecturally cannot do it. SMART-tier robots
@@ -881,85 +881,6 @@ class BatteryResetButton(_MaintenanceResetButton):
             from .services import _fire_maintenance_reset_event, async_forget_old_battery
             await async_forget_old_battery(self.hass, self._config_entry)
             _fire_maintenance_reset_event(self.hass, self._config_entry, "battery", hr)
-
-
-class ZoneCleanButton(_MaintenanceResetButton):
-    """Button: start a clean with focus on the zone selected in ZoneSelect.
-
-    For 900-series robots (EPHEMERAL capability), the MQTT API does not
-    support coordinate-based navigation or region targeting. This button
-    sends a standard start command from the robot's current position.
-
-    The practical effect: if the robot is already docked and the user has
-    selected a zone, the robot will start its normal coverage clean. The
-    zone selection is informational — it does not steer the robot.
-
-    The button is intentionally kept because the room infrastructure
-    (RoomSegStore, ZoneSelect) is still useful for room visualization,
-    room-aware automations, and the future serial OI navigation path.
-
-    ROOM-SEG Stage 3 — backed by RoomSegStore, not ZoneStore (see
-    ROOM_SEGMENTATION_NOTES.md). unique_id/entity_id unchanged.
-    """
-    _live_state = True   # sends a command to the robot; unavailable when it cannot be reached
-
-    _attr_translation_key = "clean_zone"
-    _attr_entity_category = None   # visible by default — primary action
-
-    def __init__(self, roomba: Any, blid: str, config_entry: RoombaConfigEntry) -> None:
-        super().__init__(roomba, blid, config_entry)
-        self._attr_unique_id = f"{self.robot_unique_id}_clean_zone"
-
-    async def async_press(self) -> None:
-        """Start a clean. Zone selection is informational on 900-series robots."""
-        room_seg_store = self._config_entry.runtime_data.room_seg_store
-        if not room_seg_store or not room_seg_store.rooms:
-            _LOGGER.warning("ZoneCleanButton: no rooms available yet")
-            raise ServiceValidationError(
-                translation_domain=DOMAIN,
-                translation_key="no_confirmed_room",
-            )
-
-        confirmed = [r for r in room_seg_store.rooms.values() if r.confirmed]
-        if not confirmed:
-            _LOGGER.warning("ZoneCleanButton: no confirmed rooms yet — run more missions")
-            raise ServiceValidationError(
-                translation_domain=DOMAIN,
-                translation_key="no_confirmed_room",
-            )
-
-        # Find selected zone name via ZoneSelect entity state
-        from homeassistant.helpers import entity_registry as er
-        ent_reg = er.async_get(self.hass)
-        blid = self._config_entry.data.get("blid", "")
-        select_uid = f"roomba_plus_{blid}_zone_select"
-        select_entry = ent_reg.async_get_entity_id("select", "roomba_plus", select_uid)
-
-        selected_name: str | None = None
-        if select_entry:
-            state = self.hass.states.get(select_entry)
-            if state:
-                selected_name = state.state
-
-        room = next(
-            (r for r in confirmed if r.name == selected_name),
-            confirmed[0],
-        )
-
-        x_min, x_max, y_min, y_max = room.bbox
-        _LOGGER.info(
-            "ZoneCleanButton: starting clean (900-series — no coordinate targeting). "
-            "Selected room: '%s' bbox %.0f,%.0f – %.0f,%.0f mm",
-            room.name, x_min, y_min, x_max, y_max,
-        )
-        # 900-series: send plain start — robot navigates using its own logic.
-        # The room parameter is noted in the log but cannot be passed to the robot.
-        from .services import async_send_watched  # noqa: PLC0415
-
-        await async_send_watched(
-            self.hass, self._config_entry, "zone_button",
-            lambda: self.vacuum.send_command("start"),
-        )
 
 
 class RepeatLastMissionButton(IRobotEntity, ButtonEntity):

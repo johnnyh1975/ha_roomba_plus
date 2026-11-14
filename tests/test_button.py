@@ -1,4 +1,4 @@
-"""Tests for button.py — currently just ZoneCleanButton (ROOM-SEG Stage 3).
+"""Tests for button.py.
 
 No test_button.py existed before this; button.py had zero test coverage
 across the project. Scoped here to the one class touched by the
@@ -11,7 +11,7 @@ from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 
 from tests.conftest import entry_tasks_via_hass, robot_mock
 
-from custom_components.roomba_plus.button import FavoriteButton, ZoneCleanButton
+from custom_components.roomba_plus.button import FavoriteButton
 from custom_components.roomba_plus.room_seg_store import RoomSegStore, SegRoom
 from types import SimpleNamespace
 from custom_components.roomba_plus import button as btn
@@ -30,135 +30,6 @@ from custom_components.roomba_plus.button import _cloud_part_reset_buttons
 from custom_components.roomba_plus.const import IROBOT_PART_ROLE_CLEAN_BASE_BAG
 from custom_components.roomba_plus.const import IROBOT_PART_ROLE_SIDE_BRUSH
 from custom_components.roomba_plus.maintenance_store import MaintenanceStore
-
-
-def _make_button(room_seg_store):
-    entity = ZoneCleanButton.__new__(ZoneCleanButton)
-    config_entry = MagicMock()
-    config_entry.runtime_data.room_seg_store = room_seg_store
-    config_entry.data = {"blid": "test_blid"}
-    entity._config_entry = config_entry
-    entity.hass = MagicMock()
-    entity.hass.async_add_executor_job = AsyncMock()
-    entity.vacuum = robot_mock()
-
-    # No selection made in tests below -- entity_registry lookup returns
-    # nothing, so async_press falls back to the first confirmed room.
-    fake_ent_reg = MagicMock()
-    fake_ent_reg.async_get_entity_id.return_value = None
-    import custom_components.roomba_plus.button as button_mod
-    return entity, fake_ent_reg, button_mod
-
-
-class TestZoneCleanButtonNoRooms:
-    @pytest.mark.asyncio
-    async def test_no_room_seg_store_logs_warning_and_returns(self, caplog):
-        entity, _, _ = _make_button(None)
-        with caplog.at_level("WARNING"):
-            with pytest.raises(ServiceValidationError) as exc_info:
-                await entity.async_press()
-            assert exc_info.value.translation_key == "no_confirmed_room"
-        assert "no rooms available" in caplog.text.lower()
-        entity.vacuum.send_command.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_empty_room_seg_store_logs_warning_and_returns(self, caplog):
-        rss = RoomSegStore()
-        entity, _, _ = _make_button(rss)
-        with caplog.at_level("WARNING"):
-            with pytest.raises(ServiceValidationError) as exc_info:
-                await entity.async_press()
-            assert exc_info.value.translation_key == "no_confirmed_room"
-        assert "no rooms available" in caplog.text.lower()
-        entity.vacuum.send_command.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_no_confirmed_rooms_logs_warning_and_returns(self, caplog):
-        rss = RoomSegStore()
-        rss.rooms = {"room_1": SegRoom(id="room_1", name="", confirmed=False)}
-        entity, _, _ = _make_button(rss)
-        with caplog.at_level("WARNING"):
-            with pytest.raises(ServiceValidationError) as exc_info:
-                await entity.async_press()
-            assert exc_info.value.translation_key == "no_confirmed_room"
-        assert "no confirmed rooms" in caplog.text.lower()
-        entity.vacuum.send_command.assert_not_awaited()
-
-
-class TestZoneCleanButtonStartsClean:
-
-    @pytest.fixture(autouse=True)
-    def _no_command_watch(self, monkeypatch):
-        """These tests are about what is sent; the watch after it (4.6.0)
-        is tested in test_services and would leave a coroutine behind on
-        a MagicMock entry."""
-        from unittest.mock import MagicMock as _MagicMock
-
-        from custom_components.roomba_plus import services as _services
-
-        monkeypatch.setattr(_services, "watch_for_swallowed_command", _MagicMock())
-
-    @pytest.mark.asyncio
-    async def test_confirmed_room_present_sends_start_command(self, monkeypatch):
-        rss = RoomSegStore()
-        rss.rooms = {
-            "room_1": SegRoom(
-                id="room_1", name="Kitchen", confirmed=True,
-                cells={(0, 0), (1, 0), (0, 1), (1, 1)},
-            ),
-        }
-        entity, fake_ent_reg, button_mod = _make_button(rss)
-
-        monkeypatch.setattr(
-            "homeassistant.helpers.entity_registry.async_get",
-            lambda hass: fake_ent_reg,
-        )
-
-        await entity.async_press()
-
-        entity.vacuum.send_command.assert_called_once_with("start"
-        )
-
-    @pytest.mark.asyncio
-    async def test_falls_back_to_first_confirmed_room_without_selection(self, monkeypatch):
-        rss = RoomSegStore()
-        rss.rooms = {
-            "room_1": SegRoom(id="room_1", name="Kitchen", confirmed=True),
-            "room_2": SegRoom(id="room_2", name="Bedroom", confirmed=True),
-        }
-        entity, fake_ent_reg, button_mod = _make_button(rss)
-        monkeypatch.setattr(
-            "homeassistant.helpers.entity_registry.async_get",
-            lambda hass: fake_ent_reg,
-        )
-
-        # Should not raise even with no selected-zone state available.
-        await entity.async_press()
-        entity.vacuum.send_command.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_logs_room_bbox_not_zone_attribute_names(self, monkeypatch, caplog):
-        """Regression check for the ROOM-SEG Stage 3 swap: the log
-        message must read room.bbox (a SegRoom property), not the old
-        zone.x_min/y_min/x_max/y_max ZoneStore.Zone attributes."""
-        rss = RoomSegStore()
-        rss.rooms = {
-            "room_1": SegRoom(
-                id="room_1", name="Kitchen", confirmed=True,
-                cells={(0, 0), (1, 0), (0, 1), (1, 1)},
-            ),
-        }
-        entity, fake_ent_reg, button_mod = _make_button(rss)
-        monkeypatch.setattr(
-            "homeassistant.helpers.entity_registry.async_get",
-            lambda hass: fake_ent_reg,
-        )
-
-        with caplog.at_level("INFO"):
-            await entity.async_press()
-
-        assert "Kitchen" in caplog.text
-        assert "bbox" in caplog.text.lower()
 
 
 class TestMaintenanceResetButtonCurrentHrNullRegression:
@@ -966,21 +837,6 @@ class TestMaintenanceResetButtons:
             b._save.assert_not_awaited()
 
 
-class TestLearnedRoomButton:
-
-    @pytest.mark.parametrize("rooms", [None, {}, {"r1": SimpleNamespace(confirmed=False)}])
-    @pytest.mark.asyncio
-    async def test_without_a_confirmed_room_nothing_happens(self, rooms):
-        b = btn.ZoneCleanButton.__new__(btn.ZoneCleanButton)
-        b._config_entry = MagicMock()
-        b._config_entry.runtime_data.room_seg_store = None if rooms is None else SimpleNamespace(rooms=rooms)
-        b.vacuum = MagicMock(send_command=AsyncMock())
-        with pytest.raises(ServiceValidationError) as exc_info:
-            await b.async_press()
-        assert exc_info.value.translation_key == "no_confirmed_room"
-        b.vacuum.send_command.assert_not_awaited()
-
-
 class TestResetButtonsRefreshTheSensors:
 
     @pytest.mark.asyncio
@@ -1513,24 +1369,6 @@ class TestStartButtonsAreWatched:
         await repeat.async_press()
         assert watched.await_args.args[2] == "repeat_last_mission"
         repeat.vacuum.send_command.assert_awaited()
-
-    @pytest.mark.asyncio
-    async def test_zone_button(self, monkeypatch):
-        from custom_components.roomba_plus import services as svc
-
-        watched = AsyncMock(side_effect=_through)
-        monkeypatch.setattr(svc, "async_send_watched", watched)
-        rss = RoomSegStore()
-        rss.rooms = {"room_1": SegRoom(id="room_1", name="Kitchen", confirmed=True,
-                                       cells={(0, 0), (1, 0), (0, 1), (1, 1)})}
-        entity, fake_ent_reg, _button_mod = _make_button(rss)
-        monkeypatch.setattr(
-            "homeassistant.helpers.entity_registry.async_get", lambda hass: fake_ent_reg,
-        )
-        await entity.async_press()
-        assert watched.await_args.args[2] == "zone_button"
-        entity.vacuum.send_command.assert_called_once_with("start")
-
 
 async def _through(hass, entry, what, send):
     """An `async_send_watched` that only sends."""

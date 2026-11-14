@@ -122,7 +122,7 @@ The form shows the robot's map, with each unnamed room or area drawn with its nu
 
 - **Smart Map robots with the iRobot account added:** every room and zone takes its name from the account, so there is usually nothing to name. The form lists only rooms **on the map** that have no name anywhere, and shows the room map with their numbers. Region numbers known only from old schedules or earlier cleans are on no map and are not asked about.
 - **Smart Map robots without the account:** Roomba+ knows the rooms only by number and has no map to show, so the step explains this instead of asking. Add the account (Configure → iRobot cloud credentials) and the names and the room map appear on their own. If you know a room's number already, Configure → *Manually enter Smart Map zones* still takes it.
-- **Robots without a Smart Map (900 series):** the robot keeps no map; the areas are ones Roomba+ finds in its cleaning runs ([how](../explanations/how-rooms-are-found.md)). The form shows each area as a coloured patch with its number, or its name once it has one, and the dock as a green dot. The picture is drawn from the dock, so it may be turned against your floor plan. It comes from the *Cleaning path* map entity, which must be on (Connection settings → *Enable live map*). Named areas appear in the *Select zone* list and in the mission history; a 900-series cannot be sent to an area.
+- **Robots without a Smart Map (900 series):** the robot keeps no map; the areas are ones Roomba+ finds in its cleaning runs ([how](../explanations/how-rooms-are-found.md)). The form shows each area as a coloured patch with its number, or its name once it has one, and the dock as a green dot. The picture is drawn from the dock, so it may be turned against your floor plan. It comes from the *Cleaning path* map entity, which must be on (Connection settings → *Enable live map*). Named areas appear on the map, as the current room and in the mission history; a 900-series cannot be sent to an area, so there is no area select.
 
 When there is no map to show (the map image entity is disabled, or the robot has not cleaned yet) the step says so rather than asking for names nobody can match to a room.
 
@@ -139,7 +139,7 @@ Configure → **Zone management**
 - Browse all zones in one list, with the area map above it on a 900-series: each area in its colour with its name or number.
 - Rename any zone. On a Smart Map robot the new name is used alongside the account's name, and `clean_room` takes either.
 - Hide zones: they leave the selects, `clean_room` and repair issues.
-- **900-series areas:** hide an area that is not a real space (for example one left by a mission that started away from the dock): it is no longer drawn as an area, leaves the area select and is not recorded as cleaned. Give several areas the same name to make one room of them: the select and the mission's cleaned rooms list that name once. The areas themselves stay separate on the map, and an area cannot be split.
+- **900-series areas:** hide an area that is not a real space (for example one left by a mission that started away from the dock): it is no longer drawn as an area and is not recorded as cleaned. Give several areas the same name to make one room of them: the mission's cleaned rooms list that name once. The areas themselves stay separate on the map, and an area cannot be split.
 - Changes are saved together or not at all.
 
 ## Rooms and zones from the iRobot account

@@ -941,15 +941,6 @@
           "unknown": "Desconocido"
         }
       },
-      "cleaning_speed_trend": {
-        "name": "Rendimiento – Tendencia de velocidad",
-        "state": {
-          "improving": "Mejorando",
-          "stable": "Estable",
-          "declining": "Declinando",
-          "unknown": "Desconocido"
-        }
-      },
       "battery_capacity_retention": {
         "name": "Mantenimiento – Retención de capacidad"
       },
@@ -1502,6 +1493,15 @@
       },
       "prime_stream_rejections": {
         "name": "Último mensaje de rechazo"
+      },
+      "prime_part_battery": {
+        "name": "Mantenimiento – Batería"
+      },
+      "prime_part_dock_washing_system": {
+        "name": "Mantenimiento – Sistema de lavado (base)"
+      },
+      "prime_part_mop_washing_system": {
+        "name": "Mantenimiento – Sistema de lavado (mopa)"
       }
     },
     "binary_sensor": {
@@ -1617,9 +1617,6 @@
       "reset_battery": {
         "name": "Mantenimiento – Confirmar sustitución de batería"
       },
-      "clean_zone": {
-        "name": "Limpiar zona"
-      },
       "repeat_mission": {
         "name": "Repetir última misión"
       },
@@ -1628,9 +1625,6 @@
       },
       "clean_smart_zone": {
         "name": "Limpiar zona (Smart Map)"
-      },
-      "favorite": {
-        "name": "{name}"
       },
       "spot": {
         "name": "Limpieza puntual (experimental)"
@@ -1752,9 +1746,6 @@
     "select": {
       "cleaning_passes": {
         "name": "Ajuste – Pasadas de limpieza"
-      },
-      "zone_select": {
-        "name": "Seleccionar zona"
       },
       "smart_zone_select": {
         "name": "Seleccionar zona Smart Map"
@@ -2165,63 +2156,109 @@
       "fields": {
         "room_name": {
           "name": "Nombre de habitación",
-          "description": "Un nombre de habitación, una lista, o varios separados por comas. Son los nombres que dio a sus habitaciones en la aplicación iRobot. Si no aparece ninguno, ejecute una limpieza por habitación desde esa aplicación."
+          "description": "Un nombre de habitación, una lista o varios separados por comas: los nombres que muestra la selección de habitación, de tu cuenta de iRobot o puestos en Configurar. Mayúsculas y minúsculas dan igual."
         },
         "ordered": {
           "name": "Secuencia ordenada",
           "description": "Limpiar las habitaciones en el orden indicado en lugar de dejar que el robot elija."
+        },
+        "cleaning_mode": {
+          "name": "Modo de limpieza",
+          "description": "Aspirar, fregar o ambos, solo para esta pasada. Vacío: lo que muestra la selección Modo de limpieza."
+        },
+        "two_pass": {
+          "name": "Dos pasadas",
+          "description": "Dos pasadas por habitación, solo para esta pasada. Vacío: el ajuste del robot."
+        },
+        "smart_scrub": {
+          "name": "Fregado intensivo",
+          "description": "Fregado adicional, solo para esta pasada, en los robots friegasuelos que lo ofrecen."
+        },
+        "pad_wetness": {
+          "name": "Humedad de la mopa",
+          "description": "Humedad de la mopa, solo para esta pasada. Robots friegasuelos Classic."
+        },
+        "room_passes": {
+          "name": "Habitaciones con ajustes propios",
+          "description": "En lugar del nombre de habitación: las habitaciones en orden, cada una con sus propios two_pass, cleaning_mode, smart_scrub y pad_wetness."
         }
       }
     },
     "reset_filter": {
-      "name": "Reset filter",
+      "name": "Restablecer el filtro",
       "description": "Registra la hora actual como fecha de sustitución del filtro."
     },
     "reset_brush": {
-      "name": "Reset brushes",
+      "name": "Restablecer los cepillos",
       "description": "Registra la hora actual como fecha de sustitución del cepillo."
     },
     "reset_battery": {
-      "name": "Reset battery",
+      "name": "Restablecer la batería",
       "description": "Registra la hora actual como fecha de sustitución de la batería."
     },
     "reset_pad": {
-      "name": "Reset cleaning pad",
+      "name": "Restablecer la mopa",
       "description": "Registra la hora actual como fecha de sustitución de la mopa (solo Braava)."
     },
     "smart_start": {
-      "name": "Smart start",
-      "description": "Inicia una limpieza con comprobación de sensores bloqueantes."
+      "name": "Inicio inteligente",
+      "description": "Inicia una limpieza con comprobación de sensores bloqueantes.",
+      "fields": {
+        "rooms": {
+          "name": "Habitaciones",
+          "description": "Habitaciones a limpiar, por nombre, en robots que limpian por habitación. Vacío: toda la casa."
+        },
+        "override_blocking": {
+          "name": "Ignorar los sensores de bloqueo",
+          "description": "Empezar de inmediato, aunque un sensor de bloqueo esté activo."
+        }
+      }
     },
     "clean_sequence": {
-      "name": "Start sequence clean",
+      "name": "Limpieza en secuencia",
       "description": "Inicia el robot B cuando el robot A termina su misión actual. El escuchador se activa una vez y se elimina solo.",
       "fields": {
         "entity_id": {
-          "name": "Trigger robot",
+          "name": "Robot que dispara",
           "description": "Entidad de aspiradora del robot A (debe terminar primero)."
         },
         "target_entity_id": {
-          "name": "Target robot",
+          "name": "Robot siguiente",
           "description": "Entidad de aspiradora del robot B (se inicia cuando A termina)."
         },
         "require_completed": {
-          "name": "Require completion",
+          "name": "Exigir que termine",
           "description": "Si está activo, el robot B solo se inicia si el robot A volvió a la base con normalidad."
         },
         "delay_minutes": {
-          "name": "Delay (minutes)",
+          "name": "Retraso (minutos)",
           "description": "Espera estos minutos después de que el robot A vuelva a la base antes de iniciar el robot B."
         }
       }
     },
     "create_backup": {
       "name": "Crear copia de seguridad",
-      "description": "Exporta todos los datos guardados de este robot en un único archivo ZIP."
+      "description": "Exporta todos los datos guardados de este robot en un único archivo ZIP.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "La entidad aspiradora del robot."
+        }
+      }
     },
     "restore_backup": {
       "name": "Restaurar copia de seguridad",
-      "description": "Restaura todos los datos de un ZIP de copia de seguridad. Efecto inmediato, sin reinicio."
+      "description": "Restaura todos los datos de un ZIP de copia de seguridad. Efecto inmediato, sin reinicio.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "La entidad aspiradora del robot."
+        },
+        "path": {
+          "name": "Archivo de copia",
+          "description": "Ruta completa del ZIP de copia, por ejemplo /config/roomba_plus_backups/backup.zip."
+        }
+      }
     },
     "set_quiet_hours": {
       "name": "Establecer horas de silencio",
@@ -2252,6 +2289,22 @@
         "zone_id": {
           "name": "ID de zona",
           "description": "Uno o varios id numéricos de zona. Usa esto o el nombre de zona."
+        },
+        "cleaning_mode": {
+          "name": "Modo de limpieza",
+          "description": "Aspirar, fregar o ambos, solo para esta pasada. Vacío: lo que muestra la selección Modo de limpieza."
+        },
+        "two_pass": {
+          "name": "Dos pasadas",
+          "description": "Dos pasadas por habitación, solo para esta pasada. Vacío: el ajuste del robot."
+        },
+        "smart_scrub": {
+          "name": "Fregado intensivo",
+          "description": "Fregado adicional, solo para esta pasada, en los robots friegasuelos que lo ofrecen."
+        },
+        "pad_wetness": {
+          "name": "Humedad de la mopa",
+          "description": "Humedad de la mopa, solo para esta pasada. Robots friegasuelos Classic."
         }
       }
     },
@@ -2384,6 +2437,164 @@
           "description": "Cuándo debe terminar la limpieza; la respuesta dice si cabe."
         }
       }
+    },
+    "reset_robot_profile": {
+      "name": "Restablecer el perfil del robot",
+      "description": "Olvida lo que Roomba+ ha aprendido del robot (niveles de suciedad, referencias de cobertura y navegación, estadísticas de misiones) para que aprenda de nuevo, por ejemplo tras una mudanza. El historial de misiones y los contadores de mantenimiento se conservan."
+    },
+    "advance_room": {
+      "name": "Avanzar el progreso de habitaciones",
+      "description": "Avanza una habitación el progreso de la misión cuando se queda en una habitación que el robot ya terminó. Solo durante una misión, entre habitaciones."
+    },
+    "explain_mission": {
+      "name": "Explicar la misión",
+      "description": "Devuelve por qué una misión se marcó como inusual: un obstáculo, demasiadas recargas, mucha suciedad o cobertura incompleta, con si el robot fue levantado y su error. La última misión salvo que se indique un ID.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "La entidad aspiradora del robot."
+        },
+        "mission_id": {
+          "name": "ID de misión",
+          "description": "La misión a explicar, su id en el historial de misiones. Vacío: la última."
+        }
+      }
+    },
+    "clean_overdue_rooms": {
+      "name": "Limpiar habitaciones atrasadas",
+      "description": "Limpia cada habitación que toca según su ritmo fijado o aprendido, la más atrasada primero, en una ruta desde la base. No hace nada si no toca ninguna, así que puede llamarse a diario.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "La entidad aspiradora del robot."
+        },
+        "max_rooms": {
+          "name": "Máximo de habitaciones",
+          "description": "Limpiar solo este número de las habitaciones más atrasadas."
+        }
+      }
+    },
+    "auto_clean_dirty_rooms": {
+      "name": "Limpiar habitaciones sucias",
+      "description": "Limpia las habitaciones más sucias de lo habitual, en una ruta desde la base: en Classic las que superan la media del hogar, en Prime las que el robot califica de sucias. En Classic se inicia una limpieza de toda la casa si ninguna habitación cumple.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "La entidad aspiradora del robot."
+        },
+        "max_rooms": {
+          "name": "Máximo de habitaciones",
+          "description": "Limpiar solo este número de las habitaciones más sucias."
+        }
+      }
+    },
+    "run_favorite": {
+      "name": "Ejecutar favorito",
+      "description": "Ejecuta un favorito guardado en la app de iRobot, por su ID; necesita la cuenta de iRobot. Los ID están en el atributo favorites de la aspiradora. Un favorito lleva su propio mapa, así que llega a una habitación de otra planta.",
+      "fields": {
+        "favorite_id": {
+          "name": "ID del favorito",
+          "description": "El ID del favorito, del atributo favorites de la aspiradora."
+        }
+      }
+    },
+    "create_schedule": {
+      "name": "Crear programación",
+      "description": "Crea una programación de limpieza en un robot Prime, que funciona sin Home Assistant. Necesita al menos una programación ya existente en el hogar.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "La entidad aspiradora del robot Prime."
+        },
+        "name": {
+          "name": "Nombre",
+          "description": "Una etiqueta a elección; la app de iRobot no puede renombrar programaciones."
+        },
+        "days": {
+          "name": "Días",
+          "description": "Días de la semana en que se ejecuta."
+        },
+        "time": {
+          "name": "Hora",
+          "description": "Cuándo empieza la misión, en la zona horaria del robot."
+        },
+        "frequency": {
+          "name": "Frecuencia",
+          "description": "Semanal, cada dos semanas, mensual o una vez: una programación única la borra la nube tras ejecutarse."
+        },
+        "rooms": {
+          "name": "Habitaciones",
+          "description": "Nombres de habitaciones como en los interruptores de programación. Vacío: en todas partes."
+        },
+        "pad_wetness": {
+          "name": "Humedad de la mopa",
+          "description": "De 1 a 3, por habitación. Sustituye el ajuste del robot para esta programación."
+        },
+        "enabled": {
+          "name": "Activado",
+          "description": "Crearla activada, o desactivada para activarla más tarde."
+        }
+      }
+    },
+    "update_schedule": {
+      "name": "Cambiar programación",
+      "description": "Cambia una programación Prime. Solo cambian los campos que rellenes; el resto conserva sus valores.",
+      "fields": {
+        "entity_id": {
+          "name": "Programación",
+          "description": "El interruptor de la programación."
+        },
+        "name": {
+          "name": "Nombre",
+          "description": "Una etiqueta nueva."
+        },
+        "days": {
+          "name": "Días",
+          "description": "Sustituye los días de la semana."
+        },
+        "time": {
+          "name": "Hora",
+          "description": "Una nueva hora de inicio."
+        },
+        "frequency": {
+          "name": "Frecuencia",
+          "description": "Semanal, cada dos semanas, mensual o una vez."
+        },
+        "rooms": {
+          "name": "Habitaciones",
+          "description": "Sustituye las habitaciones."
+        },
+        "pad_wetness": {
+          "name": "Humedad de la mopa",
+          "description": "De 1 a 3, para cada habitación de la programación."
+        },
+        "enabled": {
+          "name": "Activado",
+          "description": "Activar o desactivar la programación."
+        }
+      }
+    },
+    "delete_schedule": {
+      "name": "Eliminar programación",
+      "description": "Elimina una programación Prime. Su interruptor desaparece en la siguiente actualización; las demás se mantienen.",
+      "fields": {
+        "entity_id": {
+          "name": "Programación",
+          "description": "El interruptor de la programación a eliminar."
+        }
+      }
+    },
+    "reset_wheel_cleaning": {
+      "name": "Ruedas limpiadas",
+      "description": "Registra que las ruedas se han limpiado ahora."
+    },
+    "reset_contact_cleaning": {
+      "name": "Contactos de carga limpiados",
+      "description": "Registra que los contactos de carga se han limpiado ahora."
+    },
+    "reset_bin_cleaning": {
+      "name": "Depósito limpiado",
+      "description": "Registra que el depósito se ha limpiado ahora."
     }
   },
   "exceptions": {
@@ -2608,9 +2819,6 @@
     },
     "cloud_part_reset_not_confirmed": {
       "message": "La nube de iRobot aceptó la solicitud, pero no confirmó el reinicio. El contador local no se ha modificado."
-    },
-    "no_confirmed_room": {
-      "message": "Todavía no hay ninguna habitación aprendida confirmada. Las habitaciones se aprenden de misiones completadas; haz algunas más."
     },
     "no_last_mission": {
       "message": "El robot no ha indicado ningún comando de limpieza anterior que repetir."

@@ -18,7 +18,7 @@ Every mission adds the floor the robot drove over to a coverage grid, the same g
 - **A door is where the robot went through.** Rooms either side of a wall touch on the grid; a door is shown only once a mission's path went from deep in one area to deep in the other through it (`driven_by_missions` in the diagnostics). Until a mission has been checked, every door shows. Doors in the diagnostics carry `opening_mm` (the opening at its widest) and `constriction` (how much it narrows the floor).
 - **The rooms it went into.** A whole-floor mission is recorded with the named rooms its position actually went into.
 
-A new area raises a repair issue asking for a name; naming it also puts it into `select.{name}_zone_select`.
+A new area raises a repair issue asking for a name (Configure → *Rooms & zones*).
 
 ## Straight walls, doors and furniture
 

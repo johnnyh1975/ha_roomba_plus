@@ -10,19 +10,19 @@ Which robots each action works on, and examples: [Scripts and Assist](../guides/
 
 | Action | What it does | Returns data |
 |---|---|---|
-| [`roomba_plus.advance_room`](#roomba_plusadvance_room) | Manually advances the room progress indicator by one step. |  |
-| [`roomba_plus.auto_clean_dirty_rooms`](#roomba_plusauto_clean_dirty_rooms) | Start a targeted clean of the rooms that are currently dirtier than the household average (learned per-room dirt index); the route between the selected rooms is travel-optimized starting from the dock. |  |
-| [`roomba_plus.clean_overdue_rooms`](#roomba_plusclean_overdue_rooms) | Start a targeted clean of all rooms currently overdue according to the rooms_overdue sensor (configured frequency, or the room's own learned interval). |  |
+| [`roomba_plus.advance_room`](#roomba_plusadvance_room) | Move the mission's room progress on by one room when it sticks on a room the robot has finished. |  |
+| [`roomba_plus.auto_clean_dirty_rooms`](#roomba_plusauto_clean_dirty_rooms) | Cleans the rooms that are dirtier than usual, on a route from the dock: on Classic the rooms above the household's average, on Prime the rooms the robot rates dirty. |  |
+| [`roomba_plus.clean_overdue_rooms`](#roomba_plusclean_overdue_rooms) | Cleans every room that is due by its set or learned rhythm, worst first, on a route from the dock. |  |
 | [`roomba_plus.clean_room`](#roomba_plusclean_room) | Start a targeted clean of one or more named rooms on smart-map robots. |  |
 | [`roomba_plus.clean_sequence`](#roomba_plusclean_sequence) | Start robot B when robot A completes its current mission. |  |
 | [`roomba_plus.clean_zone`](#roomba_plusclean_zone) | Send the robot to one or more clean zones on demand, by name (as the zone select shows it) or by numeric id. |  |
 | [`roomba_plus.create_backup`](#roomba_pluscreate_backup) | Export every persisted store for this robot into a single ZIP file. | Always |
-| [`roomba_plus.create_schedule`](#roomba_pluscreate_schedule) | Creates a cleaning schedule on the robot itself, so it runs even when Home Assistant is not. | Optional |
+| [`roomba_plus.create_schedule`](#roomba_pluscreate_schedule) | Creates a cleaning schedule on a Prime robot, so it runs without Home Assistant. | Optional |
 | [`roomba_plus.debug_capture_get`](#roomba_plusdebug_capture_get) | Returns the lines of the debug capture, redacted, ready to paste into an issue. | Always |
 | [`roomba_plus.debug_capture_start`](#roomba_plusdebug_capture_start) | Keeps the debug log of Roomba+ in memory, with addresses, network names, robot ids, positions and secrets removed. |  |
 | [`roomba_plus.debug_capture_stop`](#roomba_plusdebug_capture_stop) | Stops the debug capture and puts the log levels back; returns the lines kept so far when asked for a response. | Optional |
-| [`roomba_plus.delete_schedule`](#roomba_plusdelete_schedule) | Removes a schedule from the robot. | Optional |
-| [`roomba_plus.explain_mission`](#roomba_plusexplain_mission) | Rule-based explanation for why a mission was flagged anomalous: obstacle_or_blockage, excessive_recharge, dirt_spike, or incomplete_coverage — plus whether the robot was picked up (robot_lifted) and any recorded error_code, which can apply independently of the primary reason. | Always |
+| [`roomba_plus.delete_schedule`](#roomba_plusdelete_schedule) | Removes a Prime schedule. | Optional |
+| [`roomba_plus.explain_mission`](#roomba_plusexplain_mission) | Returns why a mission was flagged unusual: an obstacle, too much recharging, a lot of dirt or incomplete coverage, with whether the robot was lifted and its error. | Always |
 | [`roomba_plus.get_mission`](#roomba_plusget_mission) | Returns one stored mission in full, with the battery it used and, per room, whether its time went into the learned estimates and why not. | Always |
 | [`roomba_plus.get_missions`](#roomba_plusget_missions) | Returns the newest stored missions, newest first: when, how they ended, who started them, which rooms were asked for, cleaned, skipped or not reached, and the battery they used. | Always |
 | [`roomba_plus.get_rooms`](#roomba_plusget_rooms) | Returns the rooms and zones the robot knows, each with its id, map, Home Assistant area, time estimate and how good that estimate is. | Always |
@@ -30,17 +30,24 @@ Which robots each action works on, and examples: [Scripts and Assist](../guides/
 | [`roomba_plus.maintenance_forget_learned`](#roomba_plusmaintenance_forget_learned) | Forgets the replacement interval learned from your own replacements, for one part or every part of a Classic robot. |  |
 | [`roomba_plus.maintenance_snooze`](#roomba_plusmaintenance_snooze) | No reminder for a maintenance entry for a number of days. |  |
 | [`roomba_plus.plan_clean`](#roomba_plusplan_clean) | Returns what a clean started now would take, without starting it: the rooms in order with their estimates, the total and the end. | Always |
-| [`roomba_plus.reset_robot_profile`](#roomba_plusreset_robot_profile) | Wipe the self-calibrated robot profile (dirt baselines, coverage and navigation baselines, mission statistics) so the robot starts learning fresh. |  |
+| [`roomba_plus.reset_battery`](#roomba_plusreset_battery) | Record the current time as the battery replacement date. |  |
+| [`roomba_plus.reset_bin_cleaning`](#roomba_plusreset_bin_cleaning) | Record that the bin was cleaned now. |  |
+| [`roomba_plus.reset_brush`](#roomba_plusreset_brush) | Record the current time as the brush replacement date. |  |
+| [`roomba_plus.reset_contact_cleaning`](#roomba_plusreset_contact_cleaning) | Record that the charging contacts were cleaned now. |  |
+| [`roomba_plus.reset_filter`](#roomba_plusreset_filter) | Record the current time as the filter replacement date. |  |
+| [`roomba_plus.reset_pad`](#roomba_plusreset_pad) | Record the current time as the pad replacement date (Braava only). |  |
+| [`roomba_plus.reset_robot_profile`](#roomba_plusreset_robot_profile) | Forget what Roomba+ has learned about the robot (dirt levels, coverage and navigation baselines, mission statistics) so it learns afresh, for example after a move. |  |
+| [`roomba_plus.reset_wheel_cleaning`](#roomba_plusreset_wheel_cleaning) | Record that the wheels were cleaned now. |  |
 | [`roomba_plus.restore_backup`](#roomba_plusrestore_backup) | Restore every store in a backup ZIP. | Always |
 | [`roomba_plus.retry_missed_rooms`](#roomba_plusretry_missed_rooms) | Cleans the rooms a mission skipped or did not reach, in the order the mission asked for them. |  |
-| [`roomba_plus.run_favorite`](#roomba_plusrun_favorite) | Runs a saved favorite by its ID. |  |
+| [`roomba_plus.run_favorite`](#roomba_plusrun_favorite) | Runs a favorite saved in the iRobot app, by its ID; needs the iRobot account. |  |
 | [`roomba_plus.set_quiet_hours`](#roomba_plusset_quiet_hours) | Write the household's Do Not Disturb window. |  |
 | [`roomba_plus.smart_start`](#roomba_plussmart_start) | Start a clean with blocking-sensor checks. |  |
-| [`roomba_plus.update_schedule`](#roomba_plusupdate_schedule) | Changes an existing schedule. | Optional |
+| [`roomba_plus.update_schedule`](#roomba_plusupdate_schedule) | Changes a Prime schedule. | Optional |
 
 ## `roomba_plus.advance_room`
 
-**Advance room progress.** Manually advances the room progress indicator by one step. Use when the current room or next room sensor is stuck on a completed room on lewis firmware robots (i7/s9/j-series). Only takes effect when the robot is not actively cleaning (between rooms). Requires an active mission.
+**Advance room progress.** Move the mission's room progress on by one room when it sticks on a room the robot has finished. Only during a mission, between rooms.
 
 Target: a Roomba+ vacuum.
 
@@ -48,21 +55,21 @@ No fields.
 
 ## `roomba_plus.auto_clean_dirty_rooms`
 
-**Auto-clean dirty rooms.** Start a targeted clean of the rooms that are currently dirtier than the household average (learned per-room dirt index); the route between the selected rooms is travel-optimized starting from the dock. Rooms with fewer than 10 recorded cleanings are not trusted yet; when no room qualifies, a normal whole-house clean starts instead. Requires a Smart Map robot. On a Prime robot, the rooms the robot itself rates past its threshold, dirtiest first.
+**Clean dirty rooms.** Cleans the rooms that are dirtier than usual, on a route from the dock: on Classic the rooms above the household's average, on Prime the rooms the robot rates dirty. On Classic a whole-home clean starts when no room qualifies.
 
 | Field | Required | What it is | Example |
 |---|---|---|---|
-| `entity_id` | Yes | **Entity.** The Roomba vacuum entity. |  |
-| `max_rooms` |  | **Maximum rooms.** Optional cap — keep only the dirtiest rooms. |  |
+| `entity_id` | Yes | **Robot.** The robot's vacuum entity. |  |
+| `max_rooms` |  | **Maximum rooms.** Clean only this many of the dirtiest rooms. |  |
 
 ## `roomba_plus.clean_overdue_rooms`
 
-**Clean overdue rooms.** Start a targeted clean of all rooms currently overdue according to the rooms_overdue sensor (configured frequency, or the room's own learned interval). The route between the selected rooms is travel-optimized starting from the dock. Does nothing when no room is overdue — safe to call daily from an automation. Requires a Smart Map robot (i/s/j-series, Braava m6).
+**Clean overdue rooms.** Cleans every room that is due by its set or learned rhythm, worst first, on a route from the dock. Does nothing when no room is due, so it is safe to call daily.
 
 | Field | Required | What it is | Example |
 |---|---|---|---|
-| `entity_id` | Yes | **Entity.** The Roomba vacuum entity. |  |
-| `max_rooms` |  | **Maximum rooms.** Optional cap — keep only the worst-overdue rooms. |  |
+| `entity_id` | Yes | **Robot.** The robot's vacuum entity. |  |
+| `max_rooms` |  | **Maximum rooms.** Clean only this many of the most overdue rooms. |  |
 
 ## `roomba_plus.clean_room`
 
@@ -72,13 +79,13 @@ Target: a Roomba+ vacuum.
 
 | Field | Required | What it is | Example |
 |---|---|---|---|
-| `room_name` |  | **Room name.** One room name, a list of them, or several separated by commas. The names are the ones you gave your rooms in the iRobot app. If none are offered yet, run a room-targeted clean from that app once. | `Kitchen` |
+| `room_name` |  | **Room name.** One room name, a list of them, or several separated by commas: the names the room select shows, from your iRobot account or given under Configure. Upper and lower case do not matter. | `Kitchen` |
 | `ordered` |  | **Ordered sequence.** Clean rooms in the order supplied rather than letting the robot choose. |  |
-| `cleaning_mode` |  | **Cleaning mode.** Vacuum, mop, or both, for this run only. Leave empty to use whatever the Cleaning mode selector shows — that is the everyday default, and this field is for a run that should differ from it. Pick a mode the robot can perform; the selector lists only those. |  |
-| `two_pass` |  | **Two-pass cleaning.** When true, the robot makes two cleaning passes over each room. When omitted (default), the robot's current two-pass setting is inherited. Overrides the global setting for this job only. Ignored for any room that specifies its own two_pass via room_passes. |  |
-| `smart_scrub` |  | **Smart scrub.** Extra scrubbing motion for this run only (SmartScrub), on mopping robots that offer it, Classic and Prime; leave empty to keep whatever the robot would have done. |  |
-| `pad_wetness` |  | **Pad wetness.** How wet the pad is for this run only. Leave empty to keep the Pad wetness settings on the device — a value here overrides them for this run and nothing else. Classic mopping robots only. |  |
-| `room_passes` |  | **Rooms with individual pass settings.** Alternative to room_name — a list of rooms to clean in sequence, each with its own optional two_pass, cleaning_mode, smart_scrub and pad_wetness. A room that omits one falls back to the matching field on the call, then to the robot's current setting. Example: [{name: Kitchen, two_pass: true}, {name: Bathroom, cleaning_mode: mop}] | `[{"name": "Kitchen", "two_pass": true}, {"name": "Hallway"}]` |
+| `cleaning_mode` |  | **Cleaning mode.** Vacuum, mop or both, for this run only. Empty: what the Cleaning mode select shows. |  |
+| `two_pass` |  | **Two passes.** Two passes over each room, for this run only. Empty: the robot's own setting. |  |
+| `smart_scrub` |  | **Smart scrub.** Extra scrubbing, for this run only, on mopping robots that offer it. |  |
+| `pad_wetness` |  | **Pad wetness.** How wet the pad is, for this run only. Classic mopping robots. |  |
+| `room_passes` |  | **Rooms with their own settings.** Instead of room name: the rooms in order, each with its own two_pass, cleaning_mode, smart_scrub and pad_wetness. | `[{"name": "Kitchen", "two_pass": true}, {"name": "Hallway"}]` |
 
 ## `roomba_plus.clean_sequence`
 
@@ -100,10 +107,10 @@ Target: a Roomba+ vacuum.
 | Field | Required | What it is | Example |
 |---|---|---|---|
 | `zone_name` |  | **Zone name.** One or more zone names exactly as they appear on the map. Use this or zone id. | `["Clean Kitchen", "Under Table"]` |
-| `cleaning_mode` |  | **Cleaning mode.** Vacuum, mop, or both, for this run only. Leave empty to use whatever the Cleaning mode selector shows. Pick a mode the robot can perform; the selector lists only those. |  |
-| `smart_scrub` |  | **Smart scrub.** Extra scrubbing motion for this run only (SmartScrub), on mopping robots that offer it, Classic and Prime; leave empty to keep whatever the robot would have done. |  |
-| `pad_wetness` |  | **Pad wetness.** How wet the pad is for this run only. Leave empty to keep the Pad wetness settings on the device — a value here overrides them for this run and nothing else. Classic mopping robots only. |  |
-| `two_pass` |  | **Two-pass cleaning.** When true, the robot makes two cleaning passes over each room. When omitted (default), the robot's current two-pass setting is inherited. Overrides the global setting for this job only. Ignored for any room that specifies its own two_pass via room_passes. |  |
+| `cleaning_mode` |  | **Cleaning mode.** Vacuum, mop or both, for this run only. Empty: what the Cleaning mode select shows. |  |
+| `smart_scrub` |  | **Smart scrub.** Extra scrubbing, for this run only, on mopping robots that offer it. |  |
+| `pad_wetness` |  | **Pad wetness.** How wet the pad is, for this run only. Classic mopping robots. |  |
+| `two_pass` |  | **Two passes.** Two passes over each room, for this run only. Empty: the robot's own setting. |  |
 | `zone_id` |  | **Zone ID.** One or more numeric zone ids. Use this or zone name. | `["100", "101"]` |
 
 ## `roomba_plus.create_backup`
@@ -116,11 +123,11 @@ Target: a Roomba+ vacuum.
 
 | Field | Required | What it is | Example |
 |---|---|---|---|
-| `entity_id` | Yes | **Entity.** The Roomba vacuum entity to back up. |  |
+| `entity_id` | Yes | **Robot.** The robot's vacuum entity. |  |
 
 ## `roomba_plus.create_schedule`
 
-**Create schedule.** Creates a cleaning schedule on the robot itself, so it runs even when Home Assistant is not. Derived from an existing schedule, so the household needs at least one already.
+**Create schedule.** Creates a cleaning schedule on a Prime robot, so it runs without Home Assistant. Needs at least one schedule in the household already.
 
 Returns data when you ask for it with `response_variable`.
 
@@ -128,14 +135,14 @@ Target: a Roomba+ vacuum.
 
 | Field | Required | What it is | Example |
 |---|---|---|---|
-| `entity_id` | Yes | **Robot.** The vacuum entity of the Prime robot. |  |
-| `name` |  | **Name.** A label of your choosing. The iRobot app calls every schedule "Regular Schedule" and offers no way to rename one, so this is the only place a schedule can be given a name that means something. | `Kitchen, weekday mornings` |
+| `entity_id` | Yes | **Robot.** The Prime robot's vacuum entity. |  |
+| `name` |  | **Name.** A label of your choice; the iRobot app cannot rename schedules. | `Kitchen, weekday mornings` |
 | `days` | Yes | **Days.** Weekdays the schedule runs on. |  |
-| `time` | Yes | **Time.** When the mission starts, in the robot's own time zone. |  |
-| `frequency` |  | **Frequency.** ONCE fires a single time and the server then deletes the schedule by itself, within minutes — confirmed in the field, and it happens even when the mission is cut short. Use it for "clean the kitchen tomorrow at nine". |  |
-| `rooms` |  | **Rooms.** Room names as they appear on the schedule switches. Leave empty to clean everywhere. | `["Kitchen", "Hallway"]` |
-| `pad_wetness` |  | **Pad wetness.** 1 to 3, applied per room. Confirmed to be stored exactly as sent, and confirmed to override the robot's global setting — so this is the level at which wetness actually takes effect. |  |
-| `enabled` |  | **Enabled.** Create it switched on, or off to arm it later. |  |
+| `time` | Yes | **Time.** When the mission starts, in the robot's time zone. |  |
+| `frequency` |  | **Frequency.** Weekly, every two weeks, monthly or once: a one-off schedule is deleted by the cloud after it ran. |  |
+| `rooms` |  | **Rooms.** Room names as on the schedule switches. Empty: everywhere. | `["Kitchen", "Hallway"]` |
+| `pad_wetness` |  | **Pad wetness.** 1 to 3, per room. Overrides the robot's own setting for this schedule. |  |
+| `enabled` |  | **Enabled.** Create it switched on, or off to switch it on later. |  |
 
 ## `roomba_plus.debug_capture_get`
 
@@ -163,7 +170,7 @@ No fields.
 
 ## `roomba_plus.delete_schedule`
 
-**Delete schedule.** Removes a schedule from the robot. The switch disappears within a refresh cycle. Other schedules in the same household are left alone.
+**Delete schedule.** Removes a Prime schedule. Its switch goes at the next refresh; other schedules stay.
 
 Returns data when you ask for it with `response_variable`.
 
@@ -171,18 +178,18 @@ Target: a Roomba+ vacuum.
 
 | Field | Required | What it is | Example |
 |---|---|---|---|
-| `entity_id` | Yes | **Schedule.** The schedule switch to delete. |  |
+| `entity_id` | Yes | **Schedule.** The switch of the schedule to delete. |  |
 
 ## `roomba_plus.explain_mission`
 
-**Explain mission.** Rule-based explanation for why a mission was flagged anomalous: obstacle_or_blockage, excessive_recharge, dirt_spike, or incomplete_coverage — plus whether the robot was picked up (robot_lifted) and any recorded error_code, which can apply independently of the primary reason. Defaults to the most recent mission when mission_id is omitted.
+**Explain mission.** Returns why a mission was flagged unusual: an obstacle, too much recharging, a lot of dirt or incomplete coverage, with whether the robot was lifted and its error. The latest mission unless a mission ID is given.
 
 Returns data, always: call it with `response_variable`.
 
 | Field | Required | What it is | Example |
 |---|---|---|---|
-| `entity_id` | Yes | **Robot.** Vacuum entity for the robot whose mission history to check. |  |
-| `mission_id` |  | **Mission ID.** Specific mission to explain (the "id" field from mission history, e.g. "m_1719849600"). Omit to explain the most recent mission. |  |
+| `entity_id` | Yes | **Robot.** The robot's vacuum entity. |  |
+| `mission_id` |  | **Mission ID.** The mission to explain, its id from the mission history. Empty: the latest. |  |
 
 ## `roomba_plus.get_mission`
 
@@ -261,9 +268,65 @@ Returns data, always: call it with `response_variable`.
 | `room_name` |  | **Rooms.** A room name or a list of them, in the order to clean. Empty: the whole home. | `Kitchen` |
 | `end_by` |  | **End by.** When the clean has to be finished; the answer says whether it fits. |  |
 
+## `roomba_plus.reset_battery`
+
+**Reset battery.** Record the current time as the battery replacement date.
+
+Target: a Roomba+ vacuum.
+
+No fields.
+
+## `roomba_plus.reset_bin_cleaning`
+
+**Bin cleaned.** Record that the bin was cleaned now.
+
+Target: a Roomba+ vacuum.
+
+No fields.
+
+## `roomba_plus.reset_brush`
+
+**Reset brushes.** Record the current time as the brush replacement date.
+
+Target: a Roomba+ vacuum.
+
+No fields.
+
+## `roomba_plus.reset_contact_cleaning`
+
+**Charging contacts cleaned.** Record that the charging contacts were cleaned now.
+
+Target: a Roomba+ vacuum.
+
+No fields.
+
+## `roomba_plus.reset_filter`
+
+**Reset filter.** Record the current time as the filter replacement date.
+
+Target: a Roomba+ vacuum.
+
+No fields.
+
+## `roomba_plus.reset_pad`
+
+**Reset cleaning pad.** Record the current time as the pad replacement date (Braava only).
+
+Target: a Roomba+ vacuum.
+
+No fields.
+
 ## `roomba_plus.reset_robot_profile`
 
-**Reset robot profile.** Wipe the self-calibrated robot profile (dirt baselines, coverage and navigation baselines, mission statistics) so the robot starts learning fresh. Use after moving house, a major layout change, or replacing the robot. Mission history and maintenance counters are not affected.
+**Reset robot profile.** Forget what Roomba+ has learned about the robot (dirt levels, coverage and navigation baselines, mission statistics) so it learns afresh, for example after a move. Mission history and maintenance counters are kept.
+
+Target: a Roomba+ vacuum.
+
+No fields.
+
+## `roomba_plus.reset_wheel_cleaning`
+
+**Wheels cleaned.** Record that the wheels were cleaned now.
 
 Target: a Roomba+ vacuum.
 
@@ -279,8 +342,8 @@ Target: a Roomba+ vacuum.
 
 | Field | Required | What it is | Example |
 |---|---|---|---|
-| `entity_id` | Yes | **Entity.** The Roomba vacuum entity to restore state onto. |  |
-| `path` | Yes | **Backup file path.** Full path to the backup ZIP file (e.g. /config/roomba_plus_backups/roomba_plus_backup_....zip). |  |
+| `entity_id` | Yes | **Robot.** The robot's vacuum entity. |  |
+| `path` | Yes | **Backup file.** Full path of the backup ZIP, for example /config/roomba_plus_backups/backup.zip. |  |
 
 ## `roomba_plus.retry_missed_rooms`
 
@@ -293,13 +356,13 @@ Target: a Roomba+ vacuum.
 
 ## `roomba_plus.run_favorite`
 
-**Run favorite.** Runs a saved favorite by its ID. Needs cloud credentials, because favourites live in your iRobot account -- but works on every robot, Classic and V4/Prime alike. The IDs are in the vacuum entity's `favorites` attribute, keyed on ID rather than name so an automation survives a rename in the iRobot app. A favourite carries the map and rooms it was created with, so it reaches a room on a map the robot is not currently using.
+**Run favorite.** Runs a favorite saved in the iRobot app, by its ID; needs the iRobot account. The IDs are in the vacuum's favorites attribute. A favorite carries its own map, so it reaches a room on another floor.
 
 Target: a Roomba+ vacuum.
 
 | Field | Required | What it is | Example |
 |---|---|---|---|
-| `favorite_id` | Yes | **Favorite ID.** The favorite's ID, from the vacuum's `favorites` attribute. | `01KRQ4S1RP493P1WKCG71C90D9` |
+| `favorite_id` | Yes | **Favorite ID.** The favorite's ID, from the vacuum's favorites attribute. | `01KRQ4S1RP493P1WKCG71C90D9` |
 
 ## `roomba_plus.set_quiet_hours`
 
@@ -321,12 +384,12 @@ Target: a Roomba+ vacuum.
 
 | Field | Required | What it is | Example |
 |---|---|---|---|
-| `rooms` |  | **Rooms.** Optional list of room names to clean (SMART robots only). Names must match the labels configured in Roomba+ options. |  |
-| `override_blocking` |  | **Override blocking sensors.** When true, start immediately even if blocking sensors are active. Useful for manual overrides in time-sensitive situations. |  |
+| `rooms` |  | **Rooms.** Rooms to clean, by name, on robots that clean by room. Empty: the whole home. |  |
+| `override_blocking` |  | **Ignore blocking sensors.** Start at once, even if a blocking sensor is on. |  |
 
 ## `roomba_plus.update_schedule`
 
-**Update schedule.** Changes an existing schedule. Only the fields you supply are touched; the rest keep their current values.
+**Update schedule.** Changes a Prime schedule. Only the fields you fill in change; the rest keep their values.
 
 Returns data when you ask for it with `response_variable`.
 
@@ -334,14 +397,14 @@ Target: a Roomba+ vacuum.
 
 | Field | Required | What it is | Example |
 |---|---|---|---|
-| `entity_id` | Yes | **Schedule.** The schedule switch to change. |  |
-| `name` |  | **Name.** A new label for the schedule. |  |
-| `days` |  | **Days.** Replaces the weekdays entirely rather than adding to them. |  |
-| `time` |  | **Time.**  |  |
-| `frequency` |  | **Frequency.**  |  |
-| `rooms` |  | **Rooms.** Replaces the room list entirely. | `["Kitchen", "Hallway"]` |
-| `pad_wetness` |  | **Pad wetness.** 1 to 3, applied to every room in the schedule. |  |
-| `enabled` |  | **Enabled.**  |  |
+| `entity_id` | Yes | **Schedule.** The schedule's switch. |  |
+| `name` |  | **Name.** A new label. |  |
+| `days` |  | **Days.** Replaces the weekdays. |  |
+| `time` |  | **Time.** A new start time. |  |
+| `frequency` |  | **Frequency.** Weekly, every two weeks, monthly or once. |  |
+| `rooms` |  | **Rooms.** Replaces the rooms. | `["Kitchen", "Hallway"]` |
+| `pad_wetness` |  | **Pad wetness.** 1 to 3, for every room of the schedule. |  |
+| `enabled` |  | **Enabled.** Switch the schedule on or off. |  |
 
 ---
 

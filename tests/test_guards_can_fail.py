@@ -142,7 +142,7 @@ class TestDocNameGuard:
         guard = _load("check_doc_names")
         (tmp_path / "docs").mkdir()
         (tmp_path / "README.md").write_text(
-            "Call `roomba_plus.reset_battery`, listen for `roomba_plus_mission_done`,\n"
+            "Call `roomba_plus.reset_everything`, listen for `roomba_plus_mission_done`,\n"
             "and show `image.<robot>_mapp`.\n",
             encoding="utf-8",
         )
@@ -394,6 +394,35 @@ class TestServiceSchemaGuard:
         monkeypatch.setattr(
             guard, "REGISTERING_MODULES", [component / "services.py"]
         )
+
+        assert guard.main() == 0
+
+    def test_it_reads_names_built_in_a_loop(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The reset actions are registered as f"reset_{part}" in a loop;
+        the guard reported them as unreadable (4.6.0)."""
+        guard = _load("check_service_schemas")
+        component = tmp_path / "roomba_plus"
+        component.mkdir()
+        (component / "services.yaml").write_text(
+            "reset_filter:\n  fields:\n    entity_id:\n      required: true\n"
+            "reset_brush:\n  fields:\n    entity_id:\n      required: true\n",
+            encoding="utf-8",
+        )
+        (component / "services.py").write_text(
+            "import voluptuous as vol\n"
+            "SCHEMA = vol.Schema({'entity_id': str})\n"
+            "def setup(hass):\n"
+            "    for _part in ('filter', 'brush'):\n"
+            "        svc = f'reset_{_part}'\n"
+            "        register_guarded(hass, 'roomba_plus', svc, handler, schema=SCHEMA)\n",
+            encoding="utf-8",
+        )
+        (component / "const.py").write_text("DOMAIN = 'roomba_plus'\n", encoding="utf-8")
+        monkeypatch.setattr(guard, "COMPONENT", component)
+        monkeypatch.setattr(guard, "SERVICES_YAML", component / "services.yaml")
+        monkeypatch.setattr(guard, "REGISTERING_MODULES", [component / "services.py"])
 
         assert guard.main() == 0
 

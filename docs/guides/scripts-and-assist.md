@@ -132,6 +132,7 @@ Every field of every action, and which return data: [Actions](../reference/actio
 | `roomba_plus.explain_mission` | all | Returns the reason a mission was flagged unusual |
 | `roomba_plus.maintenance_done`, `maintenance_snooze` | all | Mark a maintenance entry done, or silence it ([guide](maintenance.md)) |
 | `roomba_plus.maintenance_forget_learned` | Classic | Forget the intervals learned from your replacements |
+| `roomba_plus.reset_filter`, `reset_brush`, `reset_battery`, `reset_pad`, `reset_wheel_cleaning`, `reset_contact_cleaning`, `reset_bin_cleaning` | all | Record a part replaced or a task done now; the same as its button or `maintenance_done` |
 | `roomba_plus.reset_robot_profile` | all | Forget what Roomba+ learned about the robot |
 | `roomba_plus.create_backup`, `restore_backup` | all | Back up and restore everything Roomba+ stores for a robot ([Moving to Roomba+](../MIGRATING.md#replacing-or-selling-a-robot)) |
 | `roomba_plus.debug_capture_start`, `_stop`, `_get` | all | A debug log without `configuration.yaml` or a restart ([Diagnostics](../reference/status-and-controls.md#debug-capture)) |

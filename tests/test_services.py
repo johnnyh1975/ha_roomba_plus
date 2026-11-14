@@ -3305,14 +3305,15 @@ class TestPerRoomOptionsCoverAllFour:
     def test_the_documentation_describes_all_four(self) -> None:
         import pathlib
 
-        import yaml
+        import json
 
-        data = yaml.safe_load(
+        # The text is in strings.json since 4.6.0: one source.
+        data = json.loads(
             pathlib.Path(
-                "custom_components/roomba_plus/services.yaml"
+                "custom_components/roomba_plus/strings.json"
             ).read_text(encoding="utf-8")
         )
-        text = data["clean_room"]["fields"]["room_passes"]["description"]
+        text = data["services"]["clean_room"]["fields"]["room_passes"]["description"]
 
         for field in (
             "two_pass", "cleaning_mode", "smart_scrub", "pad_wetness",

@@ -1482,3 +1482,62 @@ def test_no_html_tag_in_a_translation(lang):
 
     walk(json.loads(path.read_text(encoding="utf-8")), lang)
     assert found == []
+
+
+# ── Every action described once, in every language (4.6.0) ────────────
+#
+# The docs review for 4.6.0 found nine actions the action editor showed
+# in English whatever the language, five actions with fields it showed
+# untranslated, and seven reset actions it showed with no description at
+# all: they were registered and not in services.yaml. services.yaml and
+# strings.json also told two different stories about where clean_room's
+# room names come from. One source now: services.yaml holds the fields and
+# selectors, strings.json and the translations every name and text.
+
+
+def _registered_actions() -> set[str]:
+    from custom_components.roomba_plus import services
+
+    hass = MagicMock()
+    hass.services.has_service.return_value = False
+    services.async_register_services(hass)
+    return {call.args[1] for call in hass.services.async_register.call_args_list}
+
+
+def _services_yaml() -> dict:
+    import yaml
+
+    return yaml.safe_load((PKG / "services.yaml").read_text(encoding="utf-8"))
+
+
+def test_every_registered_action_is_in_services_yaml():
+    missing = _registered_actions() - set(_services_yaml())
+    assert not missing, f"registered but not described in services.yaml: {sorted(missing)}"
+
+
+@pytest.mark.parametrize("lang", ["strings", "de", "en", "es", "fr", "it", "nl", "pl", "pt"])
+def test_every_action_and_field_has_a_name_and_description(lang):
+    path = PKG / "strings.json" if lang == "strings" else PKG / "translations" / f"{lang}.json"
+    texts = json.loads(path.read_text(encoding="utf-8"))["services"]
+    gaps = []
+    for action, spec in _services_yaml().items():
+        text = texts.get(action, {})
+        if not text.get("name") or not text.get("description"):
+            gaps.append(action)
+        for field in (spec or {}).get("fields") or {}:
+            entry = (text.get("fields") or {}).get(field, {})
+            if not entry.get("name") or not entry.get("description"):
+                gaps.append(f"{action}.{field}")
+    assert not gaps, gaps
+
+
+def test_services_yaml_carries_no_text_of_its_own():
+    """A name or description here competes with the translation, and the
+    two drifted apart (clean_room's room names)."""
+    found = []
+    for action, spec in _services_yaml().items():
+        spec = spec or {}
+        found += [f"{action}.{k}" for k in ("name", "description") if k in spec]
+        for field, fspec in (spec.get("fields") or {}).items():
+            found += [f"{action}.{field}.{k}" for k in ("name", "description") if k in (fspec or {})]
+    assert not found, found

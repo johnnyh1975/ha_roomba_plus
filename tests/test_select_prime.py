@@ -1179,14 +1179,21 @@ class TestTheServiceFieldOutranksTheSelect:
     def test_the_field_is_documented_with_its_fallback(self):
         """A field whose description promises "leave empty to use the
         selector" has to actually do that."""
+        import json
         import pathlib
 
+        # The options are in services.yaml, the text in strings.json (4.6.0).
         text = pathlib.Path(
             "custom_components/roomba_plus/services.yaml"
         ).read_text()
         block = text[text.index("cleaning_mode:"):][:700]
+        strings = json.loads(pathlib.Path(
+            "custom_components/roomba_plus/strings.json"
+        ).read_text(encoding="utf-8"))
 
-        assert "Cleaning mode selector" in block
+        for action in ("clean_room", "clean_zone"):
+            description = strings["services"][action]["fields"]["cleaning_mode"]["description"]
+            assert "Cleaning mode select" in description, action
         assert "vacuum_then_mop" in block
 
 

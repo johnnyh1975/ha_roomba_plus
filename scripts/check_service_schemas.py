@@ -172,6 +172,45 @@ def _registrations(
             if isinstance(name, str):
                 out[name] = _schema_field_names(last, constants, named)
 
+    # REGISTERED IN A LOOP OVER A NAME PART. The reset actions are
+    # `for _part in ("filter", ...): svc = f"reset_{_part}"` and then
+    # registered under `svc`; the names come from the f-string.
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.For) and isinstance(node.target, ast.Name)
+                and isinstance(node.iter, ast.Tuple)
+                and all(isinstance(e, ast.Constant) for e in node.iter.elts)):
+            continue
+        loop_var = node.target.id
+        templates: dict[str, ast.JoinedStr] = {}
+        for sub in ast.walk(node):
+            if (isinstance(sub, ast.Assign) and len(sub.targets) == 1
+                    and isinstance(sub.targets[0], ast.Name)
+                    and isinstance(sub.value, ast.JoinedStr)):
+                templates[sub.targets[0].id] = sub.value
+        for sub in ast.walk(node):
+            if not (isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name)
+                    and sub.func.id == "register_guarded"):
+                continue
+            name_arg = next((a for a in sub.args if isinstance(a, ast.Name)
+                             and a.id in templates), None)
+            if name_arg is None:
+                continue
+            schema = next((kw.value for kw in sub.keywords if kw.arg == "schema"), None)
+            fields = _schema_field_names(schema, constants, named) if schema is not None else None
+            for value in node.iter.elts:
+                parts = []
+                for piece in templates[name_arg.id].values:
+                    if isinstance(piece, ast.Constant):
+                        parts.append(str(piece.value))
+                    elif (isinstance(piece, ast.FormattedValue)
+                          and isinstance(piece.value, ast.Name) and piece.value.id == loop_var):
+                        parts.append(str(value.value))  # type: ignore[attr-defined]
+                    else:
+                        parts = []
+                        break
+                if parts:
+                    out["".join(parts)] = fields
+
     for node in ast.walk(tree):
         # `hass.services.async_register(...)`, or since 4.2.11 the guarded
         # wrapper `register_guarded(hass, ...)` from service_guard.py, which
