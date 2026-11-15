@@ -2354,7 +2354,7 @@
       "message": "Não foi possível alterar o agendamento do robô: {reason}"
     },
     "command_not_delivered": {
-      "message": "O comando «{command}» não foi aceite para envio — nunca chegou à nuvem iRobot, por isso o robô não o recebeu. É um problema de ligação, não uma recusa do robô."
+      "message": "A publicação do comando “{command}” não foi confirmada. A entrega é desconhecida; verifica o estado do robô antes de repetir."
     },
     "schedules_unreadable": {
       "message": "Não foi possível ler os agendamentos da nuvem iRobot — nada foi gravado."

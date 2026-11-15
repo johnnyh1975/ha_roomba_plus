@@ -875,9 +875,9 @@ def _sent_commands(data: Any) -> list[dict[str, Any]] | str:
     The robot's `lastCommand` records only what it RECEIVED -- which is
     exactly what was in doubt.
 
-    `ok` is whether the publish succeeded. False proves the robot never
-    saw it; True does not prove it acted, because a broker-confirmed
-    command can still be ignored.
+    `ok` is whether publication was confirmed. False does not rule out
+    delivery with a lost PUBACK; True does not prove the robot acted,
+    because a broker-confirmed command can still be ignored.
     """
     log = getattr(data, "sent_commands", None)
     if not log:

@@ -2354,7 +2354,7 @@
       "message": "Het robotschema kon niet worden gewijzigd: {reason}"
     },
     "command_not_delivered": {
-      "message": "Het commando “{command}” werd niet voor verzending geaccepteerd — het heeft de iRobot-cloud nooit bereikt, dus de robot heeft het niet ontvangen. Dit is een verbindingsprobleem, geen weigering door de robot."
+      "message": "De publicatie van de opdracht ‘{command}’ is niet bevestigd. De aflevering is onbekend; controleer de status van de robot voordat je het opnieuw probeert."
     },
     "schedules_unreadable": {
       "message": "Kon de schema's niet uit de iRobot-cloud lezen — er is niets geschreven."

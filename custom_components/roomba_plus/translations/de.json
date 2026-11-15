@@ -2354,7 +2354,7 @@
       "message": "Der Roboter-Zeitplan konnte nicht geändert werden: {reason}"
     },
     "command_not_delivered": {
-      "message": "Der Befehl „{command}“ wurde nicht zur Zustellung angenommen — er hat die iRobot-Cloud nie erreicht, der Roboter hat ihn also nicht gesehen. Das ist ein Verbindungsproblem, keine Ablehnung durch den Roboter."
+      "message": "Die Veröffentlichung des Befehls „{command}“ wurde nicht bestätigt. Die Zustellung ist unbekannt; prüfe vor einem erneuten Versuch den Zustand des Roboters."
     },
     "schedules_unreadable": {
       "message": "Die Zeitpläne ließen sich nicht aus der iRobot-Cloud lesen — es wurde nichts geschrieben."

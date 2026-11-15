@@ -143,6 +143,41 @@ class TestPrimeRoomCleaning:
         return PrimeRoomCleaning(data), robot
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("published", [False, True])
+    async def test_region_publish_failure_reaches_the_caller(self, monkeypatch, published):
+        """A missing PUBACK fails the action and leaves its mission plan alone."""
+        from homeassistant.exceptions import HomeAssistantError
+        from custom_components.roomba_plus.models import ConnectionType, RoombaData
+        from custom_components.roomba_plus.room_cleaning import PrimeRoomCleaning
+
+        robot = SimpleNamespace(send_routine_command_via_cmd_topic=AsyncMock(return_value=published))
+        data = RoombaData(
+            blid="0123456789ABCDEF", prime_robot=robot,
+            connection_type=ConnectionType.CLOUD_ONLY,
+        )
+        entry = SimpleNamespace(runtime_data=data, options={})
+        backend = PrimeRoomCleaning(data, entry)
+        plan = MagicMock()
+        monkeypatch.setattr(backend, "_note_mission_plan", plan)
+
+        async def send():
+            await backend.clean_rooms(
+                ["MAP-1/12"], ordered=False, operating_mode=[2],
+            )
+
+        if published:
+            await send()
+            plan.assert_called_once_with("MAP-1", ["12"])
+        else:
+            with pytest.raises(HomeAssistantError) as err:
+                await send()
+            assert err.value.translation_key == "command_not_delivered"
+            assert err.value.translation_placeholders == {"command": "start (regions)"}
+            plan.assert_not_called()
+        robot.send_routine_command_via_cmd_topic.assert_awaited_once()
+        assert data.sent_commands[-1]["ok"] is published
+
+    @pytest.mark.asyncio
     async def test_room_names_come_back_mapped_to_ids(self):
         backend, _robot = self._backend()
 

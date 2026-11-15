@@ -25,8 +25,9 @@ WHAT `ok` MEANS. Whether the publish succeeded, which the libraries
 return and every one of our call sites used to discard. It does NOT
 mean the robot acted: roombapy-prime records a robot that ignored
 `start`, `stop`, `dock` and `find` for 61 hours with every one
-broker-confirmed. A False here is proof of failure; a True is only the
-absence of that particular failure.
+broker-confirmed. False means publication was not confirmed, which can
+also follow a lost PUBACK after delivery. Neither value proves what the
+robot did, so an unconfirmed publish must not trigger an automatic retry.
 """
 
 from __future__ import annotations
