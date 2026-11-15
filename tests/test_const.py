@@ -403,6 +403,15 @@ class TestHasCleanBase:
     def test_empty_state(self):
         assert has_clean_base(STATE_EMPTY) is False
 
+    @pytest.mark.parametrize("dock_state", [0, 1, 2, -1, -2])
+    def test_plain_charging_dock_is_no_clean_base(self, dock_state):
+        """#249: a plain dock sends a small integer state and no fwVer."""
+        assert has_clean_base({"dock": {"state": dock_state}}) is False
+
+    @pytest.mark.parametrize("dock_state", [301, 353, 365])
+    def test_clean_base_state_without_fwver(self, dock_state):
+        assert has_clean_base({"dock": {"state": dock_state}}) is True
+
     def test_dock_string_state_not_int(self):
         """dock.state as string should not trigger clean_base detection."""
         state = {"dock": {"state": "ok"}}

@@ -3182,10 +3182,30 @@ def is_braava(state: dict[str, Any]) -> bool:
     return sku[0].lower() == "m"
 
 
+#: `dock.state` values of a Clean Base: the 300s, as in
+#: CLEAN_BASE_STATUS_SLUGS (ready 300/301, emptying, bag and sensor
+#: faults up to 365).
+_CLEAN_BASE_STATES: Final = range(300, 400)
+
+
 def has_clean_base(state: dict[str, Any]) -> bool:
-    """Return True if a Clean Base dock is present and communicating."""
+    """Return True if a Clean Base dock is present and communicating.
+
+    A PLAIN CHARGING DOCK ALSO SENDS AN INTEGER `dock.state` (#249): a
+    small charge state, no `fwVer`, and `clean_base_status` reading it
+    as unknown. Any integer counted as a Clean Base, so such a robot got
+    the Clean Base sensors and a bag reported due every ~29 hours of
+    runtime for a bag it does not have. A Clean Base reports its state
+    in the 300s, which is what the status sensor reads too; the two now
+    agree.
+    """
     dock = state.get("dock") or {}
-    return "fwVer" in dock or isinstance(dock.get("state"), int)
+    dock_state = dock.get("state")
+    return "fwVer" in dock or (
+        isinstance(dock_state, int)
+        and not isinstance(dock_state, bool)
+        and dock_state in _CLEAN_BASE_STATES
+    )
 
 
 def active_charge_cycles(bbchg3: dict[str, Any]) -> int | None:

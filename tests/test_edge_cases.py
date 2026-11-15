@@ -1790,8 +1790,8 @@ class TestHasCleanBaseNoneGuard:
     def test_dock_present_with_fwver_returns_true(self):
         assert has_clean_base({"dock": {"fwVer": "1.0"}}) is True
 
-    def test_dock_present_with_int_state_returns_true(self):
-        assert has_clean_base({"dock": {"state": 1}}) is True
+    def test_dock_present_with_clean_base_state_returns_true(self):
+        assert has_clean_base({"dock": {"state": 301}}) is True
 
 
 class TestHasCarpetBoostNoneGuard:
