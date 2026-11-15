@@ -80,7 +80,7 @@ history are made up.</sub>
 |---|---|---|---|
 | 600 | Roomba 694, 692, 671 | local | Roomba 694 |
 | 900 | Roomba 980, 985 | local | Roomba 980 |
-| i, s, j series | i3, i7+, s9+, j7+, Combo j9+ | local, iRobot account optional | i7+, s9+, j7+, Combo j9+ |
+| i, s, j series | i3, i7+, s9+, j7+, j8+, Combo j9+ | local, iRobot account optional | i7+, s9+, j7+, Combo j9+ |
 | Braava | jet m6 | local, iRobot account optional | Braava jet m6 |
 | V4/Prime | Combo 105, Plus 405/410/416 Combo, Combo 505, Roomba Max 705 | iRobot cloud | several models, see [V4/Prime robots](docs/PRIME.md) |
 
