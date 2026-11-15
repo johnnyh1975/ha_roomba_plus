@@ -1,7 +1,7 @@
 # Roomba+ for Home Assistant
 
 [![Marketplace](https://img.shields.io/badge/Marketplace%20%2F%20HACS-Default-blue.svg)](https://github.com/hacs/default)
-[![Version](https://img.shields.io/badge/Version-4.6.0b3-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-4.6.0-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2025.5%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Platinum-blueviolet.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
@@ -32,7 +32,7 @@ history are made up.</sub>
 - [Installation](#installation)
 - [Setup](#setup)
 - [First steps](#first-steps)
-- [What's new in 4.6 (beta)](#whats-new-in-46-beta)
+- [What's new in 4.6](#whats-new-in-46)
 - [V4/Prime robots](#v4prime-robots)
 - [Known limitations](#known-limitations)
 - [Data privacy](#data-privacy)
@@ -138,8 +138,7 @@ it moved to the Marketplace by itself and keeps getting updates.
 2. Download the newest release, then restart Home Assistant.
 
 **Betas** are offered only when you switch them on for Roomba+: *Include pre-releases* in
-the menu of its Marketplace page, or *Show beta versions* in HACS. The current beta is
-**4.6.0b3** — see [what 4.6 adds](#whats-new-in-46-beta).
+the menu of its Marketplace page, or *Show beta versions* in HACS.
 
 ### Manual
 
@@ -180,10 +179,11 @@ Step by step, with pictures: **[Getting started](docs/getting-started.md)**. In 
    maintenance with Done and Later buttons, a start when everyone has left.
 5. **Mark parts done** in `todo.<robot>_maintenance` when you replace or clean them.
 
-## What's new in 4.6 (beta)
+## What's new in 4.6
 
-4.6.0b3 is a pre-release. Everything in it is additive, and none of it has run on a robot
-yet, so reports are welcome.
+<a id="whats-new-in-46-beta"></a>
+
+Everything in 4.6 is additive: existing entities, events and their fields stay as they were.
 
 - **Prime robots get the entities Classic robots already had** — mission and history
   sensors, the stuck event, room progress for missions started in the app, and more, each
@@ -196,8 +196,10 @@ yet, so reports are welcome.
   account), and **when each Home Assistant area was last vacuumed and mopped**.
 - **Send home after a pause**, battery used per mission, and blueprints that install
   themselves.
+- **Documentation arranged by task**: [Getting started](docs/getting-started.md), a guide per
+  task, and a reference of every entity, action and option built from the code.
 
-Details: release notes [b1](release-notes/v4.6.0b1.md), [b2](release-notes/v4.6.0b2.md), [b3](release-notes/v4.6.0b3.md) · [upgrade notes](docs/UPGRADING.md#v460--from-v45x).
+Details: [release notes](release-notes/v4.6.0.md) · [upgrade notes](docs/UPGRADING.md#v460--from-v45x).
 
 ## V4/Prime robots
 

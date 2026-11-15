@@ -92,6 +92,21 @@ Nothing to do. What you will notice:
   600, showed *Unknown* until its next mission; now they show the count from
   before the restart until the robot reports again. Live values (battery,
   phase, signal) are not kept.
+- **A robot on a plain charging dock no longer counts as having a Clean
+  Base.** Its Clean Base bag is no longer reported due, and the Clean Base
+  sensors are not created for it. Those created before stay in the entity
+  registry as unavailable; delete them under Settings → Devices & services →
+  Entities.
+- **A Prime room clean whose sending the cloud did not confirm fails the
+  action** with an error, as the plain start, stop and dock commands already
+  did. The robot may still have received it, so check its state before
+  starting again. Such a start is not sent a second time.
+- **The choices in the action editor are translated**: cleaning mode, pad
+  wetness, weekdays, schedule frequency and the maintenance action. The
+  editor now writes the frequency in lower case (`weekly`); automations with
+  `WEEKLY` keep working.
+- **The documentation is arranged by task.** Links to the old sections of
+  the feature reference still land on a table that says where each went.
 
 ---
 ## v4.5.4 — from v4.5.x
