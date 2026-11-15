@@ -1076,3 +1076,15 @@ class TestTheCommandLevelFields:
 
         assert command["select_all"] is False
         assert command["regions"]
+
+
+@pytest.mark.parametrize("schema", [pss._CREATE_SCHEMA, pss._UPDATE_SCHEMA])
+@pytest.mark.parametrize("given", ["bi_weekly", "BI_WEEKLY"])
+def test_frequency_in_either_case(schema, given):
+    """The action editor sends the lower-case choice it can translate;
+    automations written with the upper-case name keep working."""
+    call = {
+        "entity_id": "vacuum.robot", "days": ["mon"], "time": "07:00",
+        "frequency": given,
+    }
+    assert schema(call)["frequency"] == "BI_WEEKLY"

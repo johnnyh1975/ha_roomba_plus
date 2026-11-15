@@ -3078,6 +3078,40 @@
         "cleaned": "Gedaan – schoongemaakt",
         "close": "Sluiten tot de volgende fout"
       }
+    },
+    "cleaning_mode": {
+      "options": {
+        "vacuum": "Stofzuigen",
+        "mop": "Dweilen",
+        "vacuum_and_mop": "Stofzuigen en dweilen",
+        "vacuum_then_mop": "Stofzuigen, dan dweilen"
+      }
+    },
+    "pad_wetness": {
+      "options": {
+        "1": "Laag",
+        "2": "Gemiddeld",
+        "3": "Hoog"
+      }
+    },
+    "weekday": {
+      "options": {
+        "mon": "Maandag",
+        "tue": "Dinsdag",
+        "wed": "Woensdag",
+        "thu": "Donderdag",
+        "fri": "Vrijdag",
+        "sat": "Zaterdag",
+        "sun": "Zondag"
+      }
+    },
+    "schedule_frequency": {
+      "options": {
+        "weekly": "Wekelijks",
+        "bi_weekly": "Om de twee weken",
+        "monthly": "Maandelijks",
+        "once": "Eenmalig"
+      }
     }
   }
 }

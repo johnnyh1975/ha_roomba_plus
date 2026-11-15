@@ -3078,6 +3078,40 @@
         "cleaned": "Done – cleaned",
         "close": "Close until the next error"
       }
+    },
+    "cleaning_mode": {
+      "options": {
+        "vacuum": "Vacuum",
+        "mop": "Mop",
+        "vacuum_and_mop": "Vacuum and mop",
+        "vacuum_then_mop": "Vacuum, then mop"
+      }
+    },
+    "pad_wetness": {
+      "options": {
+        "1": "Low",
+        "2": "Medium",
+        "3": "High"
+      }
+    },
+    "weekday": {
+      "options": {
+        "mon": "Monday",
+        "tue": "Tuesday",
+        "wed": "Wednesday",
+        "thu": "Thursday",
+        "fri": "Friday",
+        "sat": "Saturday",
+        "sun": "Sunday"
+      }
+    },
+    "schedule_frequency": {
+      "options": {
+        "weekly": "Weekly",
+        "bi_weekly": "Every two weeks",
+        "monthly": "Monthly",
+        "once": "Once"
+      }
     }
   }
 }

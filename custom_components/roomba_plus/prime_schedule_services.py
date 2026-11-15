@@ -58,13 +58,17 @@ SERVICE_DELETE_SCHEDULE = "delete_schedule"
 _WEEKDAYS = {"sun": 0, "mon": 1, "tue": 2, "wed": 3, "thu": 4, "fri": 5, "sat": 6}
 
 _FREQUENCIES = ("WEEKLY", "BI_WEEKLY", "MONTHLY", "ONCE")
+#: The action editor offers the frequencies in lower case, so Home
+#: Assistant can translate them (selector option keys must be lower
+#: case); automations written with the upper-case names keep working.
+_FREQUENCY = vol.All(cv.string, vol.Upper, vol.In(_FREQUENCIES))
 
 _CREATE_SCHEMA = vol.Schema({
     vol.Required("entity_id"): cv.entity_id,
     vol.Optional("name"): cv.string,
     vol.Required("days"): vol.All(cv.ensure_list, [vol.In(_WEEKDAYS)]),
     vol.Required("time"): cv.time,
-    vol.Optional("frequency", default="WEEKLY"): vol.In(_FREQUENCIES),
+    vol.Optional("frequency", default="WEEKLY"): _FREQUENCY,
     vol.Optional("rooms"): vol.All(cv.ensure_list, [cv.string]),
     vol.Optional("pad_wetness"): vol.All(vol.Coerce(int), vol.Range(min=1, max=3)),
     vol.Optional("enabled", default=True): cv.boolean,
@@ -75,7 +79,7 @@ _UPDATE_SCHEMA = vol.Schema({
     vol.Optional("name"): cv.string,
     vol.Optional("days"): vol.All(cv.ensure_list, [vol.In(_WEEKDAYS)]),
     vol.Optional("time"): cv.time,
-    vol.Optional("frequency"): vol.In(_FREQUENCIES),
+    vol.Optional("frequency"): _FREQUENCY,
     vol.Optional("rooms"): vol.All(cv.ensure_list, [cv.string]),
     vol.Optional("pad_wetness"): vol.All(vol.Coerce(int), vol.Range(min=1, max=3)),
     vol.Optional("enabled"): cv.boolean,

@@ -3078,6 +3078,40 @@
         "cleaned": "Erledigt – gereinigt",
         "close": "Schließen bis zum nächsten Fehler"
       }
+    },
+    "cleaning_mode": {
+      "options": {
+        "vacuum": "Saugen",
+        "mop": "Wischen",
+        "vacuum_and_mop": "Saugen und Wischen",
+        "vacuum_then_mop": "Saugen, dann Wischen"
+      }
+    },
+    "pad_wetness": {
+      "options": {
+        "1": "Niedrig",
+        "2": "Mittel",
+        "3": "Hoch"
+      }
+    },
+    "weekday": {
+      "options": {
+        "mon": "Montag",
+        "tue": "Dienstag",
+        "wed": "Mittwoch",
+        "thu": "Donnerstag",
+        "fri": "Freitag",
+        "sat": "Samstag",
+        "sun": "Sonntag"
+      }
+    },
+    "schedule_frequency": {
+      "options": {
+        "weekly": "Wöchentlich",
+        "bi_weekly": "Alle zwei Wochen",
+        "monthly": "Monatlich",
+        "once": "Einmalig"
+      }
     }
   }
 }

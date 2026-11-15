@@ -1541,3 +1541,24 @@ def test_services_yaml_carries_no_text_of_its_own():
         for field, fspec in (spec.get("fields") or {}).items():
             found += [f"{action}.{field}.{k}" for k in ("name", "description") if k in (fspec or {})]
     assert not found, found
+
+
+@pytest.mark.parametrize("lang", ["strings", "de", "en", "es", "fr", "it", "nl", "pl", "pt"])
+def test_every_choice_in_an_action_is_translated(lang):
+    """A choice list with fixed English labels showed in English in every
+    language (cleaning mode, pad wetness, weekdays, frequency)."""
+    path = PKG / "strings.json" if lang == "strings" else PKG / "translations" / f"{lang}.json"
+    selectors = json.loads(path.read_text(encoding="utf-8")).get("selector", {})
+    gaps = []
+    for action, spec in _services_yaml().items():
+        for field, fspec in ((spec or {}).get("fields") or {}).items():
+            select = ((fspec or {}).get("selector") or {}).get("select")
+            if not select or not select.get("options"):
+                continue
+            key = select.get("translation_key")
+            options = (selectors.get(key) or {}).get("options", {}) if key else {}
+            for option in select["options"]:
+                value = option.get("value") if isinstance(option, dict) else option
+                if isinstance(option, dict) or not options.get(str(value)):
+                    gaps.append(f"{action}.{field}: {value}")
+    assert not gaps, gaps

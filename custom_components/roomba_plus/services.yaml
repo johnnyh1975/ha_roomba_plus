@@ -19,15 +19,8 @@ clean_room:
     cleaning_mode:
       selector:
         select:
-          options:
-            - label: Vacuum
-              value: vacuum
-            - label: Mop
-              value: mop
-            - label: Vacuum and mop
-              value: vacuum_and_mop
-            - label: Vacuum, then mop
-              value: vacuum_then_mop
+          translation_key: cleaning_mode
+          options: [vacuum, mop, vacuum_and_mop, vacuum_then_mop]
     two_pass:
       required: false
       selector:
@@ -38,13 +31,8 @@ clean_room:
     pad_wetness:
       selector:
         select:
-          options:
-            - label: Light
-              value: "1"
-            - label: Standard
-              value: "2"
-            - label: Hard
-              value: "3"
+          translation_key: pad_wetness
+          options: ["1", "2", "3"]
     room_passes:
       required: false
       example: '[{"name": "Kitchen", "two_pass": true}, {"name": "Hallway"}]'
@@ -287,9 +275,8 @@ maintenance_done:
       required: false
       selector:
         select:
-          options:
-            - "replace"
-            - "clean"
+          translation_key: maintenance_action
+          options: [replace, clean]
 
 maintenance_snooze:
   target:
@@ -358,30 +345,18 @@ create_schedule:
       selector:
         select:
           multiple: true
-          options:
-            - label: Monday
-              value: mon
-            - label: Tuesday
-              value: tue
-            - label: Wednesday
-              value: wed
-            - label: Thursday
-              value: thu
-            - label: Friday
-              value: fri
-            - label: Saturday
-              value: sat
-            - label: Sunday
-              value: sun
+          translation_key: weekday
+          options: [mon, tue, wed, thu, fri, sat, sun]
     time:
       required: true
       selector:
         time:
     frequency:
-      default: WEEKLY
+      default: weekly
       selector:
         select:
-          options: [WEEKLY, BI_WEEKLY, MONTHLY, ONCE]
+          translation_key: schedule_frequency
+          options: [weekly, bi_weekly, monthly, once]
     rooms:
       example: '["Kitchen", "Hallway"]'
       selector:
@@ -416,28 +391,16 @@ update_schedule:
       selector:
         select:
           multiple: true
-          options:
-            - label: Monday
-              value: mon
-            - label: Tuesday
-              value: tue
-            - label: Wednesday
-              value: wed
-            - label: Thursday
-              value: thu
-            - label: Friday
-              value: fri
-            - label: Saturday
-              value: sat
-            - label: Sunday
-              value: sun
+          translation_key: weekday
+          options: [mon, tue, wed, thu, fri, sat, sun]
     time:
       selector:
         time:
     frequency:
       selector:
         select:
-          options: [WEEKLY, BI_WEEKLY, MONTHLY, ONCE]
+          translation_key: schedule_frequency
+          options: [weekly, bi_weekly, monthly, once]
     rooms:
       example: '["Kitchen", "Hallway"]'
       selector:
@@ -497,28 +460,16 @@ clean_zone:
     cleaning_mode:
       selector:
         select:
-          options:
-            - label: Vacuum
-              value: vacuum
-            - label: Mop
-              value: mop
-            - label: Vacuum and mop
-              value: vacuum_and_mop
-            - label: Vacuum, then mop
-              value: vacuum_then_mop
+          translation_key: cleaning_mode
+          options: [vacuum, mop, vacuum_and_mop, vacuum_then_mop]
     smart_scrub:
       selector:
         boolean:
     pad_wetness:
       selector:
         select:
-          options:
-            - label: Light
-              value: "1"
-            - label: Standard
-              value: "2"
-            - label: Hard
-              value: "3"
+          translation_key: pad_wetness
+          options: ["1", "2", "3"]
     two_pass:
       required: false
       selector:
