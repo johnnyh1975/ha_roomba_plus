@@ -62,6 +62,14 @@ actions:
 
 A start that the robot never begins is the failure nobody notices. Roomba+ watches every start it sends; if no mission begins within 20 seconds (Classic) or 60 seconds (Prime), it fires `roomba_plus_command_not_delivered`, sends the command once more if the robot is idle, and `event.<robot>_command` changes state. The recipe: [Tell me when a start did not arrive](../AUTOMATIONS.md#tell-me-when-a-start-did-not-arrive-460).
 
+On Prime, if the library signals a newly resolved robot MQTT prefix, the
+entry reloads once to rebuild the connection; that recovery does not replay
+the clean. An existing ignored-command watch stops without resending after
+this signal. This requires a library version offering the prefix-change
+notification; with 0.9.1 the existing behaviour remains. A mid-session
+deployment move has not yet been confirmed on a robot, and this detection
+does not establish the cause of an ignored command.
+
 ---
 
 [Documentation home](../README.md) · [Troubleshooting](../TROUBLESHOOTING.md) · [Questions and reports](https://github.com/johnnyh1975/ha_roomba_plus/issues)

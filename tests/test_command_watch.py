@@ -179,3 +179,9 @@ class TestTheNotDeliveredEvent:
 @pytest.mark.asyncio
 async def test_sleep_waits():
     await cw.sleep(0)
+
+
+def test_a_known_prefix_change_is_not_evidence_for_resending_a_command():
+    entry = _prime_entry({'cleanMissionStatus': {'cycle': 'none', 'phase': 'charge'}})
+    entry.runtime_data.prime_robot.topic_prefix_changed = True
+    assert cw.mission_status(entry) is None

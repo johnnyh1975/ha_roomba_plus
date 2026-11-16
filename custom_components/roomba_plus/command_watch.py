@@ -64,6 +64,10 @@ def mission_status(entry: Any) -> dict[str, Any] | None:
             status["batPct"] = reported.get("batPct")
             return status
         if _is_prime(data):
+            # A known namespace change invalidates this instance's command
+            # observation. Recovery rebuilds it; never resend from this watch.
+            if getattr(getattr(data, "prime_robot", None), "topic_prefix_changed", False) is True:
+                return None
             # The raw shadow: Prime's `cleanMissionStatus` carries the
             # Classic wire names (roombapy-prime `CleanMissionStatus`).
             coordinator = getattr(data, "prime_status_coordinator", None)

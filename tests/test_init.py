@@ -3129,3 +3129,128 @@ class TestTheReloadBaselineIsSeeded:
                 patch.object(pkg, "_async_setup_entry_prime", AsyncMock(return_value=True)):
             assert await pkg.async_setup_entry(MagicMock(), entry) is True
         seed.assert_called_once()
+
+
+class _PrefixSignalRobot:
+    """The proposed optional library signal, without any transport."""
+    def __init__(self, changed=False):
+        self.topic_prefix_changed = changed
+        self.callback = None
+
+    def set_topic_prefix_changed_callback(self, callback):
+        self.callback = callback
+        if callback is not None and self.topic_prefix_changed:
+            callback()
+
+    def change(self):
+        self.topic_prefix_changed = True
+        if self.callback is not None:
+            self.callback()
+
+
+class TestPrimePrefixReload:
+    @pytest.mark.asyncio
+    async def test_loaded_entry_reloads_once_without_sending_commands(self, hass, monkeypatch):
+        from homeassistant.config_entries import ConfigEntryState
+        robot = _PrefixSignalRobot()
+        entry = MockConfigEntry(domain=DOMAIN, state=ConfigEntryState.LOADED)
+        entry.add_to_hass(hass)
+        entry.runtime_data = SimpleNamespace(prime_robot=robot)
+        reload = MagicMock()
+        monkeypatch.setattr(hass.config_entries, 'async_schedule_reload', reload)
+        init_mod._reload_on_prime_prefix_change(hass, entry, robot)
+        reload.assert_not_called()
+        robot.change()
+        robot.change()
+        reload.assert_not_called()
+        await hass.async_block_till_done()
+        reload.assert_called_once_with(entry.entry_id)
+        await entry._async_process_on_unload(hass)
+        assert robot.callback is None
+
+    @pytest.mark.asyncio
+    async def test_a_change_during_setup_waits_until_loaded(self, hass, monkeypatch):
+        from homeassistant.config_entries import ConfigEntryState
+        robot = _PrefixSignalRobot(changed=True)
+        entry = MockConfigEntry(domain=DOMAIN, state=ConfigEntryState.SETUP_IN_PROGRESS)
+        entry.add_to_hass(hass)
+        entry.runtime_data = SimpleNamespace(prime_robot=robot)
+        reload = MagicMock()
+        monkeypatch.setattr(hass.config_entries, 'async_schedule_reload', reload)
+        init_mod._reload_on_prime_prefix_change(hass, entry, robot)
+        reload.assert_not_called()
+        entry._async_set_state(hass, ConfigEntryState.LOADED, None)
+        await hass.async_block_till_done()
+        reload.assert_called_once_with(entry.entry_id)
+        entry._async_set_state(hass, ConfigEntryState.LOADED, None)
+        reload.assert_called_once()
+        await entry._async_process_on_unload(hass)
+
+    @pytest.mark.asyncio
+    async def test_old_library_and_stale_callbacks_cannot_trigger_reload(self, hass, monkeypatch):
+        from homeassistant.config_entries import ConfigEntryState
+        entry = MockConfigEntry(domain=DOMAIN, state=ConfigEntryState.LOADED)
+        entry.add_to_hass(hass)
+        reload = MagicMock()
+        monkeypatch.setattr(hass.config_entries, 'async_schedule_reload', reload)
+        old_sdk_robot = object()
+        entry.runtime_data = SimpleNamespace(prime_robot=old_sdk_robot)
+        init_mod._reload_on_prime_prefix_change(hass, entry, old_sdk_robot)
+        reload.assert_not_called()
+        robot = _PrefixSignalRobot()
+        entry.runtime_data = SimpleNamespace(prime_robot=robot)
+        init_mod._reload_on_prime_prefix_change(hass, entry, robot)
+        stale_callback = robot.callback
+        await entry._async_process_on_unload(hass)
+        assert robot.callback is None
+        replacement = _PrefixSignalRobot()
+        entry.runtime_data = SimpleNamespace(prime_robot=replacement)
+        robot.change()
+        stale_callback()
+        reload.assert_not_called()
+        init_mod._reload_on_prime_prefix_change(hass, entry, replacement)
+        entry._async_set_state(hass, ConfigEntryState.LOADED, None)
+        reload.assert_not_called()  # reconstructed instance starts clean
+        replacement.change()
+        await hass.async_block_till_done()
+        reload.assert_called_once_with(entry.entry_id)
+        await entry._async_process_on_unload(hass)
+
+    @pytest.mark.asyncio
+    async def test_recovery_is_scheduled_not_awaited_from_the_signal(self, hass, monkeypatch):
+        from homeassistant.config_entries import ConfigEntryState
+        robot = _PrefixSignalRobot()
+        entry = MockConfigEntry(domain=DOMAIN, state=ConfigEntryState.LOADED)
+        entry.add_to_hass(hass)
+        entry.runtime_data = SimpleNamespace(prime_robot=robot)
+        reload = AsyncMock(return_value=True)
+        monkeypatch.setattr(hass.config_entries, 'async_reload', reload)
+        init_mod._reload_on_prime_prefix_change(hass, entry, robot)
+        robot.change()  # HA starts tasks eagerly; registration must defer them
+        reload.assert_not_awaited()
+        await hass.async_block_till_done()
+        reload.assert_awaited_once_with(entry.entry_id)
+        await entry._async_process_on_unload(hass)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize('interrupted', ['unload', 'state', 'replacement'])
+    async def test_a_queued_reload_is_discarded_when_the_entry_changes(self, hass, monkeypatch, interrupted):
+        from homeassistant.config_entries import ConfigEntryState
+        robot = _PrefixSignalRobot()
+        entry = MockConfigEntry(domain=DOMAIN, state=ConfigEntryState.LOADED)
+        entry.add_to_hass(hass)
+        entry.runtime_data = SimpleNamespace(prime_robot=robot)
+        reload = MagicMock()
+        monkeypatch.setattr(hass.config_entries, 'async_schedule_reload', reload)
+        init_mod._reload_on_prime_prefix_change(hass, entry, robot)
+        robot.change()
+        if interrupted == 'unload':
+            await entry._async_process_on_unload(hass)
+        elif interrupted == 'state':
+            entry._async_set_state(hass, ConfigEntryState.UNLOAD_IN_PROGRESS, None)
+        else:
+            entry.runtime_data = SimpleNamespace(prime_robot=_PrefixSignalRobot())
+        await hass.async_block_till_done()
+        reload.assert_not_called()
+        if interrupted != 'unload':
+            await entry._async_process_on_unload(hass)

@@ -1755,6 +1755,54 @@ async def _async_fetch_prime_time_estimates(config_entry: RoombaConfigEntry) -> 
         )
 
 
+@callback
+def _reload_on_prime_prefix_change(
+    hass: HomeAssistant, config_entry: RoombaConfigEntry, robot: Any,
+) -> None:
+    """Rebuild once when the library signals a known prefix change.
+
+    Optional until the library releases this signal. A change noticed
+    during setup waits for LOADED; renewal only schedules recovery, never
+    awaits unload from its own task. No command is sent or replayed.
+    """
+    from homeassistant.config_entries import ConfigEntryState
+
+    register = getattr(robot, "set_topic_prefix_changed_callback", None)
+    if not callable(register):
+        return
+    scheduled = False
+
+    @callback
+    def _schedule_reload() -> None:
+        if (
+            config_entry.state is ConfigEntryState.LOADED
+            and config_entry.runtime_data is not None
+            and config_entry.runtime_data.prime_robot is robot
+        ):
+            hass.config_entries.async_schedule_reload(config_entry.entry_id)
+
+    @callback
+    def _on_change() -> None:
+        nonlocal scheduled
+        if (
+            scheduled
+            or config_entry.state is not ConfigEntryState.LOADED
+            or config_entry.runtime_data is None
+            or config_entry.runtime_data.prime_robot is not robot
+            or getattr(robot, "topic_prefix_changed", False) is not True
+        ):
+            return
+        scheduled = True
+        # HA starts reload tasks eagerly. Leave authentication's callback
+        # first, rather than unloading its task from inside itself.
+        handle = hass.loop.call_soon(_schedule_reload)
+        config_entry.async_on_unload(handle.cancel)
+
+    config_entry.async_on_unload(functools.partial(register, None))
+    config_entry.async_on_unload(config_entry.async_on_state_change(_on_change))
+    register(_on_change)  # Replays a signal raised before setup finished.
+
+
 async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConfigEntry) -> bool:
     """Entirely separate setup path for CLOUD_ONLY (V4/Prime) entries.
 
@@ -2282,6 +2330,7 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
     _LOGGER.info(
         "Roomba+ (V4/Prime) connected to cloud for %s (blid=%s)", username, blid
     )
+    _reload_on_prime_prefix_change(hass, config_entry, prime_robot)
     return True
 
 
