@@ -386,3 +386,34 @@ class TestRoomAreaFields:
         assert ar.async_room_area_fields(MagicMock(), MagicMock(), None) == {
             "area_id": None, "area_name": None,
         }
+
+
+class TestMappingEdges:
+    """The shapes the mapping helpers must survive without inventing an area."""
+
+    def _ar(self, monkeypatch, options):
+        from custom_components.roomba_plus import area_resolver as ar
+
+        vacuum = SimpleNamespace(domain="vacuum", options={"vacuum": options})
+        monkeypatch.setattr(ar.er, "async_get", lambda _h: MagicMock())
+        monkeypatch.setattr(ar.er, "async_entries_for_config_entry", lambda _r, _e: [vacuum])
+        return ar
+
+    def test_a_single_segment_string_counts_as_a_list(self):
+        from custom_components.roomba_plus.area_resolver import _mapping_from_options
+
+        assert _mapping_from_options({"vacuum": {"area_mapping": {"hall": "P1_3"}}}) == {"P1_3": "hall"}
+
+    def test_no_region_id_is_no_area(self, monkeypatch):
+        ar = self._ar(monkeypatch, {"area_mapping": {"hall": ["rid_M/3"]}})
+        assert ar._area_for_prime_region(MagicMock(), MagicMock(), "") is None
+
+    def test_a_name_needs_a_mapping_and_a_named_segment(self, monkeypatch):
+        ar = self._ar(monkeypatch, {"last_seen_segments": "broken"})
+        assert ar._area_for_segment_name(MagicMock(), MagicMock(), "") is None
+        assert ar._area_for_segment_name(MagicMock(), MagicMock(), "Hall") is None
+        ar = self._ar(monkeypatch, {
+            "area_mapping": {"hall": ["P1_3"]},
+            "last_seen_segments": [{"name": "Hall"}, "junk", {"id": "P1_3", "name": "Hall"}],
+        })
+        assert ar._area_for_segment_name(MagicMock(), MagicMock(), "Hall") == "hall"

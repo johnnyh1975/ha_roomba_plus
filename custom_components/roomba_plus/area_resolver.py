@@ -262,9 +262,9 @@ def _area_for_room(
 ) -> str | None:
     """async_area_for_room() without the guard."""
     data = config_entry.runtime_data
+    area: str | None = None
     if data.connection_type is ConnectionType.CLOUD_ONLY:
         qualified = (prime_rooms or {}).get(room)
-        area: str | None = None
         if qualified and "/" in str(qualified):
             area = async_area_for_segment(hass, config_entry, f"rid_{qualified}")
         else:
@@ -274,26 +274,25 @@ def _area_for_room(
             )
             if rid:
                 area = _area_for_prime_region(hass, config_entry, rid)
-        if area:
-            return area
     else:
         # Classic offers rooms as `<pmap id>_<region id>`.
         regions = getattr(
             getattr(data, "cloud_coordinator", None), "regions", None
         ) or []
         for region in regions:
-            if str(region.get("name") or "") != room:
-                continue
             pmap_id, region_id = region.get("pmap_id"), region.get("id")
-            if pmap_id and region_id:
-                area = async_area_for_segment(
-                    hass, config_entry, f"{pmap_id}_{region_id}"
-                )
-                if area:
-                    return area
-    return _area_for_segment_name(
-        hass, config_entry, room
-    ) or async_area_for_room_name(hass, config_entry, room)
+            if str(region.get("name") or "") != room or not (pmap_id and region_id):
+                continue
+            area = async_area_for_segment(hass, config_entry, f"{pmap_id}_{region_id}")
+            if area:
+                break
+    # Both generations: the mapped segment of that name, then the area
+    # named like the room.
+    return (
+        area
+        or _area_for_segment_name(hass, config_entry, room)
+        or async_area_for_room_name(hass, config_entry, room)
+    )
 
 
 def async_area_name(hass: HomeAssistant, area_id: str | None) -> str | None:
