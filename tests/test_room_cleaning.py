@@ -4933,3 +4933,25 @@ class TestA224CountsForItsOwnMap:
         assert _version_that_failed(state, "MAP-B") is None
         state["cleanMissionStatus"]["error"] = 0
         assert _version_that_failed(state, "MAP-A") is None
+
+
+@pytest.mark.asyncio
+async def test_prime_select_mode_reaches_every_room(monkeypatch):
+    """#254: the mode picked on the select applies to every room of a
+    Prime region clean, not the first alone."""
+    from custom_components.roomba_plus import room_cleaning as rc
+    from custom_components.roomba_plus.models import ConnectionType, RoombaData
+
+    robot = SimpleNamespace(send_routine_command_via_cmd_topic=AsyncMock(return_value=True))
+    data = RoombaData(
+        blid="0123456789ABCDEF", prime_robot=robot,
+        connection_type=ConnectionType.CLOUD_ONLY,
+    )
+    backend = rc.PrimeRoomCleaning(data, SimpleNamespace(runtime_data=data, options={}))
+    monkeypatch.setattr(backend, "_note_mission_plan", MagicMock())
+    monkeypatch.setattr(rc, "_selected_cleaning_mode", lambda _entry: 2)
+
+    await backend.clean_rooms(["MAP-1/12", "MAP-1/13"], ordered=True)
+
+    regions = robot.send_routine_command_via_cmd_topic.await_args.args[0].to_json()["regions"]
+    assert [r.get("params", {}).get("operatingMode") for r in regions] == [2, 2]

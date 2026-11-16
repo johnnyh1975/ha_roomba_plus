@@ -1704,10 +1704,15 @@ class PrimeRoomCleaning(RoomCleaningBackend):
         # HERE RATHER THAN IN `clean_rooms()`: this is the single place
         # every Prime region command passes through, both callers
         # included, so a path added later inherits it.
+        #
+        # EVERY ROOM, NOT THE FIRST (#254, @AR2000AR). `_region_params()`
+        # reads the list per room and does not spread a short one, so a
+        # one-element list from the select mopped the first room and left
+        # the rest in the robot's own mode.
         if not operating_mode:
             _selected = _selected_cleaning_mode(self._config_entry)
             if _selected is not None:
-                operating_mode = [_selected]
+                operating_mode = [_selected] * len(room_ids)
         # NOT INTO A FAULT THAT RULES THE MODE OUT (4.4.2): mopping with
         # the pad plate missing, vacuuming with it fitted, anything with
         # the robot off the floor. Here, so every region start has it.
