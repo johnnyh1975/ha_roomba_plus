@@ -10,12 +10,29 @@ are listed; most releases need nothing beyond updating.
 
 | Your version | Read |
 |---|---|
-| 4.5.x | [4.6.0](#v460--from-v45x) |
-| 4.4.x | [4.5.0](#v450--from-v44x), then 4.5.3, 4.5.4 and 4.6.0 below |
+| 4.6.0 | [4.6.1](#v461--from-v460) |
+| 4.5.x | [4.6.0](#v460--from-v45x), then 4.6.1 |
+| 4.4.x | [4.5.0](#v450--from-v44x), then 4.5.3, 4.5.4, 4.6.0 and 4.6.1 below |
 | 4.3.x or older | The notes of your line under [Older versions](#older-versions), then everything above them |
 
 Release notes, with everything that changed in each version:
 [GitHub Releases](https://github.com/johnnyh1975/ha_roomba_plus/releases).
+
+---
+## v4.6.1 — from v4.6.0
+
+Nothing to do. What you will notice:
+
+- **Rooms take their area from Home Assistant's mapping** (*Map vacuum
+  segments to areas*), as described for 4.6.0: in `get_rooms`, the
+  current-room sensor, the room events and the device tracker. 4.6.0 never
+  read the mapping and matched room names to area names instead. A room
+  mapped to an area of another name now gets the mapped area, and its
+  *last vacuumed* and *last mopped* sensors appear after the update. Area
+  aliases you added as a workaround can stay; the mapping comes first.
+- **Prime: the cleaning mode on the select applies to every room** of a
+  room clean that names no mode, such as one started from the card.
+  Before, only the first room got it.
 
 ---
 ## v4.6.0 — from v4.5.x
