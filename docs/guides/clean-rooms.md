@@ -78,7 +78,7 @@ data:
     - kitchen
 ```
 
-The area of a room is used everywhere Roomba+ names a room's area: the device tracker, the current-room sensor, the room events and `get_rooms`.
+The area of a room is used everywhere Roomba+ names a room's area: the device tracker, the current-room sensor, the room events, `get_rooms` and the *last vacuumed* and *last mopped* sensors per area. A room you have not mapped gets the area whose name or alias is the room's name.
 
 ## Skipping the current room
 

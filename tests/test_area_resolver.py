@@ -10,42 +10,36 @@ import pytest
 
 
 class TestSegmentMappingIsRead:
-    """Since the CLEAN_AREA work, HA holds a segment-to-area mapping in
-    the vacuum entity's registry options. That mapping is the user's own
-    statement of which robot room is which area, so resolving through it
-    beats matching names.
-
-    The option KEY is not something to depend on: it arrived in 2026.3
-    and the architecture discussion around it is still open. Several
-    plausible keys are tried, and anything unrecognised yields no
-    mapping -- which degrades to "no area" rather than to a wrong one."""
+    """HA keeps the mapping in the vacuum entity's registry options, as
+    `area_mapping`: {area id: [segment id, ...]} (#253). Inverted here to
+    segment -> area. Anything else yields no mapping, which degrades to
+    "no area" rather than to a wrong one."""
 
     def _mapping(self, options):
         from custom_components.roomba_plus.area_resolver import _mapping_from_options
 
         return _mapping_from_options(options)
 
-    def test_segment_keyed_mapping(self):
-        result = self._mapping({"vacuum": {
-            "segment_area_mapping": {"MAP1_rid_12": "kitchen"}
-        }})
+    def test_homeassistants_own_shape_is_read(self):
+        """#253: HA's own key and shape, as `vacuum.clean_area` reads it."""
+        result = self._mapping({"vacuum": {"area_mapping": {
+            "kitchen": ["MAP1_12"], "hall": ["MAP1_3", "MAP1_4"],
+        }}})
 
-        assert result == {"MAP1_rid_12": "kitchen"}
+        assert result == {"MAP1_12": "kitchen", "MAP1_3": "hall", "MAP1_4": "hall"}
 
-    def test_area_keyed_mapping_is_inverted(self):
-        """Stored the other way round depending on HA version. An area id
-        is a plain slug; our segment ids always carry a "rid_"/"zid_"
-        marker, which is what makes the two directions distinguishable
-        without guessing."""
-        result = self._mapping({"vacuum": {
-            "area_segment_mapping": {"kitchen": "MAP1_rid_12"}
-        }})
+    def test_a_segment_in_two_areas_keeps_the_first(self):
+        result = self._mapping({"vacuum": {"area_mapping": {
+            "kitchen": ["MAP1_12"], "dining": ["MAP1_12"],
+        }}})
 
-        assert result == {"MAP1_rid_12": "kitchen"}
+        assert result == {"MAP1_12": "kitchen"}
 
     def test_an_unrecognised_shape_yields_nothing(self):
         """Degrades to "no area resolved", never to a wrong area."""
         assert self._mapping({"vacuum": {"something_else": {"a": "b"}}}) == {}
+        assert self._mapping({"vacuum": {"area_mapping": ["MAP1_12"]}}) == {}
+        assert self._mapping({"vacuum": {"area_mapping": {"kitchen": 3}}}) == {}
         assert self._mapping({"vacuum": {}}) == {}
         assert self._mapping({}) == {}
         assert self._mapping(None) == {}
@@ -53,7 +47,7 @@ class TestSegmentMappingIsRead:
     def test_an_empty_mapping_is_not_treated_as_configured(self):
         """A user who opened the dialog and saved nothing must fall
         through to the name match rather than resolving to nothing."""
-        assert self._mapping({"vacuum": {"segment_area_mapping": {}}}) == {}
+        assert self._mapping({"vacuum": {"area_mapping": {}}}) == {}
 
 
 class TestNameFallback:
@@ -270,12 +264,12 @@ class TestAreaForSegment:
         sensor = SimpleNamespace(domain="sensor", options={})
         vacuum_unmapped = SimpleNamespace(domain="vacuum", options={})
         vacuum = SimpleNamespace(domain="vacuum",
-                                 options={"vacuum": {"segment_area_mapping": {"3": "kitchen"}}})
+                                 options={"vacuum": {"area_mapping": {"kitchen": ["3"]}}})
         assert self._run(monkeypatch, [sensor, vacuum_unmapped, vacuum], "3") == "kitchen"
 
     def test_an_unmapped_segment_is_no_area(self, monkeypatch):
         vacuum = SimpleNamespace(domain="vacuum",
-                                 options={"vacuum": {"segment_area_mapping": {"3": "kitchen"}}})
+                                 options={"vacuum": {"area_mapping": {"kitchen": ["3"]}}})
         assert self._run(monkeypatch, [vacuum], "9") is None
 
 
@@ -292,34 +286,58 @@ class TestAreaForRoom:
         )
         return SimpleNamespace(entry_id="e1", runtime_data=runtime)
 
-    def _mapped(self, monkeypatch, mapping):
+    def _mapped(self, monkeypatch, mapping, seen=None):
         from custom_components.roomba_plus import area_resolver as ar
 
-        vacuum = SimpleNamespace(
-            domain="vacuum", options={"vacuum": {"segment_area_mapping": mapping}},
-        )
+        options = {"area_mapping": mapping}
+        if seen is not None:
+            options["last_seen_segments"] = seen
+        vacuum = SimpleNamespace(domain="vacuum", options={"vacuum": options})
         monkeypatch.setattr(ar.er, "async_get", lambda _h: MagicMock())
         monkeypatch.setattr(ar.er, "async_entries_for_config_entry", lambda _r, _e: [vacuum])
         monkeypatch.setattr(ar, "async_area_for_room_name", lambda *_a: "by_name")
         return ar
 
+    # The segment ids below are the forms async_get_segments() offers HA
+    # (#253): Prime `rid_<p2map id>/<region id>`, Classic
+    # `<pmap id>_<region id>`.
+
     def test_prime_finds_the_region_by_its_name(self, monkeypatch):
-        ar = self._mapped(monkeypatch, {"rid_7": "kitchen"})
+        ar = self._mapped(monkeypatch, {"kitchen": ["rid_MAP/7"]})
         entry = self._entry(True, prime_room_names={"7": "Küche"})
         assert ar.async_area_for_room(MagicMock(), entry, "Küche") == "kitchen"
 
     def test_prime_takes_the_trackers_cache_first(self, monkeypatch):
-        ar = self._mapped(monkeypatch, {"rid_9": "hall"})
+        ar = self._mapped(monkeypatch, {"hall": ["rid_MAP/9"]})
         entry = self._entry(True, prime_room_names={"7": "Flur"})
         assert ar.async_area_for_room(
             MagicMock(), entry, "Flur", {"Flur": "MAP/9"},
         ) == "hall"
 
+    def test_prime_region_on_two_maps_in_two_areas_is_no_area(self, monkeypatch):
+        ar = self._mapped(monkeypatch, {"hall": ["rid_A/7"], "attic": ["rid_B/7"]})
+        entry = self._entry(True, prime_room_names={"7": "Flur"})
+        assert ar.async_area_for_room(MagicMock(), entry, "Flur") == "by_name"
+
     def test_classic_reads_the_map_and_region(self, monkeypatch):
-        ar = self._mapped(monkeypatch, {"P1_rid_3": "bath"})
+        ar = self._mapped(monkeypatch, {"bath": ["P1_3"]})
         cloud = SimpleNamespace(regions=[{"name": "Bad", "pmap_id": "P1", "id": "3"}])
         entry = self._entry(False, cloud_coordinator=cloud)
         assert ar.async_area_for_room(MagicMock(), entry, "Bad") == "bath"
+
+    def test_a_room_is_found_by_the_name_of_its_mapped_segment(self, monkeypatch):
+        """A room on another map than the coordinator's active one: found
+        through the segments HA showed when the mapping was saved."""
+        ar = self._mapped(
+            monkeypatch,
+            {"bedroom": ["P2_4"], "porch": ["P1_zid_1"]},
+            seen=[
+                {"id": "P1_zid_1", "name": "Primary Bedroom", "group": "Zone"},
+                {"id": "P2_4", "name": "Primary Bedroom", "group": "Upstairs"},
+            ],
+        )
+        entry = self._entry(False, cloud_coordinator=SimpleNamespace(regions=[]))
+        assert ar.async_area_for_room(MagicMock(), entry, "primary bedroom") == "bedroom"
 
     def test_an_unmapped_room_falls_back_to_the_name(self, monkeypatch):
         ar = self._mapped(monkeypatch, {})
@@ -352,13 +370,15 @@ class TestRoomAreaFields:
     def test_a_prime_region_is_looked_up_by_its_id(self, monkeypatch):
         from custom_components.roomba_plus import area_resolver as ar
 
-        seen = []
-        monkeypatch.setattr(ar, "async_area_for_segment", lambda _h, _e, seg: seen.append(seg) or "hall")
+        vacuum = SimpleNamespace(
+            domain="vacuum", options={"vacuum": {"area_mapping": {"hall": ["rid_MAP/4"]}}},
+        )
+        monkeypatch.setattr(ar.er, "async_get", lambda _h: MagicMock())
+        monkeypatch.setattr(ar.er, "async_entries_for_config_entry", lambda _r, _e: [vacuum])
         monkeypatch.setattr(ar, "async_area_name", lambda _h, _a: "Hall")
         assert ar.async_room_area_fields(MagicMock(), MagicMock(), "Zone 4", "4") == {
             "area_id": "hall", "area_name": "Hall",
         }
-        assert seen == ["rid_4"]
 
     def test_no_room_is_no_area_but_both_fields(self):
         from custom_components.roomba_plus import area_resolver as ar

@@ -861,7 +861,7 @@ class TestTrackerAreaResolution:
         t = _tracker({"Kitchen": "map1/3"})
         t._config_entry.runtime_data.connection_type = ConnectionType.CLOUD_ONLY
         monkeypatch.setattr(area_resolver, "async_area_for_segment",
-                            lambda _h, _e, seg: "kitchen" if seg == "rid_3" else None)
+                            lambda _h, _e, seg: "kitchen" if seg == "rid_map1/3" else None)
         assert t._async_area_for("Kitchen") == "kitchen"
 
     def test_classic_room_resolves_through_the_cloud_region(self, monkeypatch):
@@ -875,7 +875,7 @@ class TestTrackerAreaResolution:
             {"name": "Kitchen", "pmap_id": "p1", "id": "3"},
         ]
         monkeypatch.setattr(area_resolver, "async_area_for_segment",
-                            lambda _h, _e, seg: "kitchen" if seg == "p1_rid_3" else None)
+                            lambda _h, _e, seg: "kitchen" if seg == "p1_3" else None)
         assert t._async_area_for("Kitchen") == "kitchen"
 
     def test_a_failing_resolution_gives_no_area(self, monkeypatch):
