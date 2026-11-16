@@ -44,6 +44,13 @@ def _is_prime(data: Any) -> bool:
     return getattr(data, "connection_type", None) is ConnectionType.CLOUD_ONLY
 
 
+def topic_prefix_changed(entry: Any) -> bool:
+    """Whether this entry's Prime robot reported a changed MQTT topic prefix
+    (roombapy-prime's signal; False with a library that has none)."""
+    robot = getattr(getattr(entry, "runtime_data", None), "prime_robot", None)
+    return getattr(robot, "topic_prefix_changed", False) is True
+
+
 def mission_status(entry: Any) -> dict[str, Any] | None:
     """The robot's mission status in the Classic shape, from either generation.
 
@@ -65,8 +72,8 @@ def mission_status(entry: Any) -> dict[str, Any] | None:
             return status
         if _is_prime(data):
             # A known namespace change invalidates this instance's command
-            # observation. Recovery rebuilds it; never resend from this watch.
-            if getattr(getattr(data, "prime_robot", None), "topic_prefix_changed", False) is True:
+            # observation. Recovery rebuilds it; no new resend from this watch.
+            if topic_prefix_changed(entry):
                 return None
             # The raw shadow: Prime's `cleanMissionStatus` carries the
             # Classic wire names (roombapy-prime `CleanMissionStatus`).

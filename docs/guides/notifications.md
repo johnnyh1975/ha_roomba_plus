@@ -64,9 +64,12 @@ A start that the robot never begins is the failure nobody notices. Roomba+ watch
 
 On Prime, if the library signals a newly resolved robot MQTT prefix, the
 entry reloads once to rebuild the connection; that recovery does not replay
-the clean. An existing ignored-command watch stops without resending after
-this signal. This requires a library version offering the prefix-change
-notification; with 0.9.1 the existing behaviour remains. A mid-session
+the clean. A start being watched when the signal arrives is neither reported
+as not delivered nor sent again: whether it arrived can no longer be told, so
+the watch ends with `prefix_changed` in the diagnostics (`command_watches`)
+and a log line. No resend is decided after the signal; a command or resend
+whose sending had already begun is not recalled. This requires a library
+version offering the prefix-change notification; with 0.9.1 the existing behaviour remains. A mid-session
 deployment move has not yet been confirmed on a robot, and this detection
 does not establish the cause of an ignored command.
 
