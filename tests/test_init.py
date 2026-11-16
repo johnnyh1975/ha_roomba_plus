@@ -3187,16 +3187,12 @@ class TestPrimePrefixReload:
         await entry._async_process_on_unload(hass)
 
     @pytest.mark.asyncio
-    async def test_old_library_and_stale_callbacks_cannot_trigger_reload(self, hass, monkeypatch):
+    async def test_stale_callbacks_cannot_trigger_reload(self, hass, monkeypatch):
         from homeassistant.config_entries import ConfigEntryState
         entry = MockConfigEntry(domain=DOMAIN, state=ConfigEntryState.LOADED)
         entry.add_to_hass(hass)
         reload = MagicMock()
         monkeypatch.setattr(hass.config_entries, 'async_schedule_reload', reload)
-        old_sdk_robot = object()
-        entry.runtime_data = SimpleNamespace(prime_robot=old_sdk_robot)
-        init_mod._reload_on_prime_prefix_change(hass, entry, old_sdk_robot)
-        reload.assert_not_called()
         robot = _PrefixSignalRobot()
         entry.runtime_data = SimpleNamespace(prime_robot=robot)
         init_mod._reload_on_prime_prefix_change(hass, entry, robot)
@@ -3254,3 +3250,68 @@ class TestPrimePrefixReload:
         reload.assert_not_called()
         if interrupted != 'unload':
             await entry._async_process_on_unload(hass)
+
+    @staticmethod
+    async def _rebuilt(hass, entry):
+        """What a reload leaves: the old instance unloaded, a new one set up."""
+        await entry._async_process_on_unload(hass)
+        robot = _PrefixSignalRobot()
+        entry.runtime_data = SimpleNamespace(prime_robot=robot)
+        init_mod._reload_on_prime_prefix_change(hass, entry, robot)
+        return robot
+
+    @pytest.mark.asyncio
+    async def test_a_rebuilt_entry_is_not_reloaded_again_within_hours(self, hass, monkeypatch, caplog):
+        """The limit outlives the entry's own reload; it expires after the window."""
+        from homeassistant.config_entries import ConfigEntryState
+        entry = MockConfigEntry(domain=DOMAIN, state=ConfigEntryState.LOADED)
+        entry.add_to_hass(hass)
+        reload = MagicMock()
+        monkeypatch.setattr(hass.config_entries, 'async_schedule_reload', reload)
+        first = _PrefixSignalRobot()
+        entry.runtime_data = SimpleNamespace(prime_robot=first)
+        init_mod._reload_on_prime_prefix_change(hass, entry, first)
+        first.change()
+        await hass.async_block_till_done()
+        reload.assert_called_once_with(entry.entry_id)
+
+        second = await self._rebuilt(hass, entry)
+        second.change()  # login data changed back within the window
+        await hass.async_block_till_done()
+        reload.assert_called_once()
+        assert caplog.text.count('not reloading again within 4 h') == 1
+
+        hass.data[init_mod._PRIME_PREFIX_RELOADS][entry.entry_id] -= (
+            init_mod.PRIME_PREFIX_RELOAD_INTERVAL_SEC + 1
+        )
+        third = await self._rebuilt(hass, entry)
+        third.change()
+        await hass.async_block_till_done()
+        assert reload.call_count == 2
+        await entry._async_process_on_unload(hass)
+
+    @pytest.mark.asyncio
+    async def test_entries_do_not_limit_each_other(self, hass, monkeypatch):
+        from homeassistant.config_entries import ConfigEntryState
+        reload = MagicMock()
+        monkeypatch.setattr(hass.config_entries, 'async_schedule_reload', reload)
+        entries = []
+        for _ in range(2):
+            entry = MockConfigEntry(domain=DOMAIN, state=ConfigEntryState.LOADED)
+            entry.add_to_hass(hass)
+            robot = _PrefixSignalRobot()
+            entry.runtime_data = SimpleNamespace(prime_robot=robot)
+            init_mod._reload_on_prime_prefix_change(hass, entry, robot)
+            robot.change()
+            entries.append(entry)
+        await hass.async_block_till_done()
+        assert sorted(c.args[0] for c in reload.call_args_list) == sorted(e.entry_id for e in entries)
+        for entry in entries:
+            await entry._async_process_on_unload(hass)
+
+    @pytest.mark.asyncio
+    async def test_removing_the_entry_forgets_its_prefix_reload(self, hass):
+        kept, removed = MockConfigEntry(domain=DOMAIN), MockConfigEntry(domain=DOMAIN)
+        hass.data[init_mod._PRIME_PREFIX_RELOADS] = {kept.entry_id: 1.0, removed.entry_id: 2.0}
+        await init_mod.async_remove_entry(hass, removed)
+        assert hass.data[init_mod._PRIME_PREFIX_RELOADS] == {kept.entry_id: 1.0}
