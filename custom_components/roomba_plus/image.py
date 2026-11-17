@@ -2806,7 +2806,10 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         # no visit to the rooms it passes.
         if self._last_phase != "run":
             return
-        tracker.observe(room_at_position(data, x, y, frame=frame))
+        # The run's own names, so a zone clean is followed zone by zone.
+        mts = getattr(data, "mission_timer_store", None)
+        planned = list(getattr(mts, "planned_rooms", None) or [])
+        tracker.observe(room_at_position(data, x, y, frame=frame, zones=planned))
 
     def _observe_turn_candidates(self, x: float, y: float) -> bool:
         """Count, per angle, whether this position lies in a room (4.4.2).

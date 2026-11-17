@@ -1978,6 +1978,9 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             geo: dict[str, Any] = {
                 "points2d": [], "keepoutzones": [],
                 "observed_zones": [], "regions": [],
+                # The clean zones with their outlines (4.6.2), for room
+                # tracking in a zone clean (umf_aligner.zone_name_at).
+                "zones": [],
                 "region_suggestions": [],   # v3.2.0 ROOM-TYPE-SUGGEST
                 # The map format has door and threshold layers (4.5.0);
                 # whether a robot fills them is not known yet, so only
@@ -1990,6 +1993,7 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 geo["points2d"].extend(m.get("points2d") or [])
                 geo["keepoutzones"].extend(m.get("keepoutzones") or [])
                 geo["observed_zones"].extend(m.get("observed_zones") or [])
+                geo["zones"].extend(m.get("zones") or [])
                 # Regions from UMF maps contain geometry.ids — needed by UmfAligner
                 # to resolve room polygons. Regions from get_pmaps() only have metadata.
                 geo["regions"].extend(m.get("regions") or [])
@@ -2025,6 +2029,7 @@ class IrobotCloudCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     {**z, "space": "umf"}
                     for z in geo["observed_zones"]
                 ],
+                "zones":      geo["zones"],
                 "points2d":   geo["points2d"],
                 "regions":    geo["regions"],
                 "region_suggestions": geo["region_suggestions"],   # v3.2.0 ROOM-TYPE-SUGGEST

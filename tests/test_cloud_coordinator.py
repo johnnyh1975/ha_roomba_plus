@@ -1946,6 +1946,15 @@ class TestFetchActiveUmf:
         assert geo["keepoutzones"] == [{"id": "k1", "space": "umf"}]
         assert geo["observed_zones"] == [{"id": "o1", "space": "umf"}]
 
+    @pytest.mark.asyncio
+    async def test_clean_zones_keep_their_outlines(self, hass):
+        """#252: a zone clean is followed by the zones' own outlines."""
+        zone = {"id": "3", "name": "Entertainment Center",
+                "geometry": {"type": "polygon", "ids": [["a", "b", "c"]]}}
+        c = _coordinator(hass, umf={"maps": [{"points2d": [{"id": "a"}], "zones": [zone]}]})
+        geo = await c._fetch_active_umf([_pmap()])
+        assert geo["zones"] == [zone]
+
 
 def _versioned(pid, version):
     """A pmap record as the cloud lists it, with its version timestamp."""

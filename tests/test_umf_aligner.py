@@ -15,7 +15,7 @@ from dataclasses import field
 from typing import Any
 from unittest.mock import MagicMock
 import pytest
-from custom_components.roomba_plus.umf_aligner import UmfAligner
+from custom_components.roomba_plus.umf_aligner import UmfAligner, aligner_from_umf
 from custom_components.roomba_plus.geometry_utils import point_in_polygon
 from custom_components.roomba_plus.umf_aligner import _DOOR_GAP_MIN
 from custom_components.roomba_plus.umf_aligner import _DOOR_GAP_MAX
@@ -1105,3 +1105,49 @@ class TestOneMapsLayoutWithoutAligning:
         assert len(polygons["1"]) == 4
         assert names == {"1": "Room 1", "2": "2"}
 
+
+
+def _zone(zid: str, name: str, prefix: str) -> dict:
+    return {"id": zid, "name": name, "geometry": {
+        "type": "polygon", "ids": [[f"{prefix}{i}" for i in range(4)]],
+    }}
+
+
+def _living_room_with_two_zones() -> UmfAligner:
+    """A 5 m room with two 1 m zones in it, as @cwar36's living room."""
+    points2d = (
+        _square_points2d(0, 0, 5, "r")
+        + _square_points2d(1, 1, 1, "e")
+        + _square_points2d(3, 3, 1, "c")
+    )
+    zones = [_zone("3", "Entertainment Center", "e"), _zone("5", "Coffee Table", "c")]
+    return UmfAligner(points2d, [_square_region("1", "r")], _make_gs([]), zones=zones)
+
+
+class TestZoneNameAt:
+    """#252: a zone clean is told apart by the zones' outlines."""
+
+    def test_a_point_in_a_zone_of_the_clean_names_it(self):
+        aligner = _living_room_with_two_zones()
+        planned = ["Entertainment Center", "Coffee Table"]
+        assert aligner.zone_name_at(1500, 1500, planned) == "Entertainment Center"
+        assert aligner.zone_name_at(3500, 3500, planned) == "Coffee Table"
+
+    def test_only_the_zones_of_the_clean_count(self):
+        aligner = _living_room_with_two_zones()
+        assert aligner.zone_name_at(3500, 3500, ["Entertainment Center"]) is None
+        assert aligner.zone_name_at(3500, 3500, ["coffee table"]) == "Coffee Table"
+
+    def test_outside_every_zone_is_none(self):
+        aligner = _living_room_with_two_zones()
+        assert aligner.zone_name_at(4800, 200, ["Coffee Table"]) is None
+        assert aligner.zone_name_at(1500, 1500, []) is None
+
+    def test_the_builder_hands_over_the_zones(self):
+        points2d = _square_points2d(0, 0, 5, "r") + _square_points2d(1, 1, 1, "e")
+        aligner = aligner_from_umf(
+            {"points2d": points2d, "regions": [_square_region("1", "r")],
+             "zones": [_zone("3", "Entertainment Center", "e")]},
+            [], _make_gs([]),
+        )
+        assert aligner.zone_name_at(1500, 1500, ["Entertainment Center"]) == "Entertainment Center"

@@ -14,6 +14,7 @@ from .geometry_utils import point_in_polygon
 
 import logging
 import math
+from collections.abc import Collection
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -57,8 +58,12 @@ class UmfAligner:
         pmap_version_id: str = "",
         door_mm: float | None = None,
         pmap_id: str = "",
+        zones: list[dict[str, Any]] | None = None,
     ) -> None:
         self._points2d      = points2d
+        #: The map's clean zones as the cloud draws them (4.6.2): name,
+        #: id and an outline over points2d, as a keep-out zone has.
+        self._zones = [z for z in (zones or []) if isinstance(z, dict)]
         #: The map this geometry belongs to (4.5.4). With more than one
         #: Smart Map, two maps can carry versions that compare equal, so
         #: a change of map is told by the id, not by the version alone.
@@ -262,6 +267,33 @@ class UmfAligner:
         for rid, poly in self._room_polygons.items():
             if point_in_polygon(x_umf, y_umf, poly):
                 return rid_map.get(rid, rid)
+        return None
+
+    def zone_name_at(
+        self, x_umf: float, y_umf: float, names: Collection[str]
+    ) -> str | None:
+        """The clean zone among `names` a UMF-space point lies in, or None.
+
+        A ZONE CLEAN NAMES ZONES, NOT ROOMS (#252, @cwar36). Room tracking
+        follows the robot's position from room to room, and a zone run
+        lists its zones: a position names a room the run does not hold,
+        so the display stayed on the first zone, and two zones in one
+        room can never be told apart by their room. A zone's own outline
+        tells them apart. Only the zones of the running clean are asked
+        about, so a zone the robot crosses on the way is no visit.
+        """
+        wanted = {str(n).casefold() for n in names if n}
+        if not wanted or not self._zones:
+            return None
+        if not self._coord_lookup:
+            self._build_coord_lookup()
+        for zone in self._zones:
+            name = str(zone.get("name") or "")
+            if name.casefold() not in wanted:
+                continue
+            poly = self.keepout_polygon_umf(zone)
+            if poly and point_in_polygon(x_umf, y_umf, poly):
+                return name
         return None
 
     def rid_to_name(self) -> dict[str, str]:
@@ -570,6 +602,7 @@ def aligner_from_umf(
         pmap_version_id=str(umf_data.get("version_id") or ""),
         door_mm=door_mm,
         pmap_id=str(umf_data.get("pmap_id") or ""),
+        zones=umf_data.get("zones") or [],
     )
 
 

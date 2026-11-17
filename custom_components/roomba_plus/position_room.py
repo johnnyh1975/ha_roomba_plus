@@ -26,7 +26,7 @@ room display and fires the room events.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 import math
 from time import monotonic
 from typing import Any
@@ -376,8 +376,14 @@ def auto_position_turn(learner: Any, umf: Any) -> tuple[float, str | None]:
     return math.atan2(math.sin(turn), math.cos(turn)), "learned"
 
 
-def room_at_position(data: Any, x_mm: float, y_mm: float, *, frame: str) -> str | None:
+def room_at_position(
+    data: Any, x_mm: float, y_mm: float, *, frame: str, zones: Collection[str] = ()
+) -> str | None:
     """The room a position lies in, or None where none can be said.
+
+    `zones`: the clean zones of the running clean (4.6.2, #252). A
+    position inside one of their outlines gives the zone, so a zone
+    clean moves from zone to zone as rooms do; anywhere else, the room.
 
     `frame` "umf": a position requested from a Smart Map robot, turned
     into the cloud map's own frame (image._handle_live_position) -- the
@@ -392,15 +398,25 @@ def room_at_position(data: Any, x_mm: float, y_mm: float, *, frame: str) -> str 
         # Already in the rooms' frame: no alignment needed, only rooms.
         if aligner is None:
             return None
-        name = aligner.room_name_at(x_mm, y_mm)
-        return str(name) if name else None
+        return _place_at(aligner, x_mm, y_mm, zones)
     if aligner is not None and getattr(aligner, "aligned", False):
         point = aligner.pose_to_umf(x_mm, y_mm)
         if point is None:
             return None
-        name = aligner.room_name_at(*point)
-        return str(name) if name else None
+        return _place_at(aligner, point[0], point[1], zones)
     return _seg_room_at(getattr(data, "room_seg_store", None), x_mm, y_mm)
+
+
+def _place_at(
+    aligner: Any, x_umf: float, y_umf: float, zones: Collection[str]
+) -> str | None:
+    """The zone of the running clean at a UMF point, else the room."""
+    if zones:
+        zone = aligner.zone_name_at(x_umf, y_umf, zones)
+        if zone:
+            return str(zone)
+    name = aligner.room_name_at(x_umf, y_umf)
+    return str(name) if name else None
 
 
 def _seg_room_at(store: Any, x_mm: float, y_mm: float) -> str | None:

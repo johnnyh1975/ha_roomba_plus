@@ -5675,6 +5675,30 @@ class TestRequestedPositionsOnTheCleaningMap:
             SimpleNamespace(umf_aligner=self._square_aligner()), float("nan"), 1.0
         ) is None
 
+    def test_a_zone_clean_hands_its_zones_to_room_tracking(self):
+        """#252, @cwar36: during a zone clean, a position inside one of the
+        run's zones counts for that zone, not for the room around it."""
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.position_room import PositionRoomTracker
+
+        asked: list = []
+        aligner = self._square_aligner()
+
+        def zone_name_at(x, y, names):
+            asked.append(list(names))
+            return "Sofa" if "Sofa" in names else None
+
+        aligner.zone_name_at = zone_name_at
+        m, _r, entry, _s = self._entity()
+        entry.runtime_data.umf_aligner = aligner
+        entry.runtime_data.position_room = PositionRoomTracker()
+        entry.runtime_data.mission_timer_store = SimpleNamespace(planned_rooms=["Sofa", "Rug"])
+        m._last_phase = "run"
+        m._handle_live_position(self._pos(0.5, 0.5))
+        assert asked == [["Sofa", "Rug"]]
+        assert entry.runtime_data.position_room.diagnostics()["candidate"] == "Sofa"
+
     def test_not_fed_to_the_learning_stores(self):
         """The requested frame is not confirmed against the cloud map; a
         wrong frame in GridStore would not wash out."""

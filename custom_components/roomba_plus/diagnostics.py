@@ -128,7 +128,7 @@ def _umf_zone_shapes(cc: Any) -> dict[str, Any]:
     umf = getattr(cc, "umf_data", None)
     umf = umf if isinstance(umf, dict) else {}
     shapes: dict[str, Any] = {}
-    for key in ("observed_zones", "keepoutzones"):
+    for key in ("observed_zones", "keepoutzones", "zones"):
         zones = umf.get(key)
         zones = zones if isinstance(zones, list) else []
         first = next((z for z in zones if isinstance(z, dict)), None)
