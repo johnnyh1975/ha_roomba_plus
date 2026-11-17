@@ -1299,3 +1299,64 @@ class TestThePrimeMissionArchiveAtSetup:
         archive = config_entry.runtime_data.prime_mission_archive
         assert archive is not None
         assert [r["id"] for r in archive.records] == ["p_1"]
+
+
+@pytest.mark.asyncio
+async def test_prime_setup_installs_the_prefix_change_reload() -> None:
+    """The setup itself connects roombapy-prime's prefix-change signal to a
+    reload of this entry, and detaches it on unload -- not only the helper
+    in isolation (TestPrimePrefixReload in test_init.py)."""
+    import functools
+
+    from homeassistant.config_entries import ConfigEntryState
+
+    hass, config_entry = _make_hass_and_entry()
+    fake_prime_robot = MagicMock()
+    fake_prime_robot.connect = AsyncMock()
+    fake_prime_robot.get_named_shadow = AsyncMock(
+        return_value=MagicMock(payload={"state": {"reported": {}}})
+    )
+    fake_prime_robot.get_state = AsyncMock(
+        return_value=MagicMock(payload={"state": {"reported": {}}})
+    )
+    fake_prime_robot.get_household_id = AsyncMock(return_value="hh1")
+    fake_prime_robot.get_serial_number_data = AsyncMock(return_value=None)
+
+    async def _empty_named_shadows_updates():
+        return
+        yield  # pragma: no cover -- makes this an async generator
+
+    fake_prime_robot.watch_named_shadows_updates = _empty_named_shadows_updates
+    fake_prime_robot.topic_prefix_changed = False
+    observers: list[Any] = []
+    fake_prime_robot.set_topic_prefix_changed_callback = MagicMock(side_effect=observers.append)
+    hass.data = {}
+
+    with patch.object(
+        _CURRENT["account"], "prime_robot", new=AsyncMock(return_value=fake_prime_robot),
+    ):
+        assert await _async_setup_entry_prime(hass, config_entry) is True
+
+    assert len(observers) == 1 and callable(observers[0])
+    assert config_entry.runtime_data.prime_robot is fake_prime_robot
+    hass.config_entries.async_schedule_reload.assert_not_called()
+
+    # The observer the setup installed reloads this entry, once it is loaded,
+    # from outside the signal's own call.
+    config_entry.state = ConfigEntryState.LOADED
+    fake_prime_robot.topic_prefix_changed = True
+    observers[0]()
+    hass.config_entries.async_schedule_reload.assert_not_called()
+    deferred = hass.loop.call_soon.call_args.args[0]
+    deferred()
+    hass.config_entries.async_schedule_reload.assert_called_once_with(config_entry.entry_id)
+
+    # And the unload callbacks the setup registered detach it.
+    detach = [
+        cb for cb in (c.args[0] for c in config_entry.async_on_unload.call_args_list)
+        if isinstance(cb, functools.partial)
+        and cb.func is fake_prime_robot.set_topic_prefix_changed_callback
+    ]
+    assert len(detach) == 1
+    detach[0]()
+    assert observers[-1] is None

@@ -1755,6 +1755,86 @@ async def _async_fetch_prime_time_estimates(config_entry: RoombaConfigEntry) -> 
         )
 
 
+#: At most one automatic reload per entry for a changed topic prefix in
+#: this window (the maintainer's condition on roombapy-prime#101). Logins
+#: renew about once an hour, so a second signal within it would come
+#: from login data that changes back and forth, not from a second move,
+#: and another reload would only follow it.
+PRIME_PREFIX_RELOAD_INTERVAL_SEC = 4 * 3600
+
+#: hass.data key: entry_id -> time.monotonic() of the last automatic
+#: prefix reload. In hass.data because it has to outlive the entry's own
+#: unload/reload (runtime_data and the closures below do not). A restart
+#: clears it, and a restart builds the robot from a fresh login anyway.
+_PRIME_PREFIX_RELOADS = "_roomba_plus_prime_prefix_reloads"
+
+
+@callback
+def _reload_on_prime_prefix_change(
+    hass: HomeAssistant, config_entry: RoombaConfigEntry, robot: Any,
+) -> None:
+    """Rebuild once when roombapy-prime (0.9.2) signals a prefix change.
+
+    A change noticed during setup waits for LOADED; renewal only schedules
+    recovery, never awaits unload from its own task. At most one such
+    reload per entry in PRIME_PREFIX_RELOAD_INTERVAL_SEC. No command is
+    sent or replayed.
+    """
+    from homeassistant.config_entries import ConfigEntryState
+
+    register = robot.set_topic_prefix_changed_callback
+    scheduled = False
+
+    @callback
+    def _schedule_reload() -> None:
+        if (
+            config_entry.state is not ConfigEntryState.LOADED
+            or config_entry.runtime_data is None
+            or config_entry.runtime_data.prime_robot is not robot
+        ):
+            return
+        reloads: dict[str, float] = hass.data.setdefault(_PRIME_PREFIX_RELOADS, {})
+        now = time.monotonic()
+        last = reloads.get(config_entry.entry_id)
+        if last is not None and now - last < PRIME_PREFIX_RELOAD_INTERVAL_SEC:
+            _LOGGER.warning(
+                "%s: the robot's MQTT topic prefix changed again %d min after "
+                "the last automatic reload; not reloading again within %d h. "
+                "It keeps its current prefix until the entry is reloaded or "
+                "Home Assistant restarts.",
+                config_entry.title, (now - last) // 60,
+                PRIME_PREFIX_RELOAD_INTERVAL_SEC // 3600,
+            )
+            return
+        reloads[config_entry.entry_id] = now
+        _LOGGER.info(
+            "%s: the robot's MQTT topic prefix changed; reloading the entry "
+            "to rebuild it (no command is sent again).", config_entry.title,
+        )
+        hass.config_entries.async_schedule_reload(config_entry.entry_id)
+
+    @callback
+    def _on_change() -> None:
+        nonlocal scheduled
+        if (
+            scheduled
+            or robot.topic_prefix_changed is not True
+            or config_entry.state is not ConfigEntryState.LOADED
+            or config_entry.runtime_data is None
+            or config_entry.runtime_data.prime_robot is not robot
+        ):
+            return
+        scheduled = True
+        # HA starts reload tasks eagerly. Leave authentication's callback
+        # first, rather than unloading its task from inside itself.
+        handle = hass.loop.call_soon(_schedule_reload)
+        config_entry.async_on_unload(handle.cancel)
+
+    config_entry.async_on_unload(functools.partial(register, None))
+    config_entry.async_on_unload(config_entry.async_on_state_change(_on_change))
+    register(_on_change)  # Replays a signal raised before setup finished.
+
+
 async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConfigEntry) -> bool:
     """Entirely separate setup path for CLOUD_ONLY (V4/Prime) entries.
 
@@ -2282,6 +2362,7 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
     _LOGGER.info(
         "Roomba+ (V4/Prime) connected to cloud for %s (blid=%s)", username, blid
     )
+    _reload_on_prime_prefix_change(hass, config_entry, prime_robot)
     return True
 
 
@@ -2753,6 +2834,7 @@ async def async_remove_entry(
     from homeassistant.helpers.storage import Store
 
     entry_id = config_entry.entry_id
+    hass.data.get(_PRIME_PREFIX_RELOADS, {}).pop(entry_id, None)
     removed = 0
     for label, key_template in _STORAGE_KEYS_TO_REMOVE:
         key = key_template.format(entry_id=entry_id)
