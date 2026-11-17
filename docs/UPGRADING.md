@@ -10,13 +10,28 @@ are listed; most releases need nothing beyond updating.
 
 | Your version | Read |
 |---|---|
-| 4.6.0 | [4.6.1](#v461--from-v460) |
-| 4.5.x | [4.6.0](#v460--from-v45x), then 4.6.1 |
-| 4.4.x | [4.5.0](#v450--from-v44x), then 4.5.3, 4.5.4, 4.6.0 and 4.6.1 below |
+| 4.6.1 | [4.6.2](#v462--from-v461) |
+| 4.6.0 | [4.6.1](#v461--from-v460), then 4.6.2 |
+| 4.5.x | [4.6.0](#v460--from-v45x), then 4.6.1 and 4.6.2 |
+| 4.4.x | [4.5.0](#v450--from-v44x), then 4.5.3, 4.5.4 and 4.6.0 to 4.6.2 below |
 | 4.3.x or older | The notes of your line under [Older versions](#older-versions), then everything above them |
 
 Release notes, with everything that changed in each version:
 [GitHub Releases](https://github.com/johnnyh1975/ha_roomba_plus/releases).
+
+---
+## v4.6.2 — from v4.6.1
+
+Nothing to do. Home Assistant installs **roombapy-prime 0.9.2** with the
+update. What you may notice:
+
+- **A zone clean is followed zone by zone** on Smart Map robots whose
+  cloud map carries the zones' outlines. The current-room sensor and the
+  room states move from zone to zone, also within one room. Without
+  outlines, nothing changes.
+- **Prime: if a renewed login moves the robot to another topic prefix,
+  the entry reloads once** to rebuild the connection, at most once in four
+  hours. A reload in the log with *topic prefix changed* is this.
 
 ---
 ## v4.6.1 — from v4.6.0
