@@ -296,6 +296,47 @@ class UmfAligner:
                 return name
         return None
 
+    def zone_region_ids(self) -> dict[str, str]:
+        """Clean zone -> the region id of the room it lies in (#256).
+
+        Keyed by the zone's id and, as `name:<casefolded name>`, by its
+        name: the map's zone ids are expected to be the ones the zone
+        list uses, which no robot has confirmed yet.
+
+        A ZONE BELONGS TO THE ROOM ITS MIDDLE IS IN. The cloud map gives a
+        zone an outline but not a room; its centre is the fair test, and
+        a zone drawn across a doorway goes to the room holding most of
+        it. Where the centre lies in no room (an L-shaped zone around a
+        corner), the first corner inside a room decides. A zone in no
+        room is left out rather than guessed. Empty until align() has
+        resolved the rooms.
+        """
+        if not self._zones or not self._room_polygons:
+            return {}
+        if not self._coord_lookup:
+            self._build_coord_lookup()
+        out: dict[str, str] = {}
+        for zone in self._zones:
+            zid = str(zone.get("id") or zone.get("zone_id") or "")
+            poly = self.keepout_polygon_umf(zone)
+            if not zid or not poly:
+                continue
+            cx = sum(x for x, _ in poly) / len(poly)
+            cy = sum(y for _, y in poly) / len(poly)
+            for x, y in [(cx, cy), *poly]:
+                rid = next(
+                    (r for r, room in self._room_polygons.items()
+                     if point_in_polygon(x, y, room)),
+                    None,
+                )
+                if rid is not None:
+                    out[zid] = rid
+                    name = str(zone.get("name") or "").casefold()
+                    if name:
+                        out.setdefault(f"name:{name}", rid)
+                    break
+        return out
+
     def rid_to_name(self) -> dict[str, str]:
         """Return {rid: name} from regions — used by EPHEMERAL CR4 path."""
         return {

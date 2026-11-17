@@ -1014,6 +1014,36 @@ class CloudSmartZoneSelect(IRobotEntity, SelectEntity):
         except Exception:  # noqa: BLE001
             pass
 
+        # ROOM OR ZONE, and each zone's room (#256). The options hold both;
+        # the card lists zones apart from rooms and under the room they
+        # lie in. The rooms come from the zones' outlines in the cloud map,
+        # for the map the aligner was built for; other maps' zones and a
+        # zone in no room are simply not listed.
+        segment_type = {
+            i["name"]: "zone" if i.get("type") == "zid" else "room" for i in items
+        }
+        zone_room: dict[str, str] = {}
+        try:
+            aligner = self._config_entry.runtime_data.umf_aligner
+            if aligner is not None and getattr(aligner, "pmap_id", self._pmap_id) in (
+                "", self._pmap_id,
+            ):
+                room_name_by_id = {
+                    str(i["id"]): i["name"] for i in items if i.get("type") == "rid"
+                }
+                zone_rid = aligner.zone_region_ids()
+                for i in items:
+                    if i.get("type") != "zid":
+                        continue
+                    rid = zone_rid.get(str(i["id"])) or zone_rid.get(
+                        f"name:{str(i['name']).casefold()}", ""
+                    )
+                    room = room_name_by_id.get(rid)
+                    if room:
+                        zone_room[i["name"]] = room
+        except Exception:  # noqa: BLE001
+            pass
+
         attrs = {
             "map_name": self._map_name,
             "pmap_id": self._pmap_id,
@@ -1023,7 +1053,10 @@ class CloudSmartZoneSelect(IRobotEntity, SelectEntity):
             "source": "cloud",
             "is_active_map": self._is_active_map,
             "region_icons": region_icons,
+            "segment_type": segment_type,
         }
+        if zone_room:
+            attrs["zone_room"] = zone_room
         if learning_pct is not None:
             attrs["learning_percentage"] = learning_pct
         if region_areas_m2:

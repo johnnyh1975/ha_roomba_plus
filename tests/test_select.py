@@ -1815,3 +1815,43 @@ class TestCloudSelectReadsBothIdKeys:
     def test_an_entry_without_any_id_is_not_offered(self):
         sel = _zone_select(zones=[{"name": "Ghost"}, {"id": "5", "name": "Real"}])
         assert sel.options == ["Real"]
+
+
+class TestZonesAndTheirRooms:
+    """#256: the card lists zones apart from rooms, under the room each
+    lies in. The select says which entry is which, and each zone's room."""
+
+    def _select(self, zone_rids, aligner_pmap="map1"):
+        entry = _make_config_entry()
+        aligner = MagicMock()
+        aligner.pmap_id = aligner_pmap
+        aligner.room_areas_m2 = {}
+        aligner.zone_region_ids.return_value = zone_rids
+        entry.runtime_data.umf_aligner = aligner
+        return CloudSmartZoneSelect(
+            _make_roomba(), "test_blid", entry,
+            pmap_id="map1", map_name="Ground floor",
+            regions=[{"id": "1", "name": "Living Room"}, {"id": "2", "name": "Dining Room"}],
+            zones=[{"id": "3", "name": "Entertainment Center"},
+                   {"id": "5", "name": "Coffee Table"},
+                   {"id": "6", "name": "Coffee Bar"}],
+        )
+
+    def test_each_entry_says_room_or_zone(self):
+        attrs = self._select({}).extra_state_attributes
+        assert attrs["segment_type"] == {
+            "Living Room": "room", "Dining Room": "room",
+            "Entertainment Center": "zone", "Coffee Table": "zone", "Coffee Bar": "zone",
+        }
+
+    def test_each_zone_names_its_room(self):
+        attrs = self._select({"3": "1", "5": "1", "name:coffee bar": "2"}).extra_state_attributes
+        assert attrs["zone_room"] == {
+            "Entertainment Center": "Living Room",
+            "Coffee Table": "Living Room",
+            "Coffee Bar": "Dining Room",
+        }
+
+    def test_another_maps_outlines_name_no_room(self):
+        attrs = self._select({"3": "1"}, aligner_pmap="map2").extra_state_attributes
+        assert "zone_room" not in attrs

@@ -1151,3 +1151,27 @@ class TestZoneNameAt:
             [], _make_gs([]),
         )
         assert aligner.zone_name_at(1500, 1500, ["Entertainment Center"]) == "Entertainment Center"
+
+
+class TestZoneRegionIds:
+    """#256: each clean zone belongs to the room its middle lies in."""
+
+    def test_zones_go_to_the_room_they_lie_in(self):
+        points2d = (
+            _square_points2d(0, 0, 5, "r") + _square_points2d(6, 0, 4, "d")
+            + _square_points2d(1, 1, 1, "e") + _square_points2d(7, 1, 1, "c")
+            + _square_points2d(20, 20, 1, "x")
+        )
+        aligner = UmfAligner(
+            points2d,
+            [_square_region("1", "r"), _square_region("2", "d")],
+            _make_gs([]),
+            zones=[_zone("3", "Entertainment Center", "e"), _zone("6", "Coffee Bar", "c"),
+                   _zone("9", "Nowhere", "x")],
+        )
+        assert aligner.zone_region_ids() == {}  # rooms not resolved yet
+        aligner.align()
+        assert aligner.zone_region_ids() == {
+            "3": "1", "name:entertainment center": "1",
+            "6": "2", "name:coffee bar": "2",
+        }

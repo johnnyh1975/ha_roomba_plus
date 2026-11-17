@@ -174,6 +174,8 @@ Configure → **Zone management**
 | `region_areas_m2` | `dict[str, float]` | Room name → floor area in m². Computed once from the floor plan; a map retrain recomputes it. Present only for the map the floor plan showed when it was computed (with more than one Smart Map, the map of the last command), absent rather than zero on other floors |
 | `learning_percentage` | `int` | Map-learning progress for this floor |
 | `region_count` / `zone_count` | `int` | Counts for this map |
+| `segment_type` | `dict[str, str]` | Room or zone name → `room` or `zone` |
+| `zone_room` | `dict[str, str]` | Zone name → the room it lies in, from the zones' outlines in the floor plan. Present only where the floor plan carries them, and only for the map it was built for; a zone in no room is left out |
 | `is_active_map` | `bool` | Whether this is the robot's current map. For information only: a robot takes a room command for any of its maps |
 
 ## Per-room preferences
