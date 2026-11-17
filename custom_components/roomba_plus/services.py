@@ -337,16 +337,6 @@ async def _async_warn_if_swallowed(
 
     waited = 0.0
     status: dict[str, Any] | None = None
-    while True:
-        step = min(_SWALLOW_POLL_SEC, max(grace - waited, 0.0))
-        await command_watch.sleep(step)
-        waited += step
-        status = command_watch.mission_status(entry)
-        if status is None:
-            return
-        if command_watch.cycle_is_open(status) or waited >= grace:
-            break
-
     log = getattr(data, "command_watches", None)
 
     def _record(outcome: str) -> None:
@@ -362,6 +352,28 @@ async def _async_warn_if_swallowed(
                 "not_ready": (status or {}).get("notReady"),
                 "error": (status or {}).get("error"),
             })
+
+    while True:
+        step = min(_SWALLOW_POLL_SEC, max(grace - waited, 0.0))
+        await command_watch.sleep(step)
+        waited += step
+        status = command_watch.mission_status(entry)
+        if status is None:
+            if prime and command_watch.topic_prefix_changed(entry):
+                # A KNOWN PREFIX CHANGE ENDS THE WATCH, and is not a verdict:
+                # the robot may have taken the command on the old topics or
+                # not, and this instance can no longer tell. Nothing more is
+                # sent from here; the entry reloads. A publication already
+                # under way when the signal came is not recalled.
+                _record("prefix_changed")
+                _LOGGER.info(
+                    "%s: the robot's MQTT topic prefix changed while this command "
+                    "was watched; not sending it again. Whether it arrived is "
+                    "unknown; the entry reloads.", what,
+                )
+            return
+        if command_watch.cycle_is_open(status) or waited >= grace:
+            break
 
     if command_watch.cycle_is_open(status):
         if _in_open_cycle(before):

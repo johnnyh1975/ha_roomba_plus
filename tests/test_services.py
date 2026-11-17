@@ -4338,3 +4338,89 @@ class TestTheResponseActions:
         with patch.object(svc, "_resolve_config_entry_from_entity", return_value=self._entry(False)):
             with pytest.raises(ServiceValidationError):
                 await svc.async_handle_get_rooms(self._call())
+
+
+@pytest.mark.asyncio
+async def test_prefix_change_during_the_command_watch_never_resends(monkeypatch):
+    from custom_components.roomba_plus import command_watch, services
+    entry = TestASwallowedCommandIsReported._prime_entry(
+        {'cycle': 'none', 'phase': 'charge', 'notReady': 0, 'error': 0})
+    entry.runtime_data.prime_robot.topic_prefix_changed = False
+    resend = AsyncMock()
+    hass = MagicMock()
+
+    async def prefix_changes_while_waiting(_seconds):
+        entry.runtime_data.prime_robot.topic_prefix_changed = True
+
+    monkeypatch.setattr(command_watch, 'sleep', prefix_changes_while_waiting)
+    await services._async_warn_if_swallowed(hass, entry, 'start', None, resend)
+    resend.assert_not_awaited()
+    hass.bus.async_fire.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_entry_unload_cancels_the_old_command_watch_without_replay(hass, monkeypatch):
+    import asyncio
+    from homeassistant.config_entries import ConfigEntryState
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+    from custom_components.roomba_plus import command_watch, services
+    from custom_components.roomba_plus.const import DOMAIN
+
+    observed = TestASwallowedCommandIsReported._prime_entry(
+        {'cycle': 'none', 'phase': 'charge', 'notReady': 0, 'error': 0})
+    observed.runtime_data.prime_robot.topic_prefix_changed = False
+    entry = MockConfigEntry(domain=DOMAIN, state=ConfigEntryState.LOADED)
+    entry.add_to_hass(hass)
+    entry.runtime_data = observed.runtime_data
+    sleeping = asyncio.Event()
+
+    async def wait_for_unload(_seconds):
+        sleeping.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(command_watch, 'sleep', wait_for_unload)
+    resend = AsyncMock()
+    task = entry.async_create_background_task(
+        hass, services._async_warn_if_swallowed(hass, entry, 'start', None, resend),
+        'prefix-change-watch-test')
+    await asyncio.wait_for(sleeping.wait(), 1)
+    entry.runtime_data.prime_robot.topic_prefix_changed = True
+    await entry._async_process_on_unload(hass)
+    assert task.cancelled()
+    resend.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('after_resend', [False, True])
+async def test_a_watch_ended_by_a_prefix_change_records_why(monkeypatch, caplog, after_resend):
+    """Ended for a known prefix change: recorded as such, not as not delivered,
+    and no resend is decided after the signal."""
+    import logging
+
+    from custom_components.roomba_plus import command_watch, services
+    entry = TestASwallowedCommandIsReported._prime_entry(
+        {'cycle': 'none', 'phase': 'charge', 'notReady': 0, 'error': 0})
+    entry.runtime_data.prime_robot.topic_prefix_changed = False
+    hass = MagicMock()
+
+    async def resend():
+        entry.runtime_data.prime_robot.topic_prefix_changed = True
+
+    async def no_wait(_seconds):
+        if not after_resend:
+            entry.runtime_data.prime_robot.topic_prefix_changed = True
+
+    monkeypatch.setattr(command_watch, 'sleep', no_wait)
+    resend_mock = AsyncMock(side_effect=resend)
+    caplog.set_level(logging.INFO, logger='custom_components.roomba_plus.services')
+    await services._async_warn_if_swallowed(hass, entry, 'start', None, resend_mock)
+
+    outcomes = [(w['outcome'], w['resent']) for w in entry.runtime_data.command_watches]
+    if after_resend:
+        assert outcomes == [('resent', False), ('prefix_changed', True)]
+        resend_mock.assert_awaited_once()
+    else:
+        assert outcomes == [('prefix_changed', False)]
+        resend_mock.assert_not_awaited()
+    hass.bus.async_fire.assert_not_called()
+    assert 'topic prefix changed while this command was watched' in caplog.text
