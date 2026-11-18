@@ -2042,10 +2042,13 @@ async def async_check_core_roomba_conflict(hass: HomeAssistant) -> None:
         # BLID (the entry's unique id); a different robot in each
         # integration is fine.
         ir.async_delete_issue(hass, DOMAIN, "core_roomba_conflict")
+        # A DISABLED ENTRY CONNECTS TO NOTHING (#258, @cburrell16), on
+        # either side: `_conflicting` already leaves out a disabled
+        # built-in entry, and a disabled Roomba+ entry is left out here.
         ours = {
             entry.unique_id
             for entry in hass.config_entries.async_entries(DOMAIN)
-            if entry.unique_id
+            if entry.unique_id and entry.disabled_by is None
         }
         twice = sorted(
             entry.title or str(entry.unique_id)

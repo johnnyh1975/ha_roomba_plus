@@ -8,6 +8,7 @@ the rest of a mission when asking is pointless.
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 
 import pytest
@@ -387,7 +388,7 @@ class TestARobotThatHasAnsweredStalls:
 
     @pytest.mark.asyncio
     async def test_the_pauses_grow_and_the_stalls_are_bounded(
-        self, hass: Any, monkeypatch: pytest.MonkeyPatch
+        self, hass: Any, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
         monkeypatch.setattr(lp, "MAX_STALLS_PER_MISSION", 2)
         robot = _Robot()
@@ -410,9 +411,14 @@ class TestARobotThatHasAnsweredStalls:
         await _settle()
         assert robot.streams_opened == 3
 
-        await self._stall(robot)
+        with caplog.at_level(logging.WARNING, logger=lp.__name__):
+            await self._stall(robot)
         assert stream.status == lp.STATUS_STALLED
         assert stream.diagnostics()["given_up_this_mission"] is True
+        # #258: the stalls counted, not the limit, and the last one's cause.
+        gave_up = [r.getMessage() for r in caplog.records if "gave up after" in r.getMessage()]
+        assert len(gave_up) == 1
+        assert "gave up after 3 stalls this mission (last: the robot " in gave_up[0]
         await asyncio.sleep(0.1)
         robot.report(phase="run")
         await _settle()

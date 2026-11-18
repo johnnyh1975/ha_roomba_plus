@@ -3145,6 +3145,25 @@ class TestTheBuiltInRoombaFromHomeAssistant2026_11:
         assert same.translation_placeholders == {"robots": "Core CDEF"}
 
     @pytest.mark.asyncio
+    async def test_a_disabled_roomba_plus_entry_is_no_second_connection(self, hass):
+        """#258: only the built-in integration connects to the robot."""
+        from homeassistant.config_entries import ConfigEntryDisabler
+        from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+        from custom_components.roomba_plus import repairs
+        from custom_components.roomba_plus.const import DOMAIN
+        from homeassistant.helpers import issue_registry as ir
+
+        MockConfigEntry(
+            domain=DOMAIN, unique_id="0123456789ABCDEF", title="Ours",
+            disabled_by=ConfigEntryDisabler.USER,
+        ).add_to_hass(hass)
+        MockConfigEntry(domain="roomba", unique_id="0123456789ABCDEF", title="Core").add_to_hass(hass)
+        with patch.object(repairs, "core_roomba_shares_our_library", return_value=True):
+            await repairs.async_check_core_roomba_conflict(hass)
+        assert ir.async_get(hass).async_get_issue(DOMAIN, "core_roomba_same_robot") is None
+
+    @pytest.mark.asyncio
     async def test_another_robot_in_the_built_in_one_is_fine(self, hass):
         issues = await self._check(hass, shares=True, core_ids=["FEDCBA9876543210"])
         assert issues == {}

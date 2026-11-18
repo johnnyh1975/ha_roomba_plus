@@ -390,11 +390,14 @@ class LivePositionStream:
         self._stalls += 1
         if self._stalls > MAX_STALLS_PER_MISSION:
             self._give_up(STATUS_STALLED)
+            # THE COUNT AND THE CAUSE AS THEY WERE (#258, @cburrell16): the
+            # limit is passed, not reached, and a stall can also be a robot
+            # that answers without a position. Earlier stalls may have had
+            # other causes, so the last one is named as the last.
             _LOGGER.warning(
-                "Roomba+ live position: the robot stopped answering position "
-                "requests %d times this mission; not asking again until the "
-                "next mission",
-                MAX_STALLS_PER_MISSION,
+                "Roomba+ live position: gave up after %d stalls this mission "
+                "(last: the robot %s); not asking again until the next mission",
+                self._stalls, what,
             )
             return
         delay = STALL_RETRY_DELAYS_S[
