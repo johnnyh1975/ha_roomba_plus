@@ -149,7 +149,8 @@
       "cloud_unknown": "De iRobot-cloud meldde een fout zonder bekende oorzaak.",
       "account_password_refused": "De robot accepteerde het wachtwoord uit je iRobot-account niet, dus moet het van de robot zelf worden opgehaald.",
       "robot_password_needed": "Deze vermelding heeft geen iRobot-account om het robotwachtwoord uit te halen. Voer het in, of houd de HOME-knop op de robot ingedrukt om het op te halen.",
-      "robot_password_not_in_account": "Je iRobot-account gaf geen wachtwoord voor deze robot terug. Voer het handmatig in."
+      "robot_password_not_in_account": "Je iRobot-account gaf geen wachtwoord voor deze robot terug. Voer het handmatig in.",
+      "core_roomba_holds_robot": "De ingebouwde Roomba-integratie is met deze robot verbonden, en een robot accepteert lokaal maar één verbinding tegelijk. Schakel de vermelding van de robot in de ingebouwde Roomba-integratie uit (⋮ → Uitschakelen) en probeer het opnieuw."
     },
     "abort": {
       "already_configured": "Deze robot is al geconfigureerd.",
@@ -169,7 +170,8 @@
       "no_rooms_to_name": "Geen kamers gevonden om te benoemen. De kamers van deze robot verschijnen zodra hij minstens één keer specifieke kamers heeft schoongemaakt, of zodra zijn kaart beschikbaar is via je iRobot-account.",
       "all_rooms_named": "Elke kamer heeft al een naam. Hernoem er een via de zoneselector op de apparaatpagina.",
       "wrong_roombapy": "Roomba+ heeft het asynchrone `roombapy` 2.x nodig; de door Home Assistant geladen versie is ouder:\n\n`{error}`\n\n**Start Home Assistant eerst opnieuw op** — dan wordt de versie geïnstalleerd die Roomba+ vraagt.\n\nKomt de fout na een herstart onder Home Assistant 2026.10 of ouder terug, dan heeft de **ingebouwde Roomba-integratie** van Home Assistant haar oudere bibliotheek eerst geladen. Python houdt van een bibliotheek maar één kopie tegelijk, dus Roomba+ kan de eigene niet gebruiken. De vermelding van de ingebouwde integratie verwijderen is niet altijd genoeg: als Home Assistant je robot op het netwerk vindt, bereidt het na elke herstart het ingebouwde instellingsvenster voor, en dat laadt de oude bibliotheek opnieuw. De probleemoplossingsgids legt uit hoe je dat stopt, onder \"A workaround, if you do not use the built-in integration\": [{troubleshooting_url}]({troubleshooting_url})\n\nVanaf Home Assistant 2026.11 gebruikt de ingebouwde integratie dezelfde versie als Roomba+ en is ze daar niet de oorzaak. Verschijnt de fout onder 2026.11 of nieuwer toch, zoek dan een aangepaste integratie die een oudere `roombapy` vraagt.\n\nDe Roomba+-versie maakt hier niets uit — elke versie sinds 4.2.0 vraagt dezelfde bibliotheek.",
-      "robot_not_on_account": "Deze robot staat niet meer op het iRobot-account. Als hij naar een ander account is verplaatst, stel hem dan daarmee in."
+      "robot_not_on_account": "Deze robot staat niet meer op het iRobot-account. Als hij naar een ander account is verplaatst, stel hem dan daarmee in.",
+      "core_roomba_holds_robot": "De ingebouwde Roomba-integratie is met deze robot verbonden, en een robot accepteert lokaal maar één verbinding tegelijk. Schakel de vermelding van de robot in de ingebouwde Roomba-integratie uit (⋮ → Uitschakelen) en probeer het opnieuw."
     },
     "flow_title": "{name}"
   },

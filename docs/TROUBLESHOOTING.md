@@ -316,8 +316,10 @@ Adding a robot, its local connection, and moving a robot.
 
 **Applies to:** Classic robots
 
-**Cause:** Some robots answer the pairing only while they run, or something else holds their one local connection.  
-**Fix:** Press **Clean** on the robot and retry at once; stop anything else connected to it (next entry); or set up with the iRobot account.
+**Cause:** Something else holds the robot's one local connection, most often the built-in Roomba integration; or the robot answers the pairing only while it runs.  
+**Fix:** Disable the robot in the built-in Roomba integration (or stop rest980, next entry), then retry; or press **Clean** on the robot and retry at once; or set up with the iRobot account.
+
+A Classic robot takes one local connection at a time. From Home Assistant 2026.11 the built-in Roomba integration loads next to Roomba+, so a robot it is connected to refuses Roomba+. The setup dialog says so when the built-in integration has the same robot. Disable the robot's entry there (⋮ → **Disable**), add it in Roomba+, and leave the built-in entry disabled or delete it: with both running, the two take the connection from each other ([A robot set up in two integrations](#a-robot-set-up-in-two-integrations-home-assistant-202611-and-later)). A robot on a separate network is not the cause when the built-in integration reaches it: both connect the same way.
 
 Press the physical **Clean** button on the robot to start a manual cleaning job, then immediately retry credential retrieval in HA. Some models only respond while actively running.
 

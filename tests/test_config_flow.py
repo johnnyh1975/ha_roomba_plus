@@ -3772,6 +3772,39 @@ class TestAsyncStepPrimeClassicIp:
         assert result["errors"]["base"] == "cannot_connect"
 
     @pytest.mark.asyncio
+    async def test_a_robot_held_by_the_built_in_integration_is_named(self):
+        """A robot takes one local connection; when the built-in Roomba
+        integration has this robot, the error says so rather than
+        sending the user to check the network."""
+        from homeassistant.config_entries import ConfigEntryDisabler
+
+        from custom_components.roomba_plus.config_flow import CannotConnect
+
+        def entries(domain=None):
+            assert domain == "roomba"
+            return [
+                SimpleNamespace(unique_id="OTHER", source="user", disabled_by=None),
+                SimpleNamespace(unique_id="BLID1", source="user", disabled_by=held_by),
+            ]
+
+        for held_by, expected in (
+            (None, "core_roomba_holds_robot"),
+            (ConfigEntryDisabler.USER, "cannot_connect"),
+        ):
+            flow = _make_flow()
+            flow.hass.config_entries.async_entries = entries
+            flow._prime_selected_blid = "BLID1"
+            flow._prime_account_robots = {"BLID1": {"password": "pw123", "name": "Bogdana"}}
+            with patch.object(flow, "async_set_unique_id", new=AsyncMock()), \
+                 patch.object(flow, "_abort_if_unique_id_configured"), \
+                 patch(
+                     "custom_components.roomba_plus.config_flow.validate_input",
+                     new=AsyncMock(side_effect=CannotConnect()),
+                 ):
+                result = await flow.async_step_prime_classic_ip({CONF_HOST: "192.0.2.5"})
+            assert result["errors"]["base"] == expected, held_by
+
+    @pytest.mark.asyncio
     async def test_missing_password_aborts(self):
         flow = _make_flow()
         flow._prime_selected_blid = "BLID1"

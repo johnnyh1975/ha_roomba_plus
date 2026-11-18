@@ -149,7 +149,8 @@
       "cloud_unknown": "iRobot's cloud reported an error without a known cause.",
       "account_password_refused": "The robot did not accept the password from your iRobot account, so it has to be fetched from the robot itself.",
       "robot_password_needed": "This entry has no iRobot account to take the robot password from. Enter it, or hold the HOME button on the robot to retrieve it.",
-      "robot_password_not_in_account": "Your iRobot account did not return a password for this robot. Enter it by hand."
+      "robot_password_not_in_account": "Your iRobot account did not return a password for this robot. Enter it by hand.",
+      "core_roomba_holds_robot": "The built-in Roomba integration is connected to this robot, and a robot takes one local connection at a time. Disable the robot's entry in the built-in Roomba integration (⋮ → Disable), then try again."
     },
     "abort": {
       "already_configured": "This robot is already configured.",
@@ -169,7 +170,8 @@
       "no_rooms_to_name": "No rooms were found to name. This robot's rooms appear once it has cleaned specific rooms at least once, or once its map is available from your iRobot account.",
       "all_rooms_named": "Every room already has a name. Rename one from the zone selector on the device page.",
       "wrong_roombapy": "Roomba+ needs the asynchronous `roombapy` 2.x, and the copy Home Assistant has loaded is an older one:\n\n`{error}`\n\n**Restart Home Assistant first** — that makes it install the version Roomba+ asks for.\n\nIf it comes back after a restart on Home Assistant 2026.10 or earlier, Home Assistant's **built-in Roomba integration** loaded its older library first. Python holds one copy of a library at a time, so Roomba+ cannot use its own. Deleting the built-in integration's entry is not always enough: when Home Assistant finds your robot on the network, it prepares the built-in setup dialog after every restart, and that loads the older library again. The troubleshooting guide shows how to stop that, under \"A workaround, if you do not use the built-in integration\": [{troubleshooting_url}]({troubleshooting_url})\n\nFrom Home Assistant 2026.11 the built-in integration uses the same version as Roomba+, so it is not the cause there. If this still appears on 2026.11 or later, look for a custom integration that requires an older `roombapy`.\n\nThe Roomba+ version makes no difference here — every release since 4.2.0 needs the same library.",
-      "robot_not_on_account": "This robot is no longer on the iRobot account. If it was moved to another account, set it up with that one."
+      "robot_not_on_account": "This robot is no longer on the iRobot account. If it was moved to another account, set it up with that one.",
+      "core_roomba_holds_robot": "The built-in Roomba integration is connected to this robot, and a robot takes one local connection at a time. Disable the robot's entry in the built-in Roomba integration (⋮ → Disable), then try again."
     },
     "flow_title": "{name}"
   },

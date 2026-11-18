@@ -149,7 +149,8 @@
       "cloud_unknown": "A nuvem da iRobot comunicou um erro sem causa conhecida.",
       "account_password_refused": "O robô não aceitou a palavra-passe da tua conta iRobot, por isso tem de ser obtida do próprio robô.",
       "robot_password_needed": "Esta entrada não tem uma conta iRobot de onde obter a palavra-passe do robô. Introduza-a ou mantenha premido o botão HOME do robô para a obter.",
-      "robot_password_not_in_account": "A sua conta iRobot não devolveu uma palavra-passe para este robô. Introduza-a manualmente."
+      "robot_password_not_in_account": "A sua conta iRobot não devolveu uma palavra-passe para este robô. Introduza-a manualmente.",
+      "core_roomba_holds_robot": "A integração Roomba incorporada está ligada a este robô, e um robô aceita apenas uma ligação local de cada vez. Desative a entrada do robô na integração Roomba incorporada (⋮ → Desativar) e tente novamente."
     },
     "abort": {
       "already_configured": "Este robô já está configurado.",
@@ -169,7 +170,8 @@
       "no_rooms_to_name": "Não foram encontradas divisões para nomear. As divisões deste robô aparecem depois de ter limpo divisões específicas pelo menos uma vez, ou quando o mapa estiver disponível na sua conta iRobot.",
       "all_rooms_named": "Cada divisão já tem nome. Mude um a partir do seletor de zonas na página do dispositivo.",
       "wrong_roombapy": "O Roomba+ precisa do `roombapy` 2.x (assíncrono); a cópia carregada pelo Home Assistant é mais antiga:\n\n`{error}`\n\n**Reinicie primeiro o Home Assistant** — assim instala a versão que o Roomba+ pede.\n\nSe o erro voltar após reiniciar no Home Assistant 2026.10 ou anterior, a **integração Roomba incorporada** do Home Assistant carregou primeiro a sua biblioteca antiga. O Python mantém uma só cópia de cada biblioteca de cada vez, por isso o Roomba+ não pode usar a sua. Eliminar a entrada da integração incorporada nem sempre chega: quando o Home Assistant encontra o robô na rede, prepara a janela de configuração incorporada após cada reinício, e isso volta a carregar a biblioteca antiga. O guia de resolução de problemas explica como evitá-lo, em «A workaround, if you do not use the built-in integration»: [{troubleshooting_url}]({troubleshooting_url})\n\nA partir do Home Assistant 2026.11, a integração incorporada usa a mesma versão que o Roomba+, por isso não é a causa aí. Se o erro continuar a aparecer no 2026.11 ou posterior, procure uma integração personalizada que exija um `roombapy` mais antigo.\n\nA versão do Roomba+ não influencia — todas as versões desde a 4.2.0 pedem a mesma biblioteca.",
-      "robot_not_on_account": "Este robô já não está na conta iRobot. Se foi movido para outra conta, configura-o com essa."
+      "robot_not_on_account": "Este robô já não está na conta iRobot. Se foi movido para outra conta, configura-o com essa.",
+      "core_roomba_holds_robot": "A integração Roomba incorporada está ligada a este robô, e um robô aceita apenas uma ligação local de cada vez. Desative a entrada do robô na integração Roomba incorporada (⋮ → Desativar) e tente novamente."
     },
     "flow_title": "{name}"
   },

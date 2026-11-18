@@ -459,6 +459,27 @@ def _goes_to_prime(sku: str | None) -> bool:
 
 # ── Input validation ──────────────────────────────────────────────────────────
 
+def _connect_error(hass: HomeAssistant, blid: str | None) -> str:
+    """The error for a robot that did not answer during setup.
+
+    THE BUILT-IN INTEGRATION MAY HOLD THE CONNECTION. A Classic robot
+    takes one local connection at a time. From Home Assistant 2026.11
+    both integrations load, so a robot running in the built-in Roomba
+    integration refuses Roomba+ at setup, and "Failed to connect" sent a
+    user with two such robots looking at his network. When an active
+    built-in entry has this robot's BLID, say so.
+    """
+    if blid:
+        for entry in hass.config_entries.async_entries("roomba"):
+            if (
+                entry.unique_id == blid
+                and entry.source != SOURCE_IGNORE
+                and entry.disabled_by is None
+            ):
+                return "core_roomba_holds_robot"
+    return "cannot_connect"
+
+
 async def validate_input(
     hass: HomeAssistant, data: dict[str, Any]
 ) -> dict[str, Any]:
@@ -1314,10 +1335,15 @@ class RoombaPlusConfigFlow(ConfigFlow, domain=DOMAIN):
                 "account; falling back to the HOME button", self.blid,
             )
             self._pending_config = {}
+            # The password may be fine and the robot merely busy with
+            # the built-in integration; the HOME button would not help.
+            held = _connect_error(self.hass, self.blid)
             return self.async_show_form(
                 step_id="link",
                 description_placeholders={CONF_NAME: self.name or self.blid},
-                errors={"base": "account_password_refused"},
+                errors={
+                    "base": held if held != "cannot_connect" else "account_password_refused"
+                },
             )
         self.name = self.name or result[CONF_NAME]
         return None
@@ -1467,7 +1493,7 @@ class RoombaPlusConfigFlow(ConfigFlow, domain=DOMAIN):
         try:
             result = await validate_input(self.hass, config)
         except CannotConnect:
-            errors["base"] = "cannot_connect"
+            errors["base"] = _connect_error(self.hass, blid)
             return self.async_show_form(
                 step_id="prime_classic_ip",
                 data_schema=vol.Schema({vol.Required(CONF_HOST, default=host): str}),
@@ -1526,7 +1552,7 @@ class RoombaPlusConfigFlow(ConfigFlow, domain=DOMAIN):
             try:
                 info = await validate_input(self.hass, config)
             except CannotConnect:
-                return self.async_abort(reason="cannot_connect")
+                return self.async_abort(reason=_connect_error(self.hass, self.blid))
             self.name = info[CONF_NAME]
 
         assert self.name
@@ -1549,7 +1575,7 @@ class RoombaPlusConfigFlow(ConfigFlow, domain=DOMAIN):
             try:
                 info = await validate_input(self.hass, config)
             except CannotConnect:
-                errors["base"] = "cannot_connect"
+                errors["base"] = _connect_error(self.hass, self.blid)
             else:
                 self.name = info[CONF_NAME]
                 self._pending_config = config
@@ -1636,7 +1662,9 @@ class RoombaPlusConfigFlow(ConfigFlow, domain=DOMAIN):
                 try:
                     await validate_input(self.hass, config)
                 except CannotConnect:
-                    errors["base"] = "cannot_connect"
+                    errors["base"] = _connect_error(
+                        self.hass, current.data.get(CONF_BLID)
+                    )
 
             if not errors:
                 data = {**current.data, CONF_HOST: new_host, CONF_PASSWORD: new_password}
