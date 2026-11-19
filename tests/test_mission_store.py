@@ -1693,6 +1693,46 @@ class TestAreaCleanedToday:
         assert _area_cleaned_today(store) == 0.0
 
 
+class TestAreaOfEveryRunToday:
+    """@jdapaetz2 (405 Combo): a run that cleaned three rooms, 36 m², and
+    ended short of its plan left `area_cleaned_today` at 0.0, because
+    only completed runs counted. The floor was cleaned all the same."""
+
+    @pytest.mark.asyncio
+    async def test_a_run_that_did_not_complete_counts(self):
+        store = await _store_with(
+            _make_record_v180_sensors(0, "cancelled", area_sqft=200.0),
+            _make_record_v180_sensors(0, "stuck", area_sqft=100.0),
+        )
+        assert _area_cleaned_today(store) == round(300.0 * 0.0929, 1)
+
+
+class TestRefileUnknownResult:
+    """A Prime mission stored "unknown" takes a result the code table
+    knows now, from the same mission read again (@jdapaetz2)."""
+
+    def _store(self, result):
+        store = MissionStore()
+        store.append_validated({"id": "p_a", "result": result, "ended_at": "2026-11-18T10:00:00+00:00"})
+        return store
+
+    def test_unknown_takes_the_known_result(self):
+        store = self._store("unknown")
+        assert store.refile_unknown_result({"id": "p_a", "result": "stuck"}) is True
+        assert store.records[0]["result"] == "stuck"
+
+    def test_a_settled_result_stays(self):
+        store = self._store("completed")
+        assert store.refile_unknown_result({"id": "p_a", "result": "stuck"}) is False
+        assert store.records[0]["result"] == "completed"
+
+    def test_still_unknown_or_another_mission_changes_nothing(self):
+        store = self._store("unknown")
+        assert store.refile_unknown_result({"id": "p_a", "result": "unknown"}) is False
+        assert store.refile_unknown_result({"id": "p_b", "result": "stuck"}) is False
+        assert store.records[0]["result"] == "unknown"
+
+
 class TestProblemZoneValue:
     def _make_entity(self, store):
         class _FakeData:

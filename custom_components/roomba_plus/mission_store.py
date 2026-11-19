@@ -521,6 +521,30 @@ class MissionStore:
             return True
         return False
 
+    def refile_unknown_result(self, record: dict[str, Any]) -> bool:
+        """Give a stored record filed "unknown" the result of the same
+        mission read again (id match), when that one is known.
+
+        PRIME DONE CODES THE TABLE DID NOT KNOW. A mission is stored once
+        and skipped on every later read, so a code added to the table
+        later would only ever apply to new missions; @jdapaetz2's 20
+        `stuck` and `inc` runs would have stayed "unknown". Only
+        "unknown" is replaced: a result anything else settled stays.
+        Returns whether it changed.
+        """
+        result = record.get("result")
+        record_id = record.get("id")
+        if not record_id or not result or result == "unknown":
+            return False
+        for existing in self._records:
+            if existing.get("id") != record_id:
+                continue
+            if existing.get("result") != "unknown":
+                return False
+            existing["result"] = result
+            return True
+        return False
+
     #: The command fields a Prime record gained in 4.6.0.
     COMMAND_KEYS: tuple[str, ...] = ("initiator", "requested_region_ids", "scope", "cmd")
 

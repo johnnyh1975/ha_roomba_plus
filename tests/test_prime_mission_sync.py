@@ -236,6 +236,24 @@ class TestReconciliation:
         assert store.add_missing_command_data.call_args.args[0]["id"] == "p_a"
 
     @pytest.mark.asyncio
+    async def test_a_stored_unknown_result_is_refiled(self):
+        """@jdapaetz2: a mission stored "unknown" takes the result of the
+        same mission read again, so the code table applies to the
+        history already stored."""
+        from custom_components.roomba_plus.prime_mission_sync import (
+            async_sync_prime_missions,
+        )
+
+        entry, store = self._config_entry([self._hist("a", 27)], existing=["p_a"])
+        store.add_missing_room_data = MagicMock(return_value=False)
+        store.add_missing_command_data = MagicMock(return_value=False)
+        store.refile_unknown_result = MagicMock(return_value=True)
+        store.async_save = AsyncMock()
+        await async_sync_prime_missions(entry)
+        assert store.refile_unknown_result.call_args.args[0]["id"] == "p_a"
+        store.async_save.assert_awaited()
+
+    @pytest.mark.asyncio
     async def test_already_stored_missions_are_skipped(self):
         """The whole reason this is a reconciliation. Without it every
         poll would duplicate the history."""
@@ -1630,7 +1648,10 @@ class TestTheDoneCodeTableMatchesTheRealEnum:
             _DONE_CODE_TO_RESULT,
         )
 
-        real = {str(member.value) for member in DoneCode}
+        # `inc` is on the wire (@jdapaetz2's 405 Combo, 6 of 32 runs)
+        # but not in the enum, which guessed `incomplete`; the library
+        # hands it over as the raw string.
+        real = {str(member.value) for member in DoneCode} | {"inc"}
         invented = sorted(set(_DONE_CODE_TO_RESULT) - real)
 
         assert not invented, (
@@ -1660,7 +1681,38 @@ class TestTheDoneCodeTableMatchesTheRealEnum:
         assert confirmed <= set(_DONE_CODE_TO_RESULT), (
             f"missing: {sorted(confirmed - set(_DONE_CODE_TO_RESULT))}"
         )
-        assert set(_DONE_CODE_TO_RESULT) <= {str(m.value) for m in DoneCode}
+        assert set(_DONE_CODE_TO_RESULT) <= {str(m.value) for m in DoneCode} | {"inc"}
+
+
+class TestStuckAndIncompleteRuns:
+    """@jdapaetz2 (405 Combo): of 32 runs, 14 ended `stuck` and 6 `inc`,
+    and all 20 were filed "unknown". The newest ended `inc`, so the
+    day's area, the streak and the last result stayed empty."""
+
+    def _result(self, done):
+        from custom_components.roomba_plus.prime_mission_sync import (
+            prime_entry_to_record,
+        )
+
+        record = prime_entry_to_record(_entry(
+            mission_id="a", timestamp=datetime(2026, 11, 18, tzinfo=timezone.utc),
+            done_code=done,
+        ))
+        assert record is not None
+        return record["result"]
+
+    def test_stuck_is_stuck(self):
+        from roombapy_prime.models.mission_history import DoneCode
+
+        assert self._result("stuck") == "stuck"
+        # As the library parses it, an enum member.
+        assert self._result(DoneCode.STUCK) == "stuck"
+
+    def test_inc_is_cancelled(self):
+        assert self._result("inc") == "cancelled"
+
+    def test_an_unmatched_code_is_still_unknown(self):
+        assert self._result("somethingNew") == "unknown"
 
 
 class TestSensorsRefreshAfterSync:

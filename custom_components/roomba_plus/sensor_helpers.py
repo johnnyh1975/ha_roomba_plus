@@ -532,7 +532,11 @@ def _last_mission_team_id(store: Any) -> StateType:
 
 def _area_cleaned_today(store: Any) -> StateType:
     today = dt_util.now().date()
-    records = store.query(1, result="completed")
+    # EVERY RUN THAT REPORTS AN AREA, however it ended. Counting completed
+    # runs only left the day at 0.0 after a run that stopped short of its
+    # plan or got stuck halfway (@jdapaetz2's 405 Combo: three rooms,
+    # 36 m², ended `inc`) -- the floor was cleaned all the same.
+    records = store.query(1)
     areas = []
     for r in records:
         if r.get("area_sqft") is None:

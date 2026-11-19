@@ -21,7 +21,7 @@ Every mission is recorded in a log of up to 365 missions that survives a restart
 | Last mission summary | The last mission in one entity: duration, area, battery used, recharges, dirt events, who started it, `scope` (`rooms` or `whole_home`), times |
 | Clean streak | Days in a row with at least one completed mission |
 | Missions last 30 days, Completion rate (30 days) | Completed missions, and completed against all |
-| Area cleaned today | The day's area (robots that report area) |
+| Area cleaned today | The area of the day's missions, finished or not: a run that got stuck or stopped short of its plan still cleaned what it covered (robots that report area) |
 | Rooms – Cleaning history | `{room: when it was last cleaned}` over all recorded missions, as the state's attributes and under `rooms`. Each room carries the time the robot finished it, not the end of the whole mission |
 | Last cleaned – *room or zone* | One sensor per room and saved zone, off by default: Configure → Connection settings → *Separate sensor per room and zone*. The time the robot finished the room on its newest clean. Attributes: `last_duration_min` (time spent there, every visit added up), `typical_duration_min` and `typical_duration_cleans` (the median over the room's newest 10 cleans, and how many there were; charging and the drives to and from the dock are in neither), `region_id`, `pmap_id` |
 | Consecutive anomalous missions | Unusual missions in a row (off by default) |

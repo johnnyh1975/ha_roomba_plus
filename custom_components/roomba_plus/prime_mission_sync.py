@@ -132,6 +132,17 @@ _DONE_CODE_TO_RESULT: dict[str, str] = {
     "usrEnd": "cancelled",
     "usrSpt": "cancelled",
     "batcncl": "cancelled",
+
+    # NOT IN EITHER OF THE APP'S SETS, AND ON THE WIRE ALL THE SAME.
+    # @jdapaetz2's 405 Combo: 14 of 32 runs ended `stuck`, 6 `inc`, and
+    # every one of them was filed "unknown" -- its newest run, `inc`,
+    # left the day's area, the streak and the last result empty. Both
+    # read the way the Classic cloud history reads the same field
+    # (cloud_coordinator.classify_mission_result): `stuck` is stuck,
+    # `inc` (a run that stopped short of its plan) is cancelled. The
+    # error behind either is kept in `error_code`, from the timeline.
+    "stuck": "stuck",
+    "inc": "cancelled",
 }
 
 
@@ -614,6 +625,9 @@ async def _async_sync_locked(
                 backfilled += 1
             # AND THE COMMAND FIELDS OF 4.6.0, the same way.
             if store.add_missing_command_data(record):
+                backfilled += 1
+            # AND A RESULT FILED "unknown" BEFORE THE TABLE KNEW ITS CODE.
+            if store.refile_unknown_result(record):
                 backfilled += 1
             continue
         known.add(record["id"])
