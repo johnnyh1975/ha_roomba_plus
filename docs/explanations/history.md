@@ -27,7 +27,7 @@ Every mission is recorded in a log of up to 365 missions that survives a restart
 | Consecutive anomalous missions | Unusual missions in a row (off by default) |
 | Last mission team ID | The `team_id` of the last mission if it was part of an Imprint Link team clean (Classic, off by default) |
 
-A multi-room mission is recorded up to about 90 seconds after the robot reports it done, so a pause between rooms is not taken for an early end.
+A multi-room mission is recorded up to about 90 seconds after the robot reports it done, so a pause between rooms is not taken for an early end. A robot sent home is recorded as soon as it docks, whatever rooms of the plan it left.
 
 **The error of a mission.** A mission's `error_code` falls back to the first error in its timeline when the record itself has none. On one tester's robot the record's own field was empty on all 49 missions while the timelines held 111 errors: sixteen missions had ended stuck. On Prime the last error is the newest mission that ended in error, read at startup and after each history sync.
 

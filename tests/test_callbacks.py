@@ -1812,6 +1812,25 @@ class TestRoomIndexCorroboration:
             "current_room_idx never advances — must not hang forever"
         )
 
+    def test_a_robot_sent_home_ends_with_rooms_left(self):
+        """#257, @willfanguy's i4: sent home with rooms of the plan to go.
+        The end was held for them, and a new run two minutes later was
+        taken for the same mission."""
+        recorded = self._run_phases_with_rooms(
+            [("run", 0), ("hmUsrDock", 0), ("charge", 0), ("charge", 0), ("charge", 0)],
+            planned_rooms=["Kitchen", "Hallway", "Bedroom"],
+            current_room_idx=0,
+        )
+        assert len(recorded) == 1
+
+    def test_a_robot_sent_home_and_resumed_keeps_its_plan(self):
+        recorded = self._run_phases_with_rooms(
+            [("run", 0), ("hmUsrDock", 0), ("run", 0), ("charge", 0), ("charge", 0), ("charge", 0)],
+            planned_rooms=["Kitchen", "Hallway", "Bedroom"],
+            current_room_idx=0,
+        )
+        assert len(recorded) == 0
+
     def test_unvisited_rooms_suppression_still_works_within_cap(self):
         """Sanity check: the safety cap must not defeat the original fix
         for short, normal inter-room transitions well within 90s."""
@@ -6926,6 +6945,82 @@ class TestRoomFromThePosition:
         tracker = entry.runtime_data.position_room
         cb.make_mission_callback(MagicMock(), entry)
         assert len(tracker._listeners) == 1
+
+
+class TestDrivesThatAreNoRoomChange:
+    """#257, @willfanguy's i4: of five drives in one run, two were room
+    changes. The drive off the dock (61 s, on 2026-11-17) and the drive
+    home (sent home from the Laundry Room) each moved the display on."""
+
+    def _mts(self, advanced):
+        return SimpleNamespace(
+            planned_rooms=["Kitchen", "Living Room", "Hallway"], current_room_idx=0,
+            time_in_current_room_sec=600.0, expected_room_sec=600.0,
+            advance_room=lambda *_a: advanced.append(1) or True,
+            current_room="Living Room",
+        )
+
+    def _drive_end(self, phase):
+        advanced: list[int] = []
+        ms = cb._MissionState()
+        ms.mission_start_ts = 1700000000
+        ms.cleaned_in_room = True
+        ms.ran_in_room = True
+        ms.last_phase = phase
+        entry = MagicMock(entry_id="e", title="Roomba")
+        entry.runtime_data.robot_profile_store = None
+        entry.runtime_data.position_room = None
+        cb._advance_room_on_drive_end(
+            ms, MagicMock(), entry, mts_upd=self._mts(advanced),
+            returned_from_travel=True,
+            mission={"cycle": "clean", "error": 0}, phase=phase,
+        )
+        return advanced
+
+    def test_a_drive_into_a_room_advances(self):
+        assert self._drive_end("run") == [1]
+
+    def test_the_drive_home_does_not(self):
+        assert self._drive_end("hmUsrDock") == []
+        assert self._drive_end("hmMidMsn") == []
+
+    def test_the_first_minute_is_the_drive_off_the_dock(self):
+        ms = cb._MissionState()
+        ms.mission_start_ts = 1700000000
+        assert cb._is_drive_off_the_dock(ms, now=1700000017) is True
+        assert cb._is_drive_off_the_dock(ms, now=1700000600) is False
+        assert cb._is_drive_off_the_dock(cb._MissionState(), now=1700000017) is False
+
+    @staticmethod
+    def _msg(start, *, travelling):
+        return {"state": {"reported": {
+            "cleanMissionStatus": {
+                "phase": "run", "sqft": 10, "mssnStrtTm": start,
+                "initiator": "schedule", "error": 0, "cycle": "clean",
+                "operatingMode": 3 if travelling else 2,
+            },
+            "bbrun": {"nStuck": 0, "hr": 10},
+        }}}
+
+    def _backing_off_then_driving(self, started_ago):
+        import time as _time
+
+        hass, entry, _, _ = _make_callback_env()
+        entry.runtime_data.prime_status_coordinator = None
+        entry.runtime_data.mission_timer_store = TestRoomCompletedEvent()._make_real_mts(entry)
+        callback_ = cb.make_mission_callback(hass, entry)
+        start = int(_time.time()) - started_ago
+        callback_(self._msg(start, travelling=False))   # backing off, or cleaning
+        assert callback_.state.cleaned_in_room is True
+        callback_(self._msg(start, travelling=True))
+        hass.loop.run_until_complete(asyncio.sleep(0))
+        return callback_.state.cleaned_in_room
+
+    def test_backing_off_the_dock_is_no_work_in_a_room(self):
+        assert self._backing_off_then_driving(10) is False
+
+    def test_work_minutes_into_the_mission_still_counts(self):
+        assert self._backing_off_then_driving(600) is True
 
 
 class TestA900SeriesRunRecordsTheRoomsItWentInto:

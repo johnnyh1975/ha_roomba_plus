@@ -154,6 +154,19 @@ _ROOM_TRANSITION_MIN_ELAPSED_RATIO: float = 0.5
 #: measurement: the confirmed room crossings measured 8-32 s, and no
 #: intra-room hop was ever timed.
 _ROOM_TRANSITION_MIN_SECONDS: float = 60.0
+
+#: THE DRIVE OFF THE DOCK (#257). A drive that starts this soon after
+#: the mission does goes to the first room; it leaves none. @willfanguy's
+#: i4 backs off the dock running, so the room counted as worked in, and
+#: the 61 s drive into the Kitchen moved the display to the Living Room.
+#: A dock inside the first room is unaffected: the robot cleans there
+#: first, and its first drive comes minutes later.
+_DRIVE_OFF_DOCK_SECONDS: float = 60.0
+
+#: THE DRIVE HOME (#257). A drive that ends in one of these phases is on
+#: its way to the dock, not into a room. @willfanguy's i4, sent home from
+#: the Laundry Room, showed the Guest Bedroom.
+_DRIVE_HOME_PHASES: frozenset[str] = frozenset({"hmUsrDock", "hmMidMsn", "hmPostMsn"})
 #: A travel edge sooner than this after entering a room reads as
 #: repositioning within it, not as a second boundary.
 #: A drive shorter than this is repositioning within a room, not a
@@ -1349,6 +1362,9 @@ class _MissionState:
     #: Whether a working mode has been seen since the current room
     #: was entered; see the note in the advance block.
     cleaned_in_room: bool = False
+    #: Whether the user sent the robot home in this mission (`hmUsrDock`,
+    #: #257). Its end is then no inter-room blip, whatever the plan says.
+    sent_home: bool = False
     #: Whether the robot has RUN since the current room was entered --
     #: travelling excluded where the robot reports it, counted where it
     #: does not (Braava). Decides whether the last room reached goes
@@ -1424,6 +1440,17 @@ class _MissionState:
     #   D) stuck → run does NOT re-fire mission start (no false reset)
     had_cleaning_phase: bool = False
 
+
+
+def _is_drive_off_the_dock(ms: _MissionState, now: float | None = None) -> bool:
+    """Whether a drive starting now is the one from the dock to the first
+    room: within _DRIVE_OFF_DOCK_SECONDS of the mission's start
+    (`mssnStrtTm`, the robot's own clock)."""
+    start = ms.mission_start_ts
+    if isinstance(start, bool) or not isinstance(start, (int, float)) or start <= 0:
+        return False
+    elapsed = (_time_mod.time() if now is None else now) - float(start)
+    return 0.0 <= elapsed < _DRIVE_OFF_DOCK_SECONDS
 
 
 def _evaluate_travel_edge(ms: _MissionState, travelling: bool | None) -> bool:
@@ -1522,6 +1549,7 @@ def _handle_mission_start(
         _note_mission_start_command(entry, reported, ms.current_mission_scope)
         ms.mission_start_ts = candidate_mission_start_ts
         ms.ran_in_room = False
+        ms.sent_home = False
         ms.saw_travelling = False
         bbrun = _merged_top_level(entry, reported, "bbrun")
         ms.nstuck_at_start = bbrun.get("nStuck", 0)
@@ -2105,6 +2133,7 @@ def _confirm_mission_end(
         ms.current_mission_scope = None
         ms.mission_start_ts = 0
         ms.ran_in_room = False
+        ms.sent_home = False
         ms.nstuck_at_start = 0
         ms.npicks_at_start = 0   # v3.2.0 bug-hunt fix — was missing here,
                                # inconsistent with nstuck_at_start's
@@ -2213,7 +2242,10 @@ def _advance_room_on_drive_end(
                     ms.last_phase != phase
                     and phase in _ROOM_TRANSITION_CANDIDATE_PHASES
                 )
-                or (returned_from_travel and ms.cleaned_in_room)
+                or (
+                    returned_from_travel and ms.cleaned_in_room
+                    and phase not in _DRIVE_HOME_PHASES
+                )
             )
             and _room_transition_confidence_ok(
                 mission, mts_upd, from_travel=returned_from_travel
@@ -2705,6 +2737,10 @@ def make_mission_callback(
         # record does not list it as cleaned.
         if phase == "hmUsrDock" and ms.last_phase != "hmUsrDock" and ms.had_cleaning_phase:
             _leave_room_sent_home(hass, entry)
+        if phase == "hmUsrDock" and ms.had_cleaning_phase:
+            ms.sent_home = True
+        elif phase == "run":
+            ms.sent_home = False   # resumed: the plan holds again
 
         # F4e — accumulate recharge time on every hmMidMsn entry
         if phase == "hmMidMsn":
@@ -2868,6 +2904,10 @@ def make_mission_callback(
             _ambiguous_end_phase
             and phase in _MISSION_END_PHASES
             and ms.had_cleaning_phase
+            # SENT HOME (#257): the user ended it. @willfanguy's i4 docked
+            # with seven rooms to go, the end was held for them, and a new
+            # run two minutes later was taken for the same mission.
+            and not ms.sent_home
             and _has_unvisited_planned_rooms(ms, entry)
             and _time_held < _UNVISITED_ROOMS_MAX_SUPPRESSION_SECONDS
         )
@@ -3004,6 +3044,9 @@ def make_mission_callback(
         # Not travelling, and running: the robot is doing work, and the
         # room it is doing it in is the one it travelled to. Both
         # generations report `phase` and the travel bit the same way.
+        if _travelling is True and not ms.was_travelling and _is_drive_off_the_dock(ms):
+            # What the robot did before this drive was backing off the dock.
+            ms.cleaned_in_room = False
         if phase == "run" and _travelling is False:
             ms.cleaned_in_room = True
         # For the mission record: run counts unless the robot says it is

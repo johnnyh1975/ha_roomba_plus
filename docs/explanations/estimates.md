@@ -34,6 +34,8 @@ Attributes: `current_room`, `current_room_source`, `next_room`, `elapsed_run_min
 
 **From the cloud's room events.** On Smart Map robots with the account and on Prime, the robot's own timeline says when it moves to the next room, and that moves the display too. A mission started in the iRobot app, by a schedule or on the robot has no plan in Home Assistant; on Prime the rooms the timeline names become the list, in the order the robot enters them, without a forecast of the rooms still to come and so without a remaining time.
 
+**From the robot's drives.** A Smart Map robot without positions reports when it is driving rather than cleaning. A drive that ends after the robot cleaned in a room moves the display to the next planned room. The drive off the dock in the mission's first minute and a drive home (sent home, to recharge, after the mission) do not. A drive inside a room looks the same as one into the next, so the display can run ahead; with the iRobot account, the mission record takes its rooms from the cloud's room events afterwards.
+
 A new start command while a mission runs replaces its room plan. If the progress ever sticks on a room the robot has finished, `roomba_plus.advance_room` moves it on.
 
 `current_room_source` says which path produced the room:
