@@ -10,14 +10,32 @@ are listed; most releases need nothing beyond updating.
 
 | Your version | Read |
 |---|---|
-| 4.6.1 | [4.6.2](#v462--from-v461) |
-| 4.6.0 | [4.6.1](#v461--from-v460), then 4.6.2 |
-| 4.5.x | [4.6.0](#v460--from-v45x), then 4.6.1 and 4.6.2 |
-| 4.4.x | [4.5.0](#v450--from-v44x), then 4.5.3, 4.5.4 and 4.6.0 to 4.6.2 below |
+| 4.6.2 | [4.6.3](#v463--from-v462) |
+| 4.6.1 | [4.6.2](#v462--from-v461), then 4.6.3 |
+| 4.6.0 | [4.6.1](#v461--from-v460), then 4.6.2 and 4.6.3 |
+| 4.5.x | [4.6.0](#v460--from-v45x), then 4.6.1 to 4.6.3 |
+| 4.4.x | [4.5.0](#v450--from-v44x), then 4.5.3, 4.5.4 and 4.6.0 to 4.6.3 below |
 | 4.3.x or older | The notes of your line under [Older versions](#older-versions), then everything above them |
 
 Release notes, with everything that changed in each version:
 [GitHub Releases](https://github.com/johnnyh1975/ha_roomba_plus/releases).
+
+---
+## v4.6.3 — from v4.6.2
+
+Nothing to do. What you may notice:
+
+- **Area cleaned today can be higher.** It now adds the area of every run
+  of the day, not only completed ones. The clean streak and the completion
+  rate are unchanged.
+- **Prime: runs shown as unknown get a result** at the next history sync:
+  stuck, or cancelled for a run that stopped short of its plan. The
+  mission counts of past days change with them.
+- **A robot sent home is recorded as soon as it docks.** An automation
+  that waited for `roomba_plus_mission_completed` after sending the robot
+  home gets it right away.
+- **On Smart Map robots without positions,** the current room no longer
+  moves when the robot leaves the dock or heads home.
 
 ---
 ## v4.6.2 — from v4.6.1
