@@ -992,6 +992,7 @@ def _make_map_entity():
     # checks.
     entity._renderer.point_count = 0
     entity._zone_store = None
+    entity._driving_home = False
     # v3.2.1 DOCK-ANCHOR — EPHEMERAL by default: this is the tier every
     # dock-anchor test in this file (and most of this evening's work)
     # actually concerns. Tests specifically verifying SMART-robot
@@ -5571,6 +5572,32 @@ class TestRequestedPositionsOnTheCleaningMap:
         m.vacuum.master_state = {"state": {"reported": reported}}
         m.async_write_ha_state = MagicMock()
         return m, renderer, entry, scheduled
+
+    def _phase(self, m, phase):
+        status = {"phase": phase, "cycle": "clean", "mssnStrtTm": 1700000000}
+        m.vacuum.master_state["state"]["reported"]["cleanMissionStatus"] = status
+        m.on_message({"state": {"reported": {"cleanMissionStatus": status}}})
+
+    def test_the_dock_is_where_the_robot_drove_home_to(self):
+        """Jamd-pt: requested positions are in the cloud map's frame,
+        whose origin is not the dock, so the marker sat elsewhere."""
+        m, renderer, _e, _s = self._entity()
+        renderer._cfg.mirror_x = False
+        self._phase(m, "run")
+        m._handle_live_position(self._pos(1.5, -0.25))
+        self._phase(m, "hmPostMsn")
+        renderer.remember_dock_at_last_position.assert_not_called()
+        self._phase(m, "charge")
+        renderer.remember_dock_at_last_position.assert_called_once()
+
+    def test_not_where_a_robot_carried_to_the_dock_died(self):
+        m, renderer, _e, _s = self._entity()
+        renderer._cfg.mirror_x = False
+        self._phase(m, "run")
+        m._handle_live_position(self._pos(1.5, -0.25))
+        self._phase(m, "stuck")
+        self._phase(m, "charge")
+        renderer.remember_dock_at_last_position.assert_not_called()
 
     def test_metres_to_millimetres_in_the_cloud_maps_frame(self):
         """Metres and radians in, millimetres and degrees out, drawn as the

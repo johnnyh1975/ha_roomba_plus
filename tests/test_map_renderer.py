@@ -2027,3 +2027,46 @@ class TestLabelsInScriptsDejaVuLacks:
         mr.set_fallback_fonts([self._FIXTURE])
         after = ink(mr.label_font("玄", mr.NAMING_LABEL_FONT))
         assert after > before * 2, (before, after)
+
+
+class TestTheDockWhereTheRobotDocked:
+    """Jamd-pt: with requested positions (the cloud map's frame) the dock
+    was drawn at the frame's origin, which is not where the dock is."""
+
+    @staticmethod
+    def _renderer() -> MapRenderer:
+        r = MapRenderer(RendererConfig(size_px=600, scale=10.0, auto_fit=False))
+        for x in (1000.0, 1100.0, 1200.0, 1300.0, 1400.0, 1500.0):
+            r.add_pose(x, 0.0, 0.0)
+        return r
+
+    @staticmethod
+    def _pixel(png: bytes, xy: tuple[int, int]) -> tuple[int, ...]:
+        import io
+
+        from PIL import Image
+
+        return Image.open(io.BytesIO(png)).convert("RGB").getpixel(xy)
+
+    def test_drawn_where_it_was_seen_not_at_the_origin(self):
+        from custom_components.roomba_plus.map_renderer import BG_COLOUR
+
+        plain = self._renderer()
+        docked = self._renderer()
+        assert docked.remember_dock_at_last_position() is True
+        origin = (300, 300)
+        assert self._pixel(plain.render(), origin) != BG_COLOUR[:3]
+        assert self._pixel(docked.render(), origin) == BG_COLOUR[:3]
+
+    def test_it_survives_a_restart_and_a_new_mission(self):
+        r = self._renderer()
+        r.remember_dock_at_last_position()
+        restored = MapRenderer(RendererConfig(size_px=600, scale=10.0, auto_fit=False))
+        assert restored.restore_state(r.dump_state()) is True
+        restored.reset()
+        assert restored._dock_mm == (1500.0, 0.0)
+
+    def test_no_position_no_dock(self):
+        r = MapRenderer(RendererConfig(size_px=600, scale=10.0, auto_fit=False))
+        assert r.remember_dock_at_last_position() is False
+        assert r._dock_mm is None

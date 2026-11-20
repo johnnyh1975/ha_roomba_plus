@@ -1607,6 +1607,8 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
 
         # Mission tracking
         self._last_phase: str = ""
+        #: Whether the robot is on its way to the dock (Jamd-pt).
+        self._driving_home: bool = False
         #: Whether this mission began on the dock: True, False, or None
         #: when not known (the phase before it was not seen). See
         #: _mission_start_on_dock().
@@ -2311,6 +2313,22 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                         (self.vacuum_state.get("cleanMissionStatus") or {}).get("mssnStrtTm") or 0
                     )
                     _LOGGER.debug("Map: mission started, renderer reset")
+
+            # WHERE THE DOCK IS, for requested positions (Jamd-pt): a robot
+            # that drove home and is charging stands on it. Only after a
+            # drive home -- one carried to the dock after dying elsewhere
+            # would put it where it died.
+            if current_phase in ("hmPostMsn", "hmMidMsn", "hmUsrDock"):
+                self._driving_home = True
+            elif current_phase == "run":
+                self._driving_home = False
+            elif current_phase == "charge" and self._driving_home:
+                self._driving_home = False
+                if (
+                    self._renderer is not None
+                    and self._position_source == POSITION_SOURCE_REQUEST
+                ):
+                    self._renderer.remember_dock_at_last_position()
 
             self._last_phase = current_phase
 

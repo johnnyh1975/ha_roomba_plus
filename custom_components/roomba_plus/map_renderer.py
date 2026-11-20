@@ -463,6 +463,10 @@ class MapRenderer:
         self._point_ts: list[float] = []
         self._stuck_px: list[tuple[int, int]] = []    # pixel coordinates
         self._robot_px: tuple[int, int] | None = None # current robot position
+        #: Where the robot docked, in add_pose()'s millimetres (Jamd-pt):
+        #: None until seen, and then the dock marker's place instead of
+        #: the frame's origin. Kept across missions.
+        self._dock_mm: tuple[float, float] | None = None
         self._theta: float = 0.0                      # current heading (degrees)
         self._last_png: bytes | None = None           # cached output (not persisted)
         # Auto-fit state — recomputed at the start of each render().
@@ -856,6 +860,16 @@ class MapRenderer:
             self._robot_px = _follow(self._robot_px)
         self._last_png = None
 
+    def remember_dock_at_last_position(self) -> bool:
+        """The robot drove home and is charging: the dock is where its
+        last position was drawn. False without a position."""
+        if not self._points_mm:
+            return False
+        x, y = self._points_mm[-1]
+        self._dock_mm = (float(x), float(y))
+        self._last_png = None
+        return True
+
     def mark_stuck(self) -> None:
         """Record a stuck event at the current robot position."""
         if self._robot_px:
@@ -921,6 +935,8 @@ class MapRenderer:
                     all_px.extend(self._mm_to_px(x, y) for x, y in polygon)
         if self._robot_px:
             all_px.append(self._robot_px)
+        if self._dock_mm is not None and self._fit_bounds_px is None:
+            all_px.append(self._mm_to_px(*self._dock_mm))
 
         # ROOM OUTLINES BELONG IN THE FIT, and leaving them out silently
         # cropped them off the canvas.
@@ -1068,7 +1084,13 @@ class MapRenderer:
         dock_footprint_r = self._mm_radius_px(
             self._cfg.robot_diameter_mm / 2, min_px=DOCK_MIN_PX
         )
-        dock_px = _fit_px(size // 2, size // 2)
+        # THE FRAME'S ORIGIN IS THE DOCK ONLY FOR THE ROBOT'S OWN POSE.
+        # Requested positions come in the cloud map's frame (Jamd-pt), so
+        # the dock is drawn where the robot was seen docking, once it has.
+        dock_px = _fit_px(*(
+            self._mm_to_px(*self._dock_mm) if self._dock_mm is not None
+            else (size // 2, size // 2)
+        ))
         dcx, dcy = dock_px
         dock_overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
         overlay_draw = ImageDraw.Draw(dock_overlay)
@@ -1130,6 +1152,7 @@ class MapRenderer:
             "points": list(self._points),           # list[tuple[int, int]]
             "stuck_px": list(self._stuck_px),       # list[tuple[int, int]]
             "robot_px": list(self._robot_px) if self._robot_px else None,
+            "dock_mm": list(self._dock_mm) if self._dock_mm is not None else None,
             "theta": self._theta,
             # Which way the pixels face. A dump written before the view
             # was mirrored has no key and is converted on restore.
@@ -1169,6 +1192,15 @@ class MapRenderer:
             self._stuck_px = [tuple(p) for p in state["stuck_px"]]
             robot_px = state.get("robot_px")
             self._robot_px = tuple(robot_px) if robot_px else None
+            dock_mm = state.get("dock_mm")
+            self._dock_mm = (
+                (float(dock_mm[0]), float(dock_mm[1]))
+                if isinstance(dock_mm, (list, tuple)) and len(dock_mm) == 2
+                else None
+            )
+            # Handed over mirrored or not as the view was then.
+            if self._dock_mm is not None and bool(state.get("mirror_x", False)) != self._cfg.mirror_x:
+                self._dock_mm = map_mm_to_view(*self._dock_mm)
             # A PATH SAVED THE OTHER WAY ROUND, before 4.3.1 mirrored the
             # view: the pixels are about the canvas centre, so mirroring
             # them is 2*cx - x.
