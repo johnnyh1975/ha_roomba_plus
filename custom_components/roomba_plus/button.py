@@ -926,18 +926,9 @@ class RepeatLastMissionButton(IRobotEntity, ButtonEntity):
         # command does since 4.2.13, cloud first (#183). This read the
         # robot's own `pmaps` once lastCommand no longer matched, and that
         # is the uncommitted version the robot refuses with error 224.
-        if params.get("pmap_id"):
-            from .room_cleaning import cloud_data_of, resolve_user_pmapv_id  # noqa: PLC0415
-            fresh = resolve_user_pmapv_id(
-                self.vacuum_state, cloud_data_of(self._config_entry), params["pmap_id"]
-            )
-            if fresh:
-                params["user_pmapv_id"] = fresh
-            else:
-                _LOGGER.warning(
-                    "RepeatLastMission: pmap %s not in live state — map may have been retrained",
-                    params["pmap_id"],
-                )
+        _use_current_map_version(
+            params, self.vacuum_state, self._config_entry, "RepeatLastMission"
+        )
 
         _LOGGER.info(
             "RepeatLastMission: sending %s params=%s", command, params or "(none)"
@@ -951,6 +942,33 @@ class RepeatLastMissionButton(IRobotEntity, ButtonEntity):
 
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:
         return "lastCommand" in new_state
+
+
+def _use_current_map_version(
+    params: dict[str, Any], state: dict[str, Any], config_entry: Any, sender: str
+) -> None:
+    """Give a command for a map the version that map has now.
+
+    A favourite and the robot's last command carry the version they were
+    saved with, and after a map edit the robot takes the start and runs
+    nothing, error 224 (Jamd-pt, for favourites). Every room command has
+    asked resolve_user_pmapv_id() since 4.2.13; these did not. Without an
+    answer, the saved version goes as before.
+    """
+    pmap_id = params.get("pmap_id")
+    if not pmap_id:
+        return
+    from .room_cleaning import cloud_data_of, resolve_user_pmapv_id  # noqa: PLC0415
+
+    fresh = resolve_user_pmapv_id(state, cloud_data_of(config_entry), pmap_id)
+    if fresh:
+        params["user_pmapv_id"] = fresh
+    elif params.get("user_pmapv_id"):
+        _LOGGER.warning(
+            "%s: no current version for map %s; sending the saved one, "
+            "which the robot refuses if the map has changed since",
+            sender, pmap_id,
+        )
 
 
 def robot_offers_skip(state: dict[str, Any]) -> bool:
@@ -1264,13 +1282,14 @@ async def async_run_classic_favorite(
                 "run_favorite: favourite %s has %d command definitions -- "
                 "only the first is sent", favorite_id, len(command_defs),
             )
-        await _send_favorite(hass, roomba, command_defs[0])
+        await _send_favorite(hass, roomba, command_defs[0], config_entry)
         return True
     return False
 
 
 async def _send_favorite(
-    hass: HomeAssistant, roomba: Any, cmd: dict[str, Any]
+    hass: HomeAssistant, roomba: Any, cmd: dict[str, Any],
+    config_entry: RoombaConfigEntry,
 ) -> None:
     """Publish one favourite command definition verbatim.
 
@@ -1282,7 +1301,11 @@ async def _send_favorite(
     A guard test in this repository caught the same mistake here before
     it shipped.
     """
-    await roomba.send_command(cmd.get("command", "start"), {k: v for k, v in cmd.items() if k != "command"})
+    params = {k: v for k, v in cmd.items() if k != "command"}
+    _use_current_map_version(
+        params, roomba_reported_state(roomba), config_entry, "run_favorite"
+    )
+    await roomba.send_command(cmd.get("command", "start"), params)
 
 
 class FavoriteButton(IRobotEntity, ButtonEntity):
@@ -1357,6 +1380,9 @@ class FavoriteButton(IRobotEntity, ButtonEntity):
         cmd = command_defs[0]
         command = cmd.get("command", "start")
         params = {k: v for k, v in cmd.items() if k != "command"}
+        _use_current_map_version(
+            params, self.vacuum_state, self._config_entry, "FavoriteButton"
+        )
 
         _LOGGER.info(
             "FavoriteButton: firing favorite '%s' → %s params=%s",

@@ -1370,6 +1370,64 @@ class TestStartButtonsAreWatched:
         assert watched.await_args.args[2] == "repeat_last_mission"
         repeat.vacuum.send_command.assert_awaited()
 
+class TestAFavouriteGetsTheMapsCurrentVersion:
+    """Jamd-pt: after a map retrain, a favourite sent the version it was
+    saved with; the robot took the start, ran nothing and raised error 224.
+    Every room command has resolved the version since 4.2.13."""
+
+    _FAV = {
+        "favorite_id": "f1", "name": "Kitchen",
+        "commanddefs": [{
+            "command": "start", "robot_id": "test_blid", "pmap_id": "P1",
+            "user_pmapv_id": "saved", "regions": [{"region_id": "3", "type": "rid"}],
+        }],
+    }
+
+    @pytest.mark.asyncio
+    async def test_the_button(self, monkeypatch):
+        from custom_components.roomba_plus import room_cleaning as rc
+        from custom_components.roomba_plus import services as svc
+
+        monkeypatch.setattr(svc, "async_send_watched", AsyncMock(side_effect=_through))
+        monkeypatch.setattr(rc, "resolve_user_pmapv_id", lambda state, cloud, pmap: "current")
+        btn = FavoriteButton(_make_roomba(), "test_blid", _make_config_entry(has_cloud=True), self._FAV)
+        btn.hass = MagicMock()
+        await btn.async_press()
+        command, params = btn.vacuum.send_command.await_args.args
+        assert params["pmap_id"] == "P1" and params["user_pmapv_id"] == "current"
+        # The favourite itself is not changed.
+        assert self._FAV["commanddefs"][0]["user_pmapv_id"] == "saved"
+
+    @pytest.mark.asyncio
+    async def test_the_run_favorite_action(self, monkeypatch):
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus import room_cleaning as rc
+        from custom_components.roomba_plus.button import async_run_classic_favorite
+
+        monkeypatch.setattr(rc, "resolve_user_pmapv_id", lambda state, cloud, pmap: "current")
+        roomba = _make_roomba()
+        entry = SimpleNamespace(runtime_data=SimpleNamespace(
+            roomba=roomba, blid="test_blid",
+            cloud_coordinator=SimpleNamespace(data={"favorites": [self._FAV]}),
+        ))
+        assert await async_run_classic_favorite(MagicMock(), entry, "f1") is True
+        _command, params = roomba.send_command.await_args.args
+        assert params["user_pmapv_id"] == "current"
+
+    @pytest.mark.asyncio
+    async def test_without_an_answer_the_saved_version_goes(self, monkeypatch):
+        from custom_components.roomba_plus import room_cleaning as rc
+        from custom_components.roomba_plus import services as svc
+
+        monkeypatch.setattr(svc, "async_send_watched", AsyncMock(side_effect=_through))
+        monkeypatch.setattr(rc, "resolve_user_pmapv_id", lambda state, cloud, pmap: None)
+        btn = FavoriteButton(_make_roomba(), "test_blid", _make_config_entry(has_cloud=True), self._FAV)
+        btn.hass = MagicMock()
+        await btn.async_press()
+        assert btn.vacuum.send_command.await_args.args[1]["user_pmapv_id"] == "saved"
+
+
 async def _through(hass, entry, what, send):
     """An `async_send_watched` that only sends."""
     return await send()
