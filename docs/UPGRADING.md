@@ -10,16 +10,27 @@ are listed; most releases need nothing beyond updating.
 
 | Your version | Read |
 |---|---|
-| 4.6.3 | [4.6.4](#v464--from-v463) |
-| 4.6.2 | [4.6.3](#v463--from-v462), then 4.6.4 |
-| 4.6.1 | [4.6.2](#v462--from-v461), then 4.6.3 and 4.6.4 |
-| 4.6.0 | [4.6.1](#v461--from-v460), then 4.6.2 to 4.6.4 |
-| 4.5.x | [4.6.0](#v460--from-v45x), then 4.6.1 to 4.6.4 |
-| 4.4.x | [4.5.0](#v450--from-v44x), then 4.5.3, 4.5.4 and 4.6.0 to 4.6.4 below |
+| 4.6.4 | [4.6.5](#v465--from-v464) |
+| 4.6.3 | [4.6.4](#v464--from-v463), then 4.6.5 |
+| 4.6.2 | [4.6.3](#v463--from-v462), then 4.6.4 and 4.6.5 |
+| 4.6.1 | [4.6.2](#v462--from-v461), then 4.6.3 to 4.6.5 |
+| 4.6.0 | [4.6.1](#v461--from-v460), then 4.6.2 to 4.6.5 |
+| 4.5.x | [4.6.0](#v460--from-v45x), then 4.6.1 to 4.6.5 |
+| 4.4.x | [4.5.0](#v450--from-v44x), then 4.5.3, 4.5.4 and 4.6.0 to 4.6.5 below |
 | 4.3.x or older | The notes of your line under [Older versions](#older-versions), then everything above them |
 
 Release notes, with everything that changed in each version:
 [GitHub Releases](https://github.com/johnnyh1975/ha_roomba_plus/releases).
+
+---
+## v4.6.5 — from v4.6.4
+
+Nothing to do. What you may notice:
+
+- **Favourites and *Repeat last mission* send the map's current version.**
+  A favourite that stopped working after a map retrain starts again.
+- **On the cleaning path of a Smart Map robot without its own position,**
+  the dock moves to where the robot docks, after its first drive home.
 
 ---
 ## v4.6.4 — from v4.6.3
