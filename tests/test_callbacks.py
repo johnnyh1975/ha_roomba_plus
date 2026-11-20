@@ -4533,7 +4533,12 @@ class TestTheRobotLearnsItsOwnRoomTimes:
 
         source = inspect.getsource(callbacks)
 
-        assert 'if phase == "run" and _travelling is False:' in source
+        # Not on the message that ends a drive (#257): that one is about
+        # the room behind the robot, and the advance reads the flag after.
+        assert (
+            'if phase == "run" and _travelling is False and not _returned_from_travel:'
+            in source
+        )
 
     def test_a_measured_room_time_is_written_and_found(self) -> None:
         """The write and the lookup have to agree on the key, or the
@@ -7021,6 +7026,81 @@ class TestDrivesThatAreNoRoomChange:
 
     def test_work_minutes_into_the_mission_still_counts(self):
         assert self._backing_off_then_driving(600) is True
+
+    def _arrive(self, started_ago):
+        """Back off, drive, arrive: what the advance saw on arrival."""
+        import time as _time
+
+        hass, entry, _, _ = _make_callback_env()
+        entry.runtime_data.prime_status_coordinator = None
+        entry.runtime_data.mission_timer_store = TestRoomCompletedEvent()._make_real_mts(entry)
+        callback_ = cb.make_mission_callback(hass, entry)
+        start = int(_time.time()) - started_ago
+        seen: list[tuple[bool, bool]] = []
+        real = cb._advance_room_on_drive_end
+
+        def spy(ms, *a, **kw):
+            seen.append((kw["returned_from_travel"], ms.cleaned_in_room))
+            return real(ms, *a, **kw)
+
+        with patch.object(cb, "_advance_room_on_drive_end", spy):
+            callback_(self._msg(start, travelling=False))
+            callback_(self._msg(start, travelling=True))
+            callback_(self._msg(start, travelling=False))
+        hass.loop.run_until_complete(asyncio.sleep(0))
+        return [cleaned for returned, cleaned in seen if returned]
+
+    def test_arriving_from_the_dock_leaves_no_room(self):
+        """4.6.3 on @willfanguy's i4: the message that ends the drive set
+        the flag before the advance read it, so the Kitchen was reported
+        done on arrival, 28 s off the dock."""
+        assert self._arrive(10) == [False]
+
+    def test_arriving_after_work_does(self):
+        assert self._arrive(600) == [True]
+
+    def test_no_room_change_while_heading_home(self):
+        """4.6.3 on @willfanguy's i4, sent home: the room moved as it
+        docked, through the phase route on `charge`."""
+        advanced: list[int] = []
+        ms = cb._MissionState()
+        ms.mission_start_ts = 1700000000
+        ms.last_phase = "stop"
+        ms.heading_home = True
+        entry = MagicMock(entry_id="e", title="Roomba")
+        entry.runtime_data.robot_profile_store = None
+        entry.runtime_data.position_room = None
+        with patch.object(cb, "_room_transition_confidence_ok", return_value=True):
+            cb._advance_room_on_drive_end(
+                ms, MagicMock(), entry, mts_upd=self._mts(advanced),
+                returned_from_travel=False,
+                mission={"cycle": "clean", "error": 0}, phase="charge",
+            )
+            assert advanced == []
+            ms.heading_home = False
+            cb._advance_room_on_drive_end(
+                ms, MagicMock(), entry, mts_upd=self._mts(advanced),
+                returned_from_travel=False,
+                mission={"cycle": "clean", "error": 0}, phase="charge",
+            )
+        assert advanced == [1]
+
+    def test_heading_home_lasts_until_the_robot_runs_again(self):
+        hass, entry, _, _ = _make_callback_env()
+        entry.runtime_data.prime_status_coordinator = None
+        callback_ = cb.make_mission_callback(hass, entry)
+
+        def msg(phase):
+            m = self._msg(1700000000, travelling=False)
+            m["state"]["reported"]["cleanMissionStatus"]["phase"] = phase
+            return m
+
+        callback_(msg("run"))
+        callback_(msg("hmMidMsn"))
+        callback_(msg("charge"))
+        assert callback_.state.heading_home is True
+        callback_(msg("run"))
+        assert callback_.state.heading_home is False
 
 
 class TestA900SeriesRunRecordsTheRoomsItWentInto:

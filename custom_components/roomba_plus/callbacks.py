@@ -1365,6 +1365,10 @@ class _MissionState:
     #: Whether the user sent the robot home in this mission (`hmUsrDock`,
     #: #257). Its end is then no inter-room blip, whatever the plan says.
     sent_home: bool = False
+    #: Whether the robot is heading for the dock in this mission (sent
+    #: home or recharging), until it runs again (#257). A dock reached
+    #: that way is no room change, whichever route would read it as one.
+    heading_home: bool = False
     #: Whether the robot has RUN since the current room was entered --
     #: travelling excluded where the robot reports it, counted where it
     #: does not (Braava). Decides whether the last room reached goes
@@ -1550,6 +1554,7 @@ def _handle_mission_start(
         ms.mission_start_ts = candidate_mission_start_ts
         ms.ran_in_room = False
         ms.sent_home = False
+        ms.heading_home = False
         ms.saw_travelling = False
         bbrun = _merged_top_level(entry, reported, "bbrun")
         ms.nstuck_at_start = bbrun.get("nStuck", 0)
@@ -2134,6 +2139,7 @@ def _confirm_mission_end(
         ms.mission_start_ts = 0
         ms.ran_in_room = False
         ms.sent_home = False
+        ms.heading_home = False
         ms.nstuck_at_start = 0
         ms.npicks_at_start = 0   # v3.2.0 bug-hunt fix — was missing here,
                                # inconsistent with nstuck_at_start's
@@ -2247,6 +2253,10 @@ def _advance_room_on_drive_end(
                     and phase not in _DRIVE_HOME_PHASES
                 )
             )
+            # HEADING HOME (#257): @willfanguy's i4, sent home, moved a
+            # room at 10:01:58 as it docked -- the phase route on
+            # `charge`, after the travel route had been stopped.
+            and not ms.heading_home
             and _room_transition_confidence_ok(
                 mission, mts_upd, from_travel=returned_from_travel
             )
@@ -2741,6 +2751,10 @@ def make_mission_callback(
             ms.sent_home = True
         elif phase == "run":
             ms.sent_home = False   # resumed: the plan holds again
+        if phase in ("hmUsrDock", "hmMidMsn"):
+            ms.heading_home = True
+        elif phase == "run":
+            ms.heading_home = False
 
         # F4e — accumulate recharge time on every hmMidMsn entry
         if phase == "hmMidMsn":
@@ -3047,7 +3061,13 @@ def make_mission_callback(
         if _travelling is True and not ms.was_travelling and _is_drive_off_the_dock(ms):
             # What the robot did before this drive was backing off the dock.
             ms.cleaned_in_room = False
-        if phase == "run" and _travelling is False:
+        # NOT ON THE MESSAGE THAT ENDS A DRIVE (#257). That message is
+        # `run` and not travelling, so it set the flag just before the
+        # advance read it: every drive ending in `run` counted as leaving
+        # a worked room, and resetting it on the drive off the dock (4.6.3)
+        # changed nothing. @willfanguy's i4 on 4.6.3: off the dock 28 s
+        # into the mission, and the Kitchen was reported done on arrival.
+        if phase == "run" and _travelling is False and not _returned_from_travel:
             ms.cleaned_in_room = True
         # For the mission record: run counts unless the robot says it is
         # only driving -- see `_MissionState.ran_in_room`.
