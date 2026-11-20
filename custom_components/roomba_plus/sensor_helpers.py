@@ -19,6 +19,7 @@ from homeassistant.helpers.typing import StateType
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    error_is_stale,
     lifetime_hours,
     CARPET_BOOST_LABELS,
     CLEAN_MODE_LABELS,
@@ -162,12 +163,10 @@ def _error_value(entity: "IRobotEntity") -> str | None:
     cycle is "none" (no active or queued mission) and phase indicates rest.
     """
     status = entity.clean_mission_status
-    cycle = status.get("cycle", "")
-    phase = status.get("phase", "")
     error = status.get("error", 0)
 
     # No active mission and robot is resting — suppress stale error.
-    if cycle == "none" and phase in ("charge", "stop", "idle", ""):
+    if error_is_stale(status):
         return None
 
     # THE CLASSIC APP'S WORDS (4.5.0), in English: a state must not change

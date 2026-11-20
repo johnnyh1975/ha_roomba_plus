@@ -3781,3 +3781,16 @@ def mission_store_changed_signal(blid: str) -> str:
     stayed "cleaned" until a manual refresh).
     """
     return f"{DOMAIN}_mission_store_changed_{blid}"
+
+
+def error_is_stale(status: dict[str, object]) -> bool:
+    """Whether `cleanMissionStatus.error` is left over from a mission
+    that has ended: no cycle, and the robot at rest.
+
+    The firmware does not reset the error when the robot docks after a
+    failure. The error sensor and the vacuum's error attributes both use
+    this, so they agree; the vacuum's attributes carried such an error
+    while the sensor hid it (pointed out by @charchess)."""
+    return status.get("cycle", "") == "none" and status.get("phase", "") in (
+        "charge", "stop", "idle", ""
+    )

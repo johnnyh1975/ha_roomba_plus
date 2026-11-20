@@ -3094,6 +3094,15 @@ class TestVacuumAttributes:
         attrs = v.extra_state_attributes
         assert attrs[vac.ATTR_ERROR] == "Path blocked" and attrs[vac.ATTR_ERROR_CODE] == 17
 
+    def test_an_error_left_from_an_ended_mission_is_not_carried(self):
+        """The error sensor's rule (@charchess): the firmware keeps the
+        error after the robot docks, and the attributes carried it."""
+        v = _make_vacuum_entity({"cleanMissionStatus": {"phase": "charge", "cycle": "none", "error": 42}})
+        v.hass = MagicMock()
+        v.vacuum.error_code, v.vacuum.error_message = 42, "x"
+        attrs = v.extra_state_attributes
+        assert vac.ATTR_ERROR not in attrs and vac.ATTR_ERROR_CODE not in attrs
+
     def test_a_code_no_table_has_keeps_roombapys_message(self):
         v = _make_vacuum_entity({"cleanMissionStatus": {"phase": "stuck", "error": 9999}})
         v.hass = MagicMock()

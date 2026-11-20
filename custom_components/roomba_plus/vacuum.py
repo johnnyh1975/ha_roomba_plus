@@ -35,6 +35,7 @@ from .prime_favorites import _raw_favorite_is_for
 from .care_guides import guide_id, guide_link
 from .parts_catalog import help_url_for
 from .const import (
+    error_is_stale,
     DOMAIN,
     error_label,
     has_clean_base,
@@ -672,8 +673,12 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
             attrs[ATTR_CLEANING_TIME] = cleaning_time
             attrs[ATTR_CLEANED_AREA] = cleaned_area
 
-        # Error info
-        if self.vacuum is not None and self.vacuum.error_code:
+        # Error info -- not one left over from a mission that has ended,
+        # the error sensor's rule (pointed out by @charchess).
+        if (
+            self.vacuum is not None and self.vacuum.error_code
+            and not error_is_stale(state.get("cleanMissionStatus") or {})
+        ):
             # The Classic app's label (4.5.0), as on the error sensor;
             # roombapy's own message only where no table has the code.
             attrs[ATTR_ERROR] = error_label(
