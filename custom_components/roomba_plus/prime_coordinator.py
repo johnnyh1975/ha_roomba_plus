@@ -70,6 +70,7 @@ from roombapy_prime import (
     ShadowSSLError,
 )
 from roombapy_prime.models import MissionTimelineReport, SoftwareStatusShadow
+from roombapy_prime.mqtt_client import SubscriptionRejectedError
 
 from .structural_failures import record_failure, record_success
 from .prime_favorites import async_favorites_attribute
@@ -843,7 +844,15 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         for name in self.NAMED_SHADOWS:
             try:
                 response = await self.prime_robot.get_named_shadow(name)
-            except (ShadowSSLError, ShadowConnectionError, ShadowError) as exc:
+            # A REFUSED SUBSCRIPTION IS ONE SHADOW TOO. @takacstiborap's
+            # Roomba 205: the cloud's policy refuses `rw-schedule` for that
+            # model, and the refusal -- not a ShadowError -- failed the
+            # whole entry, on every reload. What reads the shadow stays
+            # empty instead.
+            except (
+                ShadowSSLError, ShadowConnectionError, ShadowError,
+                SubscriptionRejectedError,
+            ) as exc:
                 _LOGGER.warning(
                     "roomba_plus: could not seed named shadow %r for %s: %s", name, self.blid, exc
                 )
@@ -870,7 +879,10 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         try:
             state_response = await self.prime_robot.get_state()
             seeded[self.CLASSIC_SHADOW_KEY] = (state_response.payload if isinstance(state_response.payload, dict) else {}).get("state", {}).get("reported", {})
-        except (ShadowSSLError, ShadowConnectionError, ShadowError) as exc:
+        except (
+            ShadowSSLError, ShadowConnectionError, ShadowError,
+            SubscriptionRejectedError,
+        ) as exc:
             _LOGGER.warning(
                 "roomba_plus: could not seed classic/unnamed shadow for %s: %s", self.blid, exc
             )

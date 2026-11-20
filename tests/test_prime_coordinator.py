@@ -279,6 +279,33 @@ class TestAsyncStartSeedsClassicShadow:
         assert coordinator.data["ro-currentstate"] == {"_name": "ro-currentstate"}
 
 
+class TestARefusedShadow:
+    """@takacstiborap's Roomba 205: the cloud refuses the subscription
+    to `rw-schedule` for that model, and the entry failed to set up on
+    every reload. Two other Prime robots on the account were fine."""
+
+    @pytest.mark.asyncio
+    async def test_the_other_shadows_are_seeded_and_setup_goes_on(self) -> None:
+        from roombapy_prime.mqtt_client import SubscriptionRejectedError
+
+        coordinator, _config_entry, prime_robot = _make_status_coordinator()
+
+        async def fake_get_named_shadow(name):
+            if name == "rw-schedule":
+                raise SubscriptionRejectedError("Broker REJECTED subscription")
+            return ShadowResponse(topic="x", payload={"state": {"reported": {"_name": name}}})
+
+        prime_robot.get_named_shadow = fake_get_named_shadow
+        prime_robot.get_state = AsyncMock(
+            side_effect=SubscriptionRejectedError("Broker REJECTED subscription")
+        )
+
+        await coordinator.async_start()  # must not raise
+
+        assert "rw-schedule" not in coordinator.data
+        assert coordinator.data["ro-currentstate"] == {"_name": "ro-currentstate"}
+
+
 class TestAsyncWatchStatusUpdatesRetryBehavior:
     """_async_watch_status_updates()'s own outer retry loop -- added
     after a real field report (chairstacker): sensors got stuck at
