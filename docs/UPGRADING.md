@@ -10,15 +10,30 @@ are listed; most releases need nothing beyond updating.
 
 | Your version | Read |
 |---|---|
-| 4.6.2 | [4.6.3](#v463--from-v462) |
-| 4.6.1 | [4.6.2](#v462--from-v461), then 4.6.3 |
-| 4.6.0 | [4.6.1](#v461--from-v460), then 4.6.2 and 4.6.3 |
-| 4.5.x | [4.6.0](#v460--from-v45x), then 4.6.1 to 4.6.3 |
-| 4.4.x | [4.5.0](#v450--from-v44x), then 4.5.3, 4.5.4 and 4.6.0 to 4.6.3 below |
+| 4.6.3 | [4.6.4](#v464--from-v463) |
+| 4.6.2 | [4.6.3](#v463--from-v462), then 4.6.4 |
+| 4.6.1 | [4.6.2](#v462--from-v461), then 4.6.3 and 4.6.4 |
+| 4.6.0 | [4.6.1](#v461--from-v460), then 4.6.2 to 4.6.4 |
+| 4.5.x | [4.6.0](#v460--from-v45x), then 4.6.1 to 4.6.4 |
+| 4.4.x | [4.5.0](#v450--from-v44x), then 4.5.3, 4.5.4 and 4.6.0 to 4.6.4 below |
 | 4.3.x or older | The notes of your line under [Older versions](#older-versions), then everything above them |
 
 Release notes, with everything that changed in each version:
 [GitHub Releases](https://github.com/johnnyh1975/ha_roomba_plus/releases).
+
+---
+## v4.6.4 — from v4.6.3
+
+Nothing to do. What you may notice:
+
+- **On Smart Map robots without positions,** the current room no longer
+  moves when the robot drives off the dock or docks; 4.6.3 meant to do
+  this and did not.
+- **The vacuum's `error` and `error_code` attributes** are gone once the
+  robot rests after a failed mission, as the error sensor's value is. An
+  automation that read them on the dock no longer sees the old error.
+- **Prime: a robot whose cloud refuses one of its named shadows sets up.**
+  The log has a warning naming the shadow; what reads it stays empty.
 
 ---
 ## v4.6.3 — from v4.6.2
