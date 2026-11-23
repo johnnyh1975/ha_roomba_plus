@@ -1157,6 +1157,44 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
             "last_known_position": None,
         })
 
+    def _plan_new_mission(
+        self, store: Any, mission_id: str, status: dict[str, Any], *, keep: bool
+    ) -> None:
+        """The plan of a mission that has just started (#259).
+
+        FROM THE ROBOT'S LAST COMMAND, as Classic does: a room clean
+        started in the app, by a schedule or by Home Assistant carries
+        its regions there. @woopstar's three rooms from the app had no
+        plan here, so progress and the end time followed nothing.
+
+        AND THE LAST MISSION'S PLAN GOES. A new mission number reset the
+        room index but kept the planned rooms, so his app run showed the
+        `12` of an earlier mission as its current room for hours. With no
+        usable command the plan is the whole home, which the timeline
+        fills room by room (`_note_room_without_plan`).
+
+        `keep`: Home Assistant wrote a plan for this start moments ago,
+        and the command it sent may not have reached the shadow yet.
+        That plan stays unless the command says otherwise.
+        """
+        try:
+            region_ids = _regions_of_start(
+                prime_last_command(self.entry.runtime_data), status
+            )
+            if region_ids is None and keep:
+                return
+            from .prime_mission_sync import prime_mission_plan  # noqa: PLC0415
+
+            names, total, per_room = prime_mission_plan(
+                self.entry.runtime_data, region_ids or []
+            )
+            store.set_mission_plan(
+                mission_id, names, total, self.hass, self.entry.entry_id,
+                room_estimates_sec=per_room if names else None,
+            )
+        except Exception:  # noqa: BLE001 -- the plan must not stop the stream
+            _LOGGER.debug("Prime: could not plan the new mission", exc_info=True)
+
     def _note_phase_for_timer(self, shadows: dict[str, Any]) -> None:
         """Feeds phase transitions to MissionTimerStore.
 
@@ -1319,7 +1357,16 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                 # Keyed on the mission id changing rather than on the
                 # phase, because a robot that pauses and resumes re-enters
                 # "run" with the same mission and should keep its trail.
+                new_mission = (
+                    mission_id != "prime"
+                    and getattr(store, "mission_id", None) != mission_id
+                )
+                sent_from_here = new_mission and _plan_is_pending(store)
                 store.on_phase_run(mission_id, self.hass, self.entry.entry_id)
+                if new_mission:
+                    self._plan_new_mission(
+                        store, mission_id, status, keep=sent_from_here
+                    )
             else:
                 # Anything that is not "run" ends the running segment --
                 # including charge, evac and stuck. The store flushes the
@@ -2065,6 +2112,53 @@ def prime_region_names_from_command(data: Any) -> dict[str, str]:
         if region_id and label:
             names[str(region_id)] = str(label)
     return names
+
+
+def _plan_is_pending(store: Any) -> bool:
+    """Whether the timer holds a plan Home Assistant wrote for a start it
+    sent, not yet tied to a mission number: room_cleaning keys it
+    `<map>:<regions>`, a mission number has no colon."""
+    mission_id = getattr(store, "mission_id", None)
+    return isinstance(mission_id, str) and ":" in mission_id and bool(
+        getattr(store, "planned_rooms", None)
+    )
+
+
+#: How far a command may lie from the mission's start and still be the
+#: one that started it. The app's command and the robot's start time come
+#: from two clocks, the robot's and the phone's.
+_COMMAND_START_SLACK_SECONDS = 600
+
+
+def _regions_of_start(
+    last: dict[str, Any], status: dict[str, Any]
+) -> list[str] | None:
+    """The region ids of the command that started this mission.
+
+    [] for a start without regions (the whole home). None when the last
+    command is not a start, or is from a different time than the
+    mission's start -- a scheduled run leaves the last room clean in
+    place, and its rooms are not this run's.
+    """
+    if not isinstance(last, dict) or last.get("command") not in ("start", "clean"):
+        return None
+    sent = last.get("time")
+    started = status.get("mssnStrtTm") if isinstance(status, dict) else None
+    if (
+        isinstance(sent, (int, float)) and not isinstance(sent, bool)
+        and isinstance(started, (int, float)) and not isinstance(started, bool)
+        and started > 0
+        and abs(float(sent) - float(started)) > _COMMAND_START_SLACK_SECONDS
+    ):
+        return None
+    ids: list[str] = []
+    for region in last.get("regions") or []:
+        if not isinstance(region, dict):
+            continue
+        region_id = region.get("region_id") or region.get("id")
+        if region_id is not None and str(region_id):
+            ids.append(str(region_id))
+    return ids
 
 
 def prime_last_command(data: Any) -> dict[str, Any]:

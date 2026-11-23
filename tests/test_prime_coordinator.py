@@ -2007,3 +2007,97 @@ class TestEachStreamIsNoted:
         with pytest.raises(asyncio.CancelledError):
             await c._async_watch_rejected_commands()
         assert "rejections" in c.entry.runtime_data.prime_stream_seen
+
+
+class TestAMissionStartedElsewhereGetsAPlan:
+    """#259, @woopstar (Y414040): three rooms started in the app had no
+    plan, and the planned room was the `12` of an earlier mission, as a
+    number, for hours."""
+
+    @staticmethod
+    def _coordinator(last_command, names=None, plan=None):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from custom_components.roomba_plus.mission_timer_store import MissionTimerStore
+        from custom_components.roomba_plus.prime_coordinator import (
+            PrimeStatusCoordinator,
+        )
+
+        store = MissionTimerStore()
+        hass = MagicMock()
+        if plan is not None:
+            store.set_mission_plan(plan[0], plan[1], None, hass, "e1")
+        c = PrimeStatusCoordinator.__new__(PrimeStatusCoordinator)
+        c.hass = hass
+        c._schedule_mission_history_sync = MagicMock()
+        c._note_dock_position = MagicMock()
+        c._trail_mission_id = None
+        c.entry = SimpleNamespace(entry_id="e1", runtime_data=SimpleNamespace(
+            mission_timer_store=store,
+            prime_room_names=names or {},
+            mission_store=None,
+            prime_positions=None,
+            roomba_reported_state=lambda: {},
+            prime_status_coordinator=SimpleNamespace(data={
+                "rw-software": {"lastCommand": last_command},
+            }),
+        ))
+        return c, store
+
+    @staticmethod
+    def _run(c, nmssn, start=1794988230):
+        c._note_phase_for_timer({"ro-currentstate": {"cleanMissionStatus": {
+            "phase": "run", "cycle": "clean", "nMssn": nmssn, "mssnStrtTm": start,
+        }}})
+
+    _APP_START = {
+        "command": "start", "initiator": "localApp", "time": 1794988228,
+        "regions": [
+            {"region_id": "10", "type": "rid"},
+            {"region_id": "21", "type": "rid"},
+            {"region_id": "18", "type": "rid"},
+        ],
+    }
+
+    def test_the_plan_is_the_commands_rooms_by_name(self):
+        c, store = self._coordinator(
+            self._APP_START, names={"10": "Kitchen", "21": "Hall", "18": "Utility"},
+            plan=("14", ["12"]),
+        )
+        self._run(c, 15)
+        assert store.planned_rooms == ["Kitchen", "Hall", "Utility"]
+        assert store.current_room == "Kitchen"
+
+    def test_a_command_from_another_time_leaves_the_whole_home(self):
+        """A scheduled run leaves the last room clean as the last command."""
+        c, store = self._coordinator(
+            {**self._APP_START, "time": 1794900000}, plan=("14", ["12"]),
+        )
+        self._run(c, 15)
+        assert store.planned_rooms == []
+
+    def test_a_plan_home_assistant_just_wrote_stays_until_its_command_arrives(self):
+        c, store = self._coordinator(
+            {"command": "stoppaddry", "time": 1794900000},
+            plan=("M1:13", ["Salon"]),
+        )
+        self._run(c, 15)
+        assert store.planned_rooms == ["Salon"]
+
+    def test_the_same_mission_is_not_planned_again(self):
+        c, store = self._coordinator(self._APP_START, names={"10": "Kitchen"})
+        self._run(c, 15)
+        store.advance_room(c.hass, "e1")
+        self._run(c, 15)
+        assert store.current_room_idx == 1
+
+    def test_which_command_started_it(self):
+        from custom_components.roomba_plus.prime_coordinator import _regions_of_start
+
+        status = {"mssnStrtTm": 1794988230}
+        assert _regions_of_start(self._APP_START, status) == ["10", "21", "18"]
+        assert _regions_of_start({"command": "start", "time": 1794988230}, status) == []
+        assert _regions_of_start({"command": "dock"}, status) is None
+        # No time on the command: taken as it is.
+        assert _regions_of_start({"command": "start", "regions": [{"region_id": 3}]}, {}) == ["3"]

@@ -1294,6 +1294,20 @@ class TestTheMissionPlanReachesTheTimerStore:
         assert store.planned_rooms == ["13"]
 
     @pytest.mark.asyncio
+    async def test_the_plan_holds_the_rooms_names(self):
+        """#259: a plan of ids showed `12` for a room called the office,
+        and the timeline, matched by name, never moved it on."""
+        from unittest.mock import patch
+
+        backend, store = self._backend()
+        backend._data.prime_room_names = {"13": "Salon"}
+
+        with patch.object(backend, "_raise_if_map_updating"):
+            await backend.clean_rooms(["M1/13"])
+
+        assert store.planned_rooms == ["Salon"]
+
+    @pytest.mark.asyncio
     async def test_the_current_room_becomes_the_first_one(self):
         """Which is what makes advance_room able to move to a second."""
         from unittest.mock import patch

@@ -1310,13 +1310,19 @@ class TestRoomEstimates:
         """A partial sum reads as the whole mission and is short by
         however many rooms are missing -- worse than showing nothing,
         because nothing is visibly nothing."""
-        import inspect
+        from types import SimpleNamespace
+        from unittest.mock import patch
 
-        from custom_components.roomba_plus.room_cleaning import PrimeRoomCleaning
+        from custom_components.roomba_plus import prime_mission_sync as pms
 
-        source = inspect.getsource(PrimeRoomCleaning._note_mission_plan)
-
-        assert "len(known) == len(room_ids)" in source
+        data = SimpleNamespace(prime_room_names={"1": "Kitchen"}, mission_store=None)
+        with patch.object(pms, "estimate_room_seconds", return_value=[300.0, None]):
+            names, total, per_room = pms.prime_mission_plan(data, ["1", "2"])
+        # A room without a name keeps its id (#259), one entry per region.
+        assert names == ["Kitchen", "2"]
+        assert total is None and per_room == [300.0, None]
+        with patch.object(pms, "estimate_room_seconds", return_value=[300.0, 200.0]):
+            assert pms.prime_mission_plan(data, ["1", "2"])[1] == 500.0
 
 
 class TestQueryIsCalledWithItsRequiredArgument:

@@ -860,6 +860,32 @@ async def _async_update_profile(config_entry: RoombaConfigEntry, store: Any) -> 
         _LOGGER.debug("roomba_plus: profile statistics update failed", exc_info=True)
 
 
+def prime_mission_plan(
+    data: Any, region_ids: list[str]
+) -> tuple[list[str], float | None, list[float | None]]:
+    """A Prime mission's plan from its region ids: (names, total, per room).
+
+    NAMES, NOT IDS (#259). The plan is what the current room shows and
+    what the timeline's room reports are matched against, by name
+    (PrimeCoordinator._advance_display_if_next). A plan of ids showed
+    @woopstar's `12` for his office and never moved on. A region the
+    cloud has no name for keeps its id rather than being dropped, so the
+    plan still has one entry per region the robot was sent to.
+
+    The total only when every room has a measured time: a partial sum
+    would read as the whole mission.
+    """
+    known_names = getattr(data, "prime_room_names", None)
+    if not isinstance(known_names, dict):
+        known_names = {}
+    ids = [str(r) for r in region_ids]
+    names = [str(known_names.get(r) or r) for r in ids]
+    per_room = estimate_room_seconds(getattr(data, "mission_store", None), ids)
+    known = [s for s in per_room if s is not None]
+    total = sum(known) if ids and len(known) == len(ids) else None
+    return names, total, per_room
+
+
 def estimate_room_seconds(
     store: Any, room_ids: list[str], *, max_missions: int = 10
 ) -> list[float | None]:

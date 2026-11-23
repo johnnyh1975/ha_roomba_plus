@@ -1797,12 +1797,11 @@ class PrimeRoomCleaning(RoomCleaningBackend):
                 translation_placeholders={"command": "start (regions)"},
             )
 
-        # THE PLAN GETS THE IDS THE ROBOT WILL REPORT.
+        # THE PLAN GETS THE IDS THE ROBOT WILL REPORT, as names.
         #
-        # `room_ids` still carries our `zid_` markers here. The mission
-        # timer matches planned regions against what the robot reports
-        # as it cleans, and the robot reports a bare `100` -- so a
-        # prefixed plan would never match, and a zone mission would show
+        # `room_ids` still carries our `zid_` markers here. The robot
+        # reports a bare `100`, and the names are keyed on that -- so a
+        # prefixed id would find no name, and a zone mission would show
         # every region as unvisited for its whole run.
         self._note_mission_plan(
             p2map_id,
@@ -1838,10 +1837,9 @@ class PrimeRoomCleaning(RoomCleaningBackend):
         set_mission_plan already accepts per room, because Classic has
         the same gap for a newly named room.
 
-        ONLY COVERS MISSIONS HOME ASSISTANT STARTED. A robot cleaning on
-        its own schedule still has no plan here -- the timeline reports
-        rooms as it enters them, but not the list up front. That is a
-        real limitation and not one this can fix.
+        A MISSION STARTED ELSEWHERE gets its plan when it starts, from
+        the robot's last command (PrimeCoordinator._plan_new_mission,
+        #259); this one is there from the moment Home Assistant sends.
         """
         try:
             store = getattr(self._data, "mission_timer_store", None)
@@ -1849,20 +1847,13 @@ class PrimeRoomCleaning(RoomCleaningBackend):
             entry_id = getattr(self._config_entry, "entry_id", None)
             if store is None or hass is None or not entry_id:
                 return
-            from .prime_mission_sync import estimate_room_seconds  # noqa: PLC0415
+            from .prime_mission_sync import prime_mission_plan  # noqa: PLC0415
 
-            per_room = estimate_room_seconds(
-                getattr(self._data, "mission_store", None), list(room_ids)
-            )
-            known = [s for s in per_room if s is not None]
+            names, total, per_room = prime_mission_plan(self._data, list(room_ids))
             store.set_mission_plan(
                 f"{p2map_id}:{'+'.join(room_ids)}",
-                list(room_ids),
-                # Total only when EVERY room has a measurement. A partial
-                # sum would read as the whole mission and be short by
-                # however many rooms are missing -- worse than showing
-                # nothing, because nothing is visibly nothing.
-                sum(known) if len(known) == len(room_ids) else None,
+                names,
+                total,
                 hass,
                 entry_id,
                 room_estimates_sec=per_room,
