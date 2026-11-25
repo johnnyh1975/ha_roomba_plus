@@ -1820,7 +1820,22 @@ async def _build_diagnostics(
     # function is actually called, __init__.py is fully loaded.
     from . import roomba_reported_state  # noqa: PLC0415
 
-    data = config_entry.runtime_data
+    # AN ENTRY THAT FAILED SETUP HAS NO runtime_data (#265): the download
+    # raised AttributeError exactly when it was wanted. What the entry
+    # itself holds still helps; the sweep below redacts it like the rest.
+    data = getattr(config_entry, "runtime_data", None)
+    if data is None:
+        return {
+            "setup": "not set up",
+            "state": str(getattr(config_entry, "state", "")),
+            "reason": getattr(config_entry, "reason", None),
+            "entry": {
+                "version": config_entry.version,
+                "minor_version": config_entry.minor_version,
+                "data": async_redact_data(dict(config_entry.data), _CLOUD_REDACT),
+                "options": async_redact_data(dict(config_entry.options), _CLOUD_REDACT),
+            },
+        }
 
     # REAL CRASH FOUND AND FIXED (architecture review, not a field
     # report): this whole function unconditionally accessed

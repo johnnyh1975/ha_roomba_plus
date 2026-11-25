@@ -3040,3 +3040,29 @@ class TestMaintenanceReport:
         assert report["parts"]["35"]["role"] == "filter"
         assert report["cloud_parts_hydrated_hr"] == 10
         assert report["last_known_hr"] == 0, "nothing noted: hydration does not note"
+
+
+class TestAnEntryThatDidNotSetUp:
+    """#265: an entry in setup_error has no runtime_data, and the
+    download raised AttributeError exactly when it was wanted."""
+
+    @pytest.mark.asyncio
+    async def test_it_still_downloads_without_secrets(self):
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.diagnostics import (
+            async_get_config_entry_diagnostics,
+        )
+
+        entry = SimpleNamespace(
+            version=1, minor_version=1, state="setup_error", reason="x",
+            data={"host": "192.0.2.18", "password": "secret", "blid": "0123456789ABCDEF",
+                  "irobot_username": "user@example.com", "connection_type": "cloud_only"},
+            options={},
+        )
+        payload = await async_get_config_entry_diagnostics(MagicMock(), entry)
+        text = str(payload)
+        assert payload["setup"] == "not set up"
+        assert "cloud_only" in text
+        for secret in ("192.0.2.18", "secret", "0123456789ABCDEF", "user@example.com"):
+            assert secret not in text

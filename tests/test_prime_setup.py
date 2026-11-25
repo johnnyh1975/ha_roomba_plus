@@ -165,6 +165,23 @@ class TestAsyncSetupEntryPrime:
         assert "DailyDigestView" in registered
 
     @pytest.mark.asyncio
+    async def test_a_classic_robot_set_up_as_prime_says_what_to_do(self) -> None:
+        """#265: Combo Essentials set up as Prime before roombapy-prime
+        0.9.3 moved them to Classic. The library refuses them, and the
+        bare ValueError read as a defect, retried like one."""
+        from homeassistant.exceptions import ConfigEntryError
+
+        hass, config_entry = _make_hass_and_entry()
+        _CURRENT["account"].generation.return_value = "classic"
+        _CURRENT["account"].prime_robot = AsyncMock()
+
+        with pytest.raises(ConfigEntryError) as raised:
+            await _async_setup_entry_prime(hass, config_entry)
+
+        assert raised.value.translation_key == "classic_robot_set_up_as_prime"
+        _CURRENT["account"].prime_robot.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_firmware_baseline_at_setup_and_changes_after(self) -> None:
         """`firmware_updated` on Prime (4.6.0): the version read at setup
         is the baseline, a different one pushed later is the update."""

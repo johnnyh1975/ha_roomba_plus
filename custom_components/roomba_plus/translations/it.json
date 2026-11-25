@@ -2923,6 +2923,9 @@
     },
     "nothing_to_retry": {
       "message": "La missione non ha saltato nessuna stanza su {entity_id}."
+    },
+    "classic_robot_set_up_as_prime": {
+      "message": "Questo robot si collega tramite la tua rete, non tramite il nuovo cloud di iRobot. Nel menu di questa voce scegli Riconfigura e inserisci l'indirizzo IP del robot; lascia vuota la password per prenderla dal tuo account iRobot."
     }
   },
   "selector": {

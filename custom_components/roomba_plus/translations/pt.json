@@ -2923,6 +2923,9 @@
     },
     "nothing_to_retry": {
       "message": "A missão não deixou nenhuma divisão de fora em {entity_id}."
+    },
+    "classic_robot_set_up_as_prime": {
+      "message": "Este robô liga-se pela sua própria rede, não pela nuvem mais recente da iRobot. No menu desta entrada, escolha Reconfigurar e introduza o endereço IP do robô; deixe a palavra-passe vazia para a obter da sua conta iRobot."
     }
   },
   "selector": {

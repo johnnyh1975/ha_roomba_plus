@@ -89,6 +89,7 @@ _EXCEPTION_CALLS = {
     "ServiceValidationError",
     "HomeAssistantError",
     "ConfigEntryNotReady",
+    "ConfigEntryError",
     "ConfigEntryAuthFailed",
     "UpdateFailed",
 }

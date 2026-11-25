@@ -3753,6 +3753,30 @@ class TestAsyncStepPrimeClassicIp:
         assert result["data"][CONF_HOST] == "10.0.0.5"
 
     @pytest.mark.asyncio
+    async def test_the_tls_context_is_built_off_the_loop(self):
+        """#265: building the client loads the system certificates, and
+        the flow did it in the event loop on every reconfigure."""
+        from custom_components.roomba_plus import _warm_tls_context
+        from custom_components.roomba_plus import config_flow as cf
+
+        order: list[str] = []
+        hass = MagicMock()
+
+        async def executor(func, *args):
+            order.append(getattr(func, "__name__", str(func)))
+            return func(*args)
+
+        hass.async_add_executor_job = executor
+        client = MagicMock(side_effect=lambda *a: order.append("client") or MagicMock())
+        with patch.object(cf, "RoombaClient", client), \
+                patch.object(cf, "async_connect_or_timeout",
+                             AsyncMock(return_value={cf.ROOMBA_SESSION: 1, "name": "R"})), \
+                patch.object(cf, "async_disconnect_or_timeout", AsyncMock()):
+            await cf.validate_input(hass, {CONF_HOST: "192.0.2.5", "blid": "B", "password": "p"})
+
+        assert order[:2] == [_warm_tls_context.__name__, "client"]
+
+    @pytest.mark.asyncio
     async def test_validate_input_failure_shows_cannot_connect(self):
         from custom_components.roomba_plus.config_flow import CannotConnect
 

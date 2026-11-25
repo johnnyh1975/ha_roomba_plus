@@ -2923,6 +2923,9 @@
     },
     "nothing_to_retry": {
       "message": "La mission n’a laissé aucune pièce de côté sur {entity_id}."
+    },
+    "classic_robot_set_up_as_prime": {
+      "message": "Ce robot se connecte par votre propre réseau, pas par le nouveau cloud d'iRobot. Dans le menu de cette entrée, choisissez Reconfigurer et saisissez l'adresse IP du robot ; laissez le mot de passe vide pour le reprendre de votre compte iRobot."
     }
   },
   "selector": {

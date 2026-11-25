@@ -2923,6 +2923,9 @@
     },
     "nothing_to_retry": {
       "message": "Misja nie pominęła żadnego pokoju na {entity_id}."
+    },
+    "classic_robot_set_up_as_prime": {
+      "message": "Ten robot łączy się przez Twoją sieć, a nie przez nowszą chmurę iRobot. W menu tego wpisu wybierz Zmień konfigurację i wpisz adres IP robota; pozostaw hasło puste, aby pobrać je z konta iRobot."
     }
   },
   "selector": {

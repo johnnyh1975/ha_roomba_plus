@@ -2923,6 +2923,9 @@
     },
     "nothing_to_retry": {
       "message": "De missie heeft op {entity_id} geen kamer overgeslagen."
+    },
+    "classic_robot_set_up_as_prime": {
+      "message": "Deze robot verbindt via je eigen netwerk, niet via de nieuwere cloud van iRobot. Kies in het menu van deze vermelding Opnieuw configureren en voer het IP-adres van de robot in; laat het wachtwoord leeg om het uit je iRobot-account te halen."
     }
   },
   "selector": {

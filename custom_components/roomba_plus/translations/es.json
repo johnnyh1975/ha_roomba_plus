@@ -2923,6 +2923,9 @@
     },
     "nothing_to_retry": {
       "message": "La misión no omitió ninguna habitación en {entity_id}."
+    },
+    "classic_robot_set_up_as_prime": {
+      "message": "Este robot se conecta por tu propia red, no por la nube más reciente de iRobot. En el menú de esta entrada elige Reconfigurar e introduce la dirección IP del robot; deja la contraseña vacía para tomarla de tu cuenta de iRobot."
     }
   },
   "selector": {

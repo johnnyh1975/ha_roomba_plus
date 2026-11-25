@@ -1897,6 +1897,18 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
         account = await async_acquire(
             hass, config_entry.entry_id, username, password, mqtt_blid=blid
         )
+        if account.generation(blid) == "classic":
+            # SET UP AS PRIME, AND IT IS NOT (#265). roombapy-prime 0.9.3
+            # moved the Vac and Combo Essential to Classic, and an entry
+            # made before cannot reach them this way: the library refuses,
+            # and the bare ValueError read as a defect. Not a retry either
+            # -- reconnecting changes nothing until the entry is set up
+            # on the local connection.
+            raise exceptions.ConfigEntryError(
+                f"{blid} is a Classic robot set up as cloud-only",
+                translation_domain=DOMAIN,
+                translation_key="classic_robot_set_up_as_prime",
+            )
         prime_robot = await account.prime_robot(blid, auto_refresh=True)
     except AuthCredentialsError as exc:
         raise exceptions.ConfigEntryAuthFailed(

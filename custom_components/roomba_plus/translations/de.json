@@ -2923,6 +2923,9 @@
     },
     "nothing_to_retry": {
       "message": "Die Mission hat auf {entity_id} keinen Raum ausgelassen."
+    },
+    "classic_robot_set_up_as_prime": {
+      "message": "Dieser Roboter wird über das eigene Netzwerk verbunden, nicht über iRobots neuere Cloud. Im Menü dieses Eintrags „Neu konfigurieren“ wählen und die IP-Adresse des Roboters eingeben; ohne Passwort wird es aus dem iRobot-Konto übernommen."
     }
   },
   "selector": {

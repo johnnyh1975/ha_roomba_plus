@@ -2923,6 +2923,9 @@
     },
     "nothing_to_retry": {
       "message": "The mission left no room out on {entity_id}."
+    },
+    "classic_robot_set_up_as_prime": {
+      "message": "This robot connects over your own network, not through iRobot's newer cloud. Open this entry's menu, choose Reconfigure and enter the robot's IP address; leave the password empty to take it from your iRobot account."
     }
   },
   "selector": {

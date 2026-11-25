@@ -491,6 +491,13 @@ async def validate_input(
     # See the note in __init__.py: roombapy 2.x dropped the factory, and
     # `continuous`/`delay` with it. This call passed `continuous=True`
     # explicitly, which is now the only behaviour there is.
+    # OFF THE LOOP FIRST (#265): building the client builds roombapy's
+    # TLS context, which loads the system certificates. Setup warms it in
+    # an executor; the flow did not, and Home Assistant logged the
+    # blocking call on every reconfigure.
+    from . import _warm_tls_context  # noqa: PLC0415
+
+    await hass.async_add_executor_job(_warm_tls_context)
     roomba = RoombaClient(
         data[CONF_HOST],
         data[CONF_BLID],
