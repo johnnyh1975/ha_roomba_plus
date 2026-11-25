@@ -71,6 +71,14 @@ driven from a paho-mqtt thread, so every command went through `hass.async_add_ex
 call sites of it. roombapy 2.x is async throughout (aiomqtt), so those are plain `await` now, and
 `RoombaFactory` gave way to constructing a `RoombaClient` directly.
 
+**A connect attempt that does not complete is closed** (`mqtt_session.py`). aiomqtt leaves the
+socket open when its enter fails or its caller gives up, and a Classic robot takes one local
+connection at a time, so each such attempt locked out the next until Home Assistant restarted
+(#230, #265). Before every local connect the integration gives roombapy an aiomqtt whose `Client`
+closes those attempts. The fix is proposed to roombapy (pschmitt/roombapy#631); the module steps
+aside once the installed roombapy carries it, and goes when no supported Home Assistant pins an
+older one.
+
 What did **not** move into the event loop: map rendering, UMF alignment and the backup ZIPs. Those
 are CPU- and I/O-bound, and 20 executor calls remain for them deliberately.
 

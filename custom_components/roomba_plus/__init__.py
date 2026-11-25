@@ -160,7 +160,7 @@ from .prime_coordinator import (
     PrimeStatusCoordinator,
     note_prime_firmware,
 )
-from . import cloud_errors
+from . import cloud_errors, mqtt_session
 from .cloud_account import async_acquire, async_release
 
 from roombapy_prime import (
@@ -411,6 +411,9 @@ async def _phase_connect(ctx: _SetupContext) -> bool:
     # every fresh start. Warming the cache in the executor first leaves
     # the constructor with nothing left to read.
     await hass.async_add_executor_job(_warm_tls_context)
+    # A connect attempt that does not complete must not keep holding the
+    # robot's one local connection (#265); see `mqtt_session`.
+    mqtt_session.ensure_installed()
 
     # Constructed directly after that: roombapy 2.x dropped
     # `RoombaFactory`, and with the context cached this is pure

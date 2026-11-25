@@ -61,7 +61,7 @@ from homeassistant.helpers.service_info.dhcp import DhcpServiceInfo
 from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 
 from . import CannotConnect, async_connect_or_timeout, async_disconnect_or_timeout, roomba_reported_state
-from . import cloud_errors
+from . import cloud_errors, mqtt_session
 from .cloud_account import async_login, async_offer, async_peek
 from .entity_cleanup import (
     async_remove_prime_only_entities,
@@ -498,6 +498,9 @@ async def validate_input(
     from . import _warm_tls_context  # noqa: PLC0415
 
     await hass.async_add_executor_job(_warm_tls_context)
+    # A validation the flow gives up on must not leave the robot held for
+    # the next try (#265); see `mqtt_session`.
+    mqtt_session.ensure_installed()
     roomba = RoombaClient(
         data[CONF_HOST],
         data[CONF_BLID],
