@@ -304,7 +304,10 @@ CLEANED_ALPHA   = 0.5
 CLEANED_LAYER_COLOUR = (91, 177, 205, 255)
 PATH_COLOUR     = ( 30, 100, 200, 255)  # Deep blue — travel path
 DOCK_COLOUR     = ( 80, 180,  80, 255)  # Green — dock station marker
-ROBOT_COLOUR    = ( 30, 100, 200, 255)  # Blue — robot position
+#: MAGENTA, NOT THE PATH'S BLUE (a user's suggestion). The marker was the path's
+#: own colour, so on a map full of blue track a robot that had stopped,
+#: stuck or not, was hard to find. Magenta is in no other layer.
+ROBOT_COLOUR    = (190, 100, 200, 255)  # Magenta — robot position
 ARROW_COLOUR    = (255, 255, 255, 255)  # White — direction arrow on robot
 STUCK_COLOUR    = (220,  60,  60, 255)  # Red — stuck event marker
 

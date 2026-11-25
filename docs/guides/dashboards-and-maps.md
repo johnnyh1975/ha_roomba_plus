@@ -30,7 +30,7 @@ calibration_source:
 
 <img src="../images/live-map.png" alt="The live map during a clean: room outlines with names, the robot's path in blue over the floor it has covered, and the robot's position" width="360">
 
-`image.{name}_map` (shown as *Cleaning path*; an installation from an older version may call it `image.{name}_cleaning_map`) is the live map: the robot's path in blue over the cleaned floor in light blue, the dock, the robot with its heading, and stuck events. It survives a restart of Home Assistant.
+`image.{name}_map` (shown as *Cleaning path*; an installation from an older version may call it `image.{name}_cleaning_map`) is the live map: the robot's path in blue over the cleaned floor in light blue, the dock, the robot in magenta with its heading, and stuck events. It survives a restart of Home Assistant.
 
 ```yaml
 type: picture-entity

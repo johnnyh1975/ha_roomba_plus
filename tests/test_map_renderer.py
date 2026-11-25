@@ -196,6 +196,29 @@ class TestAddPose:
         assert r._theta == 135
 
 
+class TestRobotMarker:
+    """The robot must stand out from the track it drives on."""
+
+    def test_the_robot_is_not_drawn_in_the_path_colour(self):
+        from PIL import Image
+        import io
+        from custom_components.roomba_plus.map_renderer import (
+            PATH_COLOUR,
+            ROBOT_COLOUR,
+        )
+
+        r = _make_renderer(size_px=400)
+        for i in range(1, 16):
+            r.add_pose(i * 100, 0, 0)
+        img = Image.open(io.BytesIO(r.render())).convert("RGBA")
+        x, y = r._mm_to_px_fit(1500.0, 0.0)
+
+        # Beside the centre, off the white heading arrow, on the path.
+        marker = img.getpixel((x - 2, y + 2))
+        assert marker == ROBOT_COLOUR
+        assert marker != PATH_COLOUR
+
+
 class TestDiscontinuityMarking:
     """v3.2.2 — REPLACES rejection with marking.
 
