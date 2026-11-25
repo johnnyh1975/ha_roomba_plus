@@ -10,17 +10,37 @@ are listed; most releases need nothing beyond updating.
 
 | Your version | Read |
 |---|---|
-| 4.6.4 | [4.6.5](#v465--from-v464) |
-| 4.6.3 | [4.6.4](#v464--from-v463), then 4.6.5 |
-| 4.6.2 | [4.6.3](#v463--from-v462), then 4.6.4 and 4.6.5 |
-| 4.6.1 | [4.6.2](#v462--from-v461), then 4.6.3 to 4.6.5 |
-| 4.6.0 | [4.6.1](#v461--from-v460), then 4.6.2 to 4.6.5 |
-| 4.5.x | [4.6.0](#v460--from-v45x), then 4.6.1 to 4.6.5 |
-| 4.4.x | [4.5.0](#v450--from-v44x), then 4.5.3, 4.5.4 and 4.6.0 to 4.6.5 below |
+| 4.6.5 | [4.6.6](#v466--from-v465) |
+| 4.6.4 | [4.6.5](#v465--from-v464), then 4.6.6 |
+| 4.6.3 | [4.6.4](#v464--from-v463), then 4.6.5 and 4.6.6 |
+| 4.6.2 | [4.6.3](#v463--from-v462), then 4.6.4 to 4.6.6 |
+| 4.6.1 | [4.6.2](#v462--from-v461), then 4.6.3 to 4.6.6 |
+| 4.6.0 | [4.6.1](#v461--from-v460), then 4.6.2 to 4.6.6 |
+| 4.5.x | [4.6.0](#v460--from-v45x), then 4.6.1 to 4.6.6 |
+| 4.4.x | [4.5.0](#v450--from-v44x), then 4.5.3, 4.5.4 and 4.6.0 to 4.6.6 below |
 | 4.3.x or older | The notes of your line under [Older versions](#older-versions), then everything above them |
 
 Release notes, with everything that changed in each version:
 [GitHub Releases](https://github.com/johnnyh1975/ha_roomba_plus/releases).
+
+---
+## v4.6.6 — from v4.6.5
+
+Needs roombapy-prime 0.9.3; Home Assistant installs it with the update.
+
+**A Vac or Combo Essential added from the iRobot account** was set up as a
+Prime robot, cloud only: it received commands, but its state never changed
+after the first reading. New setups take the local connection now. An
+existing entry does not move by itself: *Reconfigure* it with the robot's
+IP address and leave the password empty, or delete it and add the robot
+again. If Home Assistant's built-in Roomba integration still has the
+robot, disable that entry first.
+
+What you may notice:
+
+- **Prime: a room clean started in the iRobot app has a plan** in Home
+  Assistant: current room, next room and remaining time follow the rooms
+  it was sent to. A mission running during the update keeps what it had.
 
 ---
 ## v4.6.5 — from v4.6.4
