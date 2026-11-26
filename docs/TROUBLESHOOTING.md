@@ -531,6 +531,15 @@ clean from idle.
 > accepted region start from a paused robot has ever been recorded to
 > compare against.
 
+**No reason, and the iRobot app cannot start it either.** When the
+warning says the robot gave no reason (`notReady` and `error` both 0)
+and none of the situations above applies, try a start from the iRobot
+app. If that fails too, the robot has stopped acting on commands while
+still reporting its state, from any app; nothing on the Home Assistant
+side changes that. Pressing CLEAN on the robot, or restarting it, does.
+If the app can start it and Home Assistant cannot, it is on our side:
+download the diagnostics and open an issue.
+
 **The robot has been ignoring everything for hours or days.** A different
 fault that looks identical from Home Assistant, and it has its own
 section: see [A Prime robot that says it is cleaning and is

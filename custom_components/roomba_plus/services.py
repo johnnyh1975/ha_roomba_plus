@@ -462,13 +462,29 @@ async def _async_warn_if_swallowed(
         if refusal:
             _detail += f" notReady {not_ready} is {refusal!r}."
 
+    # NO REASON IS A FINDING TOO (#264). With notReady and error both
+    # empty the robot gave none, and a list of causes reads as a
+    # diagnosis it is not. @nicosandller's docked robot stopped acting on
+    # commands from any app, the iRobot app included, while still sending
+    # its state; only CLEAN on the robot brought it back. Say which case
+    # this is, and the one check that tells the robot's side from ours.
+    if not_ready or err:
+        _advice = (
+            " The robot's reason is in notReady and error; the readiness "
+            "and error sensors show it too."
+        )
+    else:
+        _advice = (
+            " The robot gave no reason. It ignores a command without one "
+            "when a region-targeted start is sent while it is away from "
+            "its dock or the map version is stale. If neither applies and "
+            "the iRobot app cannot start it either, the robot has stopped "
+            "acting on commands; pressing CLEAN on the robot, or restarting "
+            "it, clears that."
+        )
     _LOGGER.warning(
         "%s was accepted by the robot but no mission started within %ds%s "
-        "(phase=%r, notReady=%r, error=%r).%s The robot takes a command "
-        "and silently ignores it in several situations: a cliff sensor "
-        "reading a dark floor as a drop-off, a region-targeted start "
-        "sent while the robot is away from its dock, or a stale map "
-        "version. Check the readiness sensor.",
+        "(phase=%r, notReady=%r, error=%r).%s%s",
         what,
         round(waited),
         ", also after sending it again" if resent else "",
@@ -476,6 +492,7 @@ async def _async_warn_if_swallowed(
         not_ready,
         err,
         _detail,
+        _advice,
     )
     command_watch.fire_not_delivered(
         hass, entry, what, status, waited_sec=waited, resent=resent,

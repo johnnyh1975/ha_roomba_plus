@@ -2860,6 +2860,30 @@ class TestASwallowedCommandIsReported:
         assert "notReady=1" in text
 
     @pytest.mark.asyncio
+    async def test_no_reason_says_so_and_how_to_tell_whose_side(self, caplog):
+        """#264: notReady 0 and error 0 on a docked robot was read as a
+        cliff sensor or a stale map from the list of causes. The robot
+        had simply stopped taking commands, from the iRobot app too."""
+        text = await self._run(
+            {"cycle": "none", "phase": "charge", "notReady": 0, "error": 0},
+            caplog,
+        )
+
+        assert "The robot gave no reason." in text
+        assert "the iRobot app cannot start it either" in text
+        assert "pressing CLEAN" in text
+
+    @pytest.mark.asyncio
+    async def test_a_reason_points_at_it_not_at_a_list(self, caplog):
+        text = await self._run(
+            {"cycle": "none", "phase": "charge", "notReady": 1, "error": 0},
+            caplog,
+        )
+
+        assert "The robot's reason is in notReady and error" in text
+        assert "gave no reason" not in text
+
+    @pytest.mark.asyncio
     async def test_the_numbers_are_named(self, caplog):
         """@Thonno's i7+ (error 224, notReady 68) had to ask what the
         numbers meant. The lookup meant to name them read a table whose
