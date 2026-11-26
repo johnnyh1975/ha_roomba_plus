@@ -72,6 +72,7 @@ from roombapy_prime import (
 from roombapy_prime.models import MissionTimelineReport, SoftwareStatusShadow
 from roombapy_prime.mqtt_client import SubscriptionRejectedError
 
+from .repairs import async_note_classic_on_cloud
 from .structural_failures import record_failure, record_success
 from .prime_favorites import async_favorites_attribute
 
@@ -777,6 +778,8 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         config_entry: ConfigEntry,
         blid: str,
         prime_robot: PrimeRobot,
+        *,
+        classic_on_cloud: bool = False,
     ) -> None:
         #: NARROWED ONCE PER CLASS, not asserted at fifteen call sites.
         #:
@@ -790,6 +793,9 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         #: and rewrote the reads in all of them. A test caught it
         #: immediately. Three classes, three declarations.
         self.entry: ConfigEntry = config_entry
+        #: A Classic robot set up over the cloud (#265): a refused status
+        #: subscription is then worth a repair issue, see `_note_refused`.
+        self.classic_on_cloud = classic_on_cloud
         super().__init__(
             hass,
             _LOGGER,
@@ -856,6 +862,7 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                 _LOGGER.warning(
                     "roomba_plus: could not seed named shadow %r for %s: %s", name, self.blid, exc
                 )
+                self._note_refused(exc)
                 last_exc = exc
                 continue
             # Same `dict | str`: a string payload carries no shadow.
@@ -886,6 +893,7 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
             _LOGGER.warning(
                 "roomba_plus: could not seed classic/unnamed shadow for %s: %s", self.blid, exc
             )
+            self._note_refused(exc)
 
         self.async_set_updated_data(seeded)
 
@@ -894,6 +902,18 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
             self._async_watch_status_updates(),
             name=f"roomba_plus_prime_status_watch_{self.blid}",
         )
+
+    def _note_refused(self, exc: BaseException) -> None:
+        """A Classic robot on the cloud whose status the cloud refuses.
+
+        @gloopy-purple-liquid's Combo Essentials (#265): every status
+        subscription refused, commands still delivered, the state frozen
+        at its first reading. Only for a Classic robot: on a Prime robot a
+        refusal is one shadow its model lacks (@takacstiborap's 205), and
+        it carries on without it.
+        """
+        if self.classic_on_cloud and isinstance(exc, SubscriptionRejectedError):
+            async_note_classic_on_cloud(self.hass, self.entry, refused=True)
 
     async def _async_watch_status_updates(self) -> None:
         """Runs for the lifetime of the config entry. Parses each
@@ -960,6 +980,7 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001
+                self._note_refused(exc)
                 _LOGGER.exception(
                     # NOT INSTRUMENTED: a watcher ending is the normal
                 # shape of a disconnect, and the reconnect

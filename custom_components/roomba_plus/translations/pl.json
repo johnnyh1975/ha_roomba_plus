@@ -2132,6 +2132,14 @@
           "maintenance_done_failed": "Nie udało się zgłosić wykonania: {error}"
         }
       }
+    },
+    "classic_robot_on_cloud": {
+      "title": "Robot Classic przez chmurę",
+      "description": "**{name}** działa przez chmurę iRobot. To robot Classic, a takie działają niezawodniej przez połączenie lokalne: jego stan pochodzi bezpośrednio z robota, a mapa na żywo pokazuje jego pozycje.\n\nAby go przełączyć, w menu tego wpisu wybierz Zmień konfigurację i wpisz adres IP robota; pozostaw hasło puste, aby pobrać je z konta iRobot. Do tego czasu działa dalej jak dotąd."
+    },
+    "classic_robot_cloud_refused": {
+      "title": "Robot Classic: chmura nie wysyła stanu",
+      "description": "**{name}** działa przez chmurę iRobot, a chmura odrzuciła jego subskrypcje stanu. Polecenia nadal docierają do robota, ale to, co pokazuje Home Assistant, pozostaje przy pierwszym odczycie.\n\nPrzełącz go na połączenie lokalne: w menu tego wpisu wybierz Zmień konfigurację i wpisz adres IP robota; pozostaw hasło puste, aby pobrać je z konta iRobot."
     }
   },
   "device_automation": {
@@ -2923,9 +2931,6 @@
     },
     "nothing_to_retry": {
       "message": "Misja nie pominęła żadnego pokoju na {entity_id}."
-    },
-    "classic_robot_set_up_as_prime": {
-      "message": "Ten robot łączy się przez Twoją sieć, a nie przez nowszą chmurę iRobot. W menu tego wpisu wybierz Zmień konfigurację i wpisz adres IP robota; pozostaw hasło puste, aby pobrać je z konta iRobot."
     }
   },
   "selector": {

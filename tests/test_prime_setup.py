@@ -143,7 +143,7 @@ class TestAsyncSetupEntryPrime:
         assert result is True
         # Built by the account, so it renews through the account's login
         # (4.3.0b6) -- no credentials of its own.
-        mock_create.assert_awaited_once_with("BLID123", auto_refresh=True)
+        mock_create.assert_awaited_once_with("BLID123", auto_refresh=True, allow_classic=False)
 
         runtime_data: RoombaData = config_entry.runtime_data
         assert runtime_data.blid == "BLID123"
@@ -164,22 +164,69 @@ class TestAsyncSetupEntryPrime:
         assert "MissionHistoryView" in registered
         assert "DailyDigestView" in registered
 
+    @staticmethod
+    def _cloud_robot() -> MagicMock:
+        robot = MagicMock()
+        robot.connect = AsyncMock()
+        robot.get_named_shadow = AsyncMock(
+            return_value=MagicMock(payload={"state": {"reported": {}}})
+        )
+        robot.get_state = AsyncMock(
+            return_value=MagicMock(payload={"state": {"reported": {}}})
+        )
+        robot.get_household_id = AsyncMock(return_value="hh1")
+        robot.get_serial_number_data = AsyncMock(return_value=None)
+
+        async def _no_updates():
+            return
+            yield  # pragma: no cover -- makes this an async generator
+
+        robot.watch_named_shadows_updates = _no_updates
+        return robot
+
     @pytest.mark.asyncio
-    async def test_a_classic_robot_set_up_as_prime_says_what_to_do(self) -> None:
-        """#265: Combo Essentials set up as Prime before roombapy-prime
-        0.9.3 moved them to Classic. The library refuses them, and the
-        bare ValueError read as a defect, retried like one."""
-        from homeassistant.exceptions import ConfigEntryError
+    async def test_a_classic_robot_set_up_over_the_cloud_keeps_running(self) -> None:
+        """An Essential set up as Prime up to 4.6.5 worked for a user;
+        4.6.6 and 4.6.7 refused the entry and it went unavailable. It runs
+        as before now, with a repair issue that says how to move it."""
+        import custom_components.roomba_plus.repairs as repairs
 
         hass, config_entry = _make_hass_and_entry()
+        hass.data = {}
         _CURRENT["account"].generation.return_value = "classic"
-        _CURRENT["account"].prime_robot = AsyncMock()
+        robot = self._cloud_robot()
 
-        with pytest.raises(ConfigEntryError) as raised:
-            await _async_setup_entry_prime(hass, config_entry)
+        with patch.object(
+            _CURRENT["account"], "prime_robot", new=AsyncMock(return_value=robot)
+        ) as build, patch.object(
+            repairs, "async_note_classic_on_cloud"
+        ) as noted, patch.object(repairs, "async_clear_classic_on_cloud"):
+            assert await _async_setup_entry_prime(hass, config_entry) is True
 
-        assert raised.value.translation_key == "classic_robot_set_up_as_prime"
-        _CURRENT["account"].prime_robot.assert_not_awaited()
+        assert build.await_args.kwargs["allow_classic"] is True
+        noted.assert_called_once_with(hass, config_entry)
+        status = config_entry.runtime_data.prime_status_coordinator
+        assert status.classic_on_cloud is True
+
+    @pytest.mark.asyncio
+    async def test_a_prime_robot_clears_the_classic_issue(self) -> None:
+        import custom_components.roomba_plus.repairs as repairs
+
+        hass, config_entry = _make_hass_and_entry()
+        hass.data = {}
+        _CURRENT["account"].generation.return_value = "prime"
+
+        with patch.object(
+            _CURRENT["account"], "prime_robot",
+            new=AsyncMock(return_value=self._cloud_robot()),
+        ) as build, patch.object(
+            repairs, "async_note_classic_on_cloud"
+        ) as noted, patch.object(repairs, "async_clear_classic_on_cloud") as cleared:
+            assert await _async_setup_entry_prime(hass, config_entry) is True
+
+        assert build.await_args.kwargs["allow_classic"] is False
+        noted.assert_not_called()
+        cleared.assert_called_once_with(hass, config_entry.entry_id)
 
     @pytest.mark.asyncio
     async def test_firmware_baseline_at_setup_and_changes_after(self) -> None:
@@ -370,7 +417,7 @@ class TestPrimeTakesTheAccountLogin:
             hass, config_entry.entry_id, "user@example.com", "hunter2",
             mqtt_blid="BLID123",
         )
-        create.assert_awaited_once_with("BLID123", auto_refresh=True)
+        create.assert_awaited_once_with("BLID123", auto_refresh=True, allow_classic=False)
 
     @pytest.mark.asyncio
     async def test_the_share_is_released_on_unload(self, _account) -> None:

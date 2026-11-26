@@ -2132,6 +2132,14 @@
           "maintenance_done_failed": "Konnte nicht als erledigt gemeldet werden: {error}"
         }
       }
+    },
+    "classic_robot_on_cloud": {
+      "title": "Classic-Roboter über die Cloud",
+      "description": "**{name}** läuft über die iRobot-Cloud. Er ist ein Classic-Roboter, und die laufen über die lokale Verbindung zuverlässiger: Sein Zustand kommt direkt vom Roboter, und die Live-Karte zeigt seine Positionen.\n\nZum Umstellen im Menü dieses Eintrags „Neu konfigurieren“ wählen und die IP-Adresse des Roboters eingeben; ohne Passwort wird es aus dem iRobot-Konto übernommen. Bis dahin läuft er weiter wie bisher."
+    },
+    "classic_robot_cloud_refused": {
+      "title": "Classic-Roboter: Die Cloud liefert keinen Zustand",
+      "description": "**{name}** läuft über die iRobot-Cloud, und die Cloud hat seine Statusabos abgelehnt. Befehle erreichen den Roboter weiterhin, aber was Home Assistant anzeigt, bleibt beim ersten Stand.\n\nAuf die lokale Verbindung umstellen: im Menü dieses Eintrags „Neu konfigurieren“ wählen und die IP-Adresse des Roboters eingeben; ohne Passwort wird es aus dem iRobot-Konto übernommen."
     }
   },
   "device_automation": {
@@ -2923,9 +2931,6 @@
     },
     "nothing_to_retry": {
       "message": "Die Mission hat auf {entity_id} keinen Raum ausgelassen."
-    },
-    "classic_robot_set_up_as_prime": {
-      "message": "Dieser Roboter wird über das eigene Netzwerk verbunden, nicht über iRobots neuere Cloud. Im Menü dieses Eintrags „Neu konfigurieren“ wählen und die IP-Adresse des Roboters eingeben; ohne Passwort wird es aus dem iRobot-Konto übernommen."
     }
   },
   "selector": {

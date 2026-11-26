@@ -2083,3 +2083,42 @@ async def async_check_core_roomba_conflict(hass: HomeAssistant) -> None:
         severity=ir.IssueSeverity.WARNING,
         translation_key="core_roomba_conflict",
     )
+
+
+def classic_on_cloud_issue_id(entry_id: str) -> str:
+    """The one issue a Classic robot set up over the cloud can have."""
+    return f"classic_robot_on_cloud_{entry_id}"
+
+
+def async_note_classic_on_cloud(
+    hass: HomeAssistant, config_entry: RoombaConfigEntry, *, refused: bool = False
+) -> None:
+    """Say that this Classic robot runs over the cloud, and how to move it.
+
+    Up to 4.6.5 the Vac and Combo Essential were set up as Prime robots,
+    over the cloud only; roombapy-prime 0.9.3 moved them to Classic, and
+    4.6.6 and 4.6.7 then refused such an entry outright -- which cost a
+    user an Essential that had worked. It runs as before now, and this
+    says the local connection is the better one.
+
+    `refused`: the cloud turned down the robot's status subscription, as
+    for @gloopy-purple-liquid's three Combo Essentials (#265). Commands
+    still arrive but the state stays where it was, so the same issue
+    turns from advice into the reason Home Assistant looks frozen.
+    """
+    ir.async_create_issue(
+        hass,
+        DOMAIN,
+        classic_on_cloud_issue_id(config_entry.entry_id),
+        is_fixable=False,
+        severity=ir.IssueSeverity.ERROR if refused else ir.IssueSeverity.WARNING,
+        translation_key=(
+            "classic_robot_cloud_refused" if refused else "classic_robot_on_cloud"
+        ),
+        translation_placeholders={"name": config_entry.title},
+    )
+
+
+def async_clear_classic_on_cloud(hass: HomeAssistant, entry_id: str) -> None:
+    """Drop the issue once the entry is no longer a Classic robot on the cloud."""
+    ir.async_delete_issue(hass, DOMAIN, classic_on_cloud_issue_id(entry_id))

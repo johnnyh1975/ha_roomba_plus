@@ -1,7 +1,7 @@
 # Roomba+ for Home Assistant
 
 [![Marketplace](https://img.shields.io/badge/Marketplace%20%2F%20HACS-Default-blue.svg)](https://github.com/hacs/default)
-[![Version](https://img.shields.io/badge/Version-4.6.8-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-4.6.9-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2025.5%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Platinum-blueviolet.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
@@ -80,7 +80,7 @@ history are made up.</sub>
 |---|---|---|---|
 | 600 | Roomba 694, 692, 671 | local | Roomba 694 |
 | 900 | Roomba 980, 985 | local | Roomba 980 |
-| Essential | Roomba Vac Essential, Combo Essential | local | Combo Essential (on the built-in integration) |
+| Essential | Roomba Vac Essential, Combo Essential | local; one set up over the iRobot cloud before 4.6.6 keeps it | Combo Essential (on the built-in integration) |
 | i, s, j series | i3, i7+, s9+, j7+, j8+, Combo j9+ | local, iRobot account optional | i7+, s9+, j7+, Combo j9+ |
 | Braava | jet m6 | local, iRobot account optional | Braava jet m6 |
 | V4/Prime | Combo 105, Plus 405/410/416 Combo, Combo 505, Roomba Max 705 | iRobot cloud | several models, see [V4/Prime robots](docs/PRIME.md) |
@@ -202,7 +202,7 @@ Everything in 4.6 is additive: existing entities, events and their fields stay a
 - **Documentation arranged by task**: [Getting started](docs/getting-started.md), a guide per
   task, and a reference of every entity, action and option built from the code.
 
-Details: release notes [4.6.0](release-notes/v4.6.0.md), [4.6.1](release-notes/v4.6.1.md), [4.6.2](release-notes/v4.6.2.md), [4.6.3](release-notes/v4.6.3.md), [4.6.4](release-notes/v4.6.4.md), [4.6.5](release-notes/v4.6.5.md), [4.6.6](release-notes/v4.6.6.md), [4.6.7](release-notes/v4.6.7.md), [4.6.8](release-notes/v4.6.8.md) · [upgrade notes](docs/UPGRADING.md#v460--from-v45x).
+Details: release notes [4.6.0](release-notes/v4.6.0.md), [4.6.1](release-notes/v4.6.1.md), [4.6.2](release-notes/v4.6.2.md), [4.6.3](release-notes/v4.6.3.md), [4.6.4](release-notes/v4.6.4.md), [4.6.5](release-notes/v4.6.5.md), [4.6.6](release-notes/v4.6.6.md), [4.6.7](release-notes/v4.6.7.md), [4.6.8](release-notes/v4.6.8.md), [4.6.9](release-notes/v4.6.9.md) · [upgrade notes](docs/UPGRADING.md#v460--from-v45x).
 
 ## V4/Prime robots
 

@@ -2132,6 +2132,14 @@
           "maintenance_done_failed": "Could not mark it done: {error}"
         }
       }
+    },
+    "classic_robot_on_cloud": {
+      "title": "Classic robot over the cloud",
+      "description": "**{name}** runs over the iRobot cloud. It is a Classic robot, and those run more reliably on the local connection: its state comes straight from the robot, and the live map shows its positions.\n\nTo move it, open this entry's menu, choose Reconfigure and enter the robot's IP address; leave the password empty to take it from your iRobot account. Until then it keeps running as it is."
+    },
+    "classic_robot_cloud_refused": {
+      "title": "Classic robot: the cloud sends no status",
+      "description": "**{name}** runs over the iRobot cloud, and the cloud refused its status subscriptions. Commands still reach the robot, but what Home Assistant shows stays at its first reading.\n\nMove it to the local connection: open this entry's menu, choose Reconfigure and enter the robot's IP address; leave the password empty to take it from your iRobot account."
     }
   },
   "device_automation": {
@@ -2923,9 +2931,6 @@
     },
     "nothing_to_retry": {
       "message": "The mission left no room out on {entity_id}."
-    },
-    "classic_robot_set_up_as_prime": {
-      "message": "This robot connects over your own network, not through iRobot's newer cloud. Open this entry's menu, choose Reconfigure and enter the robot's IP address; leave the password empty to take it from your iRobot account."
     }
   },
   "selector": {

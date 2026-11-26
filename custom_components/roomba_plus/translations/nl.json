@@ -2132,6 +2132,14 @@
           "maintenance_done_failed": "Kon niet als gedaan worden gemeld: {error}"
         }
       }
+    },
+    "classic_robot_on_cloud": {
+      "title": "Classic-robot via de cloud",
+      "description": "**{name}** werkt via de iRobot-cloud. Het is een Classic-robot, en die werken betrouwbaarder via de lokale verbinding: de status komt rechtstreeks van de robot en de live-kaart toont zijn posities.\n\nOm hem over te zetten, kies je in het menu van deze vermelding Opnieuw configureren en voer je het IP-adres van de robot in; laat het wachtwoord leeg om het uit je iRobot-account te halen. Tot die tijd blijft hij werken zoals nu."
+    },
+    "classic_robot_cloud_refused": {
+      "title": "Classic-robot: de cloud stuurt geen status",
+      "description": "**{name}** werkt via de iRobot-cloud, en de cloud heeft zijn statusabonnementen geweigerd. Opdrachten bereiken de robot nog steeds, maar wat Home Assistant toont blijft bij de eerste meting.\n\nZet hem over op de lokale verbinding: kies in het menu van deze vermelding Opnieuw configureren en voer het IP-adres van de robot in; laat het wachtwoord leeg om het uit je iRobot-account te halen."
     }
   },
   "device_automation": {
@@ -2923,9 +2931,6 @@
     },
     "nothing_to_retry": {
       "message": "De missie heeft op {entity_id} geen kamer overgeslagen."
-    },
-    "classic_robot_set_up_as_prime": {
-      "message": "Deze robot verbindt via je eigen netwerk, niet via de nieuwere cloud van iRobot. Kies in het menu van deze vermelding Opnieuw configureren en voer het IP-adres van de robot in; laat het wachtwoord leeg om het uit je iRobot-account te halen."
     }
   },
   "selector": {

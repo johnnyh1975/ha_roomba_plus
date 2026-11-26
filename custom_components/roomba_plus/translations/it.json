@@ -2132,6 +2132,14 @@
           "maintenance_done_failed": "Impossibile segnalare come fatto: {error}"
         }
       }
+    },
+    "classic_robot_on_cloud": {
+      "title": "Robot Classic tramite il cloud",
+      "description": "**{name}** funziona tramite il cloud di iRobot. È un robot Classic, e questi funzionano in modo più affidabile con la connessione locale: il suo stato arriva direttamente dal robot e la mappa dal vivo mostra le sue posizioni.\n\nPer spostarlo, nel menu di questa voce scegli Riconfigura e inserisci l'indirizzo IP del robot; lascia vuota la password per prenderla dal tuo account iRobot. Fino ad allora continua a funzionare così."
+    },
+    "classic_robot_cloud_refused": {
+      "title": "Robot Classic: il cloud non invia lo stato",
+      "description": "**{name}** funziona tramite il cloud di iRobot, e il cloud ha rifiutato le sue sottoscrizioni di stato. I comandi raggiungono ancora il robot, ma ciò che mostra Home Assistant resta alla prima lettura.\n\nSpostalo sulla connessione locale: nel menu di questa voce scegli Riconfigura e inserisci l'indirizzo IP del robot; lascia vuota la password per prenderla dal tuo account iRobot."
     }
   },
   "device_automation": {
@@ -2923,9 +2931,6 @@
     },
     "nothing_to_retry": {
       "message": "La missione non ha saltato nessuna stanza su {entity_id}."
-    },
-    "classic_robot_set_up_as_prime": {
-      "message": "Questo robot si collega tramite la tua rete, non tramite il nuovo cloud di iRobot. Nel menu di questa voce scegli Riconfigura e inserisci l'indirizzo IP del robot; lascia vuota la password per prenderla dal tuo account iRobot."
     }
   },
   "selector": {

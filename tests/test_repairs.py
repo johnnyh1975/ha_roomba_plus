@@ -3907,3 +3907,36 @@ class TestTheExceptionsBlueprint:
             "3 scheduled cleans skipped in a row. Check the blocking sensors "
             "and the presence planning.",
         ]
+
+
+class TestClassicRobotOnTheCloud:
+    """A Classic robot set up over the cloud (#265): advice while it
+    works, the reason it looks frozen when the cloud refuses its status."""
+
+    def _entry(self):
+        entry = MagicMock()
+        entry.entry_id = "entry1"
+        entry.title = "Main"
+        return entry
+
+    def test_advice_then_refusal_then_gone(self):
+        from custom_components.roomba_plus import repairs
+
+        hass = MagicMock()
+        entry = self._entry()
+        with patch.object(repairs.ir, "async_create_issue") as create, patch.object(
+            repairs.ir, "async_delete_issue"
+        ) as delete:
+            repairs.async_note_classic_on_cloud(hass, entry)
+            repairs.async_note_classic_on_cloud(hass, entry, refused=True)
+            repairs.async_clear_classic_on_cloud(hass, "entry1")
+
+        advice, refused = create.call_args_list
+        # One issue per entry, its text and weight replaced in place.
+        assert advice.args[2] == refused.args[2] == "classic_robot_on_cloud_entry1"
+        assert advice.kwargs["translation_key"] == "classic_robot_on_cloud"
+        assert advice.kwargs["severity"] == repairs.ir.IssueSeverity.WARNING
+        assert refused.kwargs["translation_key"] == "classic_robot_cloud_refused"
+        assert refused.kwargs["severity"] == repairs.ir.IssueSeverity.ERROR
+        assert refused.kwargs["translation_placeholders"] == {"name": "Main"}
+        delete.assert_called_once_with(hass, repairs.DOMAIN, "classic_robot_on_cloud_entry1")

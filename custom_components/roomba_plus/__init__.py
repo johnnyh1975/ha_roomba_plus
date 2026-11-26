@@ -1585,6 +1585,11 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: RoombaConfigEntry
     if _connection_type(config_entry) == ConnectionType.CLOUD_ONLY:
         return await _async_setup_entry_prime(hass, config_entry)
 
+    # Moved to the local connection: the advice to move is done with.
+    from .repairs import async_clear_classic_on_cloud  # noqa: PLC0415
+
+    async_clear_classic_on_cloud(hass, config_entry.entry_id)
+
     ctx = _SetupContext(hass=hass, config_entry=config_entry)
 
     if not await _phase_connect(ctx):
@@ -1900,19 +1905,17 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
         account = await async_acquire(
             hass, config_entry.entry_id, username, password, mqtt_blid=blid
         )
-        if account.generation(blid) == "classic":
-            # SET UP AS PRIME, AND IT IS NOT (#265). roombapy-prime 0.9.3
-            # moved the Vac and Combo Essential to Classic, and an entry
-            # made before cannot reach them this way: the library refuses,
-            # and the bare ValueError read as a defect. Not a retry either
-            # -- reconnecting changes nothing until the entry is set up
-            # on the local connection.
-            raise exceptions.ConfigEntryError(
-                f"{blid} is a Classic robot set up as cloud-only",
-                translation_domain=DOMAIN,
-                translation_key="classic_robot_set_up_as_prime",
-            )
-        prime_robot = await account.prime_robot(blid, auto_refresh=True)
+        # A CLASSIC ROBOT SET UP OVER THE CLOUD RUNS AS IT DID. Up to 4.6.5
+        # the Vac and Combo Essential were set up as Prime robots, cloud
+        # only; roombapy-prime 0.9.3 moved them to Classic, and 4.6.6 and
+        # 4.6.7 refused such an entry outright -- a user lost an Essential
+        # that had worked that way. roombapy-prime 0.9.4 builds the robot
+        # when asked; a repair issue says the local connection is the
+        # better one and how to move (#265).
+        classic_on_cloud = account.generation(blid) == "classic"
+        prime_robot = await account.prime_robot(
+            blid, auto_refresh=True, allow_classic=classic_on_cloud
+        )
     except AuthCredentialsError as exc:
         raise exceptions.ConfigEntryAuthFailed(
             f"V4/Prime cloud login rejected for {blid}: {exc}",
@@ -1940,7 +1943,15 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
     # above -- see PrimeStatusCoordinator's own docstring for why).
     # Reuses the same, already-connected prime_robot -- does not open
     # a second MQTT connection.
-    status_coordinator = PrimeStatusCoordinator(hass, config_entry, blid, prime_robot)
+    from . import repairs  # noqa: PLC0415
+
+    if classic_on_cloud:
+        repairs.async_note_classic_on_cloud(hass, config_entry)
+    else:
+        repairs.async_clear_classic_on_cloud(hass, config_entry.entry_id)
+    status_coordinator = PrimeStatusCoordinator(
+        hass, config_entry, blid, prime_robot, classic_on_cloud=classic_on_cloud
+    )
     await status_coordinator.async_start()
 
     # Consumable parts. Best-effort on purpose: this is enrichment, and
@@ -2398,6 +2409,7 @@ def _async_clear_repair_issues(
         f"smart_zones_need_naming_{entry_id}",
         f"mqtt_watchdog_{entry_id}",
         f"segments_changed_{entry_id}",
+        f"classic_robot_on_cloud_{entry_id}",
         "smart_zones_need_naming",
         "zones_need_naming",
     ):

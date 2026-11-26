@@ -2132,6 +2132,14 @@
           "maintenance_done_failed": "No se pudo marcar como hecho: {error}"
         }
       }
+    },
+    "classic_robot_on_cloud": {
+      "title": "Robot Classic a través de la nube",
+      "description": "**{name}** funciona a través de la nube de iRobot. Es un robot Classic, y estos funcionan de forma más fiable por la conexión local: su estado llega directamente del robot y el mapa en vivo muestra sus posiciones.\n\nPara cambiarlo, en el menú de esta entrada elige Reconfigurar e introduce la dirección IP del robot; deja la contraseña vacía para tomarla de tu cuenta de iRobot. Hasta entonces sigue funcionando como ahora."
+    },
+    "classic_robot_cloud_refused": {
+      "title": "Robot Classic: la nube no envía su estado",
+      "description": "**{name}** funciona a través de la nube de iRobot, y la nube rechazó sus suscripciones de estado. Los comandos siguen llegando al robot, pero lo que muestra Home Assistant se queda en su primera lectura.\n\nCámbialo a la conexión local: en el menú de esta entrada elige Reconfigurar e introduce la dirección IP del robot; deja la contraseña vacía para tomarla de tu cuenta de iRobot."
     }
   },
   "device_automation": {
@@ -2923,9 +2931,6 @@
     },
     "nothing_to_retry": {
       "message": "La misión no omitió ninguna habitación en {entity_id}."
-    },
-    "classic_robot_set_up_as_prime": {
-      "message": "Este robot se conecta por tu propia red, no por la nube más reciente de iRobot. En el menú de esta entrada elige Reconfigurar e introduce la dirección IP del robot; deja la contraseña vacía para tomarla de tu cuenta de iRobot."
     }
   },
   "selector": {

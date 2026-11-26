@@ -220,7 +220,9 @@ class TestAsyncWatchMissionTimeline:
         assert coordinator.data.mission_id == "m1"
 
 
-def _make_status_coordinator() -> tuple[PrimeStatusCoordinator, MagicMock, MagicMock]:
+def _make_status_coordinator(
+    *, classic_on_cloud: bool = False
+) -> tuple[PrimeStatusCoordinator, MagicMock, MagicMock]:
     hass = MagicMock()
     config_entry = MagicMock()
     config_entry.async_create_background_task.side_effect = (
@@ -230,6 +232,7 @@ def _make_status_coordinator() -> tuple[PrimeStatusCoordinator, MagicMock, Magic
     prime_robot.connect = AsyncMock()
     coordinator = PrimeStatusCoordinator(
         hass, config_entry, blid="BLID123", prime_robot=prime_robot,
+        classic_on_cloud=classic_on_cloud,
     )
     return coordinator, config_entry, prime_robot
 
@@ -304,6 +307,53 @@ class TestARefusedShadow:
 
         assert "rw-schedule" not in coordinator.data
         assert coordinator.data["ro-currentstate"] == {"_name": "ro-currentstate"}
+
+
+class TestAClassicRobotTheCloudRefuses:
+    """#265: three Combo Essentials on the cloud, every status subscription
+    refused, commands delivered, the state frozen at its first reading.
+    On a Classic robot that is worth saying; on a Prime robot a refusal
+    is one shadow its model lacks."""
+
+    @staticmethod
+    def _refusing(prime_robot: MagicMock) -> None:
+        from roombapy_prime.mqtt_client import SubscriptionRejectedError
+
+        async def fake_get_named_shadow(name):
+            if name == "ro-currentstate":
+                raise SubscriptionRejectedError("Broker REJECTED subscription")
+            return ShadowResponse(topic="x", payload={"state": {"reported": {}}})
+
+        prime_robot.get_named_shadow = fake_get_named_shadow
+        prime_robot.get_state = AsyncMock(
+            return_value=ShadowResponse(topic="x", payload={"state": {"reported": {}}})
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_classic_robot_raises_the_refused_issue(self) -> None:
+        coordinator, config_entry, prime_robot = _make_status_coordinator(
+            classic_on_cloud=True
+        )
+        self._refusing(prime_robot)
+
+        with patch(
+            "custom_components.roomba_plus.prime_coordinator.async_note_classic_on_cloud"
+        ) as noted:
+            await coordinator.async_start()
+
+        noted.assert_called_once_with(coordinator.hass, config_entry, refused=True)
+
+    @pytest.mark.asyncio
+    async def test_a_prime_robot_does_not(self) -> None:
+        coordinator, _config_entry, prime_robot = _make_status_coordinator()
+        self._refusing(prime_robot)
+
+        with patch(
+            "custom_components.roomba_plus.prime_coordinator.async_note_classic_on_cloud"
+        ) as noted:
+            await coordinator.async_start()
+
+        noted.assert_not_called()
 
 
 class TestAsyncWatchStatusUpdatesRetryBehavior:
@@ -1177,12 +1227,10 @@ def _sched(hass, **runtime):
 
 
 def _status(hass):
-    c = pc.PrimeStatusCoordinator.__new__(pc.PrimeStatusCoordinator)
-    c.hass = hass
-    c.blid = "PRIMECOORD"
-    c.prime_robot = MagicMock()
-    c.entry = MagicMock()
-    c.config_entry = MagicMock()
+    # THROUGH THE CONSTRUCTOR (AGENTS.md rule 3): built with __new__, this
+    # helper had no `classic_on_cloud`, and the tests on it failed for a
+    # missing attribute rather than for what they test.
+    c = pc.PrimeStatusCoordinator(hass, MagicMock(), "PRIMECOORD", MagicMock())
     c.async_set_updated_data = MagicMock()
     return c
 
