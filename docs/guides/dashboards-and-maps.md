@@ -91,7 +91,7 @@ Four kinds of zone are drawn, and the distinction that matters is not visible fr
 | 🟣 purple | Carpet zones | **The robot**: detected while cleaning |
 | 🟠 orange | Observed obstacles | **The robot**: inferred from repeated bumps |
 
-Clean zones and keep-out zones are outlines, because they have shapes you drew. **Observed obstacles are circles**: they arrive as a centre and a radius, a cluster of contacts rather than a boundary. Orange circles often sit on white, unmapped parts of the raw live map: an obstacle the robot could not get past leaves a hole in the map *and* a cluster of contacts on top of it. Keep-out zones and observed obstacles are drawn once the positions are lined up with the floor plan.
+Clean zones and keep-out zones are outlines, because they have shapes you drew. **Observed obstacles are circles**: they arrive as a centre and a radius, a cluster of contacts rather than a boundary. Orange circles often sit on white, unmapped parts of the raw live map: an obstacle the robot could not get past leaves a hole in the map *and* a cluster of contacts on top of it. On the live map, keep-out zones and observed obstacles are drawn where its floor plan is: over the robot's own positions once those are lined up with the floor plan, over positions requested from the robot (`position_source: request`) right away.
 
 ## The coverage map
 

@@ -1866,17 +1866,18 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
 
         png = await self.hass.async_add_executor_job(self._renderer.render)
 
-        # v2.3.0 Step 6 — keepout zone overlay (Amendment 4)
-        # Not over a requested path: the zones come through the aligner,
-        # whose frame that path is not known to share.
-        if (
-            self._config_entry is not None
-            and self._position_source != POSITION_SOURCE_REQUEST
-        ):
+        # v2.3.0 Step 6 — keepout zone overlay (Amendment 4), and the
+        # observed obstacles. Both are cloud-map geometry, placed in this
+        # path's frame the way its floor plan is (`_cloud_map_placement`),
+        # so also over a requested path, which is drawn in the cloud map's
+        # own frame and needs no alignment (@jamd-pt).
+        if self._config_entry is not None:
             _data = self._config_entry.runtime_data
             aligner = _data.umf_aligner
+            place = self._cloud_map_placement(aligner)
             if (
-                aligner and aligner.aligned
+                place is not None
+                and aligner is not None
                 and _data.cloud_coordinator is not None
             ):
                 keepout_raw = _data.cloud_coordinator.keepout_zones
@@ -1886,13 +1887,13 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                         poly_umf = aligner.keepout_polygon_umf(zone)
                         if not poly_umf:
                             continue
-                        # FILTERED, NOT CHECKED. `umf_to_pose` returns
+                        # FILTERED, NOT CHECKED. A placement returns
                         # `tuple | None` for a point outside the map, and
                         # `all(p is not None ...)` proves nothing to a
                         # reader or a type checker about the list itself.
                         # Building the narrowed list and comparing lengths
                         # says the same thing and carries the type.
-                        raw_pose = [aligner.umf_to_pose(x, y) for x, y in poly_umf]
+                        raw_pose = [place(x, y) for x, y in poly_umf]
                         poly_pose = [p for p in raw_pose if p is not None]
                         if len(poly_pose) != len(raw_pose):
                             continue
@@ -1907,8 +1908,7 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                             png = overlay_png
 
                 # ZONE-OVERLAY (v3.0.0) — robot-observed obstacle zones as orange circles.
-                # Gate: same as keepout (aligner aligned) — observed_zone_centroids are in
-                # UMF space and require the aligner for pose conversion.
+                # observed_zone_centroids are in UMF space, placed like the zones.
                 # Available: any robot with active cloud coordinator (SMART + EPHEMERAL
                 # with cloud credentials) — not limited to has_pmaps.
                 centroids = _data.cloud_coordinator.observed_zone_centroids if _data.cloud_coordinator else []
@@ -1916,7 +1916,7 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                     _OBSERVED_RADIUS_MM = 200  # approx obstacle circle radius in mm
                     circles_px: list[tuple[int, int, int]] = []
                     for c in centroids:
-                        pose_xy = aligner.umf_to_pose(c["x"], c["y"])
+                        pose_xy = place(c["x"], c["y"])
                         if pose_xy is None:
                             continue
                         cx_px, cy_px = self._renderer._mm_to_px_fit(*pose_xy)
@@ -2747,6 +2747,33 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         self._room_layout_cache = (key, layout)
         return layout
 
+    def _cloud_map_placement(
+        self, aligner: Any
+    ) -> Callable[[float, float], tuple[float, float] | None] | None:
+        """How a point of the cloud map lands in this path's frame, or None.
+
+        Positions requested from the robot are in the cloud map's frame
+        (`_handle_live_position`): a point goes in as it is, mirrored the
+        way those positions are. Otherwise the aligner places it, once it
+        has aligned. Shared by the floor plan and the zone overlays, so a
+        keep-out zone lands where the rooms under it are drawn.
+        """
+        if not aligner:
+            return None
+        if self._position_source == POSITION_SOURCE_REQUEST:
+            mirror = getattr(getattr(self._renderer, "_cfg", None), "mirror_x", False) is True
+
+            def place(x: float, y: float) -> tuple[float, float] | None:
+                return map_mm_to_view(x, y) if mirror else (x, y)
+
+            return place
+        if aligner.aligned:
+            umf_to_pose: Callable[[float, float], tuple[float, float] | None] = (
+                aligner.umf_to_pose
+            )
+            return umf_to_pose
+        return None
+
     def _floor_plan(self) -> list[tuple[str | None, list[tuple[float, float]]]]:
         """The rooms of the cloud map, in the frame this path is drawn in.
 
@@ -2777,11 +2804,9 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         polygons = getattr(aligner, "room_polygons_umf", None)
         if not isinstance(polygons, dict) or not polygons:
             return []
-        if self._position_source == POSITION_SOURCE_REQUEST:
-            mirror = getattr(getattr(self._renderer, "_cfg", None), "mirror_x", False) is True
-
-            def place(x: float, y: float) -> tuple[float, float] | None:
-                return map_mm_to_view(x, y) if mirror else (x, y)
+        placement = self._cloud_map_placement(aligner)
+        if self._position_source == POSITION_SOURCE_REQUEST and placement is not None:
+            place = placement
         elif self._position_source == POSITION_SOURCE_POSE and getattr(aligner, "aligned", False) is True:
             def place(x: float, y: float) -> tuple[float, float] | None:
                 point = aligner.umf_to_pose(x, y)

@@ -5805,24 +5805,63 @@ class TestRequestedPositionsOnTheCleaningMap:
         await fresh._async_restore_map_state()
         assert fresh._position_source == img.POSITION_SOURCE_REQUEST
 
-    @pytest.mark.asyncio
-    async def test_no_zone_overlay_or_shared_frame_over_a_requested_path(self):
+    def _zone_entity(self, *, mirror: bool):
         m, renderer, entry, _s = self._entity()
+        renderer._cfg.mirror_x = mirror
         renderer.render.return_value = b"path"
         m.hass.async_add_executor_job = AsyncMock(side_effect=lambda f, *a: f(*a))
-        aligner = MagicMock()
-        aligner.aligned = True
-        aligner.keepout_polygon_umf.return_value = [(0, 0), (1, 0), (1, 1)]
-        aligner.umf_to_pose.side_effect = lambda x, y: (x, y)
+        # Not aligned: a requested path does not need it, as its floor
+        # plan does not.
+        aligner = MagicMock(aligned=False)
+        aligner.keepout_polygon_umf.return_value = [(0, 0), (1000, 0), (1000, 500)]
+        aligner.umf_to_pose.side_effect = AssertionError("not the aligner's frame")
         entry.runtime_data.umf_aligner = aligner
         entry.runtime_data.cloud_coordinator.keepout_zones = [{"id": "k"}]
-        entry.runtime_data.cloud_coordinator.observed_zone_centroids = []
+        entry.runtime_data.cloud_coordinator.observed_zone_centroids = [
+            {"x": 300.0, "y": 200.0},
+        ]
         renderer._mm_to_px_fit.side_effect = lambda x, y: (int(x), int(y))
-        renderer.render_keepout_zones.return_value = b"overlay"
+        renderer._fit_scale = 10.0
+        renderer.render_keepout_zones.return_value = b"zones"
+        renderer.render_observed_zones.return_value = b"obstacles"
         entry.runtime_data.room_map_extent_mm = (0, 1000, 0, 1000)
         m._handle_live_position(self._pos(1.0, 1.0))
-        assert await m.async_image() == b"path"
-        renderer.render_keepout_zones.assert_not_called()
+        return m, renderer
+
+    @pytest.mark.asyncio
+    async def test_zones_over_a_requested_path_land_where_its_rooms_do(self):
+        """@jamd-pt: an i7 with a requested path never showed its two
+        keep-out zones. They are cloud-map geometry like the rooms drawn
+        under that path, and go in the same way: mirrored with it."""
+        from custom_components.roomba_plus.map_renderer import map_mm_to_view
+
+        m, renderer = self._zone_entity(mirror=True)
+
+        assert await m.async_image() == b"obstacles"
+        (polys,) = renderer.render_keepout_zones.call_args.args
+        assert polys == [[
+            tuple(int(v) for v in map_mm_to_view(x, y))
+            for x, y in [(0, 0), (1000, 0), (1000, 500)]
+        ]]
+        (circles,) = renderer.render_observed_zones.call_args.args
+        x, y = map_mm_to_view(300.0, 200.0)
+        assert circles == [(int(x), int(y), 20)]
+
+    @pytest.mark.asyncio
+    async def test_unmirrored_the_zones_go_in_as_they_are(self):
+        m, renderer = self._zone_entity(mirror=False)
+
+        await m.async_image()
+        (polys,) = renderer.render_keepout_zones.call_args.args
+        assert polys == [[(0, 0), (1000, 0), (1000, 500)]]
+
+    @pytest.mark.asyncio
+    async def test_a_requested_path_does_not_share_the_rooms_maps_frame(self):
+        """The rooms map's extent is in the aligner's frame; the zones are
+        placed without it, but the fit is not taken from it."""
+        m, renderer = self._zone_entity(mirror=True)
+
+        await m.async_image()
         assert renderer._fit_bounds_px is None
 
     @pytest.mark.asyncio
