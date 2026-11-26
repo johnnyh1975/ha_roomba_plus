@@ -1,7 +1,7 @@
 # Roomba+ for Home Assistant
 
 [![Marketplace](https://img.shields.io/badge/Marketplace%20%2F%20HACS-Default-blue.svg)](https://github.com/hacs/default)
-[![Version](https://img.shields.io/badge/Version-4.6.7-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
+[![Version](https://img.shields.io/badge/Version-4.6.8-brightgreen.svg)](https://github.com/johnnyh1975/ha_roomba_plus/releases)
 [![HA Version](https://img.shields.io/badge/HA-2025.5%2B-blue.svg)](https://www.home-assistant.io/)
 [![Quality Scale](https://img.shields.io/badge/Quality%20Scale-Platinum-blueviolet.svg)](https://www.home-assistant.io/docs/quality_scale/)
 [![Local Push](https://img.shields.io/badge/IoT%20Class-Local%20Push-green.svg)](https://www.home-assistant.io/blog/2016/02/12/classifying-the-internet-of-things/)
@@ -202,7 +202,7 @@ Everything in 4.6 is additive: existing entities, events and their fields stay a
 - **Documentation arranged by task**: [Getting started](docs/getting-started.md), a guide per
   task, and a reference of every entity, action and option built from the code.
 
-Details: release notes [4.6.0](release-notes/v4.6.0.md), [4.6.1](release-notes/v4.6.1.md), [4.6.2](release-notes/v4.6.2.md), [4.6.3](release-notes/v4.6.3.md), [4.6.4](release-notes/v4.6.4.md), [4.6.5](release-notes/v4.6.5.md), [4.6.6](release-notes/v4.6.6.md), [4.6.7](release-notes/v4.6.7.md) · [upgrade notes](docs/UPGRADING.md#v460--from-v45x).
+Details: release notes [4.6.0](release-notes/v4.6.0.md), [4.6.1](release-notes/v4.6.1.md), [4.6.2](release-notes/v4.6.2.md), [4.6.3](release-notes/v4.6.3.md), [4.6.4](release-notes/v4.6.4.md), [4.6.5](release-notes/v4.6.5.md), [4.6.6](release-notes/v4.6.6.md), [4.6.7](release-notes/v4.6.7.md), [4.6.8](release-notes/v4.6.8.md) · [upgrade notes](docs/UPGRADING.md#v460--from-v45x).
 
 ## V4/Prime robots
 
