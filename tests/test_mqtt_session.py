@@ -122,7 +122,9 @@ def test_roombapy_builds_the_closing_client() -> None:
     assert mqtt_session.ensure_installed()
     assert mqtt_session.ensure_installed()  # idempotent
 
-    assert roomba_module.aiomqtt.Client is mqtt_session.ClosingClient
+    client = roomba_module.aiomqtt.Client
+    assert issubclass(client, mqtt_session.ClosingClient)
+    assert client.close_abandoned and client.tolerate_missing_suback
     # Everything else stays aiomqtt's, or the supervisor's
     # `except aiomqtt.MqttError` would stop matching.
     assert roomba_module.aiomqtt.MqttError is aiomqtt.MqttError
@@ -132,9 +134,13 @@ def test_roombapy_builds_the_closing_client() -> None:
 def test_a_roombapy_with_the_fix_is_left_alone(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """pschmitt/roombapy#631 makes this unnecessary; it must step aside."""
+    """pschmitt/roombapy#631 and the fix for #624 make this unnecessary;
+    with both, it must step aside."""
     monkeypatch.setattr(
         roomba_module, "_open_session", object(), raising=False
+    )
+    monkeypatch.setattr(
+        roomba_module, "SUBSCRIBE_ACK_TIMEOUT", 3.0, raising=False
     )
 
     assert not mqtt_session.ensure_installed()
@@ -151,3 +157,104 @@ def test_an_unknown_layout_is_left_alone(
 
     assert not mqtt_session.ensure_installed()
     assert roomba_module.aiomqtt is stranger
+
+
+@pytest.mark.usefixtures("roombapy_aiomqtt")
+def test_a_roombapy_with_one_fix_gets_only_the_other(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The two fixes reach roombapy separately; each steps aside alone."""
+    monkeypatch.setattr(
+        roomba_module, "_open_session", object(), raising=False
+    )
+
+    assert mqtt_session.ensure_installed()
+    client = roomba_module.aiomqtt.Client
+    assert not client.close_abandoned
+    assert client.tolerate_missing_suback
+
+
+class _BrokerWithoutSuback:
+    """Answers CONNECT and stays silent on SUBSCRIBE, as firmware 3.5.x
+    (Roomba 671, 675, 694) does; it publishes its state unasked."""
+
+    def __init__(self) -> None:
+        self.port = 0
+        self.subscribes = 0
+
+    @staticmethod
+    async def _read(reader: asyncio.StreamReader) -> int:
+        first = (await reader.readexactly(1))[0]
+        length, multiplier = 0, 1
+        while True:
+            byte = (await reader.readexactly(1))[0]
+            length += (byte & 0x7F) * multiplier
+            multiplier *= 128
+            if not byte & 0x80:
+                break
+        await reader.readexactly(length)
+        return first >> 4
+
+    async def serve(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
+        try:
+            while True:
+                kind = await self._read(reader)
+                if kind == 1:  # CONNECT
+                    writer.write(b"\x20\x02\x00\x00")
+                elif kind == 8:  # SUBSCRIBE: no answer
+                    self.subscribes += 1
+                elif kind == 14:  # DISCONNECT
+                    break
+                await writer.drain()
+        except (asyncio.IncompleteReadError, ConnectionError):
+            pass
+        finally:
+            writer.close()
+
+
+@pytest_asyncio.fixture
+async def broker_without_suback(
+    socket_enabled: None,
+) -> AsyncIterator[_BrokerWithoutSuback]:
+    """Serve one on a free loopback port."""
+    broker = _BrokerWithoutSuback()
+    server = await asyncio.start_server(broker.serve, "127.0.0.1", 0)
+    broker.port = server.sockets[0].getsockname()[1]
+    yield broker
+    server.close()
+    await server.wait_closed()
+
+
+async def test_a_subscription_the_robot_never_acknowledges_carries_on(
+    broker_without_suback: _BrokerWithoutSuback,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """roombapy 2.0.2 awaits the SUBACK and drops the session without it;
+    these robots never send one (#265, roombapy #624)."""
+    monkeypatch.setattr(mqtt_session, "SUBSCRIBE_ACK_TIMEOUT", 0.3)
+
+    async with asyncio.timeout(5):
+        async with mqtt_session.ClosingClient(
+            "127.0.0.1", broker_without_suback.port, timeout=2
+        ) as client:
+            assert await client.subscribe("#") is None
+
+    assert broker_without_suback.subscribes == 1
+
+
+async def test_without_the_fix_the_same_subscription_ends_the_session(
+    broker_without_suback: _BrokerWithoutSuback,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """What roombapy 2.0.2 gets on its own: a timeout it treats as lost."""
+    monkeypatch.setattr(
+        mqtt_session.ClosingClient, "tolerate_missing_suback", False
+    )
+
+    with pytest.raises(aiomqtt.MqttError, match="timed out"):
+        async with mqtt_session.ClosingClient(
+            "127.0.0.1", broker_without_suback.port, timeout=0.5
+        ) as client:
+            await client.subscribe("#")

@@ -71,13 +71,21 @@ driven from a paho-mqtt thread, so every command went through `hass.async_add_ex
 call sites of it. roombapy 2.x is async throughout (aiomqtt), so those are plain `await` now, and
 `RoombaFactory` gave way to constructing a `RoombaClient` directly.
 
-**A connect attempt that does not complete is closed** (`mqtt_session.py`). aiomqtt leaves the
-socket open when its enter fails or its caller gives up, and a Classic robot takes one local
-connection at a time, so each such attempt locked out the next until Home Assistant restarted
-(#230, #265). Before every local connect the integration gives roombapy an aiomqtt whose `Client`
-closes those attempts. The fix is proposed to roombapy (pschmitt/roombapy#631); the module steps
-aside once the installed roombapy carries it, and goes when no supported Home Assistant pins an
-older one.
+**Two connect fixes roombapy 2.0.2 lacks** (`mqtt_session.py`). Before every local connect the
+integration gives roombapy an aiomqtt whose `Client` carries them:
+
+- **A connect attempt that does not complete is closed.** aiomqtt leaves the socket open when its
+  enter fails or its caller gives up, and a Classic robot takes one local connection at a time, so
+  each such attempt locked out the next until Home Assistant restarted (#230, #265). Proposed to
+  roombapy as pschmitt/roombapy#631.
+- **A subscription the robot never acknowledges does not end the session.** Firmware 3.5.x (Roomba
+  671, 675, 694) and apparently the Combo Essential never send a SUBACK; they publish their state
+  regardless. roombapy 2.x waited for it, timed out after 10 s and dropped the session on every
+  reconnect, so these robots never connected (#265, pschmitt/roombapy#624). It now waits 3 s and
+  carries on.
+
+Each fix steps aside once the installed roombapy carries it; the module goes when no supported Home
+Assistant pins an older one.
 
 What did **not** move into the event loop: map rendering, UMF alignment and the backup ZIPs. Those
 are CPU- and I/O-bound, and 20 executor calls remain for them deliberately.
