@@ -10,21 +10,33 @@ are listed; most releases need nothing beyond updating.
 
 | Your version | Read |
 |---|---|
-| 4.6.8 | [4.6.9](#v469--from-v468) |
-| 4.6.7 | [4.6.8](#v468--from-v467), then 4.6.9 |
-| 4.6.6 | [4.6.7](#v467--from-v466), then 4.6.8 and 4.6.9 |
-| 4.6.5 | [4.6.6](#v466--from-v465), then 4.6.7 to 4.6.9 |
-| 4.6.4 | [4.6.5](#v465--from-v464), then 4.6.6 to 4.6.9 |
-| 4.6.3 | [4.6.4](#v464--from-v463), then 4.6.5 to 4.6.9 |
-| 4.6.2 | [4.6.3](#v463--from-v462), then 4.6.4 to 4.6.9 |
-| 4.6.1 | [4.6.2](#v462--from-v461), then 4.6.3 to 4.6.9 |
-| 4.6.0 | [4.6.1](#v461--from-v460), then 4.6.2 to 4.6.9 |
-| 4.5.x | [4.6.0](#v460--from-v45x), then 4.6.1 to 4.6.9 |
-| 4.4.x | [4.5.0](#v450--from-v44x), then 4.5.3, 4.5.4 and 4.6.0 to 4.6.9 below |
+| 4.6.9 | [4.6.10](#v4610--from-v469) |
+| 4.6.8 | [4.6.9](#v469--from-v468), then 4.6.10 |
+| 4.6.7 | [4.6.8](#v468--from-v467), then 4.6.9 and 4.6.10 |
+| 4.6.6 | [4.6.7](#v467--from-v466), then 4.6.8 to 4.6.10 |
+| 4.6.5 | [4.6.6](#v466--from-v465), then 4.6.7 to 4.6.10 |
+| 4.6.4 | [4.6.5](#v465--from-v464), then 4.6.6 to 4.6.10 |
+| 4.6.3 | [4.6.4](#v464--from-v463), then 4.6.5 to 4.6.10 |
+| 4.6.2 | [4.6.3](#v463--from-v462), then 4.6.4 to 4.6.10 |
+| 4.6.1 | [4.6.2](#v462--from-v461), then 4.6.3 to 4.6.10 |
+| 4.6.0 | [4.6.1](#v461--from-v460), then 4.6.2 to 4.6.10 |
+| 4.5.x | [4.6.0](#v460--from-v45x), then 4.6.1 to 4.6.10 |
+| 4.4.x | [4.5.0](#v450--from-v44x), then 4.5.3, 4.5.4 and 4.6.0 to 4.6.10 below |
 | 4.3.x or older | The notes of your line under [Older versions](#older-versions), then everything above them |
 
 Release notes, with everything that changed in each version:
 [GitHub Releases](https://github.com/johnnyh1975/ha_roomba_plus/releases).
+
+---
+## v4.6.10 — from v4.6.9
+
+Nothing to do.
+
+What you may notice:
+
+- **A new button, Record dock here**, under *Configuration* on a Classic
+  robot with a cleaning map: it moves the dock on the map to where the
+  robot stands, while it is on its dock.
 
 ---
 ## v4.6.9 — from v4.6.8
