@@ -1693,6 +1693,9 @@
       },
       "reset_cliff_sensors_cleaning": {
         "name": "Wyczyszczono czujniki uskoku"
+      },
+      "record_dock": {
+        "name": "Zapisz stację dokującą tutaj"
       }
     },
     "switch": {
@@ -2931,6 +2934,12 @@
     },
     "nothing_to_retry": {
       "message": "Misja nie pominęła żadnego pokoju na {entity_id}."
+    },
+    "record_dock_not_docked": {
+      "message": "Robot nie stoi na swojej stacji dokującej. Zapisz stację, gdy robot się na niej ładuje."
+    },
+    "record_dock_no_position": {
+      "message": "Na mapie nie ma jeszcze pozycji, w której można zapisać stację dokującą. Pozwól robotowi raz wrócić do stacji i spróbuj ponownie."
     }
   },
   "selector": {

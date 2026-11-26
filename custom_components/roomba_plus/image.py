@@ -66,6 +66,7 @@ from .const import (
     DEFAULT_MAP_SCALE,
     DEFAULT_MAP_SIZE_PX,
     map_options_changed_signal,
+    dock_recorded_signal,
     CONF_LIVE_PATH_TURN,
     CONF_LIVE_POSITION_REQUESTS,
     DEFAULT_LIVE_PATH_TURN,
@@ -1766,6 +1767,13 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                     self._handle_map_options_changed,
                 )
             )
+            # "Record dock here" (@jamd-pt).
+            self.async_on_remove(
+                async_dispatcher_connect(
+                    self.hass, dock_recorded_signal(blid),
+                    self._handle_dock_recorded,
+                )
+            )
         # Restore last mission's map from hass.storage (if any)
         await self._async_restore_map_state()
         # v2.8.2 — load (but do not yet apply) a mission-in-progress
@@ -3085,6 +3093,21 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         ):
             # A finished path keeps its new place over a restart; a
             # running mission's is saved at its end.
+            self._config_entry.async_create_task(
+                self.hass, self._async_save_map_state()
+            )
+
+    @callback
+    def _handle_dock_recorded(self) -> None:
+        """The dock was recorded where the robot stands (@jamd-pt).
+
+        The button moved it on the renderer this map shares. Drawn anew
+        now; kept over a restart at once unless a mission is under way,
+        whose end saves it with everything else.
+        """
+        self._attr_image_last_updated = dt_util.now(datetime.timezone.utc)
+        self.async_write_ha_state()
+        if not self._had_cleaning_phase and self._config_entry is not None:
             self._config_entry.async_create_task(
                 self.hass, self._async_save_map_state()
             )

@@ -1693,6 +1693,9 @@
       },
       "reset_cliff_sensors_cleaning": {
         "name": "Sensori anticaduta puliti"
+      },
+      "record_dock": {
+        "name": "Registra la base qui"
       }
     },
     "switch": {
@@ -2931,6 +2934,12 @@
     },
     "nothing_to_retry": {
       "message": "La missione non ha saltato nessuna stanza su {entity_id}."
+    },
+    "record_dock_not_docked": {
+      "message": "Il robot non è sulla sua base. Registra la base mentre il robot vi si ricarica."
+    },
+    "record_dock_no_position": {
+      "message": "La mappa non ha ancora una posizione in cui registrare la base. Lascia che il robot torni una volta alla base, poi riprova."
     }
   },
   "selector": {

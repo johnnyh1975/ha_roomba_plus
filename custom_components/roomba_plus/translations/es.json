@@ -1693,6 +1693,9 @@
       },
       "reset_cliff_sensors_cleaning": {
         "name": "Sensores de desnivel limpiados"
+      },
+      "record_dock": {
+        "name": "Registrar la base aquí"
       }
     },
     "switch": {
@@ -2931,6 +2934,12 @@
     },
     "nothing_to_retry": {
       "message": "La misión no omitió ninguna habitación en {entity_id}."
+    },
+    "record_dock_not_docked": {
+      "message": "El robot no está en su base. Registra la base mientras el robot se carga en ella."
+    },
+    "record_dock_no_position": {
+      "message": "El mapa aún no tiene ninguna posición donde registrar la base. Deja que el robot vuelva una vez a su base y vuelve a intentarlo."
     }
   },
   "selector": {

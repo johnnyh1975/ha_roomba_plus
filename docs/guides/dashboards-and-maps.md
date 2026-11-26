@@ -32,6 +32,8 @@ calibration_source:
 
 `image.{name}_map` (shown as *Cleaning path*; an installation from an older version may call it `image.{name}_cleaning_map`) is the live map: the robot's path in blue over the cleaned floor in light blue, the dock, the robot in magenta with its heading, and stuck events. It survives a restart of Home Assistant.
 
+The map places the dock where the robot charges after driving home. If the dock was moved, or the marker sits in the wrong place, press **Record dock here** (`button.{name}_record_dock`, under *Configuration* on the device) while the robot is charging on its dock: the dock moves to where the robot stands.
+
 ```yaml
 type: picture-entity
 entity: image.roomba_map

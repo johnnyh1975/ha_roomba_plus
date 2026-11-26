@@ -1693,6 +1693,9 @@
       },
       "reset_cliff_sensors_cleaning": {
         "name": "Absturzsensoren gereinigt"
+      },
+      "record_dock": {
+        "name": "Ladestation hier eintragen"
       }
     },
     "switch": {
@@ -2931,6 +2934,12 @@
     },
     "nothing_to_retry": {
       "message": "Die Mission hat auf {entity_id} keinen Raum ausgelassen."
+    },
+    "record_dock_not_docked": {
+      "message": "Der Roboter steht nicht auf seiner Ladestation. Die Ladestation eintragen, während der Roboter darauf lädt."
+    },
+    "record_dock_no_position": {
+      "message": "Auf der Karte gibt es noch keine Position, an der die Ladestation eingetragen werden kann. Den Roboter einmal zur Ladestation fahren lassen und es dann erneut versuchen."
     }
   },
   "selector": {

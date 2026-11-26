@@ -1693,6 +1693,9 @@
       },
       "reset_cliff_sensors_cleaning": {
         "name": "Valsensoren gereinigd"
+      },
+      "record_dock": {
+        "name": "Basisstation hier vastleggen"
       }
     },
     "switch": {
@@ -2931,6 +2934,12 @@
     },
     "nothing_to_retry": {
       "message": "De missie heeft op {entity_id} geen kamer overgeslagen."
+    },
+    "record_dock_not_docked": {
+      "message": "De robot staat niet op zijn basisstation. Leg het basisstation vast terwijl de robot erop oplaadt."
+    },
+    "record_dock_no_position": {
+      "message": "De kaart heeft nog geen positie om het basisstation vast te leggen. Laat de robot eenmaal naar zijn basisstation rijden en probeer het opnieuw."
     }
   },
   "selector": {

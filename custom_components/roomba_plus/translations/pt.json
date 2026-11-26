@@ -1693,6 +1693,9 @@
       },
       "reset_cliff_sensors_cleaning": {
         "name": "Sensores de queda limpos"
+      },
+      "record_dock": {
+        "name": "Registar a base aqui"
       }
     },
     "switch": {
@@ -2931,6 +2934,12 @@
     },
     "nothing_to_retry": {
       "message": "A missão não deixou nenhuma divisão de fora em {entity_id}."
+    },
+    "record_dock_not_docked": {
+      "message": "O robô não está na sua base. Registe a base enquanto o robô carrega nela."
+    },
+    "record_dock_no_position": {
+      "message": "O mapa ainda não tem nenhuma posição onde registar a base. Deixe o robô voltar uma vez à base e tente de novo."
     }
   },
   "selector": {

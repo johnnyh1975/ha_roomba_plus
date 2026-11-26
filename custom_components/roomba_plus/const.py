@@ -3749,6 +3749,16 @@ def map_options_changed_signal(blid: str) -> str:
     return f"{DOMAIN}_map_options_changed_{blid}"
 
 
+def dock_recorded_signal(blid: str) -> str:
+    """Dispatcher signal: the dock was recorded where the robot stands.
+
+    Sent by the "Record dock here" button (@jamd-pt) after it moved the
+    dock on the shared renderer; the cleaning map draws the picture anew
+    and keeps the new place over a restart.
+    """
+    return f"{DOMAIN}_dock_recorded_{blid}"
+
+
 def maintenance_items_signal(blid: str) -> str:
     """The maintenance model recomputed its entries (4.5.0)."""
     return f"{DOMAIN}_maintenance_items_{blid}"

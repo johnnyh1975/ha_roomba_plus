@@ -554,6 +554,9 @@
       },
       "reset_cliff_sensors_cleaning": {
         "default": "mdi:eye-check"
+      },
+      "record_dock": {
+        "default": "mdi:home-map-marker"
       }
     },
     "select": {

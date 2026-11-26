@@ -21,6 +21,8 @@ from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.roomba_plus import button_prime
 from custom_components.roomba_plus.const import DOMAIN
+from custom_components.roomba_plus.const import dock_recorded_signal
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from custom_components.roomba_plus.models import ConnectionType
 import json
 from pathlib import Path
@@ -1449,3 +1451,64 @@ class TestTheSmartZoneButtonIsWatched:
         monkeypatch.setattr(svc, "async_send_watched", _record)
         await TestCleanZoneButton().test_the_chosen_zone_starts_on_its_map_with_the_robots_pass_setting(monkeypatch)
         assert seen == ["zone_button"]
+
+
+class TestRecordDockButton:
+    """@jamd-pt kept this as a local patch, lost with every update: the
+    dock recorded where the robot stands, for a dock that was moved or a
+    drive home the map missed."""
+
+    def _button(self, phase, *, points=((1200.0, -300.0),)):
+        from custom_components.roomba_plus.map_renderer import (
+            MapRenderer,
+            RendererConfig,
+        )
+
+        roomba = _make_roomba()
+        roomba.master_state = {
+            "state": {"reported": {"cleanMissionStatus": {"phase": phase}}}
+        }
+        entry = _make_config_entry()
+        renderer = MapRenderer(RendererConfig())
+        for x, y in points:
+            renderer.add_pose(x, y, 0)
+        entry.runtime_data.renderer = renderer
+        entry.runtime_data.blid = "test_blid"
+        return btn.RecordDockButton(roomba, "test_blid", entry), renderer
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("phase", ["charge", "evac"])
+    async def test_on_the_dock_it_records_where_the_robot_stands(self, phase, hass):
+        button, renderer = self._button(phase)
+        button.hass = hass
+        heard = []
+        async_dispatcher_connect(
+            hass, dock_recorded_signal("test_blid"), lambda: heard.append(True)
+        )
+
+        await button.async_press()
+        await hass.async_block_till_done()
+
+        assert renderer._dock_mm == (1200.0, -300.0)
+        assert heard == [True]  # the map draws it anew and keeps it
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("phase", ["run", "hmUsrDock", "stop", None])
+    async def test_off_the_dock_it_says_so_and_moves_nothing(self, phase):
+        """Mid-room, the last position is the floor, not the dock."""
+        button, renderer = self._button(phase)
+
+        with pytest.raises(ServiceValidationError) as exc_info:
+            await button.async_press()
+
+        assert exc_info.value.translation_key == "record_dock_not_docked"
+        assert renderer._dock_mm is None
+
+    @pytest.mark.asyncio
+    async def test_without_a_position_it_says_so(self):
+        button, _renderer = self._button("charge", points=())
+
+        with pytest.raises(ServiceValidationError) as exc_info:
+            await button.async_press()
+
+        assert exc_info.value.translation_key == "record_dock_no_position"

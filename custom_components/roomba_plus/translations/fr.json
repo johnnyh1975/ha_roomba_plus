@@ -1693,6 +1693,9 @@
       },
       "reset_cliff_sensors_cleaning": {
         "name": "Capteurs de vide nettoyés"
+      },
+      "record_dock": {
+        "name": "Enregistrer la base ici"
       }
     },
     "switch": {
@@ -2931,6 +2934,12 @@
     },
     "nothing_to_retry": {
       "message": "La mission n’a laissé aucune pièce de côté sur {entity_id}."
+    },
+    "record_dock_not_docked": {
+      "message": "Le robot n'est pas sur sa base. Enregistrez la base pendant que le robot s'y recharge."
+    },
+    "record_dock_no_position": {
+      "message": "La carte n'a encore aucune position où enregistrer la base. Laissez le robot rentrer une fois à sa base, puis réessayez."
     }
   },
   "selector": {

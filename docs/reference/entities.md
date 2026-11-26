@@ -234,6 +234,7 @@ An entity whose id ends in `<…>` exists once per room, area, part, favourite o
 | `button.<robot>_prime_stop_pad_dry` | Stop pad drying | Prime |  |  |
 | `button.<robot>_prime_wash_pad` | Wash pad | Prime |  |  |
 | `button.<robot>_quick` | Quick clean (experimental) | Classic | Off | Configuration |
+| `button.<robot>_record_dock` | Record dock here | Classic |  | Configuration |
 | `button.<robot>_repeat_mission` | Repeat last mission | Classic |  |  |
 | `button.<robot>_reset_battery` | Maintenance – Confirm battery replacement | Classic | Off | Configuration |
 | `button.<robot>_reset_bin_cleaning` | Bin cleaned | Classic | Off | Configuration |

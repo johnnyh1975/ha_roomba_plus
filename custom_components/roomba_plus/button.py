@@ -52,6 +52,7 @@ from .prime_favorites import _raw_favorite_is_for
 from .const import (
     lifetime_hours,
     maintenance_changed_signal,
+    dock_recorded_signal,
     DOMAIN,
     has_clean_base,
     is_braava,
@@ -345,6 +346,10 @@ async def async_setup_entry(
         for desc in COMMAND_BUTTONS
         if desc.filter_fn is None or desc.filter_fn(state)
     )
+
+    # Where the dock is, by hand (@jamd-pt): only with a cleaning map.
+    if config_entry.runtime_data.renderer is not None:
+        entities.append(RecordDockButton(roomba, blid, config_entry))
 
     # Maintenance reset buttons (always present)
     entities.extend([
@@ -1030,6 +1035,46 @@ class SkipRoomButton(IRobotEntity, ButtonEntity):
 
     def new_state_filter(self, new_state: dict[str, Any]) -> bool:
         return "cleanMissionStatus" in new_state
+
+
+#: Phases in which the robot stands on its dock.
+_ON_DOCK_PHASES = frozenset({"charge", "evac"})
+
+
+class RecordDockButton(IRobotEntity, ButtonEntity):
+    """Button: the dock is where the robot stands now (@jamd-pt).
+
+    The cleaning map records the dock by itself when the robot drives home
+    and starts charging (4.6.5). That misses a dock that was moved, or a
+    robot carried back to it, and @jamd-pt kept a local patch for it,
+    lost with every update. This is that action, official.
+
+    ONLY ON THE DOCK. The renderer takes the last position it drew, which
+    is the dock only while the robot stands on it; pressed mid-room it
+    would put the dock in the middle of the floor. So it says why and
+    does nothing, rather than being unavailable most of the day.
+    """
+
+    _attr_translation_key = "record_dock"
+    _attr_entity_category = EntityCategory.CONFIG
+
+    def __init__(self, roomba: Any, blid: str, config_entry: RoombaConfigEntry) -> None:
+        super().__init__(roomba, blid)
+        self._attr_unique_id = f"{self.robot_unique_id}_record_dock"
+        self._config_entry = config_entry
+
+    async def async_press(self) -> None:
+        phase = (self.vacuum_state.get("cleanMissionStatus") or {}).get("phase")
+        if phase not in _ON_DOCK_PHASES:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN, translation_key="record_dock_not_docked",
+            )
+        renderer = self._config_entry.runtime_data.renderer
+        if renderer is None or not renderer.remember_dock_at_last_position():
+            raise ServiceValidationError(
+                translation_domain=DOMAIN, translation_key="record_dock_no_position",
+            )
+        async_dispatcher_send(self.hass, dock_recorded_signal(self._config_entry.runtime_data.blid))
 
 
 def pick_zone_selection(candidates: list[Any]) -> Any | None:

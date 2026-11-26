@@ -5578,6 +5578,28 @@ class TestRequestedPositionsOnTheCleaningMap:
         m.vacuum.master_state["state"]["reported"]["cleanMissionStatus"] = status
         m.on_message({"state": {"reported": {"cleanMissionStatus": status}}})
 
+    def test_a_recorded_dock_is_drawn_and_kept(self):
+        """@jamd-pt's "Record dock here": the button moves the dock on the
+        renderer this map shares; the map draws it anew and saves it."""
+        m, _renderer, _e, scheduled = self._entity()
+        m._had_cleaning_phase = False
+        before = m._attr_image_last_updated
+
+        m._handle_dock_recorded()
+
+        assert m._attr_image_last_updated != before
+        m.async_write_ha_state.assert_called_once()
+        assert any(name.endswith("_async_save_map_state") for name in scheduled)
+
+    def test_during_a_mission_the_end_keeps_it(self):
+        m, _renderer, _e, scheduled = self._entity()
+        m._had_cleaning_phase = True
+
+        m._handle_dock_recorded()
+
+        m.async_write_ha_state.assert_called_once()
+        assert not any(name.endswith("_async_save_map_state") for name in scheduled)
+
     def test_the_dock_is_where_the_robot_drove_home_to(self):
         """Jamd-pt: requested positions are in the cloud map's frame,
         whose origin is not the dock, so the marker sat elsewhere."""

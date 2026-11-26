@@ -1693,6 +1693,9 @@
       },
       "reset_cliff_sensors_cleaning": {
         "name": "Cliff sensors cleaned"
+      },
+      "record_dock": {
+        "name": "Record dock here"
       }
     },
     "switch": {
@@ -2931,6 +2934,12 @@
     },
     "nothing_to_retry": {
       "message": "The mission left no room out on {entity_id}."
+    },
+    "record_dock_not_docked": {
+      "message": "The robot is not on its dock. Record the dock while the robot is charging on it."
+    },
+    "record_dock_no_position": {
+      "message": "There is no position on the map yet to record the dock at. Let the robot drive home to its dock once, then try again."
     }
   },
   "selector": {
