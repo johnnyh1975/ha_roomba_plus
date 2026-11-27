@@ -45,6 +45,7 @@ import logging
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
@@ -545,6 +546,11 @@ def classic_items(
         snoozed_until=_snoozed(mstate, f"{ACTION_REPLACE}.battery"),
     ))
 
+    if has_cloud_parts and not braava:
+        pad = _cloud_counted_pad(store, catalogue, soon=soon, now=now)
+        if pad is not None:
+            items.append(pad)
+
     if care_reminders_enabled(options):
         items.extend(care_items(
             store, options, braava=braava, prime=False, now=now,
@@ -552,6 +558,39 @@ def classic_items(
     return apply_error(
         items, store, care_cause(state), options, prime=False,
     )
+
+
+def _cloud_counted_pad(
+    store: MaintenanceStore,
+    catalogue: Mapping[str, Mapping[str, str]],
+    *,
+    soon: float | None,
+    now: datetime,
+) -> MaintenanceItem | None:
+    """The washable mop pad of a Classic Combo, as iRobot's cloud counts it.
+
+    @jamd-pt's Combo j9+ (c975840, local): part 135
+    `care_cleaning_pad_dmc`, counted in missions, was in the cloud parts
+    and in the diagnostics, but no entry showed it. A Classic entry names
+    a pad only on a Braava (its main brush slot), and the cloud's counted
+    parts became entries only on a Prime robot.
+
+    The pad keeps the cloud's own count, like a Prime part, rather than a
+    role slot: those are runtime minutes on the local hour baseline, and
+    a count of missions read as minutes would be wrong there. Marked done,
+    it resets that counter in the cloud (`_async_cloud_reset`).
+    """
+    for pid, record in store.cloud_parts.items():
+        entry = catalogue.get(str(pid), {})
+        if prime_part_role(pid, entry.get("part_name")) != "pad":
+            continue
+        if str(record.get("counter_category") or "").lower() == "maintenance":
+            continue
+        return _counted_part_item(
+            store, f"{ACTION_REPLACE}.pad", str(pid), "pad", ACTION_REPLACE,
+            SimpleNamespace(**record), entry, soon=soon, now=now,
+        )
+    return None
 
 
 def _forced(store: MaintenanceStore, item_id: str, level: str) -> str:
@@ -623,6 +662,79 @@ def _number(value: Any) -> float | None:
     return float(value)
 
 
+def _counted_part_item(
+    store: MaintenanceStore,
+    item_id: str,
+    pid: str,
+    role: str | None,
+    action: str,
+    part: Any,
+    entry: Mapping[str, str],
+    *,
+    soon: float | None,
+    now: datetime,
+) -> MaintenanceItem:
+    """The entry of one part iRobot's cloud counts itself.
+
+    Shared by every Prime part and by the counted parts of a Classic
+    robot iRobot also counts in the cloud (its washable pad, 4.6.12).
+    Marking it done resets that counter in the cloud (`done` "cloud").
+    """
+    mstate = store.maintenance_state
+    count_type = str(getattr(part, "count_type", "") or "").lower()
+    used_n = _number(getattr(part, "count_used", None))
+    left_n = _number(getattr(part, "count_remaining", None))
+    counter = _number(getattr(part, "counter", None))
+    total = (used_n + left_n) if used_n is not None and left_n is not None else None
+    if counter is not None:
+        used = counter / 100
+    elif total:
+        used = (used_n or 0.0) / total
+    else:
+        used = None
+    if action == ACTION_CLEAN:
+        level = LEVEL_OK
+    else:
+        level = replace_level(used, _due_since(mstate, item_id), now, soon)
+        if needs_attention(part) and _RANK[level] < _RANK[LEVEL_DUE]:
+            level = LEVEL_DUE
+    remaining = part_count_in_display_unit(part, int(left_n)) if left_n is not None else None
+    interval = part_count_in_display_unit(part, int(total)) if total is not None else None
+    last_done = _epoch_iso(getattr(part, "last_updated_ts", None))
+    rate: float | None = None
+    due: datetime | None = None
+    if level in (LEVEL_DUE, LEVEL_OVERDUE):
+        due = _due_since(mstate, item_id) or now
+    elif last_done and used_n and remaining is not None:
+        started = _parse(last_done)
+        days = (now - started).total_seconds() / 86400 if started else 0
+        served = part_count_in_display_unit(part, int(used_n)) or 0
+        if days >= _MIN_RATE_DAYS and served > 0:
+            rate = round(served / days, 2)
+            due = now + timedelta(days=remaining / rate)
+    return MaintenanceItem(
+        id=item_id,
+        action=action,
+        part=role or f"part_{pid}",
+        level=level,
+        used=round(used, 3) if used is not None else None,
+        remaining=float(remaining) if remaining is not None else None,
+        unit=_COUNT_UNITS.get(count_type),
+        due=due.isoformat() if due else None,
+        interval=float(interval) if interval is not None else None,
+        interval_unit=_COUNT_UNITS.get(count_type),
+        interval_source="cloud" if interval is not None else None,
+        last_done=last_done,
+        wear_rate=rate,
+        part_id=pid,
+        guide_url=entry.get("guide_url"),
+        buy_url=entry.get("buy_url"),
+        hint=f"{action}.{role}" if role else None,
+        done="cloud",
+        snoozed_until=_snoozed(mstate, item_id),
+    )
+
+
 def prime_items(
     store: MaintenanceStore,
     parts: Mapping[str, Any],
@@ -648,7 +760,6 @@ def prime_items(
     catalogue = catalogue or {}
     soon = soon_share(options)
     absent_ids = {str(a) for a in absent}
-    mstate = store.maintenance_state
 
     rows: list[tuple[str, str | None, str, Any, Mapping[str, str]]] = []
     for part_id, part in parts.items():
@@ -673,58 +784,8 @@ def prime_items(
     items: list[MaintenanceItem] = []
     for pid, role, action, part, entry in rows:
         name = role if role is not None and taken[(action, role)] == 1 else f"part_{_name_key(pid)}"
-        item_id = f"{action}.{name}"
-        count_type = str(getattr(part, "count_type", "") or "").lower()
-        used_n = _number(getattr(part, "count_used", None))
-        left_n = _number(getattr(part, "count_remaining", None))
-        counter = _number(getattr(part, "counter", None))
-        total = (used_n + left_n) if used_n is not None and left_n is not None else None
-        if counter is not None:
-            used = counter / 100
-        elif total:
-            used = (used_n or 0.0) / total
-        else:
-            used = None
-        if action == ACTION_CLEAN:
-            level = LEVEL_OK
-        else:
-            level = replace_level(used, _due_since(mstate, item_id), now, soon)
-            if needs_attention(part) and _RANK[level] < _RANK[LEVEL_DUE]:
-                level = LEVEL_DUE
-        remaining = part_count_in_display_unit(part, int(left_n)) if left_n is not None else None
-        interval = part_count_in_display_unit(part, int(total)) if total is not None else None
-        last_done = _epoch_iso(getattr(part, "last_updated_ts", None))
-        rate: float | None = None
-        due: datetime | None = None
-        if level in (LEVEL_DUE, LEVEL_OVERDUE):
-            due = _due_since(mstate, item_id) or now
-        elif last_done and used_n and remaining is not None:
-            started = _parse(last_done)
-            days = (now - started).total_seconds() / 86400 if started else 0
-            served = part_count_in_display_unit(part, int(used_n)) or 0
-            if days >= _MIN_RATE_DAYS and served > 0:
-                rate = round(served / days, 2)
-                due = now + timedelta(days=remaining / rate)
-        items.append(MaintenanceItem(
-            id=item_id,
-            action=action,
-            part=role or f"part_{pid}",
-            level=level,
-            used=round(used, 3) if used is not None else None,
-            remaining=float(remaining) if remaining is not None else None,
-            unit=_COUNT_UNITS.get(count_type),
-            due=due.isoformat() if due else None,
-            interval=float(interval) if interval is not None else None,
-            interval_unit=_COUNT_UNITS.get(count_type),
-            interval_source="cloud" if interval is not None else None,
-            last_done=last_done,
-            wear_rate=rate,
-            part_id=pid,
-            guide_url=entry.get("guide_url"),
-            buy_url=entry.get("buy_url"),
-            hint=f"{action}.{role}" if role else None,
-            done="cloud",
-            snoozed_until=_snoozed(mstate, item_id),
+        items.append(_counted_part_item(
+            store, f"{action}.{name}", pid, role, action, part, entry, soon=soon, now=now,
         ))
 
     if care_reminders_enabled(options):
@@ -1192,7 +1253,7 @@ class MaintenanceTracker:
         if target.action == ACTION_CHECK:
             await self._async_check_done(target, via)
         elif target.done == "cloud":
-            await self._async_prime_reset(target)
+            await self._async_cloud_reset(target)
         elif target.action == ACTION_CLEAN:
             await self._async_clean_locally(target)
         else:
@@ -1250,13 +1311,18 @@ class MaintenanceTracker:
         await _async_push_part_reset_to_cloud(self.config_entry, self._data, component)
         async_dispatcher_send(self.hass, maintenance_changed_signal(self._data.blid))
 
-    async def _async_prime_reset(self, item: MaintenanceItem) -> None:
-        """The Prime app's confirmation, sent the same way: the part's
-        counter set to zero (roombapy-prime's reset_robot_parts). The
-        cloud answers with what it applied; nothing applied is an
-        error, not a success wearing a 200."""
+    async def _async_cloud_reset(self, item: MaintenanceItem) -> None:
+        """The app's confirmation, sent the same way: the part's counter
+        set to zero. A Prime robot through roombapy-prime's
+        reset_robot_parts; a Classic robot's cloud-counted part (its
+        washable pad, 4.6.12) through the Classic cloud client, as its
+        other parts are pushed. The cloud answers with what it applied;
+        nothing applied is an error, not a success wearing a 200. On a
+        Classic robot too: this entry has no local counter to fall back
+        on, so a silent failure would leave it due."""
         robot = getattr(self._data, "prime_robot", None)
-        if robot is None or item.part_id is None:
+        cloud = getattr(self._data, "cloud_coordinator", None)
+        if item.part_id is None or (robot is None and cloud is None):
             raise HomeAssistantError(
                 "The robot is not connected",
                 translation_domain=DOMAIN,
@@ -1264,7 +1330,13 @@ class MaintenanceTracker:
                 translation_placeholders={"item": item.id, "error": "not connected"},
             )
         try:
-            result = await robot.reset_robot_parts([item.part_id])
+            if robot is not None:
+                result = await robot.reset_robot_parts([item.part_id])
+            else:
+                assert cloud is not None
+                result = await cloud.api.set_robot_part_counter(
+                    self._data.blid, item.part_id, 0
+                )
         except Exception as exc:
             raise HomeAssistantError(
                 f"iRobot did not take the reset of {item.id}: {exc}",
@@ -1286,6 +1358,8 @@ class MaintenanceTracker:
         coordinator = getattr(self._data, "prime_parts_coordinator", None)
         if coordinator is not None:
             await coordinator.async_refresh()
+        elif cloud is not None:
+            await cloud.async_request_refresh()
 
     async def async_forget_learned(self, item_ids: Iterable[str] = ()) -> list[str]:
         """Forget the learned intervals of the named parts, or of every

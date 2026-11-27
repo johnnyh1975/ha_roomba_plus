@@ -2557,6 +2557,78 @@ class TestPrimeMaintenanceItems:
         assert items["replace.battery"].unit == "charge_cycles"
 
 
+_PAD_135 = {
+    "part_id": "135", "count_used": 28, "count_remaining": 2, "counter": 93,
+    "count_type": "combo_missions", "counter_category": "replacement",
+    "last_updated_ts": 1793797710, "reset_by": "user", "role": None,
+}
+_PAD_CATALOGUE = {"135": {"part_name": "care_cleaning_pad_dmc"}}
+
+
+class TestTheCloudCountedPadOnClassic:
+    """@jamd-pt's Combo j9+ (c975840, local): iRobot counts its washable
+    pad in the cloud (part 135, missions), the diagnostics showed it,
+    and the maintenance list never did: a Classic entry named a pad only
+    on a Braava, and counted cloud parts became entries only on Prime."""
+
+    def _items(self, store, **kw):
+        return {i.id: i for i in mm.classic_items(
+            store, _980(), {}, catalogue=_PAD_CATALOGUE, now=_NOW, **kw)}
+
+    def test_it_is_listed_with_the_cloud_count(self):
+        store = MaintenanceStore()
+        store.cloud_parts = {"135": dict(_PAD_135)}
+
+        pad = self._items(store, has_cloud_parts=True)["replace.pad"]
+
+        assert (pad.remaining, pad.interval, pad.unit) == (2, 30, "missions")
+        assert pad.level == "soon" and pad.part_id == "135"
+        assert pad.done == "cloud"  # no local counter: reset in the cloud
+
+    def test_not_without_the_cloud(self):
+        store = MaintenanceStore()
+        store.cloud_parts = {"135": dict(_PAD_135)}
+
+        assert "replace.pad" not in self._items(store, has_cloud_parts=False)
+
+    def test_a_maintenance_counter_is_no_pad_to_replace(self):
+        store = MaintenanceStore()
+        store.cloud_parts = {"135": dict(_PAD_135, counter_category="maintenance")}
+
+        assert "replace.pad" not in self._items(store, has_cloud_parts=True)
+
+    async def test_done_resets_it_in_the_cloud(self, hass):
+        store = MaintenanceStore()
+        store.cloud_parts = {"135": dict(_PAD_135)}
+        cloud = MagicMock()
+        cloud.api.set_robot_part_counter = AsyncMock(return_value={"num_parts": 1})
+        cloud.async_request_refresh = AsyncMock()
+        tracker = _tracker(hass, store=store, cloud=cloud)
+        tracker.config_entry.runtime_data.parts_catalogue = _PAD_CATALOGUE
+        await tracker.async_refresh()
+
+        await tracker.async_done("replace.pad")
+
+        cloud.api.set_robot_part_counter.assert_awaited_once_with("BLID1", "135", 0)
+        cloud.async_request_refresh.assert_awaited()
+
+    async def test_a_reset_the_cloud_did_not_apply_is_an_error(self, hass):
+        """No local counter to fall back on: silence would leave it due."""
+        from homeassistant.exceptions import HomeAssistantError
+
+        store = MaintenanceStore()
+        store.cloud_parts = {"135": dict(_PAD_135)}
+        cloud = MagicMock()
+        cloud.api.set_robot_part_counter = AsyncMock(return_value={"num_parts": 0})
+        tracker = _tracker(hass, store=store, cloud=cloud)
+        tracker.config_entry.runtime_data.parts_catalogue = _PAD_CATALOGUE
+        await tracker.async_refresh()
+
+        with pytest.raises(HomeAssistantError) as err:
+            await tracker.async_done("replace.pad")
+        assert err.value.translation_key == "maintenance_reset_not_applied"
+
+
 def _tracker(hass, *, store=None, state=None, options=None, prime=False, parts=None,
              robot=None, cloud=None):
     from pytest_homeassistant_custom_component.common import MockConfigEntry

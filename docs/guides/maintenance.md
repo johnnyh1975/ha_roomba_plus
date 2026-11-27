@@ -68,7 +68,7 @@ One page for maintenance, on both generations:
 
 `todo.{name}_maintenance` shows the maintenance entries as Home Assistant to-do items, in Home Assistant's language. Configure → Maintenance → Settings → *Show maintenance as a to-do list*.
 
-- **One item per entry**: every part the robot has (filter, main brushes, side brush, Clean Base bag or dust bag, the mop pad on a Braava; on Prime every part the robot reports), and with care reminders on every care task.
+- **One item per entry**: every part the robot has (filter, main brushes, side brush, Clean Base bag or dust bag, the mop pad on a Braava, and the washable pad of a Classic Combo such as the j9+ where iRobot's cloud counts it, in missions; on Prime every part the robot reports), and with care reminders on every care task. Marking the Combo's pad done resets iRobot's counter, as the app does.
 - **Open from "due"**, not from "soon": while nothing is due the list has nothing open. An item not due is listed as done, with its due date; a snoozed one stays done until its snooze ends.
 - **The description** says what is left (or how often a care task comes round), the error that brought the item, and links: our care guide, iRobot's guide and the part where the parts catalogue has them, and iRobot's article for the error. The list shows it as formatted text with clickable links, in the browser and the companion app.
 - **Ticking an item off** is `roomba_plus.maintenance_done`: counter, Logbook entry, `roomba_plus_maintenance_reset`, and iRobot's counter where the account has one. On Prime the reset goes to iRobot; if iRobot applies it to no part, the list shows the error.
