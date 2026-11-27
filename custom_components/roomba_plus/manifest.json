@@ -44,9 +44,9 @@
   "quality_scale": "platinum",
   "requirements": [
     "roombapy>=2.0.2",
-    "roombapy-prime[map]==0.9.4"
+    "roombapy-prime[map]==0.9.5"
   ],
-  "version": "4.6.10",
+  "version": "4.6.11",
   "zeroconf": [
     {
       "name": "irobot-*",
