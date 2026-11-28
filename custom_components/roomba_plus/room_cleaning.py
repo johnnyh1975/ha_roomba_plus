@@ -536,6 +536,12 @@ def raise_if_prime_start_blocked(
     try:
         status = CurrentStateShadow.from_json(raw).clean_mission_status
     except Exception:  # noqa: BLE001
+        # Unreadable is unknown, and unknown refuses nothing -- but a
+        # shadow the library cannot parse is worth a line.
+        _LOGGER.debug(
+            "%s: Prime start check: current state unreadable, not refusing",
+            robot_name or "unknown robot", exc_info=True,
+        )
         return
     codes = prime_start_refusal(status, modes)
     if not codes:
@@ -1184,6 +1190,12 @@ class PrimeRoomCleaning(RoomCleaningBackend):
             try:
                 map_data = await self._map_metadata(p2map_id)
             except Exception:  # noqa: BLE001
+                # One unreadable map leaves its zones unnamed; the others
+                # still count.
+                robot_logger(_LOGGER, self._config_entry).debug(
+                    "Zone names: one map unreadable, its zones stay unnamed",
+                    exc_info=True,
+                )
                 continue
             if map_data is None:
                 continue

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import logging
 import itertools
 import pytest
 from contextlib import contextmanager
@@ -7334,3 +7335,44 @@ class TestTheMeterInAMessageOfItsOwn:
 
     def test_another_delta_is_not(self):
         self._run({"batPct": 90}).assert_not_called()
+
+
+class TestSilentFailuresSayWhichRobot:
+    """4.7-10: a broad except in the mission path logs a debug line with
+    the robot's name instead of passing in silence. A failure there was
+    invisible in a log and in a mission replay alike."""
+
+    @staticmethod
+    def _entry(**runtime):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(title="Upstairs", entry_id="e1", runtime_data=SimpleNamespace(**runtime))
+
+    def test_unreadable_room_tracking_falls_back_and_says_so(self, caplog):
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.callbacks import _observed_rooms
+
+        store = SimpleNamespace(planned_rooms=["Hall", "Kitchen"], current_room_idx="x")
+        caplog.set_level(logging.DEBUG, logger="custom_components.roomba_plus.callbacks")
+        assert _observed_rooms(self._entry(mission_timer_store=store)) is None
+        assert "Upstairs: Rooms worked: room tracking unreadable" in caplog.text
+
+    def test_a_room_time_that_cannot_be_kept_says_so(self, caplog):
+        from types import SimpleNamespace
+
+        from custom_components.roomba_plus.callbacks import _remember_measured_room_time
+
+        profile = SimpleNamespace(room_estimate_cache=object())
+        caplog.set_level(logging.DEBUG, logger="custom_components.roomba_plus.callbacks")
+        _remember_measured_room_time(self._entry(robot_profile_store=profile), "Hall", 300.0)
+        assert "Upstairs: AUTO-ADVANCE-ROOM: measured room time not kept" in caplog.text
+
+    def test_an_unreadable_start_time_names_the_value(self, caplog):
+        from custom_components.roomba_plus.callbacks import (
+            _gs_coverage_mission_start_weekday_hour,
+        )
+
+        caplog.set_level(logging.DEBUG, logger="custom_components.roomba_plus.callbacks")
+        assert _gs_coverage_mission_start_weekday_hour("2026-13-45T00:00:00") is None
+        assert "mission start '2026-13-45T00:00:00' unreadable" in caplog.text

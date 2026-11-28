@@ -104,7 +104,11 @@ class BlockingManager:
             try:
                 cb()
             except Exception:  # noqa: BLE001
-                pass
+                # One listener failing must not keep the others from
+                # hearing it; it is still worth a line.
+                robot_logger(_LOGGER, self._entry).debug(
+                    "BlockingManager: a state listener failed", exc_info=True,
+                )
 
     @property
     def is_queued(self) -> bool:
@@ -387,7 +391,10 @@ class BlockingManager:
             try:
                 unsub()
             except Exception:  # noqa: BLE001
-                pass
+                # Unload goes on; the rest are still cancelled.
+                robot_logger(_LOGGER, self._entry).debug(
+                    "BlockingManager: a listener could not be cancelled", exc_info=True,
+                )
         self._cancel_listeners.clear()
         self._queued_since = None
         self._timeout_at = None

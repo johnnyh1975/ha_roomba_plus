@@ -649,3 +649,45 @@ class TestNotOfferedValues:
         monkeypatch.setattr(select_prime, "VENDOR_VALUES_NOT_OFFERED", stale)
         assert guard.main() == 1
         assert "stale" in capsys.readouterr().err
+
+
+class TestSilentExceptGuard:
+    """Seven silent broad handlers in the mission path until 4.7.0b1; a
+    failure there was invisible in a log and in a replay alike."""
+
+    def _module(self, tmp_path: Path, body: str) -> Path:
+        (tmp_path / "keeper.py").write_text(
+            "def keep(x):\n    try:\n        return int(x)\n" + body, encoding="utf-8",
+        )
+        return tmp_path
+
+    def test_it_reports_a_new_silent_broad_except(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        guard = _load("check_silent_excepts")
+        monkeypatch.setattr(guard, "PACKAGE", self._module(
+            tmp_path, "    except Exception:\n        return None\n"))
+        monkeypatch.setattr(guard, "KNOWN", {})
+        assert guard.main() == 1
+
+    def test_a_logged_or_narrow_except_passes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        guard = _load("check_silent_excepts")
+        monkeypatch.setattr(guard, "PACKAGE", self._module(
+            tmp_path,
+            "    except (TypeError, ValueError):\n        return None\n"
+            "    except Exception:\n        log.debug('x', exc_info=True)\n",
+        ))
+        monkeypatch.setattr(guard, "KNOWN", {})
+        assert guard.main() == 0
+
+    def test_a_count_that_went_down_must_be_lowered(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        guard = _load("check_silent_excepts")
+        monkeypatch.setattr(guard, "PACKAGE", self._module(
+            tmp_path, "    except ValueError:\n        return None\n"))
+        monkeypatch.setattr(guard, "KNOWN", {"keeper.py": 1})
+        assert guard.main() == 1
+

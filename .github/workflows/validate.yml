@@ -473,6 +473,11 @@ jobs:
       - name: Check delayed saves are flushed
         run: python3 scripts/check_delay_saves.py
 
+      # A broad except that says nothing hides a failure from every log
+      # and every mission replay; the count may only go down.
+      - name: Check no new silent broad except
+        run: python3 scripts/check_silent_excepts.py
+
       # THE MESSAGE IS THE POINT. All three of these also run inside the
       # test suite, so coverage is not the reason they are here -- a
       # failure there reads as "one test in test_quality_scale.py

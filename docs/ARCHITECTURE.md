@@ -245,6 +245,7 @@ class of mistake that leaves every test passing.
 | `check_client_attributes.py` | An attribute read off the robot client that roombapy does not have. The client is typed `Any` on the entity base, so mypy checks nothing there — across all 25 entity modules. Two renamed attributes survived the 4.2 migration that way, one of which would have made the connectivity sensor raise on every state read. |
 | `check_issue_ids.py` | A repair issue about one robot whose id does not carry its entry id. With two robots one robot's check cleared or replaced the other's notice (4.6.12); a copy with one id shared again passed the whole suite. |
 | `check_delay_saves.py` | A class that saves via `async_delay_save` with no flush on unload or removal. Forgotten four times before the check existed. |
+| `check_silent_excepts.py` | A new `except Exception` that only passes, continues or returns. It hides the failure from every log and every mission replay; the modules that still have some keep their count, which may only go down. |
 
 Each has an allowlist requiring a written reason, and a test asserting
 that the reasons are not placeholders -- ten entries reading "as above"

@@ -204,6 +204,10 @@ def _observed_rooms(entry: Any, last_room_worked: bool = True) -> list[str] | No
         index = max(0, min(int(getattr(store, "current_room_idx", 0) or 0), len(planned) - 1))
         return planned[: index + 1] if last_room_worked else planned[:index]
     except Exception:  # noqa: BLE001
+        robot_logger(_LOGGER, entry).debug(
+            "Rooms worked: room tracking unreadable, using the requested rooms",
+            exc_info=True,
+        )
         return None
 
 
@@ -372,6 +376,10 @@ def _remember_measured_room_time(
             room, seconds,
         )
     except Exception:  # noqa: BLE001
+        # Learning is a bonus; the mission goes on without it.
+        robot_logger(_LOGGER, entry).debug(
+            "AUTO-ADVANCE-ROOM: measured room time not kept", exc_info=True,
+        )
         return
 
 
@@ -3883,6 +3891,8 @@ def _gs_coverage_mission_start_weekday_hour(started_at: Any) -> tuple[int, int] 
         local = dt_util.as_local(parsed)
         return (local.weekday(), local.hour)
     except Exception:  # noqa: BLE001
+        # A start time, not private: the line says which one.
+        _LOGGER.debug("Coverage: mission start %r unreadable", started_at, exc_info=True)
         return None
 
 

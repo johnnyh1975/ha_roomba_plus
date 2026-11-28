@@ -4969,3 +4969,44 @@ async def test_prime_select_mode_reaches_every_room(monkeypatch):
 
     regions = robot.send_routine_command_via_cmd_topic.await_args.args[0].to_json()["regions"]
     assert [r.get("params", {}).get("operatingMode") for r in regions] == [2, 2]
+
+
+class TestSilentFailuresSayWhichRobot:
+    """4.7-10: a broad except in the room path logs a debug line with the
+    robot's name instead of passing in silence."""
+
+    @pytest.mark.asyncio
+    async def test_an_unreadable_map_leaves_the_others_and_says_so(self, caplog):
+        from custom_components.roomba_plus.room_cleaning import PrimeRoomCleaning
+
+        good = MagicMock()
+        good.rooms_metadata = []
+        good.zones_metadata = []
+        robot = MagicMock()
+        robot.get_active_map_versions = AsyncMock(
+            return_value=[{"p2map_id": "MAP-1"}, {"p2map_id": "MAP-2"}]
+        )
+        robot.get_map_metadata = AsyncMock(side_effect=[RuntimeError("boom"), good])
+        entry = SimpleNamespace(title="Upstairs", entry_id="e1")
+        backend = PrimeRoomCleaning(MagicMock(blid="BLID", prime_robot=robot), entry)
+        caplog.set_level("DEBUG", logger="custom_components.roomba_plus.room_cleaning")
+        await backend._named_regions_across_maps()
+        assert robot.get_map_metadata.await_count == 2
+        assert "Upstairs: Zone names: one map unreadable" in caplog.text
+
+    def test_an_unreadable_prime_state_refuses_nothing_and_says_so(
+        self, caplog, monkeypatch,
+    ):
+        from roombapy_prime.models import CurrentStateShadow
+
+        from custom_components.roomba_plus.room_cleaning import raise_if_prime_start_blocked
+
+        monkeypatch.setattr(
+            CurrentStateShadow, "from_json", MagicMock(side_effect=ValueError("bad shadow")),
+        )
+        data = SimpleNamespace(prime_status_coordinator=SimpleNamespace(
+            data={"ro-currentstate": {"cleanMissionStatus": "nonsense"}},
+        ))
+        caplog.set_level("DEBUG", logger="custom_components.roomba_plus.room_cleaning")
+        raise_if_prime_start_blocked(data, [None], robot_name="Upstairs")
+        assert "Upstairs: Prime start check: current state unreadable" in caplog.text

@@ -523,13 +523,29 @@ def _bm(hass, **runtime):
 
 class TestBlockingCallbacks:
 
-    def test_a_failing_listener_does_not_stop_the_others(self, hass):
+    def test_a_failing_listener_does_not_stop_the_others(self, hass, caplog):
         m = _bm(hass)
         calls = []
         m.register_state_callback(MagicMock(side_effect=RuntimeError("bad")))
         m.register_state_callback(lambda: calls.append(1))
+        caplog.set_level("DEBUG", logger="custom_components.roomba_plus.blocking_manager")
         m._notify_state_change()
         assert calls == [1]
+        # 4.7-10: not in silence, and with the robot named.
+        assert "entry …e1: BlockingManager: a state listener failed" in caplog.text
+
+    def test_a_listener_that_cannot_be_cancelled_does_not_stop_the_unload(
+        self, hass, caplog,
+    ):
+        m = _bm(hass)
+        cancelled = []
+        m._cancel_listeners.extend([
+            MagicMock(side_effect=RuntimeError("gone")), lambda: cancelled.append(1),
+        ])
+        caplog.set_level("DEBUG", logger="custom_components.roomba_plus.blocking_manager")
+        m.cancel_queue()
+        assert cancelled == [1]
+        assert "entry …e1: BlockingManager: a listener could not be cancelled" in caplog.text
 
     def test_unsubscribing_twice_is_harmless(self, hass):
         m = _bm(hass)
