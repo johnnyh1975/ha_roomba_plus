@@ -154,9 +154,9 @@ rules:
   parallel-updates:
     status: done
     comment: >
-      PARALLEL_UPDATES is set in all ten platform modules: binary_sensor,
-      button, calendar, device_tracker, image, select, sensor, switch, todo,
-      vacuum.
+      PARALLEL_UPDATES is set in all eleven platform modules: binary_sensor,
+      button, calendar, device_tracker, event, image, select, sensor, switch,
+      todo, vacuum. A test fails for a platform module without it.
   reauthentication-flow:
     status: done
     comment: >

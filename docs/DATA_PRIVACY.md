@@ -119,6 +119,12 @@ firmware is covered by the same rule rather than needing to be listed.
 Your BLID is also replaced wherever it appears inside nested values, not only
 where it is a key — including inside topic strings and URLs.
 
+**Left out unless debug logging is on for Roomba+:** the robot's last
+position and the path of the last mission, both in millimetres from the
+dock. Together they draw your home's floor plan. The download says they
+exist; turn on debug logging before downloading when a map question needs
+them.
+
 **NOT removed, because the download is useless without it:**
 
 - **Room and zone names** — your own names for your own rooms

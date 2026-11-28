@@ -2935,6 +2935,48 @@ class TestTheTrajectoryOnlyWithDebugLogging:
         assert trajectory == [[100.0, 200.0], [300.0, 400.0]]
 
 
+class TestThePositionOnlyWithDebugLogging:
+    """4.6.13: where the robot stands is a coordinate in the home, which
+    AGENTS rule 6 keeps out of the diagnostics; the debug capture redacts
+    it. Included with debug logging on, as the path is."""
+
+    async def _diag(self, level: int, pose) -> dict:
+        from custom_components.roomba_plus.diagnostics import (
+            async_get_config_entry_diagnostics,
+        )
+
+        reported = {"pose": pose} if pose is not None else {}
+        entry = _make_entry(reported)
+        hass = MagicMock()
+        hass.config_entries.async_entries.return_value = []
+        logger = logging.getLogger("custom_components.roomba_plus")
+        before = logger.level
+        logger.setLevel(level)
+        try:
+            with patch(
+                "custom_components.roomba_plus.diagnostics.roomba_reported_state",
+                return_value=reported,
+            ):
+                return await async_get_config_entry_diagnostics(hass, entry)
+        finally:
+            logger.setLevel(before)
+
+    @pytest.mark.asyncio
+    async def test_withheld_by_default(self) -> None:
+        pose = {"point": {"x": 120, "y": -40}, "theta": 90}
+        position = (await self._diag(logging.INFO, pose))["position"]
+        assert isinstance(position, str) and "debug logging" in position
+
+    @pytest.mark.asyncio
+    async def test_included_with_debug_logging(self) -> None:
+        pose = {"point": {"x": 120, "y": -40}, "theta": 90}
+        assert (await self._diag(logging.DEBUG, pose))["position"] == pose
+
+    @pytest.mark.asyncio
+    async def test_no_pose_is_none(self) -> None:
+        assert (await self._diag(logging.INFO, None))["position"] is None
+
+
 class TestTheLayoutInTheDiagnostics:
     """4.5.0: whether the straight walls are drawn and why not, as counts."""
 

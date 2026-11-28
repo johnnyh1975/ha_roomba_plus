@@ -38,9 +38,9 @@ DEVICE-SPECIFIC (capability-gated)
 from __future__ import annotations
 
 from homeassistant.components.sensor import (
-    SensorDeviceClass,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
+    SensorDeviceClass,  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
     SensorEntity,
-    SensorStateClass,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
+    SensorStateClass,  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
 )
 from collections.abc import Callable
 from typing import Any
@@ -54,8 +54,8 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 # shared HA singleton modules, so patching a sub-attribute on them here
 # also affects the sensor_helpers.py code that actually calls them. Do not
 # remove as "unused" without checking test_repairs.py/test_sensor.py first.
-from homeassistant.helpers import issue_registry as ir  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
-from homeassistant.util import dt as dt_util  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
+from homeassistant.helpers import issue_registry as ir  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
+from homeassistant.util import dt as dt_util  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
 
 from .reported_state import roomba_reported_state
 from .entity_cleanup import async_remove_stale_entities
@@ -106,45 +106,45 @@ from .sensor_prime import (
 from .prime_coordinator import add_prime_entities_when_available, prime_reported_state
 from .sensor_core import (
     RoombaSensor,
-    RoombaSensorDescription,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
+    RoombaSensorDescription,  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
     SENSORS,
 )
 from .sensor_helpers import (
-    _area_cleaned_today,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
-    _battery_age_days,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
-    _battery_capacity_retention,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
-    _completion_rate_30d,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
-    _compute_integration_health,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
-    _estimated_battery_eol,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
-    _expire_minutes_remaining,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
-    _health_band,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
-    _integration_health_plain_status,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
-    _last_error_code_value,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
-    _last_mission_team_id,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
-    _mission_elapsed_value,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
-    _mission_store_last_started_at,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
-    _mission_store_value,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
-    _mop_behavior,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
-    _mop_clean_mode,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
-    _mop_tank_status,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
-    _next_likely_clean_window,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
-    _parse_netinfo_addr,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
-    _phase_value,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
-    _presence_opportunities,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
-    _presence_utilisation,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
-    _problem_zone_value,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
-    _raw_wifi_floor,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
-    _raw_wifi_quality_pct,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
-    _raw_wifi_stability,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
-    _recharge_minutes_remaining,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
-    _robot_health_plain_status,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
-    _total_energy_consumed_kwh,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
-    _ts_or_none,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
+    _area_cleaned_today,  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
+    _battery_age_days,  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
+    _battery_capacity_retention,  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
+    _completion_rate_30d,  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
+    _compute_integration_health,  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
+    _estimated_battery_eol,  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
+    _expire_minutes_remaining,  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
+    _health_band,  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
+    _integration_health_plain_status,  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
+    _last_error_code_value,  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
+    _last_mission_team_id,  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
+    _mission_elapsed_value,  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
+    _mission_store_last_started_at,  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
+    _mission_store_value,  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
+    _mop_behavior,  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
+    _mop_clean_mode,  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
+    _mop_tank_status,  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
+    _next_likely_clean_window,  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
+    _parse_netinfo_addr,  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
+    _phase_value,  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
+    _presence_opportunities,  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
+    _presence_utilisation,  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
+    _problem_zone_value,  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
+    _raw_wifi_floor,  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
+    _raw_wifi_quality_pct,  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
+    _raw_wifi_stability,  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
+    _recharge_minutes_remaining,  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
+    _robot_health_plain_status,  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
+    _total_energy_consumed_kwh,  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
+    _ts_or_none,  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
 )
 from .sensor_cloud import (
     CLOUD_HISTORY_SENSORS,
     CloudHistorySensor,
-    CloudHistorySensorDescription,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
+    CloudHistorySensorDescription,  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
     RoombaCleaningAnalytics30dSensor,
     RoombaCleaningPerformanceSensor,
     RoombaEventCounts30dSensor,
@@ -154,21 +154,21 @@ from .sensor_cloud import (
     RoombaWifiChannelStabilitySensor,
     RoombaWifiHealthSensor,
     RoombaWifiLastChannelSensor,
-    _channel_to_band,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
-    _mh_sqft_to_m2,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
-    _mh_total_minutes,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
-    _mh_total_missions,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
-    _raw_cleaning_speed,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
-    _raw_cleaning_speed_trend,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
-    _raw_cloud_last_error_attrs,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
-    _raw_cloud_last_error_code,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
-    _raw_cloud_last_error_time,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
-    _raw_completion_rate,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
-    _raw_dirt_density,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
-    _raw_dirt_events,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
-    _raw_evacuations,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
-    _raw_recharge_fraction,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
-    _raw_recharges,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
+    _channel_to_band,  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
+    _mh_sqft_to_m2,  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
+    _mh_total_minutes,  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
+    _mh_total_missions,  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
+    _raw_cleaning_speed,  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
+    _raw_cleaning_speed_trend,  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
+    _raw_cloud_last_error_attrs,  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
+    _raw_cloud_last_error_code,  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
+    _raw_cloud_last_error_time,  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
+    _raw_completion_rate,  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
+    _raw_dirt_density,  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
+    _raw_dirt_events,  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
+    _raw_evacuations,  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
+    _raw_recharge_fraction,  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
+    _raw_recharges,  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
 )
 from .sensor_rooms import (
     RoombaDirtCorrelationSensor,
@@ -186,11 +186,11 @@ from .sensor_rooms import (
     PrimeRoomsOverdueSensor,
     RoombaRoomsOverdueSensor,
     RoombaZoneSummarySensor,
-    _compute_room_time_estimates,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
-    _get_planned_room_order,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
-    _id_to_display_name,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
-    _region_maps_for,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
-    _resolve_smart_tier_room_state,  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
+    _compute_room_time_estimates,  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
+    _get_planned_room_order,  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
+    _id_to_display_name,  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
+    _region_maps_for,  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
+    _resolve_smart_tier_room_state,  # noqa: F401 — SENSOR-SPLIT facade re-export, see tests/test_repo_shape_guards.py
 )
 from .sensor_areas import async_setup_area_sensors
 from .sensor_diagnostics import (

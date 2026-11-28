@@ -347,9 +347,9 @@ class TestNetinfoFmtBugFixes:
         return _parse_netinfo_addr(addr)
 
     def test_float_addr_converted(self):
-        """float 3232235777.0 must parse correctly — not return None."""
-        result = self._parse(3232235777.0)
-        assert result == "192.168.1.1"
+        """float 3221225994.0 must parse correctly — not return None."""
+        result = self._parse(3221225994.0)
+        assert result == "192.0.2.10"
 
     def test_bool_true_not_treated_as_int_1(self):
         """True must NOT be interpreted as addr=1 → '0.0.0.1'."""
@@ -363,10 +363,10 @@ class TestNetinfoFmtBugFixes:
 
     def test_int_addr_still_works(self):
         """Normal int path must still work after the fix."""
-        assert self._parse(3232235777) == "192.168.1.1"
+        assert self._parse(3221225994) == "192.0.2.10"
 
     def test_string_addr_still_works(self):
-        assert self._parse("192.168.1.5") == "192.168.1.5"
+        assert self._parse("192.0.2.11") == "192.0.2.11"
 
     def test_none_still_none(self):
         assert self._parse(None) is None
@@ -1160,7 +1160,7 @@ class TestNetinfoNoneGuard:
         """_parse_netinfo_addr's own None handling (fixed in round 1) is
         unaffected by this guard — still works standalone."""
         assert _parse_netinfo_addr(None) is None
-        assert _parse_netinfo_addr("192.168.1.5") == "192.168.1.5"
+        assert _parse_netinfo_addr("192.0.2.11") == "192.0.2.11"
 
 
 class TestCallbacksLastCommandNoneGuard:

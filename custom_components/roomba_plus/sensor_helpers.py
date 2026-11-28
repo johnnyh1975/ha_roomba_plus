@@ -673,8 +673,8 @@ def _parse_netinfo_addr(addr: object) -> str | None:
     """Parse netinfo.addr to a dotted-decimal IP string.
 
     NETINFO-FMT (v2.8.0) — netinfo.addr has two formats across firmware families:
-      - i/s/j-series (lewis/soho): dotted string, e.g. "192.168.1.5" → return as-is.
-      - 9-series (980/900): uint32 big-endian, e.g. 3232235777 → "192.168.1.1".
+      - i/s/j-series (lewis/soho): dotted string, e.g. "192.0.2.5" → return as-is.
+      - 9-series (980/900): uint32 big-endian, e.g. 3221225985 → "192.0.2.1".
 
     Returns None for missing or unparsable values.
     """

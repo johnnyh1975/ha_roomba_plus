@@ -1376,8 +1376,8 @@ class TestSignalSensors:
         assert e.vacuum_state.get("signal", {}).get("noise") == -85
 
     def test_ip_address_present(self):
-        e = self._entity(netinfo={"addr": "192.168.1.42"})
-        assert e.vacuum_state.get("netinfo", {}).get("addr") == "192.168.1.42"
+        e = self._entity(netinfo={"addr": "192.0.2.10"})
+        assert e.vacuum_state.get("netinfo", {}).get("addr") == "192.0.2.10"
 
     def test_snr_missing_returns_none(self):
         e = self._entity(signal={"rssi": -60})

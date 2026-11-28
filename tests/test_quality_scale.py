@@ -527,3 +527,28 @@ class TestTheManifestNamesTheMqttLogger:
             )
         )
         assert MQTT_LOGGER.name in manifest["loggers"]
+
+
+
+def test_every_platform_module_sets_parallel_updates() -> None:
+    """quality_scale.yaml said "all ten platform modules"; there were
+    eleven, and event.py had none (independent review, 28.11.)."""
+    import ast
+    import pathlib
+
+    from homeassistant.const import Platform
+
+    base = pathlib.Path("custom_components/roomba_plus")
+    platforms = {p.value for p in Platform}
+    missing = []
+    for path in base.glob("*.py"):
+        if path.stem not in platforms:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        names = {
+            t.id for n in tree.body if isinstance(n, ast.Assign) for t in n.targets
+            if isinstance(t, ast.Name)
+        }
+        if "PARALLEL_UPDATES" not in names:
+            missing.append(path.name)
+    assert missing == []

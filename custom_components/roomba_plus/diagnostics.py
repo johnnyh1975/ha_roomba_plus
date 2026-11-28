@@ -734,6 +734,16 @@ def _mode_params(params: Any) -> dict[str, Any] | None:
     return kept or None
 
 
+def _withheld_unless_debug(value: Any) -> Any:
+    """`value` with debug logging on for Roomba+; otherwise a note that it
+    exists (or None when there is nothing)."""
+    if value is None:
+        return None
+    if _debug_logging_on():
+        return value
+    return "withheld: turn on debug logging for Roomba+ to include it"
+
+
 def _debug_logging_on() -> bool:
     """Whether debug logging is on for this integration.
 
@@ -2677,8 +2687,11 @@ async def _build_diagnostics(
         # 4.5.0 -- the maintenance entries, their parts and the catalogue
         "maintenance": _maintenance_report(data),
 
-        # Last known position
-        "position": state.get("pose"),
+        # THE LAST POSITION, WITHHELD LIKE THE PATH (4.6.13). Where the
+        # robot stands in the home is a coordinate, and AGENTS rule 6 says
+        # the diagnostics carry none; the debug capture redacts it too.
+        # With debug logging on it is included, as the path is.
+        "position": _withheld_unless_debug(state.get("pose")),
 
         # Bin / dock state
         "bin": state.get("bin"),

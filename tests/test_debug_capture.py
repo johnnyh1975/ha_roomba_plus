@@ -23,8 +23,8 @@ OTHER_BLID = "FEDCBA9876543210"
 class TestRedaction:
     @pytest.mark.parametrize(("line", "gone"), [
         # A Classic state dump: the network block, an integer address.
-        ('{"netinfo": {"dhcp": true, "addr": 3232235777, "mask": 4294967040}, "x": 1}',
-         ["3232235777", "4294967040", "dhcp"]),
+        ('{"netinfo": {"dhcp": true, "addr": 3221225985, "mask": 4294967040}, "x": 1}',
+         ["3221225985", "4294967040", "dhcp"]),
         ("{'wlcfg': {'sec': 7, 'ssid': '4d794e6574'}}", ["4d794e6574"]),
         # Positions in the home.
         ('"pose": {"theta": 12, "point": {"x": 310, "y": -42}}', ["310", "-42", "theta"]),

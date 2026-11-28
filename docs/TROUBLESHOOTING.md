@@ -696,10 +696,9 @@ The live map, room detection, room names, and cleaning by room or area.
 **Applies to:** Smart Map robots (i, s, j series)
 
 **Cause:** Without the iRobot account, zones come from positions the robot sends, and many Smart Map robots send none.  
-**Fix:** Add the iRobot account: the names come from the cloud. The diagnostics' `position` says whether the robot sends positions.
+**Fix:** Add the iRobot account: the names come from the cloud. The diagnostics' `position` says whether the robot sends positions: `null` when it sends none, a note that it is withheld when it does (the coordinates themselves only with debug logging on).
 
-Check the diagnostics download for `"position"` carrying actual
-coordinates, **not** `"cap": {"pose": ...}`.
+Check the diagnostics download's `"position"`, **not** `"cap": {"pose": ...}`.
 
 `cap.pose` is a compile-time constant on lewis firmware — it says
 nothing about whether a robot publishes a position. Four robots across

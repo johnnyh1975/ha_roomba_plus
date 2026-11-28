@@ -295,16 +295,16 @@ class TestWifiStability:
 class TestParseNetinfoAddr:
     def test_string_format_returned_as_is(self):
         """i/s/j-series: dotted string → pass through unchanged."""
-        assert _parse_netinfo_addr("192.168.1.5") == "192.168.1.5"
+        assert _parse_netinfo_addr("192.0.2.5") == "192.0.2.5"
 
-    def test_uint32_192_168_1_1(self):
-        """9-series: uint32 big-endian 0xC0A80101 = 192.168.1.1."""
-        # 192*2^24 + 168*2^16 + 1*2^8 + 1 = 3232235777
-        assert _parse_netinfo_addr(3232235777) == "192.168.1.1"
+    def test_uint32_192_0_2_1(self):
+        """9-series: uint32 big-endian 0xC0000201 = 192.0.2.1."""
+        # 192*2^24 + 0*2^16 + 2*2^8 + 1 = 3221225985
+        assert _parse_netinfo_addr(3221225985) == "192.0.2.1"
 
-    def test_uint32_10_0_0_1(self):
-        """10.0.0.1 = 0x0A000001 = 167772161."""
-        assert _parse_netinfo_addr(167772161) == "10.0.0.1"
+    def test_uint32_198_51_100_1(self):
+        """198.51.100.1 = 0xC6336401 = 3325256705."""
+        assert _parse_netinfo_addr(3325256705) == "198.51.100.1"
 
     def test_uint32_zero_is_0_0_0_0(self):
         """uint32 0 → '0.0.0.0' (valid but unusual)."""
@@ -328,9 +328,9 @@ class TestParseNetinfoAddr:
         e._blid = "test"
         e._roomba = MagicMock()
         # Simulate 9-series uint32 addr
-        e.vacuum_state = {"netinfo": {"addr": 3232235777}}
+        e.vacuum_state = {"netinfo": {"addr": 3221225985}}
 
-        assert desc.value_fn(e) == "192.168.1.1"
+        assert desc.value_fn(e) == "192.0.2.1"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1136,8 +1136,8 @@ class TestStoreBackedHelpers:
 class TestNetinfoAddress:
 
     @pytest.mark.parametrize("addr,erwartet", [
-        (None, None), ("", None), ("10.0.0.9", "10.0.0.9"),
-        (0x0A000009, "10.0.0.9"),
+        (None, None), ("", None), ("192.0.2.9", "192.0.2.9"),
+        (0xC0000209, "192.0.2.9"),
         (-1, None), (2**40, None),       # outside an IPv4 address
         (True, None), ([10, 0, 0, 9], None),
     ])

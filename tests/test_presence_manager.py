@@ -592,7 +592,7 @@ class TestRoombaOptimalCleanWindow:
         entry = MagicMock()
         entry.runtime_data.presence_manager = pm
         entry.runtime_data.blid = "BLID"
-        roomba.address = "10.0.0.1"
+        roomba.address = "192.0.2.10"
         sensor = object.__new__(RoombaOptimalCleanWindow)
         sensor.vacuum = roomba
         sensor.vacuum_state = {}

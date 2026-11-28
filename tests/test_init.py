@@ -422,7 +422,7 @@ async def _setup(hass, monkeypatch, *, data=None, options=None, state=None):
 
     monkeypatch.setattr(init_mod, "_phase_connect", _connect)
     entry = MockConfigEntry(domain=DOMAIN, version=25, unique_id="BLID_E2E",
-                            data={"blid": "BLID_E2E", "host": "10.0.0.9", "password": "pw", **(data or {})},
+                            data={"blid": "BLID_E2E", "host": "192.0.2.10", "password": "pw", **(data or {})},
                             options=options or {})
     entry.add_to_hass(hass)
     monkeypatch.setattr(hass.config_entries, "async_forward_entry_setups", AsyncMock())
@@ -777,7 +777,7 @@ class TestDiscoveredZonesBackfill:
         monkeypatch.setattr(init_mod, "async_connect_or_timeout",
                             AsyncMock(return_value={ROOMBA_SESSION: robot, CONF_NAME: "Robbie"}))
         entry = MockConfigEntry(domain=DOMAIN, version=25,
-                                data={"blid": "B", "host": "10.0.0.9", "password": "pw"},
+                                data={"blid": "B", "host": "192.0.2.10", "password": "pw"},
                                 options={CONF_SMART_ZONE_DATA: {"3": {"name": "Kitchen"}, "5": {}},
                                          "discovered_zone_ids": ["1"], "continuous": True})
         entry.add_to_hass(hass)
@@ -2522,7 +2522,7 @@ class TestPhaseConnectFailureIsRetryable:
         ctx.config_entry.data = {
             "blid": "BLID_TEST",
             "password": "pw",
-            "host": "10.0.0.2",
+            "host": "192.0.2.11",
         }
         # The phase migrates options out of data for a fresh entry, and
         # `async_update_entry` refuses an entry hass does not know. The

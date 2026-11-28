@@ -44,7 +44,7 @@ PW = "hunter2"
 PRIME = "G1BLID00000001"
 CLASSIC = "C1BLID00000001"
 CLASSIC_SET_UP = "C2BLID00000001"
-HOST = "10.0.0.21"
+HOST = "192.0.2.10"
 
 ROBOTS = {
     PRIME: {"name": "Mopsy", "sku": "G185020", "password": ":1:prime"},
@@ -79,7 +79,7 @@ def _known_entry(hass, *, blid: str = CLASSIC_SET_UP, password: str = PW,
                  state: ConfigEntryState | None = None) -> MockConfigEntry:
     entry = MockConfigEntry(
         domain=DOMAIN, unique_id=blid, title=ROBOTS.get(blid, {}).get("name", blid),
-        data={CONF_BLID: blid, "host": "10.0.0.99", "password": "x",
+        data={CONF_BLID: blid, "host": "192.0.2.11", "password": "x",
               CONF_IROBOT_USERNAME: USER, CONF_IROBOT_PASSWORD: password},
     )
     if state is not None:

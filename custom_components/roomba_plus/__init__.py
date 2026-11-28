@@ -2513,16 +2513,9 @@ async def async_unload_entry(
                     exc_info=True,
                 )
 
-        # SERVICES ARE REMOVED WITH THE LAST ENTRY, whichever generation
-        # it is.
-        #
-        # The Classic path has done this since services existed; the
-        # Prime branch returns before reaching it. So somebody whose only
-        # robot was a Prime removed the integration and kept eighteen
-        # registered actions pointing at nothing.
-        #
-        # Found by the generation-parity check on its first run, which is
-        # what that check is for.
+        # No service teardown here, on either path: the actions are
+        # registered once in `async_setup` and stay (quality scale rule
+        # `action-setup`).
         return unload_ok
 
     data = config_entry.runtime_data

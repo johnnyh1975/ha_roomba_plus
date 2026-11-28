@@ -1916,7 +1916,7 @@ BLID = "MIGRATEBLID1"
 
 def _entry(hass, version, **options):
     e = MockConfigEntry(domain=DOMAIN, version=version, unique_id=BLID,
-                        data={"blid": BLID, "host": "10.0.0.9", "password": "pw"},
+                        data={"blid": BLID, "host": "192.0.2.10", "password": "pw"},
                         options=options)
     e.add_to_hass(hass)
     return e

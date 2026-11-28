@@ -640,7 +640,7 @@ class TestValidateInput:
         from custom_components.roomba_plus.const import CONF_BLID
 
         return {
-            CONF_HOST: "192.168.1.50",
+            CONF_HOST: "192.0.2.10",
             CONF_BLID: "TESTBLID",
             CONF_PASSWORD: "secret",
             CONF_DELAY: 1,
@@ -662,7 +662,7 @@ class TestValidateInput:
             result = await config_flow.validate_input(hass, self._data())
 
         assert result["name"] == "Rosie"
-        assert result[CONF_HOST] == "192.168.1.50"
+        assert result[CONF_HOST] == "192.0.2.10"
 
     @pytest.mark.asyncio
     async def test_an_unreachable_robot_propagates_cannot_connect(self):
@@ -872,7 +872,7 @@ class TestLinkStep:
 
         flow = object.__new__(RoombaPlusConfigFlow)
         flow.hass = hass_mock()
-        flow.host = "192.168.1.50"
+        flow.host = "192.0.2.10"
         flow.blid = "TESTBLID"
         flow.name = name
         flow._pending_config = {}
@@ -2215,7 +2215,7 @@ class TestReconfigureStep:
 
     @pytest.mark.asyncio
     async def test_it_shows_a_form_without_input(self):
-        flow = self._flow({"host": "10.0.0.2", "blid": "B1", "password": "pw"})
+        flow = self._flow({"host": "192.0.2.11", "blid": "B1", "password": "pw"})
         result = await flow.async_step_reconfigure()
         assert result["type"] == "form"
 
@@ -2230,7 +2230,7 @@ class TestReconfigureStep:
         # what this test is about is what gets WRITTEN afterwards.
         monkeypatch.setattr(cf, "validate_input", AsyncMock(return_value={}))
 
-        flow = self._flow({"host": "10.0.0.2", "blid": "B1", "password": "pw"})
+        flow = self._flow({"host": "192.0.2.11", "blid": "B1", "password": "pw"})
         geschrieben: dict = {}
         flow.hass.config_entries.async_update_entry = (
             lambda entry, **kw: geschrieben.update(kw)
@@ -2238,10 +2238,10 @@ class TestReconfigureStep:
         flow.hass.config_entries.async_reload = AsyncMock()
         flow.async_abort = MagicMock(return_value={"type": "abort"})
 
-        await flow.async_step_reconfigure({"host": "10.0.0.9", "password": "pw"})
+        await flow.async_step_reconfigure({"host": "192.0.2.12", "password": "pw"})
 
         assert geschrieben["data"]["blid"] == "B1"
-        assert geschrieben["data"]["host"] == "10.0.0.9"
+        assert geschrieben["data"]["host"] == "192.0.2.12"
 
     # ── 4.4.4: a working local connection decides the path ─────────────────
     #
@@ -2460,13 +2460,13 @@ class TestDiscoverRoombas:
     async def test_it_returns_what_discovery_found(self, monkeypatch):
         from custom_components.roomba_plus import config_flow as cf
 
-        disc = self._discovery(devices=[self._device("10.0.0.2")])
+        disc = self._discovery(devices=[self._device("192.0.2.11")])
         monkeypatch.setattr(cf, "_async_get_roomba_discovery", lambda: disc)
         monkeypatch.setattr(cf.asyncio, "sleep", _no_sleep)
 
         result = await cf._async_discover_roombas(MagicMock())
 
-        assert [d.ip for d in result] == ["10.0.0.2"]
+        assert [d.ip for d in result] == ["192.0.2.11"]
 
     @pytest.mark.asyncio
     async def test_a_network_error_yields_nothing_rather_than_raising(
@@ -2489,13 +2489,13 @@ class TestDiscoverRoombas:
         """With an address in hand there is no reason to sweep the LAN."""
         from custom_components.roomba_plus import config_flow as cf
 
-        disc = self._discovery(host_device=self._device("10.0.0.5"))
+        disc = self._discovery(host_device=self._device("192.0.2.13"))
         monkeypatch.setattr(cf, "_async_get_roomba_discovery", lambda: disc)
         monkeypatch.setattr(cf.asyncio, "sleep", _no_sleep)
 
-        result = await cf._async_discover_roombas(MagicMock(), "10.0.0.5")
+        result = await cf._async_discover_roombas(MagicMock(), "192.0.2.13")
 
-        assert [d.ip for d in result] == ["10.0.0.5"]
+        assert [d.ip for d in result] == ["192.0.2.13"]
         disc.get_all.assert_not_awaited()
 
 
@@ -2708,7 +2708,7 @@ class TestZoneIndexOptions:
 BLID = "ABCDEF123456"
 
 
-HOST = "10.0.0.9"
+HOST = "192.0.2.12"
 
 
 CLASSIC_SKU = "R980020"
@@ -2787,13 +2787,13 @@ class TestDiscovery:
     async def test_a_known_robot_on_a_new_address_updates_its_entry(self, hass):
         """Quality scale, discovery-update-info: a robot that moved to a new
         IP is recognised by its BLID and its entry follows it."""
-        entry = MockConfigEntry(domain=DOMAIN, unique_id=BLID, data={"host": "10.0.0.2"})
+        entry = MockConfigEntry(domain=DOMAIN, unique_id=BLID, data={"host": "192.0.2.11"})
         entry.add_to_hass(hass)
 
-        result = await _dhcp_flow(hass, f"irobot-{BLID.lower()}", ip="10.0.0.77")
+        result = await _dhcp_flow(hass, f"irobot-{BLID.lower()}", ip="192.0.2.14")
 
         assert result["reason"] == "already_configured"
-        assert entry.data["host"] == "10.0.0.77"
+        assert entry.data["host"] == "192.0.2.14"
 
     @pytest.mark.asyncio
     async def test_a_shorter_blid_yields_to_a_flow_that_already_has_the_full_one(self, hass):
@@ -2804,7 +2804,7 @@ class TestDiscovery:
         assert first["type"] is FlowResultType.FORM
 
         with _discovery([]):
-            second = await _dhcp_flow(hass, f"irobot-{BLID[:6].lower()}", ip="10.0.0.10")
+            second = await _dhcp_flow(hass, f"irobot-{BLID[:6].lower()}", ip="192.0.2.15")
 
         assert second["type"] is FlowResultType.ABORT
         assert second["reason"] == "short_blid"
@@ -2816,7 +2816,7 @@ class TestDiscovery:
         assert len(hass.config_entries.flow.async_progress()) == 1
 
         with _discovery([]):
-            await _dhcp_flow(hass, f"irobot-{BLID.lower()}", ip="10.0.0.10")
+            await _dhcp_flow(hass, f"irobot-{BLID.lower()}", ip="192.0.2.15")
 
         ids = [f["context"].get("unique_id") for f in hass.config_entries.flow.async_progress()]
         assert ids == [BLID]
@@ -2879,7 +2879,7 @@ class TestUserAndManual:
             result = await hass.config_entries.flow.async_configure(result["flow_id"], {"host": None})
         with _discovery([]):
             result = await hass.config_entries.flow.async_configure(
-                result["flow_id"], {"host": "10.0.0.250"}
+                result["flow_id"], {"host": "192.0.2.16"}
             )
         assert result["reason"] == "cannot_connect"
 
@@ -3271,11 +3271,11 @@ class TestReconfigureError:
     async def test_an_unreachable_new_address_is_an_error_not_a_save(self, monkeypatch):
         flow = cf.RoombaPlusConfigFlow.__new__(cf.RoombaPlusConfigFlow)
         entry = entry_mock()
-        entry.data = {"host": "10.0.0.2", "blid": "B1", "password": "pw"}
+        entry.data = {"host": "192.0.2.11", "blid": "B1", "password": "pw"}
         flow._get_reconfigure_entry = lambda: entry
         flow.hass = MagicMock()
         monkeypatch.setattr(cf, "validate_input", AsyncMock(side_effect=cf.CannotConnect))
-        result = await flow.async_step_reconfigure({"host": "10.0.0.99", "password": "pw"})
+        result = await flow.async_step_reconfigure({"host": "192.0.2.17", "password": "pw"})
         assert result["type"] == "form"
         assert result["errors"] == {"base": "cannot_connect"}
 
@@ -3692,7 +3692,7 @@ class TestAsyncStepPrimeClassicIp:
         flow._prime_account_robots = {"BLID1": {"password": "pw123", "name": "Bogdana"}}
         fake_device = MagicMock()
         fake_device.blid = "BLID1"
-        fake_device.ip = "192.168.1.50"
+        fake_device.ip = "192.0.2.10"
 
         with patch.object(flow, "async_set_unique_id", new=AsyncMock()):
             with patch.object(flow, "_abort_if_unique_id_configured"):
@@ -3708,7 +3708,7 @@ class TestAsyncStepPrimeClassicIp:
 
         mock_validate.assert_awaited_once()
         call_config = mock_validate.call_args.args[1]
-        assert call_config[CONF_HOST] == "192.168.1.50"
+        assert call_config[CONF_HOST] == "192.0.2.10"
         assert call_config[CONF_PASSWORD] == "pw123"
         # No separate "keep the credentials?" step since 4.3: the entry
         # is created at once, with the account.
@@ -3746,11 +3746,11 @@ class TestAsyncStepPrimeClassicIp:
                     new=AsyncMock(return_value={"name": "Bogdana"}),
                 ):
                     result = await flow.async_step_prime_classic_ip(
-                        {CONF_HOST: "10.0.0.5"}
+                        {CONF_HOST: "192.0.2.13"}
                     )
 
         assert result["type"] == "create_entry"
-        assert result["data"][CONF_HOST] == "10.0.0.5"
+        assert result["data"][CONF_HOST] == "192.0.2.13"
 
     @pytest.mark.asyncio
     async def test_the_tls_context_is_built_off_the_loop(self):
@@ -3790,7 +3790,7 @@ class TestAsyncStepPrimeClassicIp:
                     "custom_components.roomba_plus.config_flow.validate_input",
                     new=AsyncMock(side_effect=CannotConnect()),
                 ):
-                    result = await flow.async_step_prime_classic_ip({CONF_HOST: "10.0.0.5"})
+                    result = await flow.async_step_prime_classic_ip({CONF_HOST: "192.0.2.13"})
 
         assert result["type"] == "form"
         assert result["errors"]["base"] == "cannot_connect"
@@ -3862,7 +3862,7 @@ class TestAsyncStepPrimeClassicAnalytics:
     async def test_the_classic_entry_keeps_the_account_and_hands_over_the_login(self):
         flow = _make_flow()
         flow.name = "Bogdana"
-        flow._pending_config = {CONF_HOST: "10.0.0.5", CONF_BLID: "BLID1"}
+        flow._pending_config = {CONF_HOST: "192.0.2.13", CONF_BLID: "BLID1"}
         account = _fake_account({"BLID1": {"name": "Bogdana"}})
         with patch.object(cf, "async_offer") as offer, \
              patch.object(cf.discovery_flow, "async_create_flow") as announced:
@@ -3895,7 +3895,7 @@ class TestAsyncStepUserFiltersPrimeDevicesFromLocalDiscovery:
     @pytest.mark.asyncio
     async def test_prime_device_excluded_from_dropdown_choices(self):
         flow = _make_flow()
-        prime_device = self._make_device("10.0.0.5", "G185020")
+        prime_device = self._make_device("192.0.2.13", "G185020")
 
         with patch(
             "custom_components.roomba_plus.config_flow._async_discover_roombas",
@@ -3907,13 +3907,13 @@ class TestAsyncStepUserFiltersPrimeDevicesFromLocalDiscovery:
         assert result["type"] == "form"
         schema_keys = list(result["data_schema"].schema.keys())
         choices = result["data_schema"].schema[schema_keys[0]].container
-        assert "10.0.0.5" not in choices
+        assert "192.0.2.13" not in choices
         assert _CLOUD_ACCOUNT_SENTINEL in choices
 
     @pytest.mark.asyncio
     async def test_classic_device_still_shown_normally(self):
         flow = _make_flow()
-        classic_device = self._make_device("10.0.0.6", "R980020", blid="BLID2")
+        classic_device = self._make_device("192.0.2.18", "R980020", blid="BLID2")
 
         with patch(
             "custom_components.roomba_plus.config_flow._async_discover_roombas",
@@ -3924,7 +3924,7 @@ class TestAsyncStepUserFiltersPrimeDevicesFromLocalDiscovery:
 
         schema_keys = list(result["data_schema"].schema.keys())
         choices = result["data_schema"].schema[schema_keys[0]].container
-        assert "10.0.0.6" in choices
+        assert "192.0.2.18" in choices
 
     @pytest.mark.asyncio
     async def test_prime_device_matching_self_host_redirects_to_cloud_account_not_local_link(self):
@@ -3935,8 +3935,8 @@ class TestAsyncStepUserFiltersPrimeDevicesFromLocalDiscovery:
         cloud-account flow instead, since the SKU already answers the
         question a form would otherwise ask."""
         flow = _make_flow()
-        prime_device = self._make_device("10.0.0.5", "G185020")
-        flow.host = "10.0.0.5"
+        prime_device = self._make_device("192.0.2.13", "G185020")
+        flow.host = "192.0.2.13"
 
         with patch(
             "custom_components.roomba_plus.config_flow._async_discover_roombas",
@@ -3953,8 +3953,8 @@ class TestAsyncStepUserFiltersPrimeDevicesFromLocalDiscovery:
         """Confirms the fix is scoped to Prime devices specifically --
         Classic's own existing fast-path behavior must be unaffected."""
         flow = _make_flow()
-        classic_device = self._make_device("10.0.0.6", "R980020", blid="BLID2")
-        flow.host = "10.0.0.6"
+        classic_device = self._make_device("192.0.2.18", "R980020", blid="BLID2")
+        flow.host = "192.0.2.18"
 
         with patch(
             "custom_components.roomba_plus.config_flow._async_discover_roombas",
@@ -4528,19 +4528,19 @@ class TestAnUnknownSkuTakesThePrimePath:
     @pytest.mark.asyncio
     async def test_the_local_list_does_not_offer_it(self):
         flow = _make_flow()
-        devices = [_device(ip="10.0.0.8", blid="B1", sku="R980020", name="Classic"),
-                   _device(ip="10.0.0.9", blid="B2", sku=UNKNOWN_SKU, name="New")]
+        devices = [_device(ip="192.0.2.19", blid="B1", sku="R980020", name="Classic"),
+                   _device(ip="192.0.2.12", blid="B2", sku=UNKNOWN_SKU, name="New")]
         with _discovery(devices), patch.object(flow, "_async_current_ids", return_value=set()):
             result = await flow.async_step_user()
         choices = result["data_schema"].schema[next(iter(result["data_schema"].schema))].container
-        assert "10.0.0.8" in choices
-        assert "10.0.0.9" not in choices
+        assert "192.0.2.19" in choices
+        assert "192.0.2.12" not in choices
 
     @pytest.mark.asyncio
     async def test_a_discovered_host_goes_to_the_account(self):
         flow = _make_flow()
-        flow.host = "10.0.0.9"
-        devices = [_device(ip="10.0.0.9", blid="B2", sku=UNKNOWN_SKU, name="New")]
+        flow.host = "192.0.2.12"
+        devices = [_device(ip="192.0.2.12", blid="B2", sku=UNKNOWN_SKU, name="New")]
         with _discovery(devices), patch.object(flow, "_async_current_ids", return_value=set()):
             result = await flow.async_step_user()
         assert result["step_id"] == "prime_account"

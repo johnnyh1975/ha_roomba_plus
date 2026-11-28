@@ -48,6 +48,9 @@ from .mission_result import RESULT_TYPES
 from .entity import IRobotEntity
 from .models import ConnectionType, RoombaConfigEntry
 
+#: Event entities only record what the bus fires; nothing to throttle.
+PARALLEL_UPDATES = 0
+
 #: (unique-id key, bus event, event type). The key doubles as the
 #: translation key and the entity id suffix.
 _MOMENTS: tuple[tuple[str, str, str], ...] = (
