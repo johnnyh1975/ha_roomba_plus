@@ -107,11 +107,13 @@ The lines are redacted before they are kept: addresses (IPv4, IPv6, MAC), e-mail
 
 ### Mission recording
 
-*New in 4.7.* **Applies to:** Classic robots
+*New in 4.7.* **Applies to:** all robots (Prime since 4.7.0b2)
 
 `roomba_plus.mission_recording_start` records what the robot reports while it cleans, message by message with the seconds since the start, so the mission can be played back through Roomba+ as a test. It runs for 180 minutes unless `minutes` says otherwise (at most 360), keeps at most 20,000 messages and stops by itself. `mission_recording_stop` ends it, `mission_recording_get` returns it. All three target one or more robots by their vacuum entity; the two that return a recording answer as an action response keyed by that entity, ready to copy into an issue. A new start replaces the last recording; a reload of the robot stops it and keeps what was recorded. Nothing is written to disk.
 
-What it keeps is a fixed list of the state fields the mission course, the room tracking, the dock and the maintenance counters read. The network block, the robot's name, its schedules and anything a newer firmware adds are left out. Robot ids, addresses, e-mail addresses and token-shaped values are redacted as in the debug capture, and map ids become `map-1`, `map-2`. On a robot with a Smart Map it also keeps the rooms of the active map, by id, room type and the cloud's time estimates, because a mission names its rooms by id only. Room names are not in it.
+What it keeps is a fixed list of the state fields the mission course, the room tracking, the dock and the maintenance counters read. The network block, the robot's name, its schedules and anything a newer firmware adds are left out. Robot ids, addresses, e-mail addresses and token-shaped values are redacted as in the debug capture, and map ids become `map-1`, `map-2`. On a robot with a Smart Map it also keeps the rooms of the active map, by id, room type and the cloud's time estimates, because a mission names its rooms by id only. Room names are not in it, nor any other name: a start from Home Assistant can carry the room names in its command, and those are left out too.
+
+On a Prime robot the same arrives in three streams, and each message says which: `shadow` (the robot's state, `ro-currentstate` and `ro-stats`, through the same list of fields), `timeline` (the mission's events: which room, travel, docking) and `history` (what the iRobot cloud reports for the mission once it is over). The timeline and the history are kept whole, cleaned the same way, except for room outlines: those are the map.
 
 **Positions are kept**, in millimetres from the dock, because the room tracking cannot be replayed without them. With no map and no origin they do not place your home anywhere, but over a whole mission they trace its floor plan. Leave a recording out of a public issue if that matters to you, or ask for an address to send it to.
 

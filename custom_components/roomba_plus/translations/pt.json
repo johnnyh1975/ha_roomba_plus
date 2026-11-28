@@ -2393,7 +2393,7 @@
     },
     "mission_recording_start": {
       "name": "Iniciar gravação de missão",
-      "description": "Grava o que um robô Classic informa durante uma missão, para que a missão possa ser reproduzida como teste. Apenas em memória; identificadores do robô, endereços e identificadores de mapa são substituídos, as posições relativas à base são mantidas. Para sozinha após o tempo indicado.",
+      "description": "Grava o que o robô informa durante uma missão, para que a missão possa ser reproduzida como teste. Apenas em memória; identificadores do robô, endereços e identificadores de mapa são substituídos, as posições relativas à base são mantidas. Para sozinha após o tempo indicado.",
       "fields": {
         "minutes": {
           "name": "Minutos",
@@ -2961,9 +2961,6 @@
     },
     "no_mission_recording": {
       "message": "Nada foi gravado para {entity_id}. Inicie primeiro uma gravação."
-    },
-    "mission_recording_classic_only": {
-      "message": "Por agora a gravação de missão funciona com robôs Classic; {entity_id} é um robô Prime."
     }
   },
   "selector": {

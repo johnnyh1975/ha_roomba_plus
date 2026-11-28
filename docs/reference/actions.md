@@ -30,7 +30,7 @@ Which robots each action works on, and examples: [Scripts and Assist](../guides/
 | [`roomba_plus.maintenance_forget_learned`](#roomba_plusmaintenance_forget_learned) | Forgets the replacement interval learned from your own replacements, for one part or every part of a Classic robot. |  |
 | [`roomba_plus.maintenance_snooze`](#roomba_plusmaintenance_snooze) | No reminder for a maintenance entry for a number of days. |  |
 | [`roomba_plus.mission_recording_get`](#roomba_plusmission_recording_get) | Returns the mission recording so far, ready to attach to an issue. | Always |
-| [`roomba_plus.mission_recording_start`](#roomba_plusmission_recording_start) | Records what a Classic robot reports during a mission, so the mission can be replayed as a test. |  |
+| [`roomba_plus.mission_recording_start`](#roomba_plusmission_recording_start) | Records what the robot reports during a mission, so the mission can be replayed as a test. |  |
 | [`roomba_plus.mission_recording_stop`](#roomba_plusmission_recording_stop) | Stops the mission recording; returns what was recorded when asked for a response. | Optional |
 | [`roomba_plus.plan_clean`](#roomba_plusplan_clean) | Returns what a clean started now would take, without starting it: the rooms in order with their estimates, the total and the end. | Always |
 | [`roomba_plus.reset_battery`](#roomba_plusreset_battery) | Record the current time as the battery replacement date. |  |
@@ -271,7 +271,7 @@ No fields.
 
 ## `roomba_plus.mission_recording_start`
 
-**Start mission recording.** Records what a Classic robot reports during a mission, so the mission can be replayed as a test. Kept in memory only; robot ids, addresses and map ids are replaced, positions relative to the dock are kept. Stops by itself after the given time.
+**Start mission recording.** Records what the robot reports during a mission, so the mission can be replayed as a test. Kept in memory only; robot ids, addresses and map ids are replaced, positions relative to the dock are kept. Stops by itself after the given time.
 
 Target: a Roomba+ vacuum.
 

@@ -2393,7 +2393,7 @@
     },
     "mission_recording_start": {
       "name": "Rozpocznij nagrywanie misji",
-      "description": "Nagrywa to, co robot Classic zgłasza podczas misji, aby misję można było odtworzyć jako test. Tylko w pamięci; identyfikatory robota, adresy i identyfikatory map są zastępowane, pozycje względem stacji pozostają. Kończy się samo po podanym czasie.",
+      "description": "Nagrywa to, co robot zgłasza podczas misji, aby misję można było odtworzyć jako test. Tylko w pamięci; identyfikatory robota, adresy i identyfikatory map są zastępowane, pozycje względem stacji pozostają. Kończy się samo po podanym czasie.",
       "fields": {
         "minutes": {
           "name": "Minuty",
@@ -2961,9 +2961,6 @@
     },
     "no_mission_recording": {
       "message": "Dla {entity_id} nic nie zostało nagrane. Najpierw rozpocznij nagrywanie."
-    },
-    "mission_recording_classic_only": {
-      "message": "Nagrywanie misji działa na razie z robotami Classic; {entity_id} to robot Prime."
     }
   },
   "selector": {

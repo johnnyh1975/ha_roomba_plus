@@ -1936,16 +1936,9 @@ async def async_handle_mission_recording_start(call: ServiceCall) -> None:
     """roomba_plus.mission_recording_start: record what each robot reports.
 
     Every target is checked before any recording starts, so a call that
-    names a Prime robot among Classic ones starts none of them.
+    names an unloaded robot among loaded ones starts none of them.
     """
     targets = _recording_entries(call)
-    for entity_id, entry in targets:
-        if getattr(entry.runtime_data, "roomba", None) is None:
-            raise ServiceValidationError(
-                f"mission_recording_start: {entity_id} is not a Classic robot",
-                translation_domain=DOMAIN, translation_key="mission_recording_classic_only",
-                translation_placeholders={"entity_id": str(entity_id)},
-            )
     minutes = int(call.data.get("minutes", mission_recorder.DEFAULT_MINUTES))
     integration = await async_get_integration(call.hass, DOMAIN)
     version = str(integration.version or "") or None

@@ -51,7 +51,7 @@ if TYPE_CHECKING:
 
 from .const import EVENT_MISSION_COMPLETED, mission_store_changed_signal
 from .mission_result import note_last_error
-from . import mission_battery
+from . import mission_battery, mission_recorder
 from .room_times import region_visits, visit_learning
 from .structural_failures import record_failure, record_success
 from .robot_log import robot_logger
@@ -578,7 +578,12 @@ async def _async_sync_locked(
         # fault of its own: `record_success` fires after the fetch,
         # which did succeed. The loss happens past the exception
         # boundary, in data nothing watches.
-        history = _parsed(await robot.get_mission_history(robot.blid))
+        raw_history = await robot.get_mission_history(robot.blid)
+        mission_recorder.note(
+            getattr(config_entry.runtime_data, "hass_ref", None),
+            config_entry.entry_id, "history", raw_history,
+        )
+        history = _parsed(raw_history)
         # THE SUCCESS SIDE MATTERS AS MUCH AS THE FAILURE SIDE. Without
         # it, a path that works would still be reported as structurally
         # broken the first two times a cloud call happened to time out.

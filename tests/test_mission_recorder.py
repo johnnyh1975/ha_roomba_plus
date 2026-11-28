@@ -27,7 +27,7 @@ from pytest_homeassistant_custom_component.common import (
 
 from custom_components.roomba_plus import mission_recorder as mr
 from custom_components.roomba_plus.const import DOMAIN
-from tests.replay import BLID, Replay
+from tests.replay import BLID, PrimeReplay, Replay
 
 def _message(reported: dict[str, Any]) -> dict[str, Any]:
     return {"state": {"reported": reported}}
@@ -74,6 +74,17 @@ class TestWhatIsKept:
         rec = mr.MissionRecording((BLID,))
         rec.add(_message({"lastCommand": {"initiator": value}}))
         assert gone not in str(rec.messages)
+
+    def test_names_are_left_out_wherever_they_are(self):
+        """A room clean started from Home Assistant carries the room names
+        in `lastCommand`; the recording keeps the ids."""
+        rec = mr.MissionRecording(())
+        rec.add(_message({"lastCommand": {"regions": [
+            {"region_id": "3", "region_name": "Anna's room", "type": "rid"},
+        ], "pmapName": "Ground floor"}}))
+        assert rec.messages[0]["reported"] == {
+            "lastCommand": {"regions": [{"region_id": "3", "type": "rid"}]},
+        }
 
     def test_secret_shaped_keys_are_left_out_wherever_they_are(self):
         rec = mr.MissionRecording(())
@@ -236,23 +247,6 @@ class TestTheActions:
         await robot.unload()
 
     @pytest.mark.asyncio
-    async def test_a_prime_robot_is_told_it_is_not_supported_yet(
-        self, hass, monkeypatch, enable_custom_integrations,
-    ):
-        robot = await _robot(hass, monkeypatch)
-        prime = MockConfigEntry(domain=DOMAIN, title="Prime", unique_id="prime")
-        prime.add_to_hass(hass)
-        prime.mock_state(hass, ConfigEntryState.LOADED)
-        prime.runtime_data = SimpleNamespace(roomba=None)
-        entity_id = er.async_get(hass).async_get_or_create(
-            "vacuum", DOMAIN, "prime", config_entry=prime,
-        ).entity_id
-        with pytest.raises(ServiceValidationError) as err:
-            await _call(hass, "mission_recording_start", entity_id)
-        assert err.value.translation_key == "mission_recording_classic_only"
-        await robot.unload()
-
-    @pytest.mark.asyncio
     async def test_one_call_records_two_robots_each_on_its_own(
         self, hass, monkeypatch, enable_custom_integrations,
     ):
@@ -273,16 +267,15 @@ class TestTheActions:
         await first.unload()
 
     @pytest.mark.asyncio
-    async def test_a_prime_robot_among_the_targets_starts_none(
+    async def test_an_unloaded_robot_among_the_targets_starts_none(
         self, hass, monkeypatch, enable_custom_integrations,
     ):
         robot = await _robot(hass, monkeypatch)
-        prime = MockConfigEntry(domain=DOMAIN, title="Prime", unique_id="prime")
-        prime.add_to_hass(hass)
-        prime.mock_state(hass, ConfigEntryState.LOADED)
-        prime.runtime_data = SimpleNamespace(roomba=None)
+        other = MockConfigEntry(domain=DOMAIN, title="Unloaded", unique_id="unloaded")
+        other.add_to_hass(hass)
+        other.mock_state(hass, ConfigEntryState.LOADED)
         entity_id = er.async_get(hass).async_get_or_create(
-            "vacuum", DOMAIN, "prime", config_entry=prime,
+            "vacuum", DOMAIN, "unloaded", config_entry=other,
         ).entity_id
         with pytest.raises(ServiceValidationError):
             await _call(hass, "mission_recording_start", [robot.vacuum_entity_id, entity_id])
@@ -356,3 +349,152 @@ class TestARecordingReplaysToTheSameMission:
         ]
         assert len(held) == 3
         await second.replay.unload()
+
+
+# ── Prime (4.7.0b2) ──────────────────────────────────────────────────────────
+
+MAP_ID = "AbCdEfGhIjKlMnOpQrStUv"
+
+
+def _timeline(ts: int, rid: str | None) -> dict[str, Any]:
+    """A mission timeline delta as the robot sends it: the current room."""
+    event = [] if rid is None else [{
+        "type": "room", "ts": ts,
+        "room": {"rid": rid, "pmapId": MAP_ID, "name": "Kitchen"},
+        "poly": {"rid": rid, "poly": [[0, 0], [4100, 0], [4100, 3200]]},
+    }]
+    return {
+        "cmd": {"command": "start", "initiator": "rmtApp", "time": 1789747000},
+        "event": event, "mission_id": "M-REPLAY-1", "nMssn": 11,
+    }
+
+
+def _state(phase: str, cycle: str, battery: int) -> dict[str, Any]:
+    return {"cleanMissionStatus": {"phase": phase, "cycle": cycle, "nMssn": 11}, "batPct": battery}
+
+
+#: A two-room mission from the app: (seconds, kind, payload).
+PRIME_MISSION: list[tuple[float, str, dict[str, Any]]] = [
+    (1.0, "shadow", _state("run", "clean", 100)),
+    (2.0, "timeline", _timeline(1789747002, "10")),
+    (300.0, "shadow", _state("run", "clean", 90)),
+    (600.0, "timeline", _timeline(1789747600, "11")),
+    (1200.0, "timeline", _timeline(1789748200, None)),
+    (1210.0, "shadow", _state("hmPostMsn", "clean", 80)),
+    (1300.0, "shadow", _state("charge", "none", 80)),
+]
+
+
+class TestWhatAPrimeRecordingKeeps:
+    def test_a_shadow_keeps_the_allowed_keys_of_the_recorded_shadows(self):
+        rec = mr.MissionRecording(())
+        rec.add_shadow("ro-currentstate", {"batPct": 80, "netinfo": {"addr": 1}, "name": "Robbie"})
+        rec.add_shadow("rw-schedule", {"cmd": "on"})
+        rec.add_shadow("ro-stats", {"bbrun": {"hr": 3}})
+        assert rec.messages[0]["source"] == "shadow"
+        assert [(m["shadow"], m["reported"]) for m in rec.messages] == [
+            ("ro-currentstate", {"batPct": 80}), ("ro-stats", {"bbrun": {"hr": 3}}),
+        ]
+
+    def test_a_timeline_delta_loses_outlines_and_names_and_keeps_ids(self):
+        rec = mr.MissionRecording(())
+        rec.add_payload("timeline", _timeline(1789747002, "10"))
+        event = rec.messages[0]["payload"]["event"][0]
+        assert event["room"] == {"rid": "10", "pmapId": "map-1"}
+        assert "poly" not in event and "Kitchen" not in str(rec.messages)
+        assert MAP_ID not in str(rec.messages)
+
+    @pytest.mark.asyncio
+    async def test_a_coordinator_hands_over_only_while_recording_and_never_fails(self, hass):
+        mr.note(hass, "no-such-entry", "timeline", {"event": []})
+        rec = mr.MissionRecording(())
+        mr.recordings(hass)["e1"] = rec
+        mr.note(hass, "e1", "timeline", {"event": []})
+        assert rec.messages == []
+        rec.start(hass, None, {}, {}, 1)
+        mr.note(hass, "e1", "timeline", {"event": []})
+        mr.note(hass, "e1", "shadow", {"batPct": 5}, shadow="ro-currentstate")
+        assert [m["source"] for m in rec.messages] == ["timeline", "shadow"]
+        # A message the cleaning cannot take is dropped, not raised.
+        mr.note(hass, "e1", "timeline", {_Unprintable(): 1})
+        assert len(rec.messages) == 2
+        rec.stop()
+        assert rec.running is False
+
+
+class _Unprintable:
+    def __str__(self) -> str:
+        raise RuntimeError("no")
+
+
+async def _prime(hass, monkeypatch) -> PrimeReplay:
+    robot = PrimeReplay(hass, monkeypatch)
+    await robot.setup({"ro-currentstate": _state("charge", "none", 100) | {"name": "Robbie"}})
+    return robot
+
+
+async def _play(robot: PrimeReplay, mission: list[tuple[float, str, dict[str, Any]]]) -> None:
+    for seconds, kind, payload in mission:
+        if kind == "shadow":
+            await robot.shadow(seconds, "ro-currentstate", payload)
+        else:
+            await robot.timeline(seconds, payload)
+
+
+def _room_events(hass) -> list[dict[str, Any]]:
+    found: list[dict[str, Any]] = []
+
+    def _keep(event: Any) -> None:
+        data = dict(event.data)
+        data.pop("entry_id", None)
+        found.append(data)
+
+    hass.bus.async_listen("roomba_plus_room_completed", _keep)
+    return found
+
+
+class TestAPrimeRecording:
+    @pytest.mark.asyncio
+    async def test_it_records_shadows_and_the_timeline_with_their_source(
+        self, hass, monkeypatch, enable_custom_integrations,
+    ):
+        robot = await _prime(hass, monkeypatch)
+        await _call(hass, "mission_recording_start", robot.vacuum_entity_id)
+        await _play(robot, PRIME_MISSION[:2])
+        got = await _call(hass, "mission_recording_stop", robot.vacuum_entity_id)
+        assert got["robot"]["generation"] == "prime"
+        assert got["robot"]["sku_prefix"] == "g"
+        assert got["initial"] == {"shadows": {"ro-currentstate": _state("charge", "none", 100)}}
+        assert [(m["t"], m["source"]) for m in got["messages"]] == [
+            (1.0, "shadow"), (2.0, "timeline"),
+        ]
+        await robot.unload()
+
+    @pytest.mark.asyncio
+    async def test_the_replayed_recording_completes_the_same_rooms(
+        self, hass, monkeypatch, enable_custom_integrations,
+    ):
+        """Recorded through the real Prime setup, then played from the
+        recording alone into a fresh one: the same room events, in order."""
+        events = _room_events(hass)
+        first = await _prime(hass, monkeypatch)
+        await _call(hass, "mission_recording_start", first.vacuum_entity_id)
+        await _play(first, PRIME_MISSION)
+        recording = await _call(hass, "mission_recording_stop", first.vacuum_entity_id)
+        await first.unload()
+        await hass.config_entries.async_remove(first.entry.entry_id)
+        await hass.async_block_till_done()
+        recorded = list(events)
+        events.clear()
+
+        second = PrimeReplay(hass, monkeypatch)
+        await second.setup(
+            recording["initial"]["shadows"], sku="G185020",
+        )
+        await second.play(recording)
+
+        # The history read after the mission is in it, as an answer.
+        assert [m["source"] for m in recording["messages"]][-1] == "history"
+        assert [e["room_id"] for e in recorded] == ["10", "11"]
+        assert events == recorded
+        await second.unload()

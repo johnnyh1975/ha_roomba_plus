@@ -2393,7 +2393,7 @@
     },
     "mission_recording_start": {
       "name": "Start mission recording",
-      "description": "Records what a Classic robot reports during a mission, so the mission can be replayed as a test. Kept in memory only; robot ids, addresses and map ids are replaced, positions relative to the dock are kept. Stops by itself after the given time.",
+      "description": "Records what the robot reports during a mission, so the mission can be replayed as a test. Kept in memory only; robot ids, addresses and map ids are replaced, positions relative to the dock are kept. Stops by itself after the given time.",
       "fields": {
         "minutes": {
           "name": "Minutes",
@@ -2961,9 +2961,6 @@
     },
     "no_mission_recording": {
       "message": "Nothing has been recorded for {entity_id}. Start a recording first."
-    },
-    "mission_recording_classic_only": {
-      "message": "Mission recording works with Classic robots for now; {entity_id} is a Prime robot."
     }
   },
   "selector": {

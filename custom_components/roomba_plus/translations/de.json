@@ -2393,7 +2393,7 @@
     },
     "mission_recording_start": {
       "name": "Missionsaufzeichnung starten",
-      "description": "Zeichnet auf, was ein Classic-Roboter während einer Mission meldet, damit die Mission als Test nachgespielt werden kann. Nur im Speicher; Roboter-IDs, Adressen und Karten-IDs werden ersetzt, Positionen relativ zur Ladestation bleiben erhalten. Endet von selbst nach der angegebenen Zeit.",
+      "description": "Zeichnet auf, was der Roboter während einer Mission meldet, damit die Mission als Test nachgespielt werden kann. Nur im Speicher; Roboter-IDs, Adressen und Karten-IDs werden ersetzt, Positionen relativ zur Ladestation bleiben erhalten. Endet von selbst nach der angegebenen Zeit.",
       "fields": {
         "minutes": {
           "name": "Minuten",
@@ -2961,9 +2961,6 @@
     },
     "no_mission_recording": {
       "message": "Für {entity_id} wurde nichts aufgezeichnet. Starte zuerst eine Aufzeichnung."
-    },
-    "mission_recording_classic_only": {
-      "message": "Die Missionsaufzeichnung funktioniert vorerst mit Classic-Robotern; {entity_id} ist ein Prime-Roboter."
     }
   },
   "selector": {

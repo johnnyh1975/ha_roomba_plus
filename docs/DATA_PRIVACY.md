@@ -146,14 +146,15 @@ identifies you personally unless your own room or zone names do.
 
 ## What is in a mission recording
 
-**Applies to:** Classic robots
+**Applies to:** all robots
 
 Only made when you start one (`roomba_plus.mission_recording_start`), and
 kept in memory, never on disk. It holds the state fields the mission logic
 reads, with robot ids, addresses, e-mail addresses and tokens redacted and
 map ids replaced by `map-1`, `map-2`. With a Smart Map, the rooms of the
-active map by id, room type and time estimate. No room names, network
-details or schedules.
+active map by id, room type and time estimate. On a Prime robot, the
+mission's timeline and the cloud's record of it, without room outlines. No
+names of rooms or anything else, no network details, no schedules.
 
 **It keeps the robot's positions**, in millimetres from the dock. That is
 what makes it replayable, and over a whole mission it traces the floor plan

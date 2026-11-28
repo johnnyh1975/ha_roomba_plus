@@ -57,7 +57,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from homeassistant.util import dt as dt_util
 
 from . import cloud_errors
-from . import mission_battery
+from . import mission_battery, mission_recorder
 from .area_resolver import async_room_area_fields
 from .command_watch import note_prime_shadows
 from .mission_started import fire_mission_started, prime_start_details
@@ -339,6 +339,9 @@ class PrimeCoordinator(DataUpdateCoordinator[MissionTimelineReport]):
                             type(delta.payload).__name__,
                         )
                         continue
+                    mission_recorder.note(
+                        self.hass, self.entry.entry_id, "timeline", delta.payload,
+                    )
                     report = MissionTimelineReport.from_json(delta.payload)
                     self._fire_room_completed_if_changed(report)
                     self.async_set_updated_data(report)
@@ -957,6 +960,9 @@ class PrimeStatusCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                     reported = (response.payload if isinstance(response.payload, dict) else {}).get("state", {}).get("reported", {})
                     if not reported:
                         continue
+                    mission_recorder.note(
+                        self.hass, self.entry.entry_id, "shadow", reported, shadow=shadow_name,
+                    )
                     updated = dict(self.data or {})
                     updated[shadow_name] = _deep_merge_reported(updated.get(shadow_name) or {}, reported)
                     self.entry.runtime_data.last_mqtt_message_ts = _time.time()

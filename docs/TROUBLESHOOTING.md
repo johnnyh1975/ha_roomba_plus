@@ -1227,7 +1227,7 @@ identity — the timing does not matter.
 
 ### When a mission went wrong
 
-**Applies to:** Classic robots
+**Applies to:** Every robot
 
 **Cause:** A log shows what Roomba+ decided, not what the robot said.  
 **Fix:** Record the next mission like it and send the recording.

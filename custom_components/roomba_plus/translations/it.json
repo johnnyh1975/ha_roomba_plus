@@ -2393,7 +2393,7 @@
     },
     "mission_recording_start": {
       "name": "Avvia registrazione missione",
-      "description": "Registra ciò che un robot Classic segnala durante una missione, così che la missione possa essere riprodotta come test. Solo in memoria; ID del robot, indirizzi e ID delle mappe vengono sostituiti, le posizioni rispetto alla base restano. Si ferma da sola dopo il tempo indicato.",
+      "description": "Registra ciò che il robot segnala durante una missione, così che la missione possa essere riprodotta come test. Solo in memoria; ID del robot, indirizzi e ID delle mappe vengono sostituiti, le posizioni rispetto alla base restano. Si ferma da sola dopo il tempo indicato.",
       "fields": {
         "minutes": {
           "name": "Minuti",
@@ -2961,9 +2961,6 @@
     },
     "no_mission_recording": {
       "message": "Non è stato registrato nulla per {entity_id}. Avvia prima una registrazione."
-    },
-    "mission_recording_classic_only": {
-      "message": "Per ora la registrazione della missione funziona con i robot Classic; {entity_id} è un robot Prime."
     }
   },
   "selector": {

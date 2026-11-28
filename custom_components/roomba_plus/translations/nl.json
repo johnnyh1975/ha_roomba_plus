@@ -2393,7 +2393,7 @@
     },
     "mission_recording_start": {
       "name": "Missie-opname starten",
-      "description": "Neemt op wat een Classic-robot tijdens een missie meldt, zodat de missie als test kan worden afgespeeld. Alleen in het geheugen; robot-id's, adressen en kaart-id's worden vervangen, posities ten opzichte van het dock blijven behouden. Stopt vanzelf na de opgegeven tijd.",
+      "description": "Neemt op wat de robot tijdens een missie meldt, zodat de missie als test kan worden afgespeeld. Alleen in het geheugen; robot-id's, adressen en kaart-id's worden vervangen, posities ten opzichte van het dock blijven behouden. Stopt vanzelf na de opgegeven tijd.",
       "fields": {
         "minutes": {
           "name": "Minuten",
@@ -2961,9 +2961,6 @@
     },
     "no_mission_recording": {
       "message": "Er is niets opgenomen voor {entity_id}. Start eerst een opname."
-    },
-    "mission_recording_classic_only": {
-      "message": "Missie-opname werkt voorlopig met Classic-robots; {entity_id} is een Prime-robot."
     }
   },
   "selector": {

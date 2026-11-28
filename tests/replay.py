@@ -35,6 +35,7 @@ from __future__ import annotations
 import json
 import sys
 import time as _real_time
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -248,6 +249,196 @@ class Replay:
         assert recording.get("format") == 1, recording.get("format")
         for message in recording["messages"]:
             await self.at(float(message["t"]), message["reported"])
+
+    async def unload(self) -> None:
+        assert self.entry is not None
+        assert await self.hass.config_entries.async_unload(self.entry.entry_id)
+        await self.hass.async_block_till_done()
+
+
+# ── Prime (4.7.0b2) ──────────────────────────────────────────────────────────
+#
+# A Prime robot has no client the integration builds: the account hands
+# out a `PrimeRobot`, whose streams are async generators. The fake below
+# is that robot with its network replaced -- every stream reads from a
+# queue the replay fills, and every read the setup makes answers from
+# the state the replay was given. The coordinators, stores and callbacks
+# around it are the integration's own, set up through the entry manager.
+
+PRIME_BLID = "0123456789ABCDEF0123456789ABCDEF"
+
+
+class _Stream:
+    """One of the robot's watch_* streams, fed by the replay.
+
+    `join()` returns once the consumer has finished with every message:
+    a message counts as handled when the consumer asks for the next one.
+    """
+
+    def __init__(self) -> None:
+        import asyncio
+
+        self.queue: asyncio.Queue[Any] = asyncio.Queue()
+
+    async def watch(self, *_args: Any, **_kwargs: Any) -> Any:
+        while True:
+            item = await self.queue.get()
+            try:
+                yield item
+            finally:
+                self.queue.task_done()
+
+
+class FakePrimeRobot:
+    """A `roombapy_prime.PrimeRobot` without a network."""
+
+    def __init__(self, blid: str, sku: str, shadows: dict[str, dict[str, Any]]) -> None:
+        from roombapy_prime.models import RobotSerialInfo
+
+        self.blid = blid
+        self.shadows = shadows
+        self.history: Any = []
+        #: History reads a recording made, answered in order.
+        self.answers: list[Any] = []
+        self.serial = RobotSerialInfo(serial_number="SN-REPLAY", sku=sku)
+        self.named = _Stream()
+        self.timeline = _Stream()
+        self._idle = _Stream()
+        self.watch_named_shadows_updates = self.named.watch
+        self.watch_mission_timeline = self.timeline.watch
+        self.watch_rejected_commands = self._idle.watch
+        self.watch_dock_reports = self._idle.watch
+        self.watch_live_map = self._idle.watch
+
+    #: The broker never moves this robot's topics in a replay.
+    topic_prefix_changed = False
+
+    def set_topic_prefix_changed_callback(self, _callback: Any) -> None:
+        return None
+
+    async def connect(self) -> None:
+        return None
+
+    async def disconnect(self) -> None:
+        return None
+
+    async def get_named_shadow(self, name: str) -> Any:
+        return SimpleNamespace(payload={"state": {"reported": self.shadows.get(name, {})}})
+
+    async def get_state(self) -> Any:
+        return SimpleNamespace(payload={"state": {"reported": self.shadows.get("classic", {})}})
+
+    async def get_household_id(self) -> str:
+        return "household-1"
+
+    async def get_serial_number_data(self) -> Any:
+        return self.serial
+
+    async def get_mission_history(self, *_args: Any, **_kwargs: Any) -> Any:
+        """The next recorded answer, or the last one again."""
+        if self.answers:
+            self.history = self.answers.pop(0)
+        return self.history
+
+    def __getattr__(self, name: str) -> Any:
+        # Everything else the setup reads (parts, favorites, maps,
+        # schedules, time estimates) has nothing to say in a replay.
+        if name.startswith(("get_", "download_", "send_", "set_", "update_", "create_", "delete_")):
+            return AsyncMock(return_value=None)
+        raise AttributeError(name)
+
+
+class PrimeReplay:
+    """One Prime robot, set up for real, fed by hand."""
+
+    def __init__(self, hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch,
+                 *, blid: str = PRIME_BLID) -> None:
+        self.hass = hass
+        self.clock = ReplayClock()
+        self._monkeypatch = monkeypatch
+        self.blid = blid
+        self.robot: FakePrimeRobot | None = None
+        self.entry: MockConfigEntry | None = None
+        self.vacuum_entity_id = ""
+
+    async def setup(
+        self, shadows: dict[str, dict[str, Any]], *, sku: str = "G185020",
+        title: str = "Prime", history: Any = None,
+    ) -> MockConfigEntry:
+        mp = self._monkeypatch
+        _install_clock(mp, self.clock)
+        for fetch in ("async_fetch_help", "async_fetch_catalogue"):
+            mp.setattr(parts_catalog, fetch, AsyncMock(return_value={}))
+        robot = FakePrimeRobot(self.blid, sku, {k: dict(v) for k, v in shadows.items()})
+        robot.history = history or []
+        self.robot = robot
+        account = MagicMock()
+        account.generation.return_value = "prime"
+        account.prime_robot = AsyncMock(return_value=robot)
+        mp.setattr(integration, "async_acquire", AsyncMock(return_value=account))
+        mp.setattr(integration, "async_release", MagicMock())
+        entry = MockConfigEntry(
+            domain=DOMAIN, version=25, unique_id=self.blid, title=title,
+            data={
+                "connection_type": "cloud_only", "blid": self.blid,
+                "irobot_username": "user@example.com", "irobot_password": "password",
+            },
+        )
+        entry.add_to_hass(self.hass)
+        mp.setattr(self.hass.config_entries, "async_forward_entry_setups", AsyncMock())
+        mp.setattr(
+            self.hass.config_entries, "async_unload_platforms", AsyncMock(return_value=True),
+        )
+        mp.setattr(self.hass, "http", MagicMock())
+        assert await self.hass.config_entries.async_setup(entry.entry_id)
+        await self._settle()
+        self.vacuum_entity_id = er.async_get(self.hass).async_get_or_create(
+            "vacuum", DOMAIN, self.blid, config_entry=entry,
+        ).entity_id
+        self.entry = entry
+        return entry
+
+    async def _settle(self) -> None:
+        assert self.robot is not None
+        await self.hass.async_block_till_done()
+        await self.robot.named.queue.join()
+        await self.robot.timeline.queue.join()
+        await self.hass.async_block_till_done()
+
+    async def shadow(self, seconds: float, name: str, reported: dict[str, Any]) -> None:
+        """Move the clock, then one named shadow update."""
+        assert self.robot is not None and seconds >= self.clock.elapsed
+        self.clock.elapsed = seconds
+        self.robot.named.queue.put_nowait(SimpleNamespace(
+            topic=f"$aws/things/{self.blid}/shadow/name/{name}/update/accepted",
+            payload={"state": {"reported": reported}},
+        ))
+        await self._settle()
+
+    async def timeline(self, seconds: float, payload: dict[str, Any]) -> None:
+        """Move the clock, then one mission timeline delta."""
+        assert self.robot is not None and seconds >= self.clock.elapsed
+        self.clock.elapsed = seconds
+        self.robot.timeline.queue.put_nowait(SimpleNamespace(payload=payload))
+        await self._settle()
+
+    async def play(self, recording: dict[str, Any]) -> None:
+        """A Prime recording, message by message. Each history read is
+        what the robot answers when the integration next asks."""
+        assert recording.get("format") == 1 and recording["robot"]["generation"] == "prime"
+        assert self.robot is not None
+        # A history read is an answer to a request the integration makes
+        # itself, so the answers are lined up before the messages that
+        # lead to the requests.
+        self.robot.answers = [
+            m["payload"] for m in recording["messages"] if m["source"] == "history"
+        ]
+        for message in recording["messages"]:
+            t = float(message["t"])
+            if message["source"] == "shadow":
+                await self.shadow(t, message["shadow"], message["reported"])
+            elif message["source"] == "timeline":
+                await self.timeline(t, message["payload"])
 
     async def unload(self) -> None:
         assert self.entry is not None
