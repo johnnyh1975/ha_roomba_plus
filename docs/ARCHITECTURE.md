@@ -251,6 +251,12 @@ Each has an allowlist requiring a written reason, and a test asserting
 that the reasons are not placeholders -- ten entries reading "as above"
 failed that test on the first attempt.
 
+**Before each minor version:** `python scripts/mutation_probe.py` puts
+fixed defects back into a copy of the repository, one at a time, and
+reports any that no test notices (the review of 28.11. found two). It is
+not in CI because a survivor needs a person to write the missing test;
+CI only checks that every mutation still applies.
+
 ## Known weaknesses
 
 Recorded because a review that stays in one person's head is not a review.

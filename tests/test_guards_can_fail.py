@@ -691,3 +691,27 @@ class TestSilentExceptGuard:
         monkeypatch.setattr(guard, "KNOWN", {"keeper.py": 1})
         assert guard.main() == 1
 
+
+class TestTheMutationProbeStillApplies:
+    """scripts/mutation_probe.py runs outside CI (4.7-3); this keeps it
+    from rotting: a refactor that removes a mutation's source has to
+    bring the mutation along."""
+
+    def test_every_mutation_finds_its_source_once(self) -> None:
+        probe = _load("mutation_probe")
+        stale = {m.key: probe.applies(m) for m in probe.MUTATIONS if probe.applies(m) != 1}
+        assert stale == {}
+
+    def test_every_mutation_names_test_files_that_exist(self) -> None:
+        probe = _load("mutation_probe")
+        missing = [
+            (m.key, t) for m in probe.MUTATIONS for t in m.tests
+            if not (probe.ROOT / t).is_file()
+        ]
+        assert missing == []
+
+    def test_keys_are_unique(self) -> None:
+        probe = _load("mutation_probe")
+        keys = [m.key for m in probe.MUTATIONS]
+        assert len(keys) == len(set(keys))
+
