@@ -2391,6 +2391,40 @@
       "name": "Get debug capture",
       "description": "Returns the lines of the debug capture, redacted, ready to paste into an issue."
     },
+    "mission_recording_start": {
+      "name": "Start mission recording",
+      "description": "Records what a Classic robot reports during a mission, so the mission can be replayed as a test. Kept in memory only; robot ids, addresses and map ids are replaced, positions relative to the dock are kept. Stops by itself after the given time.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "Vacuum entity of the robot."
+        },
+        "minutes": {
+          "name": "Minutes",
+          "description": "How long to record before it stops by itself."
+        }
+      }
+    },
+    "mission_recording_stop": {
+      "name": "Stop mission recording",
+      "description": "Stops the mission recording; returns what was recorded when asked for a response.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "Vacuum entity of the robot."
+        }
+      }
+    },
+    "mission_recording_get": {
+      "name": "Get mission recording",
+      "description": "Returns the mission recording so far, ready to attach to an issue.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "Vacuum entity of the robot."
+        }
+      }
+    },
     "get_rooms": {
       "name": "Get rooms",
       "description": "Returns the rooms and zones the robot knows, each with its id, map, Home Assistant area, time estimate and how good that estimate is.",
@@ -2940,6 +2974,12 @@
     },
     "record_dock_no_position": {
       "message": "There is no position on the map yet to record the dock at. Let the robot drive home to its dock once, then try again."
+    },
+    "no_mission_recording": {
+      "message": "Nothing has been recorded for {entity_id}. Start a recording first."
+    },
+    "mission_recording_classic_only": {
+      "message": "Mission recording works with Classic robots for now; {entity_id} is a Prime robot."
     }
   },
   "selector": {

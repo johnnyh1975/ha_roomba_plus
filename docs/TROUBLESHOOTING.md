@@ -1225,6 +1225,21 @@ identical to a robot that does not report those fields at all.
 For anything else — entity states, settings, mission history, dock
 identity — the timing does not matter.
 
+### When a mission went wrong
+
+**Applies to:** Classic robots
+
+**Cause:** A log shows what Roomba+ decided, not what the robot said.  
+**Fix:** Record the next mission like it and send the recording.
+
+When the room, the progress or the end of a mission came out wrong, start
+`roomba_plus.mission_recording_start` for the robot before the next mission
+of the same kind, and call `roomba_plus.mission_recording_stop` once it is
+back on the dock. The response is the recording: what the robot reported,
+in order, which can be played back through Roomba+ until a fix gives the
+right answer. It contains positions relative to the dock; [what else is in
+it →](reference/status-and-controls.md#mission-recording)
+
 ---
 
 ## Older versions

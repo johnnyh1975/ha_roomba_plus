@@ -160,7 +160,7 @@ from .prime_coordinator import (
     PrimeStatusCoordinator,
     note_prime_firmware,
 )
-from . import cloud_errors, mqtt_session
+from . import cloud_errors, mission_recorder, mqtt_session
 from .reported_state import roomba_reported_state  # re-exported, see the module
 from .cloud_account import async_acquire, async_release
 from .robot_log import robot_logger
@@ -2466,6 +2466,7 @@ async def async_unload_entry(
     # Cleared on unload rather than on remove, because a reload is the
     # common case and the conditions are re-evaluated on setup anyway.
     _async_clear_repair_issues(hass, config_entry)
+    mission_recorder.async_stop_for_entry(hass, config_entry.entry_id)
 
     if config_entry.runtime_data.connection_type == ConnectionType.CLOUD_ONLY:
         from .const import PRIME_PLATFORMS

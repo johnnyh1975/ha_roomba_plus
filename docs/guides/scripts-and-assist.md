@@ -138,6 +138,7 @@ Every field of every action, and which return data: [Actions](../reference/actio
 | `roomba_plus.reset_robot_profile` | all | Forget what Roomba+ learned about the robot |
 | `roomba_plus.create_backup`, `restore_backup` | all | Back up and restore everything Roomba+ stores for a robot ([Moving to Roomba+](../MIGRATING.md#replacing-or-selling-a-robot)) |
 | `roomba_plus.debug_capture_start`, `_stop`, `_get` | all | A debug log without `configuration.yaml` or a restart ([Diagnostics](../reference/status-and-controls.md#debug-capture)) |
+| `roomba_plus.mission_recording_start`, `_stop`, `_get` | Classic | A mission recorded for replay as a test ([Diagnostics](../reference/status-and-controls.md#mission-recording)) |
 | `roomba_plus.create_schedule`, `update_schedule`, `delete_schedule` | Prime | Write the robot's schedules ([guide](schedules.md)) |
 | `roomba_plus.set_quiet_hours` | Prime | Write the household's quiet hours ([guide](start-conditions.md#quiet-hours-do-not-disturb)) |
 

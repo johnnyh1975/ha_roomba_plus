@@ -2391,6 +2391,40 @@
       "name": "Récupérer la capture de débogage",
       "description": "Renvoie les lignes de la capture, anonymisées, prêtes à coller dans un ticket."
     },
+    "mission_recording_start": {
+      "name": "Démarrer l'enregistrement de mission",
+      "description": "Enregistre ce qu'un robot Classic signale pendant une mission, pour que la mission puisse être rejouée comme test. Gardé en mémoire uniquement ; identifiants du robot, adresses et identifiants de carte sont remplacés, les positions relatives à la base sont conservées. S'arrête de lui-même après la durée indiquée.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "Entité aspirateur du robot."
+        },
+        "minutes": {
+          "name": "Minutes",
+          "description": "Durée d'enregistrement avant l'arrêt automatique."
+        }
+      }
+    },
+    "mission_recording_stop": {
+      "name": "Arrêter l'enregistrement de mission",
+      "description": "Arrête l'enregistrement de mission ; renvoie ce qui a été enregistré si une réponse est demandée.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "Entité aspirateur du robot."
+        }
+      }
+    },
+    "mission_recording_get": {
+      "name": "Obtenir l'enregistrement de mission",
+      "description": "Renvoie l'enregistrement de mission jusqu'ici, prêt à joindre à un ticket.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "Entité aspirateur du robot."
+        }
+      }
+    },
     "get_rooms": {
       "name": "Obtenir les pièces",
       "description": "Renvoie les pièces et zones que le robot connaît, chacune avec son id, sa carte, sa zone Home Assistant, son estimation de durée et la qualité de cette estimation.",
@@ -2940,6 +2974,12 @@
     },
     "record_dock_no_position": {
       "message": "La carte n'a encore aucune position où enregistrer la base. Laissez le robot rentrer une fois à sa base, puis réessayez."
+    },
+    "no_mission_recording": {
+      "message": "Rien n'a été enregistré pour {entity_id}. Démarrez d'abord un enregistrement."
+    },
+    "mission_recording_classic_only": {
+      "message": "L'enregistrement de mission fonctionne pour l'instant avec les robots Classic ; {entity_id} est un robot Prime."
     }
   },
   "selector": {

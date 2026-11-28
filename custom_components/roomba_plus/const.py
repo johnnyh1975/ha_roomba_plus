@@ -1022,6 +1022,10 @@ SERVICE_PLAN_CLEAN: Final = "plan_clean"
 SERVICE_DEBUG_CAPTURE_START: Final = "debug_capture_start"  # 4.6.0, A1
 SERVICE_DEBUG_CAPTURE_STOP: Final = "debug_capture_stop"
 SERVICE_DEBUG_CAPTURE_GET: Final = "debug_capture_get"
+#: 4.7.0 -- a mission recorded for replay as a test (mission_recorder.py).
+SERVICE_MISSION_RECORDING_START: Final = "mission_recording_start"
+SERVICE_MISSION_RECORDING_STOP: Final = "mission_recording_stop"
+SERVICE_MISSION_RECORDING_GET: Final = "mission_recording_get"
 SERVICE_CREATE_BACKUP: Final = "create_backup"  # v3.5.0 FULL-BACKUP
 SERVICE_RESTORE_BACKUP: Final = "restore_backup"  # v3.5.0 FULL-BACKUP
 

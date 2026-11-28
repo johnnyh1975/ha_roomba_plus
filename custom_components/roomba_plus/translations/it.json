@@ -2391,6 +2391,40 @@
       "name": "Recupera acquisizione di debug",
       "description": "Restituisce le righe dell’acquisizione, già anonimizzate, pronte da incollare in una segnalazione."
     },
+    "mission_recording_start": {
+      "name": "Avvia registrazione missione",
+      "description": "Registra ciò che un robot Classic segnala durante una missione, così che la missione possa essere riprodotta come test. Solo in memoria; ID del robot, indirizzi e ID delle mappe vengono sostituiti, le posizioni rispetto alla base restano. Si ferma da sola dopo il tempo indicato.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "Entità aspirapolvere del robot."
+        },
+        "minutes": {
+          "name": "Minuti",
+          "description": "Per quanto registrare prima che si fermi da sola."
+        }
+      }
+    },
+    "mission_recording_stop": {
+      "name": "Ferma registrazione missione",
+      "description": "Ferma la registrazione della missione; restituisce quanto registrato se viene richiesta una risposta.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "Entità aspirapolvere del robot."
+        }
+      }
+    },
+    "mission_recording_get": {
+      "name": "Ottieni registrazione missione",
+      "description": "Restituisce la registrazione della missione finora, pronta da allegare a una segnalazione.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "Entità aspirapolvere del robot."
+        }
+      }
+    },
     "get_rooms": {
       "name": "Ottieni stanze",
       "description": "Restituisce le stanze e le zone che il robot conosce, ciascuna con id, mappa, area di Home Assistant, tempo stimato e qualità della stima.",
@@ -2940,6 +2974,12 @@
     },
     "record_dock_no_position": {
       "message": "La mappa non ha ancora una posizione in cui registrare la base. Lascia che il robot torni una volta alla base, poi riprova."
+    },
+    "no_mission_recording": {
+      "message": "Non è stato registrato nulla per {entity_id}. Avvia prima una registrazione."
+    },
+    "mission_recording_classic_only": {
+      "message": "Per ora la registrazione della missione funziona con i robot Classic; {entity_id} è un robot Prime."
     }
   },
   "selector": {

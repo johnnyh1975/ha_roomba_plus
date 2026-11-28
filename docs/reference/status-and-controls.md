@@ -105,6 +105,16 @@ Prime robots have their own settings (suction, pad wetness, washing, drying, aut
 
 The lines are redacted before they are kept: addresses (IPv4, IPv6, MAC), e-mail addresses, robot ids, tokens and keys, and the values of fields with private names (passwords, network names, positions). It is the same list the diagnostics use. Look the text over before posting it all the same: a room you named after a person is not something a filter can know.
 
+### Mission recording
+
+*New in 4.7.* **Applies to:** Classic robots
+
+`roomba_plus.mission_recording_start` records what the robot reports while it cleans, message by message with the seconds since the start, so the mission can be played back through Roomba+ as a test. It runs for 180 minutes unless `minutes` says otherwise (at most 360), keeps at most 20,000 messages and stops by itself. `mission_recording_stop` ends it, `mission_recording_get` returns it; both take the robot's vacuum entity and answer as an action response, ready to copy into an issue. A new start replaces the last recording; a reload of the robot stops it and keeps what was recorded. Nothing is written to disk.
+
+What it keeps is a fixed list of the state fields the mission course, the room tracking, the dock and the maintenance counters read. The network block, the robot's name, its schedules and anything a newer firmware adds are left out. Robot ids, addresses, e-mail addresses and token-shaped values are redacted as in the debug capture, and map ids become `map-1`, `map-2`. Room names are not in it.
+
+**Positions are kept**, in millimetres from the dock, because the room tracking cannot be replayed without them. With no map and no origin they do not place your home anywhere, but over a whole mission they trace its floor plan. Leave a recording out of a public issue if that matters to you, or ask for an address to send it to.
+
 ### Diagnostics download
 
 The device page → ⋮ → **Download diagnostics**. It covers the map, the zones, the room geometry, the cloud, the robot profile (battery chemistry and scale), the intervals learned from your replacements, the firmware of each component, and the field evidence the troubleshooting page asks for. No address, password, hash or coordinates. What to send with a report: [Reporting a problem](../TROUBLESHOOTING.md#reporting-a-problem).

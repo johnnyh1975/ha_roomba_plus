@@ -144,6 +144,20 @@ several of this project's investigations were solved from a single block.
 The one thing worth saying plainly: nothing in a diagnostics download
 identifies you personally unless your own room or zone names do.
 
+## What is in a mission recording
+
+**Applies to:** Classic robots
+
+Only made when you start one (`roomba_plus.mission_recording_start`), and
+kept in memory, never on disk. It holds the state fields the mission logic
+reads, with robot ids, addresses, e-mail addresses and tokens redacted and
+map ids replaced by `map-1`, `map-2`. No room names, network details or
+schedules.
+
+**It keeps the robot's positions**, in millimetres from the dock. That is
+what makes it replayable, and over a whole mission it traces the floor plan
+of your home. [In full →](reference/status-and-controls.md#mission-recording)
+
 ## Getting rid of it
 
 **Applies to:** all robots

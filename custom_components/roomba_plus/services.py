@@ -34,6 +34,7 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.storage import Store
+from homeassistant.loader import async_get_integration
 
 from .robot_profile_store import RobotProfileStore
 from .command_record import record_command
@@ -44,6 +45,9 @@ from .const import (
     SERVICE_DEBUG_CAPTURE_GET,
     SERVICE_DEBUG_CAPTURE_START,
     SERVICE_DEBUG_CAPTURE_STOP,
+    SERVICE_MISSION_RECORDING_GET,
+    SERVICE_MISSION_RECORDING_START,
+    SERVICE_MISSION_RECORDING_STOP,
     SERVICE_RETRY_MISSED_ROOMS,
     SERVICE_GET_ROOMS,
     SERVICE_GET_MISSIONS,
@@ -93,7 +97,7 @@ from .const import (
 from .prime_coordinator import prime_region_names_from_command
 from .room_cleaning import ZID_PREFIX, async_get_room_cleaning_backend
 from .zone_naming import resolve_zone_name
-from . import command_watch, mission_queries
+from . import command_watch, mission_queries, mission_recorder
 from .debug_capture import DEFAULT_MINUTES as DEBUG_DEFAULT_MINUTES
 from .debug_capture import MAX_MINUTES as DEBUG_MAX_MINUTES
 from .debug_capture import get_capture as get_debug_capture
@@ -1888,6 +1892,53 @@ async def async_handle_debug_capture_get(call: ServiceCall) -> dict[str, Any]:
     return get_debug_capture(call.hass).report()
 
 
+# ── 4.7.0 — mission recording (mission_recorder.py) ─────────────────────────
+
+def _recording_of(call: ServiceCall, service: str) -> mission_recorder.MissionRecording:
+    """The robot's recording, or a validation error if there is none."""
+    entry = _query_entry(call, service)
+    recording = mission_recorder.recordings(call.hass).get(entry.entry_id)
+    if recording is None:
+        raise ServiceValidationError(
+            f"{service}: nothing recorded for {call.data['entity_id']}",
+            translation_domain=DOMAIN, translation_key="no_mission_recording",
+            translation_placeholders={"entity_id": str(call.data["entity_id"])},
+        )
+    return recording
+
+
+async def async_handle_mission_recording_start(call: ServiceCall) -> None:
+    """roomba_plus.mission_recording_start: record what the robot reports."""
+    entry = _query_entry(call, SERVICE_MISSION_RECORDING_START)
+    if getattr(entry.runtime_data, "roomba", None) is None:
+        raise ServiceValidationError(
+            f"mission_recording_start: {call.data['entity_id']} is not a Classic robot",
+            translation_domain=DOMAIN, translation_key="mission_recording_classic_only",
+            translation_placeholders={"entity_id": str(call.data["entity_id"])},
+        )
+    minutes = int(call.data.get("minutes", mission_recorder.DEFAULT_MINUTES))
+    integration = await async_get_integration(call.hass, DOMAIN)
+    mission_recorder.async_start(
+        call.hass, entry, minutes, str(integration.version or "") or None,
+    )
+    robot_logger(_LOGGER, entry).info(
+        "Mission recording started for %d minutes; kept in memory until "
+        "roomba_plus.mission_recording_get.", minutes,
+    )
+
+
+async def async_handle_mission_recording_stop(call: ServiceCall) -> dict[str, Any]:
+    """roomba_plus.mission_recording_stop: stop, and return what was recorded."""
+    recording = _recording_of(call, SERVICE_MISSION_RECORDING_STOP)
+    recording.stop()
+    return recording.report()
+
+
+async def async_handle_mission_recording_get(call: ServiceCall) -> dict[str, Any]:
+    """roomba_plus.mission_recording_get: what was recorded so far."""
+    return _recording_of(call, SERVICE_MISSION_RECORDING_GET).report()
+
+
 async def async_handle_retry_missed_rooms(call: ServiceCall) -> None:
     """Handle roomba_plus.retry_missed_rooms (4.6.0, A5).
 
@@ -2652,6 +2703,36 @@ def async_register_services(hass: HomeAssistant) -> None:
             SERVICE_DEBUG_CAPTURE_GET,
             async_handle_debug_capture_get,
             schema=vol.Schema({}),
+            supports_response=SupportsResponse.ONLY,
+        )
+
+    # ── 4.7.0 — mission recording ─────────────────────────────────────────────
+    if not hass.services.has_service(DOMAIN, SERVICE_MISSION_RECORDING_START):
+        register_guarded(hass,
+            DOMAIN,
+            SERVICE_MISSION_RECORDING_START,
+            async_handle_mission_recording_start,
+            schema=vol.Schema({
+                vol.Required("entity_id"): cv.entity_id,
+                vol.Optional("minutes", default=mission_recorder.DEFAULT_MINUTES): vol.All(
+                    vol.Coerce(int), vol.Range(min=1, max=mission_recorder.MAX_MINUTES),
+                ),
+            }),
+        )
+    if not hass.services.has_service(DOMAIN, SERVICE_MISSION_RECORDING_STOP):
+        register_guarded(hass,
+            DOMAIN,
+            SERVICE_MISSION_RECORDING_STOP,
+            async_handle_mission_recording_stop,
+            schema=vol.Schema({vol.Required("entity_id"): cv.entity_id}),
+            supports_response=SupportsResponse.OPTIONAL,
+        )
+    if not hass.services.has_service(DOMAIN, SERVICE_MISSION_RECORDING_GET):
+        register_guarded(hass,
+            DOMAIN,
+            SERVICE_MISSION_RECORDING_GET,
+            async_handle_mission_recording_get,
+            schema=vol.Schema({vol.Required("entity_id"): cv.entity_id}),
             supports_response=SupportsResponse.ONLY,
         )
 

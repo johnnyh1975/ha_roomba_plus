@@ -2391,6 +2391,40 @@
       "name": "Debugopname ophalen",
       "description": "Geeft de regels van de opname terug, geanonimiseerd en klaar om in een issue te plakken."
     },
+    "mission_recording_start": {
+      "name": "Missie-opname starten",
+      "description": "Neemt op wat een Classic-robot tijdens een missie meldt, zodat de missie als test kan worden afgespeeld. Alleen in het geheugen; robot-id's, adressen en kaart-id's worden vervangen, posities ten opzichte van het dock blijven behouden. Stopt vanzelf na de opgegeven tijd.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "Stofzuigerentiteit van de robot."
+        },
+        "minutes": {
+          "name": "Minuten",
+          "description": "Hoe lang er wordt opgenomen voordat het vanzelf stopt."
+        }
+      }
+    },
+    "mission_recording_stop": {
+      "name": "Missie-opname stoppen",
+      "description": "Stopt de missie-opname; geeft het opgenomene terug als om een antwoord wordt gevraagd.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "Stofzuigerentiteit van de robot."
+        }
+      }
+    },
+    "mission_recording_get": {
+      "name": "Missie-opname ophalen",
+      "description": "Geeft de missie-opname tot nu toe terug, klaar om aan een issue toe te voegen.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "Stofzuigerentiteit van de robot."
+        }
+      }
+    },
     "get_rooms": {
       "name": "Ruimtes ophalen",
       "description": "Geeft de ruimtes en zones die de robot kent, elk met id, kaart, Home Assistant-gebied, tijdschatting en hoe goed die schatting is.",
@@ -2940,6 +2974,12 @@
     },
     "record_dock_no_position": {
       "message": "De kaart heeft nog geen positie om het basisstation vast te leggen. Laat de robot eenmaal naar zijn basisstation rijden en probeer het opnieuw."
+    },
+    "no_mission_recording": {
+      "message": "Er is niets opgenomen voor {entity_id}. Start eerst een opname."
+    },
+    "mission_recording_classic_only": {
+      "message": "Missie-opname werkt voorlopig met Classic-robots; {entity_id} is een Prime-robot."
     }
   },
   "selector": {

@@ -29,6 +29,9 @@ Which robots each action works on, and examples: [Scripts and Assist](../guides/
 | [`roomba_plus.maintenance_done`](#roomba_plusmaintenance_done) | Marks a maintenance entry as done: a part replaced or a care task carried out. |  |
 | [`roomba_plus.maintenance_forget_learned`](#roomba_plusmaintenance_forget_learned) | Forgets the replacement interval learned from your own replacements, for one part or every part of a Classic robot. |  |
 | [`roomba_plus.maintenance_snooze`](#roomba_plusmaintenance_snooze) | No reminder for a maintenance entry for a number of days. |  |
+| [`roomba_plus.mission_recording_get`](#roomba_plusmission_recording_get) | Returns the mission recording so far, ready to attach to an issue. | Always |
+| [`roomba_plus.mission_recording_start`](#roomba_plusmission_recording_start) | Records what a Classic robot reports during a mission, so the mission can be replayed as a test. |  |
+| [`roomba_plus.mission_recording_stop`](#roomba_plusmission_recording_stop) | Stops the mission recording; returns what was recorded when asked for a response. | Optional |
 | [`roomba_plus.plan_clean`](#roomba_plusplan_clean) | Returns what a clean started now would take, without starting it: the rooms in order with their estimates, the total and the end. | Always |
 | [`roomba_plus.reset_battery`](#roomba_plusreset_battery) | Record the current time as the battery replacement date. |  |
 | [`roomba_plus.reset_bin_cleaning`](#roomba_plusreset_bin_cleaning) | Record that the bin was cleaned now. |  |
@@ -255,6 +258,35 @@ Target: a Roomba+ vacuum.
 |---|---|---|---|
 | `item` | Yes | **Entry.** The entry's id, from the maintenance sensor's items attribute, for example replace.filter or clean.wheel. | `replace.filter` |
 | `days` |  | **Days.** How many days; 1 if left empty. |  |
+
+## `roomba_plus.mission_recording_get`
+
+**Get mission recording.** Returns the mission recording so far, ready to attach to an issue.
+
+Returns data, always: call it with `response_variable`.
+
+| Field | Required | What it is | Example |
+|---|---|---|---|
+| `entity_id` | Yes | **Robot.** Vacuum entity of the robot. |  |
+
+## `roomba_plus.mission_recording_start`
+
+**Start mission recording.** Records what a Classic robot reports during a mission, so the mission can be replayed as a test. Kept in memory only; robot ids, addresses and map ids are replaced, positions relative to the dock are kept. Stops by itself after the given time.
+
+| Field | Required | What it is | Example |
+|---|---|---|---|
+| `entity_id` | Yes | **Robot.** Vacuum entity of the robot. |  |
+| `minutes` |  | **Minutes.** How long to record before it stops by itself. |  |
+
+## `roomba_plus.mission_recording_stop`
+
+**Stop mission recording.** Stops the mission recording; returns what was recorded when asked for a response.
+
+Returns data when you ask for it with `response_variable`.
+
+| Field | Required | What it is | Example |
+|---|---|---|---|
+| `entity_id` | Yes | **Robot.** Vacuum entity of the robot. |  |
 
 ## `roomba_plus.plan_clean`
 

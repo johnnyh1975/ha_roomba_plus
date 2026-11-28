@@ -2391,6 +2391,40 @@
       "name": "Pobierz zapis debugowania",
       "description": "Zwraca wiersze zapisu, zanonimizowane i gotowe do wklejenia w zgłoszeniu."
     },
+    "mission_recording_start": {
+      "name": "Rozpocznij nagrywanie misji",
+      "description": "Nagrywa to, co robot Classic zgłasza podczas misji, aby misję można było odtworzyć jako test. Tylko w pamięci; identyfikatory robota, adresy i identyfikatory map są zastępowane, pozycje względem stacji pozostają. Kończy się samo po podanym czasie.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "Encja odkurzacza robota."
+        },
+        "minutes": {
+          "name": "Minuty",
+          "description": "Jak długo nagrywać, zanim nagrywanie zakończy się samo."
+        }
+      }
+    },
+    "mission_recording_stop": {
+      "name": "Zatrzymaj nagrywanie misji",
+      "description": "Zatrzymuje nagrywanie misji; na żądanie zwraca to, co zostało nagrane.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "Encja odkurzacza robota."
+        }
+      }
+    },
+    "mission_recording_get": {
+      "name": "Pobierz nagranie misji",
+      "description": "Zwraca dotychczasowe nagranie misji, gotowe do dołączenia do zgłoszenia.",
+      "fields": {
+        "entity_id": {
+          "name": "Robot",
+          "description": "Encja odkurzacza robota."
+        }
+      }
+    },
     "get_rooms": {
       "name": "Pobierz pomieszczenia",
       "description": "Zwraca pomieszczenia i strefy znane robotowi, każde z identyfikatorem, mapą, obszarem Home Assistant, szacowanym czasem i jakością tego szacunku.",
@@ -2940,6 +2974,12 @@
     },
     "record_dock_no_position": {
       "message": "Na mapie nie ma jeszcze pozycji, w której można zapisać stację dokującą. Pozwól robotowi raz wrócić do stacji i spróbuj ponownie."
+    },
+    "no_mission_recording": {
+      "message": "Dla {entity_id} nic nie zostało nagrane. Najpierw rozpocznij nagrywanie."
+    },
+    "mission_recording_classic_only": {
+      "message": "Nagrywanie misji działa na razie z robotami Classic; {entity_id} to robot Prime."
     }
   },
   "selector": {

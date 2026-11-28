@@ -2391,6 +2391,40 @@
       "name": "Debug-Mitschnitt abrufen",
       "description": "Gibt die Zeilen des Debug-Mitschnitts zurück, geschwärzt und fertig zum Einfügen in ein Issue."
     },
+    "mission_recording_start": {
+      "name": "Missionsaufzeichnung starten",
+      "description": "Zeichnet auf, was ein Classic-Roboter während einer Mission meldet, damit die Mission als Test nachgespielt werden kann. Nur im Speicher; Roboter-IDs, Adressen und Karten-IDs werden ersetzt, Positionen relativ zur Ladestation bleiben erhalten. Endet von selbst nach der angegebenen Zeit.",
+      "fields": {
+        "entity_id": {
+          "name": "Roboter",
+          "description": "Staubsauger-Entität des Roboters."
+        },
+        "minutes": {
+          "name": "Minuten",
+          "description": "Wie lange aufgezeichnet wird, bevor es von selbst endet."
+        }
+      }
+    },
+    "mission_recording_stop": {
+      "name": "Missionsaufzeichnung beenden",
+      "description": "Beendet die Missionsaufzeichnung; gibt auf Wunsch das Aufgezeichnete zurück.",
+      "fields": {
+        "entity_id": {
+          "name": "Roboter",
+          "description": "Staubsauger-Entität des Roboters."
+        }
+      }
+    },
+    "mission_recording_get": {
+      "name": "Missionsaufzeichnung abrufen",
+      "description": "Gibt die bisherige Missionsaufzeichnung zurück, fertig zum Anhängen an ein Issue.",
+      "fields": {
+        "entity_id": {
+          "name": "Roboter",
+          "description": "Staubsauger-Entität des Roboters."
+        }
+      }
+    },
     "get_rooms": {
       "name": "Räume abrufen",
       "description": "Gibt die Räume und Zonen zurück, die der Roboter kennt, jeweils mit ID, Karte, Home-Assistant-Bereich, Zeitschätzung und deren Güte.",
@@ -2940,6 +2974,12 @@
     },
     "record_dock_no_position": {
       "message": "Auf der Karte gibt es noch keine Position, an der die Ladestation eingetragen werden kann. Den Roboter einmal zur Ladestation fahren lassen und es dann erneut versuchen."
+    },
+    "no_mission_recording": {
+      "message": "Für {entity_id} wurde nichts aufgezeichnet. Starte zuerst eine Aufzeichnung."
+    },
+    "mission_recording_classic_only": {
+      "message": "Die Missionsaufzeichnung funktioniert vorerst mit Classic-Robotern; {entity_id} ist ein Prime-Roboter."
     }
   },
   "selector": {

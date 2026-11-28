@@ -198,6 +198,41 @@ debug_capture_start:
 
 debug_capture_stop:
 debug_capture_get:
+mission_recording_start:
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          domain: vacuum
+          integration: roomba_plus
+    minutes:
+      required: false
+      default: 180
+      selector:
+        number:
+          min: 1
+          max: 360
+          unit_of_measurement: min
+
+mission_recording_stop:
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          domain: vacuum
+          integration: roomba_plus
+
+mission_recording_get:
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          domain: vacuum
+          integration: roomba_plus
+
 clean_overdue_rooms:
   fields:
     entity_id:

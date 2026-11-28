@@ -118,6 +118,10 @@ class TestServicesRegistration:
             (DOMAIN, "debug_capture_start"),
             (DOMAIN, "debug_capture_stop"),
             (DOMAIN, "debug_capture_get"),
+            # 4.7.0 -- mission recording
+            (DOMAIN, "mission_recording_start"),
+            (DOMAIN, "mission_recording_stop"),
+            (DOMAIN, "mission_recording_get"),
             # v3.3.0 ROOM-SCHED
             (DOMAIN, "clean_overdue_rooms"),
             # v3.3.0 SMART-ORDER
@@ -150,7 +154,7 @@ class TestServicesRegistration:
         async_register_services(hass)
         # Handler not replaced on second call
         assert registered[(DOMAIN, "clean_room")] is first_handler
-        assert len(registered) == 34
+        assert len(registered) == 37
 
     # THE REMOVAL TESTS ARE GONE WITH THE REMOVAL (4.2.11, quality scale:
     # action-setup). Services used to disappear when the last entry
@@ -168,7 +172,7 @@ class TestServicesRegistration:
         hass, registered = self._make_hass()
         assert asyncio.run(async_setup(hass, {})) is True
         assert (DOMAIN, "clean_room") in registered
-        assert len(registered) == 34
+        assert len(registered) == 37
 
 
 class TestConfCleanDelayMin:
