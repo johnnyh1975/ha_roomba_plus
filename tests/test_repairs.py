@@ -499,6 +499,8 @@ class TestBatteryContactIssue:
             assert call_kwargs["translation_key"] == "battery_contact_suspect"
             assert call_kwargs["translation_placeholders"]["cause"] == "jump"
             assert call_kwargs["translation_placeholders"]["name"] == "Upstairs"
+            # One per robot (4.6.13): a shared id passed the suite.
+            assert mock_ir.async_create_issue.call_args[0][2] == f"battery_contact_suspect_{entry.entry_id}"
 
     @pytest.mark.asyncio
     async def test_single_isolated_jump_does_not_fire_below_debounce(self):

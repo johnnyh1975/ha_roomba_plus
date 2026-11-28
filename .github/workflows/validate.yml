@@ -463,6 +463,11 @@ jobs:
       - name: Check late imports
         run: python3 scripts/check_late_imports.py
 
+      # One robot's repair must not clear another's (4.6.12): every
+      # issue about a robot carries its entry id in the issue id.
+      - name: Check repair issue ids carry the entry id
+        run: python3 scripts/check_issue_ids.py
+
       # THE MESSAGE IS THE POINT. All three of these also run inside the
       # test suite, so coverage is not the reason they are here -- a
       # failure there reads as "one test in test_quality_scale.py

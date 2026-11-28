@@ -332,6 +332,51 @@ class TestLateImportGuard:
         assert guard.main() == 0
 
 
+class TestIssueIdGuard:
+    """4.6.12 made four shared repair ids per robot; a copy with one of
+    them shared again passed the whole suite (independent review, 28.11.)."""
+
+    def _package(self, tmp_path: Path, issue_id: str) -> Path:
+        (tmp_path / "repairs.py").write_text(
+            "from homeassistant.helpers import issue_registry as ir\n\n\n"
+            "def raise_it(hass, config_entry):\n"
+            f"    issue_id = {issue_id}\n"
+            "    ir.async_create_issue(hass, 'roomba_plus', issue_id, is_fixable=False)\n",
+            encoding="utf-8",
+        )
+        return tmp_path
+
+    def test_it_reports_an_id_shared_by_every_robot(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        guard = _load("check_issue_ids")
+        monkeypatch.setattr(guard, "PACKAGE", self._package(tmp_path, '"dock_contact_health"'))
+        monkeypatch.setattr(guard, "NOT_PER_ROBOT", {})
+        assert guard.main() == 1
+
+    def test_an_id_with_the_entry_passes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        guard = _load("check_issue_ids")
+        monkeypatch.setattr(
+            guard, "PACKAGE",
+            self._package(tmp_path, 'f"dock_contact_health_{config_entry.entry_id}"'),
+        )
+        monkeypatch.setattr(guard, "NOT_PER_ROBOT", {})
+        assert guard.main() == 0
+
+    def test_a_listed_function_that_raises_nothing_is_reported(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        guard = _load("check_issue_ids")
+        monkeypatch.setattr(
+            guard, "PACKAGE",
+            self._package(tmp_path, 'f"x_{config_entry.entry_id}"'),
+        )
+        monkeypatch.setattr(guard, "NOT_PER_ROBOT", {"repairs.gone": "reason"})
+        assert guard.main() == 1
+
+
 class TestServiceSchemaGuard:
     """A field documented in services.yaml but absent from the schema.
 
