@@ -151,6 +151,7 @@ def _make_config_entry(bbchg: dict):
     """Build a mock config_entry whose vacuum has the given bbchg state."""
     entry = MagicMock()
     entry.entry_id = "test_entry"
+    entry.title = "Upstairs"
     entry.runtime_data.roomba_reported_state.return_value = {"bbchg": bbchg}
     return entry
 
@@ -162,6 +163,7 @@ class TestFurnitureChange:
 
     def _entry_with_candidates(self, candidates):
         entry = _make_entry()
+        entry.title = "Upstairs"
         gs = MagicMock()
         gs.furniture_candidates.return_value = candidates
         gs._furniture_dismissed_at = {}
@@ -212,7 +214,8 @@ class TestFurnitureChange:
             await async_check_furniture_change(hass, entry)
             mock_ir.async_create_issue.assert_called_once()
             args = mock_ir.async_create_issue.call_args
-            assert args[0][2] == "furniture_1_2"
+            assert args[0][2] == f"furniture_{entry.entry_id}_1_2"
+            assert args.kwargs["translation_placeholders"]["name"] == "Upstairs"
 
     @pytest.mark.asyncio
     async def test_one_issue_per_area_not_per_cell(self):
@@ -231,9 +234,10 @@ class TestFurnitureChange:
             await async_check_furniture_change(hass, entry)
         created = {c.args[2]: c.kwargs["translation_placeholders"]
                    for c in mock_ir.async_create_issue.call_args_list}
+        prefix = f"furniture_{entry.entry_id}_"
         assert created == {
-            "furniture_1_2": {"x_mm": "300", "y_mm": "400"},
-            "furniture_9_9": {"x_mm": "1350", "y_mm": "1350"},
+            f"{prefix}1_2": {"name": "Upstairs", "x_mm": "300", "y_mm": "400"},
+            f"{prefix}9_9": {"name": "Upstairs", "x_mm": "1350", "y_mm": "1350"},
         }
 
     @pytest.mark.asyncio
@@ -245,11 +249,34 @@ class TestFurnitureChange:
         with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
             reg = mock_ir.async_get.return_value
             reg.async_get_issue.return_value = None
+            prefix = f"furniture_{entry.entry_id}_"
             reg.issues = {
-                ("roomba_plus", "furniture_1_2"): MagicMock(),
-                ("roomba_plus", "furniture_5_5"): MagicMock(),
+                ("roomba_plus", f"{prefix}1_2"): MagicMock(),
+                ("roomba_plus", f"{prefix}5_5"): MagicMock(),
                 ("roomba_plus", "mqtt_watchdog_x"): MagicMock(),
-                ("other", "furniture_7_7"): MagicMock(),
+                ("other", f"{prefix}7_7"): MagicMock(),
+            }
+            await async_check_furniture_change(hass, entry)
+            mock_ir.async_delete_issue.assert_called_once_with(
+                hass, "roomba_plus", f"{prefix}5_5"
+            )
+
+    @pytest.mark.asyncio
+    async def test_one_robot_leaves_the_areas_of_another_alone(self):
+        """4.6.12: the id was `furniture_<x>_<y>` for every robot, so the
+        check of one robot deleted the areas another had found -- they
+        were not candidates on a map they never came from. The id from
+        before goes, being nobody's now."""
+        hass = _make_hass()
+        entry, gs = self._entry_with_candidates([
+            {"cell": (1, 2), "x_mm": 150.0, "y_mm": 300.0},
+        ])
+        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
+            reg = mock_ir.async_get.return_value
+            reg.async_get_issue.return_value = None
+            reg.issues = {
+                ("roomba_plus", "furniture_other_entry_5_5"): MagicMock(),
+                ("roomba_plus", "furniture_5_5"): MagicMock(),
             }
             await async_check_furniture_change(hass, entry)
             mock_ir.async_delete_issue.assert_called_once_with(
@@ -357,7 +384,7 @@ class TestFurnitureChange:
             mock_ir.async_get.return_value.async_get_issue.return_value = None
             await async_check_furniture_change(hass, entry)
             mock_ir.async_delete_issue.assert_called_once_with(
-                hass, "roomba_plus", "furniture_1_2"
+                hass, "roomba_plus", f"furniture_{entry.entry_id}_1_2"
             )
             # Delete must happen before create, not after — otherwise
             # the fresh create would immediately get deleted.
@@ -406,6 +433,7 @@ def _make_contact_entry(batpct=None, phase=""):
     check reads.
     """
     entry = MagicMock()
+    entry.title = "Upstairs"
     rd = entry.runtime_data
     rd.roomba_reported_state = MagicMock(
         return_value={"batPct": batpct, "cleanMissionStatus": {"phase": phase}}
@@ -470,6 +498,7 @@ class TestBatteryContactIssue:
             call_kwargs = mock_ir.async_create_issue.call_args[1]
             assert call_kwargs["translation_key"] == "battery_contact_suspect"
             assert call_kwargs["translation_placeholders"]["cause"] == "jump"
+            assert call_kwargs["translation_placeholders"]["name"] == "Upstairs"
 
     @pytest.mark.asyncio
     async def test_single_isolated_jump_does_not_fire_below_debounce(self):
@@ -1498,6 +1527,27 @@ class TestDockHealthRepairIssue:
         assert str(_DOCK_CHATTERS_THRESHOLD + 1) in call_kwargs["translation_placeholders"]["chatters"]
 
     @pytest.mark.asyncio
+    async def test_the_issue_and_the_log_name_the_robot(self, caplog):
+        """@lloydbayley has several robots, and the issue named none of
+        them. The name goes into it, and into one warning in the log
+        when it is raised -- not again on every check while it stands."""
+        entry = _make_config_entry({"nChatters": 60, "nKnockoffs": 179, "nAborts": 0})
+        hass = MagicMock()
+        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
+            mock_ir.async_get.return_value.async_get_issue.return_value = None
+            with caplog.at_level("WARNING", logger="custom_components.roomba_plus.repairs"):
+                await async_check_dock_health(hass, entry)
+            mock_ir.async_get.return_value.async_get_issue.return_value = MagicMock()
+            await async_check_dock_health(hass, entry)
+        placeholders = mock_ir.async_create_issue.call_args.kwargs["translation_placeholders"]
+        assert placeholders["name"] == "Upstairs"
+        logged = [r.getMessage() for r in caplog.records if "dock contact" in r.getMessage()]
+        assert logged == [
+            "Upstairs: dock contact counters are high (chatters 60, knockoffs 179, "
+            "charge aborts 0); see Settings > Repairs"
+        ]
+
+    @pytest.mark.asyncio
     async def test_fires_when_knockoffs_exceeded(self):
         entry = _make_config_entry({
             "nChatters": 0,
@@ -2057,6 +2107,7 @@ class TestMapRetrainWorkflow:
         # class has the same latent cross-test leakage risk a real CI run
         # caught elsewhere, even though no test here currently fails from it.
         entry.entry_id = entry_id or f"test_map_entry_{uuid.uuid4().hex}"
+        entry.title = "Upstairs"
         return entry
 
     def test_not_updating_clears_issue_and_state(self):
@@ -2133,6 +2184,7 @@ class TestMapRetrainWorkflow:
         from homeassistant.helpers import issue_registry as ir
         assert kwargs["severity"] == ir.IssueSeverity.ERROR
         assert kwargs["translation_key"] == "map_retrain_stuck"
+        assert kwargs["translation_placeholders"]["name"] == "Upstairs"
 
     def test_stuck_stage_does_not_fire_any_bus_event(self):
         """v3.5.0: only the WARN stage (map_retrain_in_progress) fires an
@@ -3606,43 +3658,67 @@ class TestCounterReset:
     was reset or its board replaced; the maintenance baselines are wrong."""
 
     @pytest.mark.asyncio
-    async def test_a_reset_counter_names_the_affected_parts(self, hass):
+    async def test_a_reset_counter_names_the_robot_and_the_affected_parts(self, hass):
+        entry = MockConfigEntry(domain=DOMAIN, title="Upstairs")
         store = SimpleNamespace(filter_reset_hr=500, brush_reset_hr=100, battery_reset_hr=900)
-        await rp.async_check_bbrun_reset(hass, MagicMock(), store, 300)
-        issue = _issue(hass, "maintenance_baselines_reset")
+        await rp.async_check_bbrun_reset(hass, entry, store, 300)
+        issue = _issue(hass, f"maintenance_baselines_reset_{entry.entry_id}")
         assert issue is not None
+        assert issue.translation_placeholders["name"] == "Upstairs"
         assert "filter" in issue.translation_placeholders["parts"]
         assert "brush" not in issue.translation_placeholders["parts"]
 
     @pytest.mark.asyncio
     async def test_a_consistent_counter_clears_the_issue(self, hass):
+        entry = MockConfigEntry(domain=DOMAIN, title="Upstairs")
         store = SimpleNamespace(filter_reset_hr=500, brush_reset_hr=500, battery_reset_hr=500)
-        await rp.async_check_bbrun_reset(hass, MagicMock(), store, 300)
-        await rp.async_check_bbrun_reset(hass, MagicMock(), store, 900)
-        assert _issue(hass, "maintenance_baselines_reset") is None
+        await rp.async_check_bbrun_reset(hass, entry, store, 300)
+        await rp.async_check_bbrun_reset(hass, entry, store, 900)
+        assert _issue(hass, f"maintenance_baselines_reset_{entry.entry_id}") is None
+
+    @pytest.mark.asyncio
+    async def test_a_second_robot_does_not_clear_the_first_robots_issue(self, hass):
+        """4.6.12: one id for every robot, so the robot whose counter was
+        fine cleared the issue of the one whose counter was reset."""
+        reset = MockConfigEntry(domain=DOMAIN, title="Upstairs")
+        fine = MockConfigEntry(domain=DOMAIN, title="Downstairs")
+        store = SimpleNamespace(filter_reset_hr=500, brush_reset_hr=500, battery_reset_hr=500)
+        await rp.async_check_bbrun_reset(hass, reset, store, 300)
+        await rp.async_check_bbrun_reset(hass, fine, store, 900)
+        assert _issue(hass, f"maintenance_baselines_reset_{reset.entry_id}") is not None
 
 
 class TestObservedZones:
 
-    def _entry(self, *, centroids, stuck, cloud=True, grid=True):
+    def _entry(self, *, centroids, stuck, cloud=True, grid=True, entry_id="e1", title="Upstairs"):
         data = SimpleNamespace(
             cloud_coordinator=SimpleNamespace(observed_zone_centroids=centroids) if cloud else None,
             grid_store=SimpleNamespace(stuck_event_count=stuck) if grid else None)
-        return SimpleNamespace(runtime_data=data)
+        return SimpleNamespace(runtime_data=data, entry_id=entry_id, title=title)
 
     @pytest.mark.asyncio
     async def test_zones_the_robot_avoids_are_suggested_until_it_gets_stuck_there(self, hass):
         await rp.async_check_observed_zones(hass, self._entry(centroids=[{"x": 1}], stuck=0))
-        assert _issue(hass, "observed_zones_detected") is not None
+        issue = _issue(hass, "observed_zones_detected_e1")
+        assert issue is not None
+        assert issue.translation_placeholders["name"] == "Upstairs"
         await rp.async_check_observed_zones(hass, self._entry(centroids=[{"x": 1}], stuck=2))
-        assert _issue(hass, "observed_zones_detected") is None
+        assert _issue(hass, "observed_zones_detected_e1") is None
+
+    @pytest.mark.asyncio
+    async def test_a_second_robot_does_not_clear_the_first_robots_issue(self, hass):
+        await rp.async_check_observed_zones(hass, self._entry(centroids=[{"x": 1}], stuck=0))
+        await rp.async_check_observed_zones(
+            hass, self._entry(centroids=[{"x": 1}], stuck=2, entry_id="e2", title="Downstairs")
+        )
+        assert _issue(hass, "observed_zones_detected_e1") is not None
 
     @pytest.mark.parametrize("kw", [{"cloud": False}, {"centroids": []}, {"grid": False}])
     @pytest.mark.asyncio
     async def test_without_the_inputs_nothing_is_raised(self, hass, kw):
         args = {"centroids": [{"x": 1}], "stuck": 0, **kw}
         await rp.async_check_observed_zones(hass, self._entry(**args))
-        assert _issue(hass, "observed_zones_detected") is None
+        assert _issue(hass, "observed_zones_detected_e1") is None
 
 
 class TestMaintenanceRepairFlow:
@@ -3940,3 +4016,66 @@ class TestClassicRobotOnTheCloud:
         assert refused.kwargs["severity"] == repairs.ir.IssueSeverity.ERROR
         assert refused.kwargs["translation_placeholders"] == {"name": "Main"}
         delete.assert_called_once_with(hass, repairs.DOMAIN, "classic_robot_on_cloud_entry1")
+
+
+class TestEveryRobotIssueNamesTheRobot:
+    """With several robots a title like "Dock contact health issue
+    detected" says nothing about which one (@lloydbayley, 4.6.12). Every
+    issue about one robot starts its title with the robot's name, in
+    every language."""
+
+    ROBOT_ISSUES = (
+        "battery_contact_suspect", "classic_robot_cloud_refused",
+        "classic_robot_on_cloud", "dock_contact_health", "layout_change_detected",
+        "maintenance_baselines_reset", "maintenance_error_care",
+        "maintenance_part_overdue", "map_retrain_stuck", "mqtt_watchdog",
+        "mqtt_watchdog_cloud_connected", "mqtt_watchdog_cloud_disconnected",
+        "mqtt_watchdog_cloud_unknown", "observed_zones_detected", "zones_need_naming",
+    )
+
+    @pytest.mark.parametrize(
+        "path",
+        ["strings.json", *(f"translations/{lang}.json" for lang in
+                           ("en", "de", "fr", "es", "it", "nl", "pl", "pt"))],
+    )
+    def test_the_title_starts_with_the_name(self, path):
+        import json
+        import pathlib
+
+        issues = json.loads(
+            pathlib.Path("custom_components/roomba_plus", path).read_text(encoding="utf-8")
+        )["issues"]
+        unnamed = [k for k in self.ROBOT_ISSUES if not issues[k]["title"].startswith("{name}")]
+        assert not unnamed
+
+    @pytest.mark.parametrize(
+        "lang", ("en", "de", "fr", "es", "it", "nl", "pl", "pt"),
+    )
+    def test_the_dock_advice_is_a_slightly_damp_cloth_in_the_language(self, lang):
+        """iRobot and our care guides say slightly damp, and five
+        languages showed this text in English."""
+        import json
+        import pathlib
+
+        text = json.loads(
+            pathlib.Path(f"custom_components/roomba_plus/translations/{lang}.json")
+            .read_text(encoding="utf-8")
+        )["issues"]["dock_contact_health"]["description"]
+        damp = {"en": "slightly damp", "de": "leicht feuchten", "fr": "légèrement humide",
+                "es": "ligeramente húmedo", "it": "leggermente umido",
+                "nl": "licht vochtige", "pl": "lekko wilgotną", "pt": "ligeiramente húmido"}
+        assert damp[lang] in text
+        assert "**{name}**" in text
+
+    def test_the_rooms_notice_has_the_step_its_flow_shows(self):
+        """`zones_need_naming` opens the generic confirm flow, whose step
+        is `init`; the text sat under `zones` and the dialog showed none."""
+        import json
+        import pathlib
+
+        for lang in ("en", "de", "fr", "es", "it", "nl", "pl", "pt"):
+            issues = json.loads(
+                pathlib.Path(f"custom_components/roomba_plus/translations/{lang}.json")
+                .read_text(encoding="utf-8")
+            )["issues"]
+            assert set(issues["zones_need_naming"]["fix_flow"]["step"]) == {"init"}, lang

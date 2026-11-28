@@ -7600,3 +7600,29 @@ class TestTheFloorPlanOfEachPrimeMap:
         with patch.object(img, "async_remove_deleted_floor_plans"):
             await img.async_setup_entry(MagicMock(), entry, created.extend)
         assert any(isinstance(e, PrimeFloorPlanImage) for e in created)
+
+
+class TestTheRoomsNoticeIsOnePerRobot:
+    """4.6.12: `zones_need_naming` had one id for every robot, so the
+    second robot's new rooms replaced the first robot's notice, and
+    neither said which robot it meant."""
+
+    async def test_each_robot_gets_its_own_named_notice(self, hass):
+        from types import SimpleNamespace
+
+        from homeassistant.helpers import issue_registry as ir
+        from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+        from custom_components.roomba_plus.image import RoombaMapImage
+
+        entries = [MockConfigEntry(domain="roomba_plus", title=t) for t in ("Upstairs", "Downstairs")]
+        for entry in entries:
+            await RoombaMapImage._trigger_zone_issue(
+                SimpleNamespace(hass=hass, _config_entry=entry)  # type: ignore[arg-type]
+            )
+
+        reg = ir.async_get(hass)
+        for entry in entries:
+            issue = reg.async_get_issue("roomba_plus", f"zones_need_naming_{entry.entry_id}")
+            assert issue is not None
+            assert issue.translation_placeholders == {"name": entry.title}

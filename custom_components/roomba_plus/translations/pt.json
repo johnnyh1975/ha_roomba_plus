@@ -2019,10 +2019,10 @@
   },
   "issues": {
     "zones_need_naming": {
-      "title": "Novas divisões detetadas",
+      "title": "{name}: Novas divisões detetadas",
       "fix_flow": {
         "step": {
-          "zones": {
+          "init": {
             "title": "Nomear divisões detetadas",
             "description": "O Roomba+ detetou novas áreas. Abre as definições para as nomear."
           }
@@ -2051,43 +2051,43 @@
       }
     },
     "maintenance_baselines_reset": {
-      "title": "Contador de tempo possivelmente reiniciado",
+      "title": "{name}: Contador de tempo possivelmente reiniciado",
       "description": "O contador é inferior às baselines para: {parts}. Redefine todos os consumíveis."
     },
     "battery_contact_suspect": {
-      "title": "Possível problema de contacto bateria/base",
+      "title": "{name}: Possível problema de contacto bateria/base",
       "description": "Detetado um possível problema de contacto ou comunicação (causa: {cause}). Picos recentes por ciclo de carga: {recent_peaks}. Um salto súbito implausível ou uma tendência decrescente no máximo atingido geralmente indica um contacto solto ou corroído, não a bateria em si — limpe os contactos antes de suspeitar da bateria. {smberr_context}"
     },
     "observed_zones_detected": {
-      "title": "Obstáculos detetados pelo robô no mapa cloud",
+      "title": "{name}: Obstáculos detetados pelo robô no mapa cloud",
       "description": "O mapa na nuvem da iRobot mostra {zone_count} zona(s) de obstáculos detetadas pelo robô, mas o Roomba+ ainda não tem dados locais que as confirmem. Faça algumas limpezas — este aviso desaparece quando os registos do próprio robô confirmarem os obstáculos. Se um obstáculo deve ser sempre evitado, adicione uma zona proibida na app iRobot."
     },
     "dock_contact_health": {
-      "title": "Detetado um problema nos contactos da base",
-      "description": "The robot is reporting dock contact issues:\n\n- Contact chatters: {chatters}\n- Knockoffs (unintended undocking): {knockoffs}\n- Charge aborts: {aborts}\n\n**Recommended actions:**\n1. Clean the charging contacts on the robot and dock with a dry cloth.\n2. Ensure the dock is on a flat, stable surface.\n3. If knockoffs are high, check for obstructions near the dock. {smberr_context}"
+      "title": "{name}: Detetado um problema nos contactos da base",
+      "description": "**{name}** está a reportar problemas nos contactos da base:\n\n- Oscilações de contacto: {chatters}\n- Desacoplamentos involuntários: {knockoffs}\n- Carregamentos interrompidos: {aborts}{smberr_context}\n\n**Ações recomendadas:**\n1. Limpa os contactos de carga do robô e da base com um pano ligeiramente húmido e deixa-os secar.\n2. Garante que a base está numa superfície plana e estável.\n3. Se houver muitos desacoplamentos, verifica se há obstáculos perto da base."
     },
     "mqtt_watchdog": {
-      "title": "Ligação MQTT do robot perdida durante a missão",
+      "title": "{name}: Ligação MQTT do robot perdida durante a missão",
       "description": "O Roomba+ não recebeu mensagens MQTT do robot há {minutes} minutos enquanto uma missão de limpeza estava ativa. Última fase conhecida antes do silêncio: {last_phase}. Conectividade na nuvem do robot: {cloud_hint}. Se o robot parecer estar fisicamente encravado ou em pausa, isto pode não ser um problema de rede real -- verifique primeiro o robot pessoalmente."
     },
     "map_retrain_stuck": {
-      "title": "Atualização do Mapa Inteligente parece travada",
+      "title": "{name}: Atualização do Mapa Inteligente parece travada",
       "description": "O Mapa Inteligente do robô está sendo atualizado há pelo menos {minutes} minutos sem terminar. Isso é mais do que uma atualização real deveria levar. Tente reiniciar o robô pelo app da iRobot, ou contate o suporte da iRobot se persistir."
     },
     "mqtt_watchdog_cloud_connected": {
-      "title": "Ligação MQTT do robot perdida durante a missão",
+      "title": "{name}: Ligação MQTT do robot perdida durante a missão",
       "description": "O Roomba+ não recebeu mensagens MQTT do robot há {minutes} minutos enquanto uma missão de limpeza estava ativa. Última fase conhecida antes do silêncio: {last_phase}. Conectividade na nuvem do robot: conectado — isto indica um problema local/do Home Assistant, não uma falha de Wi-Fi no próprio robot. Se o robot parecer estar fisicamente encravado ou em pausa, isto pode não ser um problema de rede real -- verifique primeiro o robot pessoalmente."
     },
     "mqtt_watchdog_cloud_disconnected": {
-      "title": "Ligação MQTT do robot perdida durante a missão",
+      "title": "{name}: Ligação MQTT do robot perdida durante a missão",
       "description": "O Roomba+ não recebeu mensagens MQTT do robot há {minutes} minutos enquanto uma missão de limpeza estava ativa. Última fase conhecida antes do silêncio: {last_phase}. Conectividade na nuvem do robot: desconectado — isto sugere uma falha de Wi-Fi no próprio robot. Se o robot parecer estar fisicamente encravado ou em pausa, isto pode não ser um problema de rede real -- verifique primeiro o robot pessoalmente."
     },
     "mqtt_watchdog_cloud_unknown": {
-      "title": "Ligação MQTT do robot perdida durante a missão",
+      "title": "{name}: Ligação MQTT do robot perdida durante a missão",
       "description": "O Roomba+ não recebeu mensagens MQTT do robot há {minutes} minutos enquanto uma missão de limpeza estava ativa. Última fase conhecida antes do silêncio: {last_phase}. Conectividade na nuvem do robot: desconhecido (este campo não está disponível neste firmware). Se o robot parecer estar fisicamente encravado ou em pausa, isto pode não ser um problema de rede real -- verifique primeiro o robot pessoalmente."
     },
     "layout_change_detected": {
-      "title": "Possível alteração de disposição detetada",
+      "title": "{name}: Possível alteração de disposição detetada",
       "description": "Um local perto de ({x_mm}, {y_mm}) foi limpo de forma fiável durante muito tempo e agora foi ignorado em várias missões consecutivas — um sinal de que mobiliário novo ou outro obstáculo pode estar a bloqueá-lo. Verifica a área, ou dispensa se isto era esperado."
     },
     "favorite_multi_commanddefs": {
@@ -2137,11 +2137,11 @@
       }
     },
     "classic_robot_on_cloud": {
-      "title": "Robô Classic pela nuvem",
+      "title": "{name}: Robô Classic pela nuvem",
       "description": "**{name}** funciona pela nuvem da iRobot. É um robô Classic, e estes funcionam de forma mais fiável pela ligação local: o seu estado vem diretamente do robô e o mapa em direto mostra as suas posições.\n\nPara o mudar, no menu desta entrada, escolha Reconfigurar e introduza o endereço IP do robô; deixe a palavra-passe vazia para a obter da sua conta iRobot. Até lá continua a funcionar como está."
     },
     "classic_robot_cloud_refused": {
-      "title": "Robô Classic: a nuvem não envia o estado",
+      "title": "{name}: Robô Classic: a nuvem não envia o estado",
       "description": "**{name}** funciona pela nuvem da iRobot, e a nuvem recusou as suas subscrições de estado. Os comandos continuam a chegar ao robô, mas o que o Home Assistant mostra fica na primeira leitura.\n\nMude-o para a ligação local: no menu desta entrada, escolha Reconfigurar e introduza o endereço IP do robô; deixe a palavra-passe vazia para a obter da sua conta iRobot."
     }
   },

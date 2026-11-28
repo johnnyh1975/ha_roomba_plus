@@ -13,6 +13,7 @@ or a return-to-base mission).
 from __future__ import annotations
 
 import logging
+import re
 import time
 from typing import Any
 
@@ -443,28 +444,30 @@ async def async_check_bbrun_reset(
     if current_hr < maintenance_store.battery_reset_hr:
         affected.append("battery")
 
+    issue_id = f"maintenance_baselines_reset_{config_entry.entry_id}"
     if not affected:
         # No reset detected -- clear any stale issue from a previous check
-        ir.async_delete_issue(hass, DOMAIN, "maintenance_baselines_reset")
+        ir.async_delete_issue(hass, DOMAIN, issue_id)
         return
 
     parts_str = ", ".join(affected)
     _LOGGER.warning(
-        "Roomba+: bbrun.hr (%d h) is lower than stored reset baselines "
+        "Roomba+: %s: bbrun.hr (%d h) is lower than stored reset baselines "
         "for: %s -- firmware update may have reset the runtime counter. "
         "Remaining-hours values are unreliable until parts are manually reset.",
+        config_entry.title,
         current_hr,
         parts_str,
     )
     ir.async_create_issue(
         hass,
         DOMAIN,
-        "maintenance_baselines_reset",
+        issue_id,
         is_fixable=False,
         is_persistent=False,
         severity=ir.IssueSeverity.WARNING,
         translation_key="maintenance_baselines_reset",
-        translation_placeholders={"parts": parts_str},
+        translation_placeholders={"name": config_entry.title, "parts": parts_str},
     )
 
 
@@ -545,10 +548,15 @@ async def async_check_furniture_change(
 
     reg = ir.async_get(hass)
     current: set[str] = set()
+    # ONE ROBOT'S AREAS, NOT EVERY ROBOT'S (4.6.12). The id was
+    # `furniture_<x>_<y>` for every robot, so the check of one robot
+    # deleted the areas of another -- they were "no longer a candidate"
+    # on a map they never came from.
+    prefix = furniture_issue_prefix(entry.entry_id)
 
     for area in furniture_areas(candidates):
         cells = [tuple(c["cell"]) for c in area]
-        issue_id = f"furniture_{cells[0][0]}_{cells[0][1]}"
+        issue_id = f"{prefix}{cells[0][0]}_{cells[0][1]}"
         current.add(issue_id)
 
         existing = reg.async_get_issue(DOMAIN, issue_id)
@@ -598,6 +606,7 @@ async def async_check_furniture_change(
             severity=ir.IssueSeverity.WARNING,
             translation_key="layout_change_detected",
             translation_placeholders={
+                "name": entry.title,
                 "x_mm": str(int(sum(c["x_mm"] for c in area) / len(area))),
                 "y_mm": str(int(sum(c["y_mm"] for c in area) / len(area))),
             },
@@ -607,8 +616,19 @@ async def async_check_furniture_change(
     issues = getattr(reg, "issues", None)
     if isinstance(issues, dict):
         for domain, issue_id in list(issues):
-            if domain == DOMAIN and issue_id.startswith("furniture_") and issue_id not in current:
+            if domain != DOMAIN or issue_id in current:
+                continue
+            if issue_id.startswith(prefix) or _LEGACY_FURNITURE_ID.fullmatch(issue_id):
                 ir.async_delete_issue(hass, DOMAIN, issue_id)
+
+
+#: The id the layout issue had before 4.6.12, shared by every robot.
+_LEGACY_FURNITURE_ID = re.compile(r"furniture_-?\d+_-?\d+")
+
+
+def furniture_issue_prefix(entry_id: str) -> str:
+    """The id prefix of one robot's layout-change issues."""
+    return f"furniture_{entry_id}_"
 
 
 # F6f — battery contact / bus-communication anomaly thresholds.
@@ -750,6 +770,7 @@ async def async_check_battery_contact_issue(
             severity=ir.IssueSeverity.WARNING,
             translation_key="battery_contact_suspect",
             translation_placeholders={
+                "name": config_entry.title,
                 "cause": cause,
                 "recent_peaks": ", ".join(f"{p:.0f}%" for p in peaks),
                 # v3.5.0 — corroborating context from the former smberr_high
@@ -865,19 +886,21 @@ async def async_check_observed_zones(
     if data.grid_store is None:
         return
 
+    issue_id = f"observed_zones_detected_{entry.entry_id}"
     if data.grid_store.stuck_event_count > 0:
         # Local data exists — dismiss the issue if present
-        ir.async_delete_issue(hass, DOMAIN, "observed_zones_detected")
+        ir.async_delete_issue(hass, DOMAIN, issue_id)
         return
 
     ir.async_create_issue(
         hass,
         DOMAIN,
-        "observed_zones_detected",
+        issue_id,
         is_fixable=False,
         severity=ir.IssueSeverity.WARNING,
         translation_key="observed_zones_detected",
         translation_placeholders={
+            "name": entry.title,
             "zone_count": str(len(data.cloud_coordinator.observed_zone_centroids)),
         },
     )
@@ -1413,6 +1436,15 @@ async def async_check_dock_health(
     )
 
     if exceeded:
+        # THE LOG SAYS WHICH ROBOT, ONCE (4.6.12, @lloydbayley). With
+        # several robots the issue named none of them; it does now, and
+        # the log line is there to search for.
+        if ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is None:
+            _LOGGER.warning(
+                "%s: dock contact counters are high (chatters %d, "
+                "knockoffs %d, charge aborts %d); see Settings > Repairs",
+                config_entry.title, chatters, knockoffs, aborts,
+            )
         ir.async_create_issue(
             hass,
             DOMAIN,
@@ -1422,6 +1454,7 @@ async def async_check_dock_health(
             severity=ir.IssueSeverity.WARNING,
             translation_key="dock_contact_health",
             translation_placeholders={
+                "name": config_entry.title,
                 "chatters": str(chatters),
                 "knockoffs": str(knockoffs),
                 "aborts": str(aborts),
@@ -1591,7 +1624,10 @@ def async_check_map_retrain_workflow(
             is_persistent=False,
             severity=ir.IssueSeverity.ERROR,
             translation_key="map_retrain_stuck",
-            translation_placeholders={"minutes": str(int(elapsed_minutes))},
+            translation_placeholders={
+                "name": config_entry.title,
+                "minutes": str(int(elapsed_minutes)),
+            },
         )
     elif elapsed_minutes >= MAP_RETRAIN_WARN_MINUTES:
         _fire_once(

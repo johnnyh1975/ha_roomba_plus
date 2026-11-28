@@ -2019,10 +2019,10 @@
   },
   "issues": {
     "zones_need_naming": {
-      "title": "Nieuwe kamers gedetecteerd",
+      "title": "{name}: Nieuwe kamers gedetecteerd",
       "fix_flow": {
         "step": {
-          "zones": {
+          "init": {
             "title": "Gevonden kamers een naam geven",
             "description": "Roomba+ heeft nieuwe gebieden gedetecteerd. Open de instellingen om ze een naam te geven."
           }
@@ -2051,43 +2051,43 @@
       }
     },
     "maintenance_baselines_reset": {
-      "title": "Looptijdteller mogelijk gereset",
+      "title": "{name}: Looptijdteller mogelijk gereset",
       "description": "De teller is lager dan de baselines voor: {parts}. Reset alle verbruiksartikelen."
     },
     "battery_contact_suspect": {
-      "title": "Mogelijk contactprobleem accu/dock",
+      "title": "{name}: Mogelijk contactprobleem accu/dock",
       "description": "Mogelijk contact- of communicatieprobleem gedetecteerd (oorzaak: {cause}). Recente piekwaarden per laadcyclus: {recent_peaks}. Een plotselinge onwaarschijnlijke sprong of een dalende trend in het bereikte maximum wijst meestal op een los of gecorrodeerd contact, niet op de accu zelf — reinig de contacten voordat je de accu verdenkt. {smberr_context}"
     },
     "observed_zones_detected": {
-      "title": "Door robot gedetecteerde obstakels in cloudkaart",
+      "title": "{name}: Door robot gedetecteerde obstakels in cloudkaart",
       "description": "De iRobot-cloudkaart toont {zone_count} door de robot gedetecteerde obstakelzone(s), maar Roomba+ heeft nog geen eigen gegevens die ze bevestigen. Laat de robot een paar keer reinigen — deze melding verdwijnt zodra de eigen gegevens van de robot de obstakels bevestigen. Moet een obstakel altijd worden vermeden, voeg dan in de iRobot-app een verboden zone toe."
     },
     "dock_contact_health": {
-      "title": "Probleem met dockcontacten gedetecteerd",
-      "description": "The robot is reporting dock contact issues:\n\n- Contact chatters: {chatters}\n- Knockoffs (unintended undocking): {knockoffs}\n- Charge aborts: {aborts}\n\n**Recommended actions:**\n1. Clean the charging contacts on the robot and dock with a dry cloth.\n2. Ensure the dock is on a flat, stable surface.\n3. If knockoffs are high, check for obstructions near the dock. {smberr_context}"
+      "title": "{name}: Probleem met dockcontacten gedetecteerd",
+      "description": "**{name}** meldt problemen met de dockcontacten:\n\n- Contactdender: {chatters}\n- Onbedoeld van het dock losgekomen: {knockoffs}\n- Afgebroken laadbeurten: {aborts}{smberr_context}\n\n**Aanbevolen acties:**\n1. Veeg de laadcontacten van de robot en het dock af met een licht vochtige doek en laat ze drogen.\n2. Zorg dat het dock op een vlakke, stabiele ondergrond staat.\n3. Komt de robot vaak los van het dock, kijk dan of er obstakels bij het dock staan."
     },
     "mqtt_watchdog": {
-      "title": "MQTT-verbinding robot verbroken tijdens missie",
+      "title": "{name}: MQTT-verbinding robot verbroken tijdens missie",
       "description": "Roomba+ heeft {minutes} minuten geen MQTT-berichten van de robot ontvangen terwijl een reinigingsmissie actief was. Laatst bekende fase voor de stilte: {last_phase}. Cloudverbinding van de robot: {cloud_hint}. Als de robot fysiek vast lijkt te zitten of gepauzeerd is, is dit mogelijk geen echt netwerkprobleem -- controleer eerst de robot zelf."
     },
     "map_retrain_stuck": {
-      "title": "Smart Map-update lijkt vast te lopen",
+      "title": "{name}: Smart Map-update lijkt vast te lopen",
       "description": "De Smart Map van de robot wordt al minstens {minutes} minuten bijgewerkt zonder te voltooien. Dit duurt langer dan een echte update zou moeten duren. Probeer de robot opnieuw te starten via de iRobot-app, of neem contact op met iRobot-support als dit aanhoudt."
     },
     "mqtt_watchdog_cloud_connected": {
-      "title": "MQTT-verbinding van robot verloren tijdens missie",
+      "title": "{name}: MQTT-verbinding van robot verloren tijdens missie",
       "description": "Roomba+ heeft {minutes} minuten geen MQTT-berichten van de robot ontvangen terwijl een reinigingsmissie actief was. Laatst bekende fase voor de stilte: {last_phase}. Cloudverbinding van de robot: verbonden — dit wijst op een lokaal/Home Assistant-probleem, niet op een wifi-storing bij de robot zelf. Als de robot fysiek vast lijkt te zitten of gepauzeerd is, is dit mogelijk geen echt netwerkprobleem -- controleer eerst de robot zelf."
     },
     "mqtt_watchdog_cloud_disconnected": {
-      "title": "MQTT-verbinding van robot verloren tijdens missie",
+      "title": "{name}: MQTT-verbinding van robot verloren tijdens missie",
       "description": "Roomba+ heeft {minutes} minuten geen MQTT-berichten van de robot ontvangen terwijl een reinigingsmissie actief was. Laatst bekende fase voor de stilte: {last_phase}. Cloudverbinding van de robot: verbroken — dit wijst op een wifi-storing bij de robot zelf. Als de robot fysiek vast lijkt te zitten of gepauzeerd is, is dit mogelijk geen echt netwerkprobleem -- controleer eerst de robot zelf."
     },
     "mqtt_watchdog_cloud_unknown": {
-      "title": "MQTT-verbinding van robot verloren tijdens missie",
+      "title": "{name}: MQTT-verbinding van robot verloren tijdens missie",
       "description": "Roomba+ heeft {minutes} minuten geen MQTT-berichten van de robot ontvangen terwijl een reinigingsmissie actief was. Laatst bekende fase voor de stilte: {last_phase}. Cloudverbinding van de robot: onbekend (dit veld is niet beschikbaar op deze firmware). Als de robot fysiek vast lijkt te zitten of gepauzeerd is, is dit mogelijk geen echt netwerkprobleem -- controleer eerst de robot zelf."
     },
     "layout_change_detected": {
-      "title": "Mogelijke indelingswijziging gedetecteerd",
+      "title": "{name}: Mogelijke indelingswijziging gedetecteerd",
       "description": "Een plek bij ({x_mm}, {y_mm}) werd lange tijd betrouwbaar gereinigd en is nu meerdere missies achter elkaar overgeslagen — een teken dat nieuw meubilair of een ander obstakel deze plek kan blokkeren. Controleer het gebied, of negeer als dit verwacht was."
     },
     "favorite_multi_commanddefs": {
@@ -2137,11 +2137,11 @@
       }
     },
     "classic_robot_on_cloud": {
-      "title": "Classic-robot via de cloud",
+      "title": "{name}: Classic-robot via de cloud",
       "description": "**{name}** werkt via de iRobot-cloud. Het is een Classic-robot, en die werken betrouwbaarder via de lokale verbinding: de status komt rechtstreeks van de robot en de live-kaart toont zijn posities.\n\nOm hem over te zetten, kies je in het menu van deze vermelding Opnieuw configureren en voer je het IP-adres van de robot in; laat het wachtwoord leeg om het uit je iRobot-account te halen. Tot die tijd blijft hij werken zoals nu."
     },
     "classic_robot_cloud_refused": {
-      "title": "Classic-robot: de cloud stuurt geen status",
+      "title": "{name}: Classic-robot: de cloud stuurt geen status",
       "description": "**{name}** werkt via de iRobot-cloud, en de cloud heeft zijn statusabonnementen geweigerd. Opdrachten bereiken de robot nog steeds, maar wat Home Assistant toont blijft bij de eerste meting.\n\nZet hem over op de lokale verbinding: kies in het menu van deze vermelding Opnieuw configureren en voer het IP-adres van de robot in; laat het wachtwoord leeg om het uit je iRobot-account te halen."
     }
   },

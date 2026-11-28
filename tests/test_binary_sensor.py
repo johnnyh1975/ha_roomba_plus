@@ -150,6 +150,7 @@ def _mqtt_stale_sensor(
 
     entry = entry_mock()
     entry.entry_id = "test_entry"
+    entry.title = "Upstairs"
     entry.runtime_data.last_mqtt_message_ts = last_mqtt_message_ts
     # Derived on RoombaData: a MagicMock would answer with a
     # MagicMock, not a number.
@@ -195,6 +196,7 @@ class TestMqttWatchdogRepairIssue:
         placeholders = mock_create.call_args.kwargs["translation_placeholders"]
         assert placeholders["minutes"] == "7"
         assert placeholders["last_phase"] == "run"
+        assert placeholders["name"] == "Upstairs"
 
     def test_cloud_hint_unknown_when_wifistat_absent(self):
         """9-series firmware (incl. the 980 OG test robot) never sends

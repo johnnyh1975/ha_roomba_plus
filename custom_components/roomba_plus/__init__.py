@@ -2399,22 +2399,37 @@ def _async_clear_repair_issues(
     """Remove every repair issue this entry can raise.
 
     See the note in `async_unload_entry`. Both forms are covered: the
-    per-entry ids that carry `entry_id`, and the two singletons that do
-    not (`smart_zones_need_naming`, `zones_need_naming`).
+    per-entry ids that carry `entry_id`, and the singletons from before
+    they did (`smart_zones_need_naming`, `zones_need_naming`).
     """
     from homeassistant.helpers import issue_registry as ir  # noqa: PLC0415
+
+    from .repairs import furniture_issue_prefix  # noqa: PLC0415
 
     entry_id = config_entry.entry_id
     for issue_id in (
         f"smart_zones_need_naming_{entry_id}",
+        f"zones_need_naming_{entry_id}",
         f"mqtt_watchdog_{entry_id}",
         f"segments_changed_{entry_id}",
         f"classic_robot_on_cloud_{entry_id}",
+        f"dock_contact_health_{entry_id}",
+        f"battery_contact_suspect_{entry_id}",
+        f"map_retrain_workflow_{entry_id}",
+        f"maintenance_baselines_reset_{entry_id}",
+        f"observed_zones_detected_{entry_id}",
         "smart_zones_need_naming",
         "zones_need_naming",
+        "maintenance_baselines_reset",
+        "observed_zones_detected",
     ):
         with contextlib.suppress(Exception):
             ir.async_delete_issue(hass, DOMAIN, issue_id)
+    prefix = furniture_issue_prefix(entry_id)
+    with contextlib.suppress(Exception):
+        for domain, issue_id in list(ir.async_get(hass).issues):
+            if domain == DOMAIN and issue_id.startswith(prefix):
+                ir.async_delete_issue(hass, DOMAIN, issue_id)
 
 
 async def async_unload_entry(

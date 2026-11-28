@@ -141,10 +141,38 @@ class TestRepairIssuesAreClearedOnUnload:
 
         cleared = {call.args[2] for call in deleter.call_args_list}
         assert "smart_zones_need_naming_abc123" in cleared
+        # Every issue about one robot (4.6.12): these stayed behind.
+        assert {
+            "dock_contact_health_abc123", "battery_contact_suspect_abc123",
+            "map_retrain_workflow_abc123", "maintenance_baselines_reset_abc123",
+            "observed_zones_detected_abc123", "zones_need_naming_abc123",
+        } <= cleared
         assert "smart_zones_need_naming" in cleared, (
             "the singleton form has no entry_id and is the one that "
             "actually survived his reinstall"
         )
+
+    async def test_unload_clears_this_robots_layout_issues_only(self, hass):
+        """The layout-change issues carry a cell in their id; the ones of
+        the robot going away go, another robot's stay."""
+        from homeassistant.helpers import issue_registry as ir
+        from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+        from custom_components.roomba_plus import _async_clear_repair_issues
+        from custom_components.roomba_plus.const import DOMAIN
+
+        going = MockConfigEntry(domain=DOMAIN, title="Upstairs")
+        staying = MockConfigEntry(domain=DOMAIN, title="Downstairs")
+        for entry in (going, staying):
+            ir.async_create_issue(
+                hass, DOMAIN, f"furniture_{entry.entry_id}_1_2", is_fixable=False,
+                severity=ir.IssueSeverity.WARNING, translation_key="layout_change_detected",
+            )
+
+        _async_clear_repair_issues(hass, going)
+
+        left = {issue_id for (domain, issue_id) in ir.async_get(hass).issues if domain == DOMAIN}
+        assert left == {f"furniture_{staying.entry_id}_1_2"}
 
     def test_unload_actually_calls_it(self):
         """A helper nothing calls clears nothing."""

@@ -4350,11 +4350,14 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         # appeared. Every other repair issue in this integration imports
         # the helper.
         from homeassistant.helpers import issue_registry as ir
+        # One per robot (4.6.12): with a shared id the second robot's
+        # new rooms replaced the first robot's notice.
         ir.async_create_issue(
-            self.hass, DOMAIN, "zones_need_naming",
+            self.hass, DOMAIN, f"zones_need_naming_{self._config_entry.entry_id}",
             is_fixable=True,
             severity=ir.IssueSeverity.WARNING,
             translation_key="zones_need_naming",
+            translation_placeholders={"name": self._config_entry.title},
         )
 
     async def _trigger_drift_issue_enriched(self, dx: float, dy: float) -> None:

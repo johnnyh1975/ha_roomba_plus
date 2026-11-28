@@ -2019,10 +2019,10 @@
   },
   "issues": {
     "zones_need_naming": {
-      "title": "Wykryto nowe pomieszczenia",
+      "title": "{name}: Wykryto nowe pomieszczenia",
       "fix_flow": {
         "step": {
-          "zones": {
+          "init": {
             "title": "Nazwij wykryte pomieszczenia",
             "description": "Roomba+ wykrył nowe obszary. Otwórz ustawienia, aby je nazwać."
           }
@@ -2051,43 +2051,43 @@
       }
     },
     "maintenance_baselines_reset": {
-      "title": "Licznik czasu pracy robota mógł zostać zresetowany",
+      "title": "{name}: Licznik czasu pracy robota mógł zostać zresetowany",
       "description": "Licznik bbrun.hr robota jest niższy niż zapisane wartości bazowe resetowania dla: {parts}. Zazwyczaj oznacza to, że aktualizacja oprogramowania cicho zresetowała licznik. Szacunki pozostałych godzin dla materiałów eksploatacyjnych są teraz niewiarygodne. Zresetuj wszystkie materiały eksploatacyjne za pomocą przycisków Reset."
     },
     "battery_contact_suspect": {
-      "title": "Możliwy problem ze stykami akumulatora lub stacji dokującej",
+      "title": "{name}: Możliwy problem ze stykami akumulatora lub stacji dokującej",
       "description": "Roomba+ wykrył dowody problemu ze stykami akumulatora/stacji dokującej lub komunikacją (przyczyna: {cause}). Ostatnie szczytowe poziomy akumulatora w cyklach ładowania: {recent_peaks}. Nagły nieprawdopodobny skok zgłaszanego poziomu akumulatora lub malejący trend najwyższego poziomu ładowania zazwyczaj wskazuje na luźny lub skorodowany styk, a nie na sam akumulator — wyczyść styki robota i stacji przed założeniem, że akumulator jest uszkodzony. {smberr_context}"
     },
     "observed_zones_detected": {
-      "title": "Przeszkody wykryte przez robota w mapie chmury",
+      "title": "{name}: Przeszkody wykryte przez robota w mapie chmury",
       "description": "Mapa w chmurze iRobot pokazuje {zone_count} strefę/strefy przeszkód wykrytych przez robota, ale Roomba+ nie ma jeszcze własnych danych, które by je potwierdzały. Uruchom kilka sprzątań — to powiadomienie zniknie, gdy własne dane robota potwierdzą przeszkody. Jeśli przeszkody należy zawsze unikać, dodaj strefę zakazaną w aplikacji iRobot."
     },
     "dock_contact_health": {
-      "title": "Wykryto problem ze stykami stacji dokującej",
-      "description": "Robot zgłasza problemy ze stykami stacji dokującej:\n\n- Drgania styków: {chatters}\n- Przypadkowe odpięcia: {knockoffs}\n- Przerwane ładowania: {aborts}\n\n**Zalecane działania:**\n1. Wyczyść styki ładowania robota i stacji suchą ściereczką.\n2. Upewnij się, że stacja stoi na płaskiej, stabilnej powierzchni.\n3. Jeśli liczba odpięć jest wysoka, sprawdź czy w pobliżu stacji nie ma przeszkód. {smberr_context}"
+      "title": "{name}: Wykryto problem ze stykami stacji dokującej",
+      "description": "**{name}** zgłasza problemy ze stykami stacji dokującej:\n\n- Drgania styków: {chatters}\n- Przypadkowe odpięcia: {knockoffs}\n- Przerwane ładowania: {aborts}{smberr_context}\n\n**Zalecane działania:**\n1. Przetrzyj styki ładowania robota i stacji lekko wilgotną ściereczką, a potem pozostaw do wyschnięcia.\n2. Upewnij się, że stacja stoi na płaskiej, stabilnej powierzchni.\n3. Jeśli odpięć jest dużo, sprawdź, czy w pobliżu stacji nie ma przeszkód."
     },
     "mqtt_watchdog": {
-      "title": "Utracono połączenie MQTT robota podczas misji",
+      "title": "{name}: Utracono połączenie MQTT robota podczas misji",
       "description": "Roomba+ nie otrzymał żadnych wiadomości MQTT od robota przez {minutes} minut podczas aktywnej misji sprzątania. Ostatnia znana faza przed utratą połączenia: {last_phase}. Łączność robota z chmurą: {cloud_hint}. Jeśli robot wydaje się fizycznie utknięty lub wstrzymany, może to nie być rzeczywisty problem sieciowy — najpierw sprawdź robota osobiście."
     },
     "map_retrain_stuck": {
-      "title": "Aktualizacja Smart Map wydaje się zablokowana",
+      "title": "{name}: Aktualizacja Smart Map wydaje się zablokowana",
       "description": "Smart Map robota jest aktualizowana od co najmniej {minutes} minut bez zakończenia. To dłużej niż powinna trwać prawdziwa aktualizacja. Spróbuj zrestartować robota z aplikacji iRobot lub skontaktuj się z pomocą techniczną iRobot, jeśli problem będzie się utrzymywał."
     },
     "mqtt_watchdog_cloud_connected": {
-      "title": "Utracono połączenie MQTT robota podczas misji",
+      "title": "{name}: Utracono połączenie MQTT robota podczas misji",
       "description": "Roomba+ nie otrzymał żadnych wiadomości MQTT od robota przez {minutes} minut podczas aktywnej misji. Ostatnia znana faza: {last_phase}. Łączność robota z chmurą: połączony — wskazuje to na problem po stronie lokalnej/Home Assistant, a nie awarię Wi-Fi po stronie robota. Jeśli robot wydaje się fizycznie utknięty lub wstrzymany, może to nie być rzeczywisty problem sieciowy — sprawdź robota osobiście."
     },
     "mqtt_watchdog_cloud_disconnected": {
-      "title": "Utracono połączenie MQTT robota podczas misji",
+      "title": "{name}: Utracono połączenie MQTT robota podczas misji",
       "description": "Roomba+ nie otrzymał żadnych wiadomości MQTT od robota przez {minutes} minut podczas aktywnej misji. Ostatnia znana faza: {last_phase}. Łączność robota z chmurą: rozłączony — sugeruje to awarię Wi-Fi po stronie robota. Jeśli robot wydaje się fizycznie utknięty lub wstrzymany, może to nie być rzeczywisty problem sieciowy — sprawdź robota osobiście."
     },
     "mqtt_watchdog_cloud_unknown": {
-      "title": "Utracono połączenie MQTT robota podczas misji",
+      "title": "{name}: Utracono połączenie MQTT robota podczas misji",
       "description": "Roomba+ nie otrzymał żadnych wiadomości MQTT od robota przez {minutes} minut podczas aktywnej misji. Ostatnia znana faza: {last_phase}. Łączność robota z chmurą: nieznana (to pole nie jest dostępne w tym oprogramowaniu). Jeśli robot wydaje się fizycznie utknięty lub wstrzymany, może to nie być rzeczywisty problem sieciowy — sprawdź robota osobiście."
     },
     "layout_change_detected": {
-      "title": "Wykryto możliwą zmianę układu",
+      "title": "{name}: Wykryto możliwą zmianę układu",
       "description": "Miejsce w pobliżu ({x_mm}, {y_mm}) było niezawodnie sprzątane przez długi czas i teraz zostało pominięte w kilku kolejnych misjach — znak, że nowe meble lub inna przeszkoda mogą je blokować. Sprawdź obszar lub odrzuć, jeśli było to oczekiwane (np. celowo dodano dywan)."
     },
     "favorite_multi_commanddefs": {
@@ -2137,11 +2137,11 @@
       }
     },
     "classic_robot_on_cloud": {
-      "title": "Robot Classic przez chmurę",
+      "title": "{name}: Robot Classic przez chmurę",
       "description": "**{name}** działa przez chmurę iRobot. To robot Classic, a takie działają niezawodniej przez połączenie lokalne: jego stan pochodzi bezpośrednio z robota, a mapa na żywo pokazuje jego pozycje.\n\nAby go przełączyć, w menu tego wpisu wybierz Zmień konfigurację i wpisz adres IP robota; pozostaw hasło puste, aby pobrać je z konta iRobot. Do tego czasu działa dalej jak dotąd."
     },
     "classic_robot_cloud_refused": {
-      "title": "Robot Classic: chmura nie wysyła stanu",
+      "title": "{name}: Robot Classic: chmura nie wysyła stanu",
       "description": "**{name}** działa przez chmurę iRobot, a chmura odrzuciła jego subskrypcje stanu. Polecenia nadal docierają do robota, ale to, co pokazuje Home Assistant, pozostaje przy pierwszym odczycie.\n\nPrzełącz go na połączenie lokalne: w menu tego wpisu wybierz Zmień konfigurację i wpisz adres IP robota; pozostaw hasło puste, aby pobrać je z konta iRobot."
     }
   },

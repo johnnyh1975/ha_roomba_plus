@@ -1227,6 +1227,7 @@ class RoombaMqttStale(IRobotEntity, BinarySensorEntity):
                 severity=ir.IssueSeverity.ERROR,
                 translation_key=watchdog_translation_key,
                 translation_placeholders={
+                    "name": self._entry.title,
                     "minutes": str(silence_min),
                     "last_phase": last_phase,
                 },

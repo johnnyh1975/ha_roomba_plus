@@ -206,10 +206,10 @@ All remaining-hours sensors read the maintenance entries' calculation, the same 
 
 **Applies to:** Classic robots; on Prime the navigation resets and the dock counters once the robot reports them
 
-Signals that something other than a consumable needs attention. Each raises a repair issue and clears it on its own once the signal is back to normal.
+Signals that something other than a consumable needs attention. Each raises a repair issue whose title starts with the robot's name, and clears it on its own once the signal is back to normal.
 
 - **Battery or dock contacts** (`battery_contact_suspect`): the battery level jumps by more than about 25 points within 10 minutes, or the highest level reached falls over three charge cycles in a row. Both usually mean a loose or dirty contact rather than a failing battery: clean the contacts on the robot and the dock first.
-- **Dock contact health** (i and s series, some 900s): the dock-contact counters `nChatters`, `nKnockoffs` and `nAborts` pass their thresholds, an early sign of contact wear.
+- **Dock contact health** (i and s series, some 900s): the dock-contact counters `nChatters`, `nKnockoffs` and `nAborts` pass their thresholds, an early sign of contact wear. The log gets one warning naming the robot when the issue is raised. Wipe the contacts on the robot and the dock with a slightly damp cloth and let them dry.
 - **Navigation health** (i and s series; `sensor.{name}_relocalisation_rate`, off by default): how often the robot has to find itself again during a mission, a direct signal of Smart Map quality. Learned against the robot's own rate over its first 15 missions; the issue comes at three times that.
 - **Health score trend** (`sensor.{name}_health_score_trend`): `improving`, `stable` or `declining`, against the robot's own baseline. It needs 44 days of history (`days_until_ready` counts down); the issue comes after 14 days of decline.
 - **Reset causes** (`sensor.{name}_reset_diagnostics`, diagnostic): the robot's own count of navigation, mobility, safety and out-of-memory resets.
