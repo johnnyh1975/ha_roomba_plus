@@ -212,7 +212,7 @@ An entity whose id ends in `<…>` exists once per room, area, part, favourite o
 | `binary_sensor.<robot>_mqtt_stale` | MQTT stale | Classic |  | Diagnostic |
 | `binary_sensor.<robot>_prime_dock_error` | Dock error | Prime |  | Diagnostic |
 | `binary_sensor.<robot>_prime_quiet_hours` | In quiet hours | Prime |  |  |
-| `binary_sensor.<robot>_prime_start_blocked` | Start blocked | Prime |  |  |
+| `binary_sensor.<robot>_prime_start_blocked` | Fault blocks start | Prime |  |  |
 | `binary_sensor.<robot>_schedule_hold_active` | Schedule hold active | Classic |  | Diagnostic |
 | `binary_sensor.<robot>_start_blocked` | Start blocked | Both |  | Diagnostic |
 

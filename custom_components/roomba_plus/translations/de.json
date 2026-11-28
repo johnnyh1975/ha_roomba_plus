@@ -1597,7 +1597,7 @@
         "name": "Raumlayout-Änderung erkannt"
       },
       "prime_start_blocked": {
-        "name": "Start blockiert"
+        "name": "Fehler verhindert Start"
       },
       "prime_quiet_hours": {
         "name": "In Ruhezeit"
@@ -2056,7 +2056,7 @@
     },
     "battery_contact_suspect": {
       "title": "{name}: Mögliches Batterie- oder Kontaktproblem",
-      "description": "Hinweis auf ein Akku-/Kontaktproblem erkannt (Ursache: {cause}). Letzte Ladezyklus-Höchstwerte: {recent_peaks}. Ein plötzlicher, unplausibler Sprung im Ladestand oder ein sinkender Höchstwert je Ladung deutet meist auf einen wackligen oder korrodierten Kontakt hin, nicht auf den Akku selbst — Kontakte an Roboter und Ladestation reinigen, bevor der Akku verdächtigt wird. {smberr_context}"
+      "description": "Hinweis auf ein Akku-/Kontaktproblem erkannt (Ursache: {cause}). Letzte Ladezyklus-Höchstwerte: {recent_peaks}. Ein plötzlicher, unplausibler Sprung im Ladestand oder ein sinkender Höchstwert je Ladung deutet meist auf einen wackligen oder korrodierten Kontakt hin, nicht auf den Akku selbst — Kontakte an Roboter und Ladestation reinigen, bevor der Akku verdächtigt wird. SMBus-Fehler (Akku-Kommunikation): {smberr}."
     },
     "observed_zones_detected": {
       "title": "{name}: Roboter-erkannte Hindernisse in der Cloud-Karte",
@@ -2064,7 +2064,7 @@
     },
     "dock_contact_health": {
       "title": "{name}: Problem mit Dock-Kontaktgesundheit erkannt",
-      "description": "**{name}** meldet Probleme mit den Dock-Kontakten:\n\n- Kontakt-Prellungen: {chatters}\n- Unbeabsichtigte Abdockungen: {knockoffs}\n- Ladeabbrüche: {aborts}{smberr_context}\n\n**Empfohlene Maßnahmen:**\n1. Ladekontakte an Roboter und Dock mit einem leicht feuchten Tuch abwischen und trocknen lassen.\n2. Sicherstellen, dass die Station auf einem ebenen, stabilen Untergrund steht.\n3. Bei vielen Abdockungen: Hindernisse in der Nähe der Station prüfen."
+      "description": "**{name}** meldet Probleme mit den Dock-Kontakten:\n\n- Kontakt-Prellungen: {chatters}\n- Unbeabsichtigte Abdockungen: {knockoffs}\n- Ladeabbrüche: {aborts}\n- SMBus-Fehler (Akku-Kommunikation): {smberr}\n\n**Empfohlene Maßnahmen:**\n1. Ladekontakte an Roboter und Dock mit einem leicht feuchten Tuch abwischen und trocknen lassen.\n2. Sicherstellen, dass die Station auf einem ebenen, stabilen Untergrund steht.\n3. Bei vielen Abdockungen: Hindernisse in der Nähe der Station prüfen."
     },
     "mqtt_watchdog": {
       "title": "{name}: Roboter-MQTT-Verbindung während Mission verloren",

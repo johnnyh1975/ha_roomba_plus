@@ -1597,7 +1597,7 @@
         "name": "Wykryto zmianę układu"
       },
       "prime_start_blocked": {
-        "name": "Start zablokowany"
+        "name": "Usterka blokuje start"
       },
       "prime_quiet_hours": {
         "name": "W godzinach ciszy"
@@ -2056,7 +2056,7 @@
     },
     "battery_contact_suspect": {
       "title": "{name}: Możliwy problem ze stykami akumulatora lub stacji dokującej",
-      "description": "Roomba+ wykrył dowody problemu ze stykami akumulatora/stacji dokującej lub komunikacją (przyczyna: {cause}). Ostatnie szczytowe poziomy akumulatora w cyklach ładowania: {recent_peaks}. Nagły nieprawdopodobny skok zgłaszanego poziomu akumulatora lub malejący trend najwyższego poziomu ładowania zazwyczaj wskazuje na luźny lub skorodowany styk, a nie na sam akumulator — wyczyść styki robota i stacji przed założeniem, że akumulator jest uszkodzony. {smberr_context}"
+      "description": "Roomba+ wykrył dowody problemu ze stykami akumulatora/stacji dokującej lub komunikacją (przyczyna: {cause}). Ostatnie szczytowe poziomy akumulatora w cyklach ładowania: {recent_peaks}. Nagły nieprawdopodobny skok zgłaszanego poziomu akumulatora lub malejący trend najwyższego poziomu ładowania zazwyczaj wskazuje na luźny lub skorodowany styk, a nie na sam akumulator — wyczyść styki robota i stacji przed założeniem, że akumulator jest uszkodzony. Błędy SMBus (komunikacja z akumulatorem): {smberr}."
     },
     "observed_zones_detected": {
       "title": "{name}: Przeszkody wykryte przez robota w mapie chmury",
@@ -2064,7 +2064,7 @@
     },
     "dock_contact_health": {
       "title": "{name}: Wykryto problem ze stykami stacji dokującej",
-      "description": "**{name}** zgłasza problemy ze stykami stacji dokującej:\n\n- Drgania styków: {chatters}\n- Przypadkowe odpięcia: {knockoffs}\n- Przerwane ładowania: {aborts}{smberr_context}\n\n**Zalecane działania:**\n1. Przetrzyj styki ładowania robota i stacji lekko wilgotną ściereczką, a potem pozostaw do wyschnięcia.\n2. Upewnij się, że stacja stoi na płaskiej, stabilnej powierzchni.\n3. Jeśli odpięć jest dużo, sprawdź, czy w pobliżu stacji nie ma przeszkód."
+      "description": "**{name}** zgłasza problemy ze stykami stacji dokującej:\n\n- Drgania styków: {chatters}\n- Przypadkowe odpięcia: {knockoffs}\n- Przerwane ładowania: {aborts}\n- Błędy SMBus (komunikacja z akumulatorem): {smberr}\n\n**Zalecane działania:**\n1. Przetrzyj styki ładowania robota i stacji lekko wilgotną ściereczką, a potem pozostaw do wyschnięcia.\n2. Upewnij się, że stacja stoi na płaskiej, stabilnej powierzchni.\n3. Jeśli odpięć jest dużo, sprawdź, czy w pobliżu stacji nie ma przeszkód."
     },
     "mqtt_watchdog": {
       "title": "{name}: Utracono połączenie MQTT robota podczas misji",

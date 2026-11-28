@@ -1391,7 +1391,7 @@ class TestSmberrMergedIntoContactRepairs:
             await async_check_dock_health(hass, entry)
         mock_ir.async_create_issue.assert_called_once()
         placeholders = mock_ir.async_create_issue.call_args[1]["translation_placeholders"]
-        assert "SMBus errors" in placeholders["smberr_context"]
+        assert placeholders["smberr"] == "50432"
 
     @pytest.mark.asyncio
     async def test_dock_health_normal_thresholds_when_smberr_not_elevated(self):
@@ -1411,9 +1411,9 @@ class TestSmberrMergedIntoContactRepairs:
         mock_ir.async_create_issue.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_dock_health_context_empty_when_not_elevated(self):
-        """smberr_context is an empty string (not a stray 'None'/'0') in
-        the fired issue's placeholders when smberr isn't elevated."""
+    async def test_the_smbus_count_is_a_number_or_a_dash(self):
+        """4.6.13: the count, never an English clause in a translated
+        text -- "0" when reported and low, "–" when not reported."""
         entry = _make_config_entry({
             "nChatters": _DOCK_CHATTERS_THRESHOLD + 1,
             "nKnockoffs": 0,
@@ -1424,7 +1424,13 @@ class TestSmberrMergedIntoContactRepairs:
         with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
             await async_check_dock_health(hass, entry)
         placeholders = mock_ir.async_create_issue.call_args[1]["translation_placeholders"]
-        assert placeholders["smberr_context"] == ""
+        assert placeholders["smberr"] == "0"
+        entry = _make_config_entry({
+            "nChatters": _DOCK_CHATTERS_THRESHOLD + 1, "nKnockoffs": 0, "nAborts": 0,
+        })
+        with patch("custom_components.roomba_plus.repairs.ir") as mock_ir:
+            await async_check_dock_health(hass, entry)
+        assert mock_ir.async_create_issue.call_args[1]["translation_placeholders"]["smberr"] == "–"
 
     @pytest.mark.asyncio
     async def test_battery_contact_debounce_drops_to_one_when_smberr_elevated(self):

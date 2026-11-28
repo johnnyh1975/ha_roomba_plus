@@ -1597,7 +1597,7 @@
         "name": "Layout change detected"
       },
       "prime_start_blocked": {
-        "name": "Start blocked"
+        "name": "Fault blocks start"
       },
       "prime_quiet_hours": {
         "name": "In quiet hours"
@@ -2056,7 +2056,7 @@
     },
     "battery_contact_suspect": {
       "title": "{name}: Possible battery or dock contact problem",
-      "description": "Roomba+ detected evidence of a battery/dock contact or communication issue (cause: {cause}). Recent charge-cycle peak battery levels: {recent_peaks}.{smberr_context} A sudden implausible jump in reported battery level, or a declining trend in how high it gets each charge, usually points to a loose or corroded contact rather than the battery itself — clean the contacts on the robot and dock before assuming the battery has failed."
+      "description": "Roomba+ detected evidence of a battery/dock contact or communication issue (cause: {cause}). Recent charge-cycle peak battery levels: {recent_peaks}. SMBus errors (battery communication): {smberr}. A sudden implausible jump in reported battery level, or a declining trend in how high it gets each charge, usually points to a loose or corroded contact rather than the battery itself — clean the contacts on the robot and dock before assuming the battery has failed."
     },
     "observed_zones_detected": {
       "title": "{name}: Robot-detected obstacles in cloud map",
@@ -2064,7 +2064,7 @@
     },
     "dock_contact_health": {
       "title": "{name}: Dock contact health issue detected",
-      "description": "**{name}** is reporting dock contact problems:\n\n- Contact chatters: {chatters}\n- Knockoffs (unintended undocking): {knockoffs}\n- Charge aborts: {aborts}{smberr_context}\n\n**Recommended actions:**\n1. Wipe the charging contacts on the robot and the dock with a slightly damp cloth, then let them dry.\n2. Make sure the dock stands on a flat, stable surface.\n3. If knockoffs are high, check for obstructions near the dock."
+      "description": "**{name}** is reporting dock contact problems:\n\n- Contact chatters: {chatters}\n- Knockoffs (unintended undocking): {knockoffs}\n- Charge aborts: {aborts}\n- SMBus errors (battery communication): {smberr}\n\n**Recommended actions:**\n1. Wipe the charging contacts on the robot and the dock with a slightly damp cloth, then let them dry.\n2. Make sure the dock stands on a flat, stable surface.\n3. If knockoffs are high, check for obstructions near the dock."
     },
     "mqtt_watchdog": {
       "title": "{name}: Robot MQTT connection lost during mission",

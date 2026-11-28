@@ -166,14 +166,18 @@ IDENTICAL_IS_FINE: set[str] = {
     # Words that are the same in several of these languages.
     "Status", "Filter", "Filtro", "Filtr", "OK",
     # Product and protocol names.
-    "Roomba", "Braava", "iRobot", "MQTT", "Wi-Fi", "SNR",
+    "Roomba", "Braava", "iRobot", "MQTT", "Wi-Fi", "SNR", "Home Assistant",
+    # Only placeholders and punctuation.
+    "{name}: {task}",
+    # French that happens to be spelt as the English.
+    "Mission active",
 }
 
 #: Below this length, an identical value is usually a shared word
-#: rather than a missed translation. Set from the shortest real miss
-#: found when this check was written ("Connection settings updated
-#: successfully." at 40 characters), with room to spare.
-UNTRANSLATED_MIN_LENGTH = 26
+#: rather than a missed translation. It was 26 and let a whole options
+#: step stay English in five languages ("Blocking sensors", "Behavior
+#: when blocked", 16 and 21 characters; independent review, 28.11.).
+UNTRANSLATED_MIN_LENGTH = 13
 
 
 def check_untranslated() -> list[str]:

@@ -271,11 +271,11 @@
         }
       },
       "blocking_sensors": {
-        "title": "Blocking sensors",
+        "title": "Sensores de bloqueo",
         "data": {
-          "blocking_sensors": "Blocking sensors",
-          "blocking_behavior": "Behavior when blocked",
-          "blocking_timeout_min": "Queue timeout (minutes)"
+          "blocking_sensors": "Sensores de bloqueo",
+          "blocking_behavior": "Comportamiento al bloquear",
+          "blocking_timeout_min": "Tiempo de espera de la cola (minutos)"
         },
         "description": "Configura los sensores que deben estar inactivos antes de que pueda iniciarse un smart_start.",
         "data_description": {
@@ -285,7 +285,7 @@
         }
       },
       "map_management": {
-        "title": "Zone management",
+        "title": "Gestión de zonas",
         "data": {
           "selected_zone": "Zone to edit"
         },
@@ -298,7 +298,7 @@
         "title": "Editar zona: {zone_name}",
         "data": {
           "display_name": "Display name",
-          "hidden": "Hide this zone"
+          "hidden": "Ocultar esta zona"
         },
         "description": "Define un nombre visible y la visibilidad de esta zona.",
         "data_description": {
@@ -1597,7 +1597,7 @@
         "name": "Cambio de disposición detectado"
       },
       "prime_start_blocked": {
-        "name": "Inicio bloqueado"
+        "name": "Fallo que impide el inicio"
       },
       "prime_quiet_hours": {
         "name": "En horas de silencio"
@@ -2056,7 +2056,7 @@
     },
     "battery_contact_suspect": {
       "title": "{name}: Posible problema de contacto de batería o base",
-      "description": "Se detectó un posible problema de contacto o comunicación (causa: {cause}). Picos recientes por ciclo de carga: {recent_peaks}. Un salto repentino implausible o una tendencia a la baja en el máximo alcanzado suele indicar un contacto flojo o corroído, no la batería en sí — limpia los contactos antes de sospechar de la batería. {smberr_context}"
+      "description": "Se detectó un posible problema de contacto o comunicación (causa: {cause}). Picos recientes por ciclo de carga: {recent_peaks}. Un salto repentino implausible o una tendencia a la baja en el máximo alcanzado suele indicar un contacto flojo o corroído, no la batería en sí — limpia los contactos antes de sospechar de la batería. Errores SMBus (comunicación con la batería): {smberr}."
     },
     "observed_zones_detected": {
       "title": "{name}: Obstáculos detectados por el robot en el mapa en la nube",
@@ -2064,7 +2064,7 @@
     },
     "dock_contact_health": {
       "title": "{name}: Se ha detectado un problema en los contactos de la base",
-      "description": "**{name}** informa de problemas en los contactos de la base:\n\n- Rebotes de contacto: {chatters}\n- Desacoples involuntarios: {knockoffs}\n- Cargas interrumpidas: {aborts}{smberr_context}\n\n**Acciones recomendadas:**\n1. Limpia los contactos de carga del robot y de la base con un paño ligeramente húmedo y deja que se sequen.\n2. Asegúrate de que la base está sobre una superficie plana y estable.\n3. Si hay muchos desacoples, comprueba que no haya obstáculos cerca de la base."
+      "description": "**{name}** informa de problemas en los contactos de la base:\n\n- Rebotes de contacto: {chatters}\n- Desacoples involuntarios: {knockoffs}\n- Cargas interrumpidas: {aborts}\n- Errores SMBus (comunicación con la batería): {smberr}\n\n**Acciones recomendadas:**\n1. Limpia los contactos de carga del robot y de la base con un paño ligeramente húmedo y deja que se sequen.\n2. Asegúrate de que la base está sobre una superficie plana y estable.\n3. Si hay muchos desacoples, comprueba que no haya obstáculos cerca de la base."
     },
     "mqtt_watchdog": {
       "title": "{name}: Conexión MQTT del robot perdida durante la misión",

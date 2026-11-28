@@ -3309,15 +3309,10 @@ class RoombaPlusOptionsFlow(OptionsFlow):
             }),
             errors=errors,
             description_placeholders={
-                "current_user": current_user or "not configured",
-                # CF3 (v2.6.0): contextual scope label so SMART and EPHEMERAL
-                # users understand what cloud credentials unlock for their robot.
-                "cloud_scope": (
-                    "room maps and analytics"
-                    if getattr(self.config_entry.runtime_data, "map_capability", None)
-                    and self.config_entry.runtime_data.map_capability.value == "smart"
-                    else "analytics only"
-                ),
+                # "–", not English words, in every language's sentence
+                # (4.6.13). `cloud_scope` went at the same time: no text
+                # had used it.
+                "current_user": current_user or "–",
             },
         )
 

@@ -728,7 +728,7 @@ async def async_check_battery_contact_issue(
     # enough to act on immediately, rather than waiting for it to repeat.
     # Does not affect the independent declining-peak-trend signal, which
     # has its own, unrelated evidence bar.
-    smberr_elevated, smberr_count = _smberr_elevated(data)
+    smberr_elevated, _smberr = _smberr_elevated(data)
     effective_debounce = 1 if smberr_elevated else _CONTACT_ANOMALY_DEBOUNCE
 
     # ── Signal 2: declining peak-per-charge-cycle trend ─────────────────
@@ -774,14 +774,11 @@ async def async_check_battery_contact_issue(
                 "name": config_entry.title,
                 "cause": cause,
                 "recent_peaks": ", ".join(f"{p:.0f}%" for p in peaks),
-                # v3.5.0 — corroborating context from the former smberr_high
-                # Repair (merged in, not just deleted): empty string when
-                # smberr isn't elevated, so the translation can render this
-                # as an optional trailing clause.
-                "smberr_context": (
-                    f" (also: {smberr_count:,} SMBus errors observed, which "
-                    f"often correlates with this)" if smberr_elevated else ""
-                ),
+                # THE COUNT, NOT A SENTENCE (4.6.13). This was an English
+                # clause stitched into every language's text; the text now
+                # says what the number is, and "–" stands for a robot
+                # that does not report it.
+                "smberr": _smberr_text(data),
             },
         )
     else:
@@ -1349,6 +1346,15 @@ def _smberr_elevated(data: Any) -> tuple[bool, int]:
     return smberr > _SMBERR_THRESHOLD, smberr
 
 
+def _smberr_text(data: Any) -> str:
+    """bbchg.smberr for the repair texts: the count, or "–" when the
+    robot does not report it."""
+    bbchg = data.roomba_reported_state().get("bbchg", {}) or {}
+    if "smberr" not in bbchg:
+        return "–"
+    return str(_safe_int_repairs(bbchg.get("smberr")))
+
+
 def _safe_int_repairs(val: Any, default: int = 0) -> int:
     """Convert val to int, returning default on TypeError/ValueError.
 
@@ -1421,7 +1427,7 @@ async def async_check_dock_health(
     aborts: int = _safe_int_repairs(bbchg.get("nAborts"))
     issue_id = f"dock_contact_health_{config_entry.entry_id}"
 
-    smberr_elevated, smberr_count = _smberr_elevated(data)
+    smberr_elevated, _smberr = _smberr_elevated(data)
     threshold_divisor = 2 if smberr_elevated else 1
 
     _LOGGER.debug(
@@ -1459,14 +1465,11 @@ async def async_check_dock_health(
                 "chatters": str(chatters),
                 "knockoffs": str(knockoffs),
                 "aborts": str(aborts),
-                # v3.5.0 — corroborating context from the former smberr_high
-                # Repair (merged in, not just deleted); empty when smberr
-                # isn't elevated so the translation can render this as an
-                # optional trailing clause.
-                "smberr_context": (
-                    f" (also: {smberr_count:,} SMBus errors observed, which "
-                    f"often correlates with this)" if smberr_elevated else ""
-                ),
+                # THE COUNT, NOT A SENTENCE (4.6.13). This was an English
+                # clause stitched into every language's text; the text now
+                # says what the number is, and "–" stands for a robot
+                # that does not report it.
+                "smberr": _smberr_text(data),
             },
         )
     else:

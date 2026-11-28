@@ -260,7 +260,7 @@
       },
       "cloud_credentials": {
         "title": "iRobot cloud-inloggegevens",
-        "description": "Momenteel aangemeld als: {current_user}\n\nBij je iRobot-inloggegevens of wis beide velden om cloudfuncties uit te schakelen.",
+        "description": "Momenteel aangemeld als: {current_user}\n\nWerk je iRobot-inloggegevens bij of wis beide velden om cloudfuncties uit te schakelen.",
         "data": {
           "irobot_username": "iRobot e-mail",
           "irobot_password": "iRobot wachtwoord"
@@ -271,11 +271,11 @@
         }
       },
       "blocking_sensors": {
-        "title": "Blocking sensors",
+        "title": "Blokkerende sensoren",
         "data": {
-          "blocking_sensors": "Blocking sensors",
-          "blocking_behavior": "Behavior when blocked",
-          "blocking_timeout_min": "Queue timeout (minutes)"
+          "blocking_sensors": "Blokkerende sensoren",
+          "blocking_behavior": "Gedrag bij blokkering",
+          "blocking_timeout_min": "Wachtrij-time-out (minuten)"
         },
         "description": "Stel sensoren in die inactief moeten zijn voordat een smart_start kan beginnen.",
         "data_description": {
@@ -285,7 +285,7 @@
         }
       },
       "map_management": {
-        "title": "Zone management",
+        "title": "Zonebeheer",
         "data": {
           "selected_zone": "Zone to edit"
         },
@@ -298,7 +298,7 @@
         "title": "Zone bewerken: {zone_name}",
         "data": {
           "display_name": "Display name",
-          "hidden": "Hide this zone"
+          "hidden": "Deze zone verbergen"
         },
         "description": "Stel een weergavenaam en zichtbaarheid in voor deze zone.",
         "data_description": {
@@ -1597,7 +1597,7 @@
         "name": "Indelingswijziging gedetecteerd"
       },
       "prime_start_blocked": {
-        "name": "Start geblokkeerd"
+        "name": "Storing blokkeert start"
       },
       "prime_quiet_hours": {
         "name": "In stille uren"
@@ -2056,7 +2056,7 @@
     },
     "battery_contact_suspect": {
       "title": "{name}: Mogelijk contactprobleem accu/dock",
-      "description": "Mogelijk contact- of communicatieprobleem gedetecteerd (oorzaak: {cause}). Recente piekwaarden per laadcyclus: {recent_peaks}. Een plotselinge onwaarschijnlijke sprong of een dalende trend in het bereikte maximum wijst meestal op een los of gecorrodeerd contact, niet op de accu zelf — reinig de contacten voordat je de accu verdenkt. {smberr_context}"
+      "description": "Mogelijk contact- of communicatieprobleem gedetecteerd (oorzaak: {cause}). Recente piekwaarden per laadcyclus: {recent_peaks}. Een plotselinge onwaarschijnlijke sprong of een dalende trend in het bereikte maximum wijst meestal op een los of gecorrodeerd contact, niet op de accu zelf — reinig de contacten voordat je de accu verdenkt. SMBus-fouten (communicatie met de accu): {smberr}."
     },
     "observed_zones_detected": {
       "title": "{name}: Door robot gedetecteerde obstakels in cloudkaart",
@@ -2064,7 +2064,7 @@
     },
     "dock_contact_health": {
       "title": "{name}: Probleem met dockcontacten gedetecteerd",
-      "description": "**{name}** meldt problemen met de dockcontacten:\n\n- Contactdender: {chatters}\n- Onbedoeld van het dock losgekomen: {knockoffs}\n- Afgebroken laadbeurten: {aborts}{smberr_context}\n\n**Aanbevolen acties:**\n1. Veeg de laadcontacten van de robot en het dock af met een licht vochtige doek en laat ze drogen.\n2. Zorg dat het dock op een vlakke, stabiele ondergrond staat.\n3. Komt de robot vaak los van het dock, kijk dan of er obstakels bij het dock staan."
+      "description": "**{name}** meldt problemen met de dockcontacten:\n\n- Contactdender: {chatters}\n- Onbedoeld van het dock losgekomen: {knockoffs}\n- Afgebroken laadbeurten: {aborts}\n- SMBus-fouten (communicatie met de accu): {smberr}\n\n**Aanbevolen acties:**\n1. Veeg de laadcontacten van de robot en het dock af met een licht vochtige doek en laat ze drogen.\n2. Zorg dat het dock op een vlakke, stabiele ondergrond staat.\n3. Komt de robot vaak los van het dock, kijk dan of er obstakels bij het dock staan."
     },
     "mqtt_watchdog": {
       "title": "{name}: MQTT-verbinding robot verbroken tijdens missie",

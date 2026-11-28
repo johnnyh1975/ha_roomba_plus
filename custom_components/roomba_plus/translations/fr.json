@@ -271,11 +271,11 @@
         }
       },
       "blocking_sensors": {
-        "title": "Blocking sensors",
+        "title": "Capteurs bloquants",
         "data": {
-          "blocking_sensors": "Blocking sensors",
-          "blocking_behavior": "Behavior when blocked",
-          "blocking_timeout_min": "Queue timeout (minutes)"
+          "blocking_sensors": "Capteurs bloquants",
+          "blocking_behavior": "Comportement en cas de blocage",
+          "blocking_timeout_min": "Délai de la file d'attente (minutes)"
         },
         "description": "Configurez les capteurs qui doivent être inactifs avant qu'un smart_start puisse démarrer.",
         "data_description": {
@@ -285,7 +285,7 @@
         }
       },
       "map_management": {
-        "title": "Zone management",
+        "title": "Gestion des zones",
         "data": {
           "selected_zone": "Zone to edit"
         },
@@ -298,7 +298,7 @@
         "title": "Modifier la zone : {zone_name}",
         "data": {
           "display_name": "Display name",
-          "hidden": "Hide this zone"
+          "hidden": "Masquer cette zone"
         },
         "description": "Définissez un nom d'affichage et la visibilité de cette zone.",
         "data_description": {
@@ -1408,7 +1408,7 @@
         "name": "Numéro de série"
       },
       "prime_consumable_part": {
-        "name": "Maintenance – {part}"
+        "name": "Entretien – {part}"
       },
       "prime_part_edge_brush": {
         "name": "Maintenance – Brosse latérale"
@@ -1597,7 +1597,7 @@
         "name": "Changement de disposition détecté"
       },
       "prime_start_blocked": {
-        "name": "Démarrage bloqué"
+        "name": "Défaut empêchant le démarrage"
       },
       "prime_quiet_hours": {
         "name": "En heures calmes"
@@ -2056,7 +2056,7 @@
     },
     "battery_contact_suspect": {
       "title": "{name} : Problème possible de contact batterie/base",
-      "description": "Problème de contact ou de communication détecté (cause : {cause}). Pics récents par cycle de charge : {recent_peaks}. Un saut soudain invraisemblable ou une tendance à la baisse du maximum atteint indique généralement un contact desserré ou corrodé, pas la batterie elle-même — nettoyez les contacts avant de suspecter la batterie. {smberr_context}"
+      "description": "Problème de contact ou de communication détecté (cause : {cause}). Pics récents par cycle de charge : {recent_peaks}. Un saut soudain invraisemblable ou une tendance à la baisse du maximum atteint indique généralement un contact desserré ou corrodé, pas la batterie elle-même — nettoyez les contacts avant de suspecter la batterie. Erreurs SMBus (communication avec la batterie) : {smberr}."
     },
     "observed_zones_detected": {
       "title": "{name} : Obstacles détectés par le robot dans la carte cloud",
@@ -2064,7 +2064,7 @@
     },
     "dock_contact_health": {
       "title": "{name} : Problème détecté sur les contacts de la base",
-      "description": "**{name}** signale des problèmes de contact avec la base :\n\n- Rebonds de contact : {chatters}\n- Désamarrages involontaires : {knockoffs}\n- Charges interrompues : {aborts}{smberr_context}\n\n**Actions recommandées :**\n1. Essuyez les contacts de charge du robot et de la base avec un chiffon légèrement humide, puis laissez-les sécher.\n2. Vérifiez que la base repose sur une surface plane et stable.\n3. En cas de nombreux désamarrages, vérifiez qu'aucun obstacle ne se trouve près de la base."
+      "description": "**{name}** signale des problèmes de contact avec la base :\n\n- Rebonds de contact : {chatters}\n- Désamarrages involontaires : {knockoffs}\n- Charges interrompues : {aborts}\n- Erreurs SMBus (communication avec la batterie) : {smberr}\n\n**Actions recommandées :**\n1. Essuyez les contacts de charge du robot et de la base avec un chiffon légèrement humide, puis laissez-les sécher.\n2. Vérifiez que la base repose sur une surface plane et stable.\n3. En cas de nombreux désamarrages, vérifiez qu'aucun obstacle ne se trouve près de la base."
     },
     "mqtt_watchdog": {
       "title": "{name} : Connexion MQTT du robot perdue pendant la mission",
