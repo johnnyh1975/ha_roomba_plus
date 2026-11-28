@@ -230,7 +230,7 @@ migrations and silently stop upgrading every existing install. A test guards it.
 
 ## Guards
 
-Four checks run in CI that no test can replace, because each covers a
+These checks run in CI and no test can replace them, because each covers a
 class of mistake that leaves every test passing.
 
 | Check | What it catches |
@@ -243,6 +243,8 @@ class of mistake that leaves every test passing.
 | `filterwarnings` in `pyproject.toml` | A RuntimeWarning anywhere in the suite. Not a script — pytest itself fails the run. The suite carried 41 warnings for a long time, 31 of them "coroutine … was never awaited"; none was a real bug, but a warning that is always there is one nobody reads, and a genuine missing `await` looks exactly the same. `tests/conftest.py` provides `hass_mock()` and `entry_mock()` for the four routes production uses to launch background work, plus an autouse fixture for the fifth. |
 | `check_ci_pins_match_manifest.py` | A workflow installing a different library version than `manifest.json` pins. The manifest is the only pin a user gets; a workflow that differs tests a build nobody runs, and passes while doing it. Through the 4.2 migration the manifest said roombapy 2.0.1 while one job still installed 1.9.1. |
 | `check_client_attributes.py` | An attribute read off the robot client that roombapy does not have. The client is typed `Any` on the entity base, so mypy checks nothing there — across all 25 entity modules. Two renamed attributes survived the 4.2 migration that way, one of which would have made the connectivity sensor raise on every state read. |
+| `check_issue_ids.py` | A repair issue about one robot whose id does not carry its entry id. With two robots one robot's check cleared or replaced the other's notice (4.6.12); a copy with one id shared again passed the whole suite. |
+| `check_delay_saves.py` | A class that saves via `async_delay_save` with no flush on unload or removal. Forgotten four times before the check existed. |
 
 Each has an allowlist requiring a written reason, and a test asserting
 that the reasons are not placeholders -- ten entries reading "as above"
@@ -252,17 +254,12 @@ failed that test on the first attempt.
 
 Recorded because a review that stays in one person's head is not a review.
 
-- **Delayed saves need an explicit flush on unload, and it is easy to forget.** Both
-  `MissionTimerStore` and the Prime map PNG persist via `Store.async_delay_save`, which coalesces a
-  burst of writes into one. Without a matching `async_save` on unload, a RELOAD can have the old
-  instance's pending write land after the new instance has already loaded — overwriting fresh state
-  with stale, which is worse than losing the update.
-
-  Classic solved this for `MissionTimerStore` in v3.3.0. The Prime unload path was written later and
-  did not inherit it: its short `CLOUD_ONLY` branch returns before that code is reached. The Prime
-  map then reproduced it a third time, having copied the delayed-save pattern from that very store
-  without copying the flush. Any new delayed-save store needs the flush added deliberately; nothing
-  enforces it.
+- **Delayed saves need an explicit flush on unload.** Several objects persist via
+  `Store.async_delay_save`, which coalesces a burst of writes into one. Without a matching
+  `async_save` on unload or removal, a RELOAD can have the old instance's pending write land after
+  the new instance has already loaded — overwriting fresh state with stale, which is worse than
+  losing the update. The flush was forgotten four times, so `scripts/check_delay_saves.py` now fails
+  for any class that saves delayed without a method that writes now and runs on unload or removal.
 
 - **The Prime and Classic branches diverge silently.** `async_setup_entry`, `async_unload_entry` and
   most platform setups have a `CLOUD_ONLY` branch that returns early. Anything added to the Classic

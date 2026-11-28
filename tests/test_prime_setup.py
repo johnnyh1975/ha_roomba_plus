@@ -499,6 +499,30 @@ class TestAsyncUnloadEntryCloudOnly:
         hass.config_entries.async_unload_platforms.assert_awaited_once()
 
     @pytest.mark.asyncio
+    async def test_the_mission_timer_is_flushed(self) -> None:
+        """The fix for the reload race (ARCHITECTURE "Known weaknesses")
+        stood in the code with no test holding it: removing it left the
+        suite green (independent review, mutation M3, 28.11.)."""
+        hass = hass_mock()
+        hass.config_entries.async_unload_platforms = AsyncMock(return_value=True)
+        config_entry = entry_mock()
+        fake_prime_robot = MagicMock()
+        fake_prime_robot.disconnect = AsyncMock()
+        mts = MagicMock()
+        mts.async_save = AsyncMock()
+        config_entry.runtime_data = RoombaData(
+            blid="BLID123",
+            roomba=None,
+            connection_type=ConnectionType.CLOUD_ONLY,
+            prime_robot=fake_prime_robot,
+            mission_timer_store=mts,
+        )
+
+        await async_unload_entry(hass, config_entry)
+
+        mts.async_save.assert_awaited_once_with(hass, config_entry.entry_id)
+
+    @pytest.mark.asyncio
     async def test_handles_missing_prime_robot_gracefully(self) -> None:
         """Defensive: if setup failed before prime_robot was ever set
         (shouldn't happen given _async_setup_entry_prime()'s ordering,

@@ -4808,6 +4808,34 @@ class TestPrimeRoomsStart:
         assert r.async_on_remove.call_count >= 2
 
 
+class TestPrimeRoomsFlushOnRemove:
+    """4.6.13: the live bundle is saved five seconds delayed and the
+    entity never wrote it on removal -- a reload could land the old
+    bundle last (independent review, 28.11.)."""
+
+    @pytest.mark.asyncio
+    async def test_the_pending_bundle_is_written_when_the_entity_goes(self, hass):
+        entry = _real_entry(hass)
+        r = img.PrimeRoomsImage("PB", entry, hass, include_live=True)
+        r.hass = hass
+        r._live_bundle_store = MagicMock(async_save=AsyncMock())
+        r._current_map_id = "m1"
+        r._live_bundle = {}
+        await r.async_will_remove_from_hass()
+        r._live_bundle_store.async_save.assert_awaited_once()
+        assert r._live_bundle_store.async_save.call_args.args[0]["map_id"] == "m1"
+
+    @pytest.mark.asyncio
+    async def test_nothing_is_written_without_a_map(self, hass):
+        entry = _real_entry(hass)
+        r = img.PrimeRoomsImage("PB", entry, hass, include_live=True)
+        r.hass = hass
+        r._live_bundle_store = MagicMock(async_save=AsyncMock())
+        r._current_map_id = None
+        await r.async_will_remove_from_hass()
+        r._live_bundle_store.async_save.assert_not_awaited()
+
+
 class TestLiveZonesBelongToTheirMap:
     """Zone layers come from the live bundle only when it belongs to the
     map being drawn; a bundle from the other floor would draw its zones

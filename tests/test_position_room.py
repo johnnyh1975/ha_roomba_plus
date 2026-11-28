@@ -51,3 +51,30 @@ def test_a_room_clean_names_the_room():
     data = _living_room()
     assert room_at_position(data, 1500, 1500, frame="umf", zones=["Living Room"]) == "Living Room"
     assert room_at_position(data, 1500, 1500, frame="umf") == "Living Room"
+
+
+class TestThePathTurnLearnerFlushes:
+    """4.6.13: the counts are saved five minutes delayed; `async_flush`
+    writes them now and drops the pending write, for the unload."""
+
+    async def test_flush_writes_the_counts_and_leaves_nothing_pending(self, hass):
+        from homeassistant.helpers.storage import Store
+
+        from custom_components.roomba_plus.position_room import (
+            PathTurnLearner,
+            path_turn_store_key,
+        )
+
+        learner = PathTurnLearner()
+        await learner.async_load(hass, "e1")
+        learner.add("map|0", {"0": True}, "0")
+        assert learner._store._delay_handle is not None
+        await learner.async_flush()
+        assert learner._store._delay_handle is None
+        stored = await Store(hass, 1, path_turn_store_key("e1")).async_load()
+        assert stored["maps"]["map|0"]["positions"] == 1
+
+    async def test_flush_without_a_store_does_nothing(self):
+        from custom_components.roomba_plus.position_room import PathTurnLearner
+
+        await PathTurnLearner().async_flush()

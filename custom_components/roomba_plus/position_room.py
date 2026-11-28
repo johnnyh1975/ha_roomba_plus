@@ -332,6 +332,15 @@ class PathTurnLearner:
     def _payload(self) -> dict[str, Any]:
         return {"maps": self._maps}
 
+    async def async_flush(self) -> None:
+        """Write the counts now and drop the pending delayed write (4.6.13).
+
+        Called on unload: a reload could otherwise have the old learner's
+        delayed write (five minutes) land after the new one loaded.
+        """
+        if self._store is not None:
+            await self._store.async_save(self._payload())
+
     async def async_load(self, hass: Any, entry_id: str) -> None:
         """Read the counts kept for this entry; anything odd is dropped."""
         from homeassistant.helpers.storage import Store

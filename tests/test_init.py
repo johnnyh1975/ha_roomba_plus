@@ -2321,6 +2321,26 @@ class TestUnloadFlushesAndDisconnects:
         entry.runtime_data.mission_timer_store.async_save.assert_awaited()
 
     @pytest.mark.asyncio
+    async def test_the_path_turn_counts_are_flushed_before_the_entry_goes(
+        self, hass: Any
+    ) -> None:
+        """4.6.13: the learner saves five minutes delayed, and nothing
+        wrote it on unload -- a reload could land the old counts last."""
+        from unittest.mock import AsyncMock
+
+        from custom_components.roomba_plus import async_unload_entry
+        from custom_components.roomba_plus.position_room import PathTurnLearner
+
+        entry = self._entry_with_runtime(hass)
+        learner = PathTurnLearner()
+        learner.async_flush = AsyncMock()  # type: ignore[method-assign]
+        entry.runtime_data.path_turn = learner
+
+        await async_unload_entry(hass, entry)
+
+        learner.async_flush.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_the_blocking_queue_is_cancelled(self, hass: Any) -> None:
         """A queued smart_start that survives the unload would fire
         against a robot the entry no longer owns."""

@@ -2551,6 +2551,12 @@ async def async_unload_entry(
                 await mts.async_save(hass, config_entry.entry_id)
             except Exception:  # noqa: BLE001 — unload must never fail on this
                 _LOGGER.debug("MTS unload flush failed", exc_info=True)
+        path_turn = getattr(config_entry.runtime_data, "path_turn", None)
+        if isinstance(path_turn, PathTurnLearner):
+            try:
+                await path_turn.async_flush()
+            except Exception:  # noqa: BLE001 — unload must never fail on this
+                _LOGGER.debug("Path turn unload flush failed", exc_info=True)
 
         # `roomba` IS SET FROM HERE DOWN. The CLOUD_ONLY branch above
         # returns before reaching this code, so a Prime entry -- which

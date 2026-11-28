@@ -468,6 +468,11 @@ jobs:
       - name: Check repair issue ids carry the entry id
         run: python3 scripts/check_issue_ids.py
 
+      # A delayed save the unload does not flush can land after a reload
+      # and overwrite fresh state with stale.
+      - name: Check delayed saves are flushed
+        run: python3 scripts/check_delay_saves.py
+
       # THE MESSAGE IS THE POINT. All three of these also run inside the
       # test suite, so coverage is not the reason they are here -- a
       # failure there reads as "one test in test_quality_scale.py

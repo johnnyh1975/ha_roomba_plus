@@ -377,6 +377,58 @@ class TestIssueIdGuard:
         assert guard.main() == 1
 
 
+class TestDelaySaveGuard:
+    """Two delayed saves without a flush survived until the independent
+    review of 28.11.; ARCHITECTURE said "nothing enforces it"."""
+
+    _SAVE = (
+        "class Keeper:\n"
+        "    def touch(self):\n"
+        "        self._store.async_delay_save(self._payload, 5)\n"
+    )
+
+    def test_it_reports_a_delayed_save_nobody_flushes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        guard = _load("check_delay_saves")
+        (tmp_path / "keeper.py").write_text(self._SAVE, encoding="utf-8")
+        monkeypatch.setattr(guard, "PACKAGE", tmp_path)
+        monkeypatch.setattr(guard, "NO_FLUSH_NEEDED", {})
+        assert guard.main() == 1
+
+    def test_a_flush_on_removal_passes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        guard = _load("check_delay_saves")
+        (tmp_path / "keeper.py").write_text(
+            self._SAVE
+            + "    async def async_will_remove_from_hass(self):\n"
+            "        await self._store.async_save(self._payload())\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(guard, "PACKAGE", tmp_path)
+        monkeypatch.setattr(guard, "NO_FLUSH_NEEDED", {})
+        assert guard.main() == 0
+
+    def test_a_flush_nobody_calls_is_no_flush(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        guard = _load("check_delay_saves")
+        (tmp_path / "keeper.py").write_text(
+            self._SAVE
+            + "    async def async_flush(self):\n"
+            "        await self._store.async_save(self._payload())\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(guard, "PACKAGE", tmp_path)
+        monkeypatch.setattr(guard, "NO_FLUSH_NEEDED", {})
+        assert guard.main() == 1
+        (tmp_path / "unload.py").write_text(
+            "async def unload(keeper):\n    await keeper.async_flush()\n", encoding="utf-8"
+        )
+        assert guard.main() == 0
+
+
 class TestServiceSchemaGuard:
     """A field documented in services.yaml but absent from the schema.
 

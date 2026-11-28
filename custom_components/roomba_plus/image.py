@@ -6641,6 +6641,21 @@ class PrimeRoomsImage(IRobotEntity, ImageEntity):
             )
         self._mark_live_dirty(force=self._bundle_just_became_preferred())
 
+    async def async_will_remove_from_hass(self) -> None:
+        """Flush the delayed live-bundle write (4.6.13).
+
+        The same reload race the map store has: the old entity's pending
+        write could land after the new one loaded. `Store.async_save`
+        writes and cancels the pending timer.
+        """
+        await super().async_will_remove_from_hass()
+        store = getattr(self, "_live_bundle_store", None)
+        if store is not None and getattr(self, "_current_map_id", None) is not None:
+            try:
+                await store.async_save(self._live_bundle_save_payload())
+            except Exception:  # noqa: BLE001 -- removal must never fail on this
+                _LOGGER.debug("Prime rooms map: live bundle flush failed", exc_info=True)
+
     def _live_bundle_save_payload(self) -> dict[str, Any]:
         """Persist only the rendered live layers for the current map."""
         bundle = self._live_bundle if isinstance(self._live_bundle, dict) else {}
