@@ -1873,6 +1873,11 @@ class RoombaPlusOptionsFlow(OptionsFlow):
         # CF4: single "rooms" entry routes internally to zones/smart_zones
         if data.map_capability in (MapCapability.EPHEMERAL, MapCapability.SMART):
             menu.append("rooms")
+        # ROOM NUMBERS BY HAND (4.6.13). The step existed and the docs sent
+        # Smart Map owners without an iRobot account here, but no menu
+        # offered it. A Classic Smart Map robot is the only one it serves.
+        if data.map_capability == MapCapability.SMART and getattr(data, "prime_robot", None) is None:
+            menu.append("smart_zones_manual")
 
         # ── 🔧  Maintenance (4.5.0): every maintenance setting in one place.
         # Last of the regular entries: it was second, right under the

@@ -4605,3 +4605,49 @@ class TestSettingsWallsAndDoorsForEveryMap:
         result = await flow.async_step_settings(None)
         defaults = {str(k): k.default() for k in result["data_schema"].schema}
         assert defaults["wall_thickness_cm"] == 15 and defaults["door_width_cm"] == 100
+
+
+class TestEveryMenuEntryIsReachable:
+    """4.6.13: `smart_zones_manual` had texts, a step, tests and three
+    pages of docs sending people to it -- and no menu that offered it.
+    Every entry `strings.json` lists for the options menu must appear in
+    the menu for at least one kind of robot."""
+
+    async def _menu(self, capability, *, cloud, prime, rest980):
+        from custom_components.roomba_plus.models import MapCapability
+
+        flow = _make_options_flow()
+        data = flow._config_entry.runtime_data
+        data.map_capability = getattr(MapCapability, capability)
+        data.has_cloud = cloud
+        data.prime_robot = MagicMock() if prime else None
+        flow.hass.config_entries.async_entries = MagicMock(
+            return_value=[MagicMock()] if rest980 else []
+        )
+        flow.async_show_menu = MagicMock(side_effect=lambda **kw: kw)
+        return (await flow.async_step_init())["menu_options"]
+
+    @pytest.mark.asyncio
+    async def test_every_listed_entry_is_offered_somewhere(self):
+        import itertools
+        import json
+        from pathlib import Path
+
+        from custom_components.roomba_plus import config_flow as cf
+
+        listed = set(
+            json.loads((Path(cf.__file__).parent / "strings.json").read_text(encoding="utf-8"))
+            ["options"]["step"]["init"]["menu_options"]
+        )
+        offered: set[str] = set()
+        for capability, cloud, prime, rest980 in itertools.product(
+            ("NONE", "EPHEMERAL", "SMART"), (False, True), (False, True), (False, True)
+        ):
+            offered |= set(await self._menu(capability, cloud=cloud, prime=prime, rest980=rest980))
+        assert listed - offered == set()
+
+    @pytest.mark.asyncio
+    async def test_a_classic_smart_map_robot_can_enter_room_numbers(self):
+        assert "smart_zones_manual" in await self._menu("SMART", cloud=False, prime=False, rest980=False)
+        assert "smart_zones_manual" in await self._menu("SMART", cloud=True, prime=False, rest980=False)
+        assert "smart_zones_manual" not in await self._menu("EPHEMERAL", cloud=False, prime=False, rest980=False)
