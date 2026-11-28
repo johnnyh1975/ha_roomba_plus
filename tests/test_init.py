@@ -3363,3 +3363,127 @@ class TestPrimePrefixReload:
         hass.data[init_mod._PRIME_PREFIX_RELOADS] = {kept.entry_id: 1.0, removed.entry_id: 2.0}
         await init_mod.async_remove_entry(hass, removed)
         assert hass.data[init_mod._PRIME_PREFIX_RELOADS] == {kept.entry_id: 1.0}
+
+
+# ── The real lifecycle, with two robots (4.7-2) ──────────────────────────────
+#
+# Through Home Assistant's entry manager, with a real roombapy client
+# (Classic) and the account's robot replaced by a fake without a network
+# (Prime): tests/replay.py. Setup, reload and unload as Home Assistant
+# drives them, and two robots at once -- the case most field reports of
+# the 4.6 line came from (one robot's repair, event or timer reaching the
+# other).
+
+_CLASSIC_STATE = {
+    "name": "Downstairs", "cap": {"pose": 1}, "batPct": 90,
+    "pose": {"point": {"x": 0, "y": 0}, "theta": 0},
+    "cleanMissionStatus": {"phase": "charge", "cycle": "none", "error": 0},
+}
+_PRIME_STATE = {"ro-currentstate": {
+    "batPct": 100, "cleanMissionStatus": {"phase": "charge", "cycle": "none", "nMssn": 10},
+}}
+
+
+def _loaded(entry) -> bool:
+    from homeassistant.config_entries import ConfigEntryState
+
+    return entry.state is ConfigEntryState.LOADED
+
+
+class TestRealLifecycleWithTwoRobots:
+
+    @pytest.mark.asyncio
+    async def test_a_classic_reload_registers_each_callback_once(
+        self, hass, monkeypatch, enable_custom_integrations,
+    ):
+        """The reloaded entry gets its own client, with the same callbacks
+        as the first setup and the state the robot last reported."""
+        from tests.replay import Replay
+
+        robot = Replay(hass, monkeypatch)
+        await robot.setup(_CLASSIC_STATE)
+        await robot.at(1.0, {"batPct": 80})
+        first_client = robot.client
+        listening = len(first_client._on_message)
+        assert await hass.config_entries.async_reload(robot.entry.entry_id)
+        await hass.async_block_till_done()
+        assert _loaded(robot.entry)
+        assert robot.client is not first_client
+        assert robot.entry.runtime_data.roomba is robot.client
+        assert len(robot.client._on_message) == listening
+        assert robot.entry.runtime_data.roomba_reported_state()["batPct"] == 80
+        await robot.unload()
+
+    @pytest.mark.asyncio
+    async def test_a_prime_reload_and_unload_stop_reading_the_streams(
+        self, hass, monkeypatch, enable_custom_integrations,
+    ):
+        from tests.replay import PrimeReplay
+
+        robot = PrimeReplay(hass, monkeypatch)
+        await robot.setup(_PRIME_STATE)
+        assert await hass.config_entries.async_reload(robot.entry.entry_id)
+        await hass.async_block_till_done()
+        assert _loaded(robot.entry)
+        await robot.shadow(1.0, "ro-currentstate", {"batPct": 80})
+        status = robot.entry.runtime_data.prime_status_coordinator
+        assert status.data["ro-currentstate"]["batPct"] == 80
+        await robot.unload()
+        # Nobody reads the stream any more: a message stays where it is.
+        robot.robot.named.queue.put_nowait(object())
+        await hass.async_block_till_done()
+        assert robot.robot.named.queue.qsize() == 1
+
+    @pytest.mark.asyncio
+    async def test_classic_and_prime_side_by_side_each_keep_going_alone(
+        self, hass, monkeypatch, enable_custom_integrations,
+    ):
+        from tests.replay import PrimeReplay, Replay
+
+        classic = Replay(hass, monkeypatch)
+        await classic.setup(_CLASSIC_STATE, title="Downstairs")
+        prime = PrimeReplay(hass, monkeypatch)
+        await prime.setup(_PRIME_STATE, title="Upstairs")
+        assert _loaded(classic.entry) and _loaded(prime.entry)
+
+        await prime.unload()
+        assert _loaded(classic.entry)
+        await classic.at(5.0, {"batPct": 70})
+        assert classic.entry.runtime_data.roomba_reported_state()["batPct"] == 70
+
+        assert await hass.config_entries.async_reload(prime.entry.entry_id)
+        await hass.async_block_till_done()
+        await classic.unload()
+        assert _loaded(prime.entry)
+        await prime.shadow(6.0, "ro-currentstate", {"batPct": 60})
+        status = prime.entry.runtime_data.prime_status_coordinator
+        assert status.data["ro-currentstate"]["batPct"] == 60
+        await prime.unload()
+
+    @pytest.mark.asyncio
+    async def test_two_prime_robots_on_one_account_hear_only_their_own(
+        self, hass, monkeypatch, enable_custom_integrations,
+    ):
+        from tests.replay import PrimeReplay
+
+        first = PrimeReplay(hass, monkeypatch, blid="0123456789ABCDEF0123456789ABCDE1")
+        await first.setup(_PRIME_STATE, title="First")
+        second = PrimeReplay(hass, monkeypatch, blid="0123456789ABCDEF0123456789ABCDE2")
+        await second.setup(_PRIME_STATE, title="Second")
+
+        await first.shadow(1.0, "ro-currentstate", {"batPct": 50})
+        first_status = first.entry.runtime_data.prime_status_coordinator
+        second_status = second.entry.runtime_data.prime_status_coordinator
+        assert first_status.data["ro-currentstate"]["batPct"] == 50
+        assert second_status.data["ro-currentstate"]["batPct"] == 100
+
+        # A reload of the first after the second was set up gets the
+        # first robot back, not the last one the account handed out.
+        assert await hass.config_entries.async_reload(first.entry.entry_id)
+        await hass.async_block_till_done()
+        assert first.entry.runtime_data.prime_robot is first.robot
+        await first.unload()
+        await second.shadow(2.0, "ro-currentstate", {"batPct": 40})
+        assert second.entry.runtime_data.prime_status_coordinator.data[
+            "ro-currentstate"]["batPct"] == 40
+        await second.unload()

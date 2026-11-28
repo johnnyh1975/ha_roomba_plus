@@ -253,7 +253,7 @@ class ThonnoRun:
 
         async def _record(*args: Any, **kwargs: Any) -> Any:
             # The real recorder runs; only the moment is noted.
-            self.closed_at.append(replay.clock.elapsed)
+            self.closed_at.append(replay.elapsed)
             return await record(*args, **kwargs)
 
         monkeypatch.setattr(callbacks, "async_record_mission", _record)

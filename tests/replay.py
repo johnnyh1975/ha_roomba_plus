@@ -18,9 +18,10 @@ fans them out to every callback the setup registered, in order.
 TIME. One clock for the whole integration: every module that reads
 `time.time()` or `time.monotonic()` -- directly or through an imported
 `monotonic` -- reads `ReplayClock` instead, so a mission of an hour runs
-in milliseconds and the gates that wait seconds see them pass. The event
-loop keeps its own clock; patching `time.monotonic` itself would stall
-every `asyncio.sleep`.
+in milliseconds and the gates that wait seconds see them pass. Every
+robot in a test shares it, and each counts its own seconds from when its
+replay began. The event loop keeps its own clock; patching
+`time.monotonic` itself would stall every `asyncio.sleep`.
 
 WHAT IS NOT REAL. Entity platforms are not set up (no entities, only the
 vacuum's registry entry so the actions can be targeted), and nothing is
@@ -65,6 +66,10 @@ class ReplayClock:
     def __init__(self) -> None:
         self.elapsed = 0.0
 
+    def move_to(self, elapsed: float) -> None:
+        assert elapsed >= self.elapsed, "a replay does not go back in time"
+        self.elapsed = elapsed
+
     def time(self) -> float:
         return EPOCH + self.elapsed
 
@@ -73,6 +78,12 @@ class ReplayClock:
 
     def __getattr__(self, name: str) -> Any:
         return getattr(_real_time, name)
+
+
+def shared_clock(hass: HomeAssistant) -> ReplayClock:
+    """One clock per test: every robot in it lives in the same time."""
+    clock: ReplayClock = hass.data.setdefault("roomba_plus_replay_clock", ReplayClock())
+    return clock
 
 
 def _bound_to_clock(value: Any, name: str) -> bool:
@@ -161,11 +172,19 @@ class Replay:
         self.hass = hass
         self.blid = blid
         self.host = host
-        self.clock = ReplayClock()
+        self.clock = shared_clock(hass)
+        #: Where this robot's own seconds start on the shared clock: a
+        #: second robot set up later counts from its own start.
+        self._start = self.clock.elapsed
         self._monkeypatch = monkeypatch
         self.client: RoombaClient | None = None
         self.entry: MockConfigEntry | None = None
         self.vacuum_entity_id = ""
+
+    @property
+    def elapsed(self) -> float:
+        """Seconds since this robot's replay began."""
+        return self.clock.elapsed - self._start
 
     async def setup(
         self,
@@ -184,13 +203,21 @@ class Replay:
         if cloud_pmaps is not None:
             mp.setattr(integration, "IrobotCloudCoordinator", _cloud_answering(cloud_pmaps))
             data |= {"irobot_username": "user@example.com", "irobot_password": "password"}
-        client = RoombaClient(self.host, self.blid, "password")
-        self.client = client
+        self.client = RoombaClient(self.host, self.blid, "password")
         self.send(reported)
 
         async def _connect(ctx: Any) -> bool:
-            ctx.roomba = client
-            ctx.state = roomba_reported_state(client)
+            # A NEW CLIENT ON EVERY SETUP, as the real phase builds one:
+            # a reload gets a fresh client that knows what the robot last
+            # reported, and the old one goes with the old entry.
+            assert self.client is not None
+            if self.client._on_message:
+                # Set up before: this is a reload.
+                known = roomba_reported_state(self.client)
+                self.client = RoombaClient(self.host, self.blid, "password")
+                self.send(known)
+            ctx.roomba = self.client
+            ctx.state = roomba_reported_state(self.client)
             return True
 
         mp.setattr(integration, "_phase_connect", _connect)
@@ -220,8 +247,7 @@ class Replay:
 
     async def at(self, seconds: float, reported: dict[str, Any]) -> None:
         """Move the clock to `seconds` after the start, then send."""
-        assert seconds >= self.clock.elapsed, "a replay does not go back in time"
-        self.clock.elapsed = seconds
+        self.clock.move_to(self._start + seconds)
         self.send(reported)
         await self.hass.async_block_till_done()
 
@@ -348,18 +374,46 @@ class FakePrimeRobot:
         raise AttributeError(name)
 
 
+_PRIME_ROBOTS = "roomba_plus_replay_prime_robots"
+
+
+class _ReplayAccount:
+    """Stands in for `cloud_account.async_acquire`: the shared account."""
+
+    def __init__(self, robots: dict[str, FakePrimeRobot]) -> None:
+        self.robots = robots
+        self.account = MagicMock()
+        self.account.generation.return_value = "prime"
+
+        async def _robot(blid: str, **_kwargs: Any) -> FakePrimeRobot:
+            return robots[blid]
+
+        self.account.prime_robot = _robot
+
+    async def __call__(self, *_args: Any, **_kwargs: Any) -> Any:
+        return self.account
+
+
 class PrimeReplay:
     """One Prime robot, set up for real, fed by hand."""
 
     def __init__(self, hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch,
                  *, blid: str = PRIME_BLID) -> None:
         self.hass = hass
-        self.clock = ReplayClock()
+        self.clock = shared_clock(hass)
+        #: Where this robot's own seconds start on the shared clock: a
+        #: second robot set up later counts from its own start.
+        self._start = self.clock.elapsed
         self._monkeypatch = monkeypatch
         self.blid = blid
         self.robot: FakePrimeRobot | None = None
         self.entry: MockConfigEntry | None = None
         self.vacuum_entity_id = ""
+
+    @property
+    def elapsed(self) -> float:
+        """Seconds since this robot's replay began."""
+        return self.clock.elapsed - self._start
 
     async def setup(
         self, shadows: dict[str, dict[str, Any]], *, sku: str = "G185020",
@@ -372,11 +426,15 @@ class PrimeReplay:
         robot = FakePrimeRobot(self.blid, sku, {k: dict(v) for k, v in shadows.items()})
         robot.history = history or []
         self.robot = robot
-        account = MagicMock()
-        account.generation.return_value = "prime"
-        account.prime_robot = AsyncMock(return_value=robot)
-        mp.setattr(integration, "async_acquire", AsyncMock(return_value=account))
-        mp.setattr(integration, "async_release", MagicMock())
+        # ONE ACCOUNT FOR EVERY PRIME ROBOT IN THE TEST, as two robots
+        # on one iRobot login share one: it hands each entry its own
+        # robot by id, so a reload of the first after a second was set
+        # up still gets the first robot back.
+        robots: dict[str, FakePrimeRobot] = self.hass.data.setdefault(_PRIME_ROBOTS, {})
+        robots[self.blid] = robot
+        if not isinstance(integration.async_acquire, _ReplayAccount):
+            mp.setattr(integration, "async_acquire", _ReplayAccount(robots))
+            mp.setattr(integration, "async_release", MagicMock())
         entry = MockConfigEntry(
             domain=DOMAIN, version=25, unique_id=self.blid, title=title,
             data={
@@ -407,8 +465,8 @@ class PrimeReplay:
 
     async def shadow(self, seconds: float, name: str, reported: dict[str, Any]) -> None:
         """Move the clock, then one named shadow update."""
-        assert self.robot is not None and seconds >= self.clock.elapsed
-        self.clock.elapsed = seconds
+        assert self.robot is not None
+        self.clock.move_to(self._start + seconds)
         self.robot.named.queue.put_nowait(SimpleNamespace(
             topic=f"$aws/things/{self.blid}/shadow/name/{name}/update/accepted",
             payload={"state": {"reported": reported}},
@@ -417,8 +475,8 @@ class PrimeReplay:
 
     async def timeline(self, seconds: float, payload: dict[str, Any]) -> None:
         """Move the clock, then one mission timeline delta."""
-        assert self.robot is not None and seconds >= self.clock.elapsed
-        self.clock.elapsed = seconds
+        assert self.robot is not None
+        self.clock.move_to(self._start + seconds)
         self.robot.timeline.queue.put_nowait(SimpleNamespace(payload=payload))
         await self._settle()
 
