@@ -2395,10 +2395,6 @@
       "name": "Start mission recording",
       "description": "Records what a Classic robot reports during a mission, so the mission can be replayed as a test. Kept in memory only; robot ids, addresses and map ids are replaced, positions relative to the dock are kept. Stops by itself after the given time.",
       "fields": {
-        "entity_id": {
-          "name": "Robot",
-          "description": "Vacuum entity of the robot."
-        },
         "minutes": {
           "name": "Minutes",
           "description": "How long to record before it stops by itself."
@@ -2407,23 +2403,11 @@
     },
     "mission_recording_stop": {
       "name": "Stop mission recording",
-      "description": "Stops the mission recording; returns what was recorded when asked for a response.",
-      "fields": {
-        "entity_id": {
-          "name": "Robot",
-          "description": "Vacuum entity of the robot."
-        }
-      }
+      "description": "Stops the mission recording; returns what was recorded when asked for a response."
     },
     "mission_recording_get": {
       "name": "Get mission recording",
-      "description": "Returns the mission recording so far, ready to attach to an issue.",
-      "fields": {
-        "entity_id": {
-          "name": "Robot",
-          "description": "Vacuum entity of the robot."
-        }
-      }
+      "description": "Returns the mission recording so far, ready to attach to an issue."
     },
     "get_rooms": {
       "name": "Get rooms",

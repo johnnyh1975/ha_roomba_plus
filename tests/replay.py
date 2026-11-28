@@ -52,7 +52,6 @@ from custom_components.roomba_plus.reported_state import roomba_reported_state
 
 BLID = "0123456789ABCDEF"
 HOST = "192.0.2.10"
-TOPIC = f"$aws/things/{BLID}/shadow/update"
 
 #: Wall-clock start of every replay: 2026-09-18 16:09:41 UTC, the start
 #: of the Thonno mission the first replay rebuilds.
@@ -154,8 +153,13 @@ def _cloud_answering(pmaps: list[dict[str, Any]]) -> type[IrobotCloudCoordinator
 class Replay:
     """One Classic robot, set up for real, fed by hand."""
 
-    def __init__(self, hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch) -> None:
+    def __init__(
+        self, hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch,
+        *, blid: str = BLID, host: str = HOST,
+    ) -> None:
         self.hass = hass
+        self.blid = blid
+        self.host = host
         self.clock = ReplayClock()
         self._monkeypatch = monkeypatch
         self.client: RoombaClient | None = None
@@ -175,11 +179,11 @@ class Replay:
         _install_clock(mp, self.clock)
         for fetch in ("async_fetch_help", "async_fetch_catalogue"):
             mp.setattr(parts_catalog, fetch, AsyncMock(return_value={}))
-        data = {"blid": BLID, "host": HOST, "password": "password"}
+        data = {"blid": self.blid, "host": self.host, "password": "password"}
         if cloud_pmaps is not None:
             mp.setattr(integration, "IrobotCloudCoordinator", _cloud_answering(cloud_pmaps))
             data |= {"irobot_username": "user@example.com", "irobot_password": "password"}
-        client = RoombaClient(HOST, BLID, "password")
+        client = RoombaClient(self.host, self.blid, "password")
         self.client = client
         self.send(reported)
 
@@ -190,7 +194,7 @@ class Replay:
 
         mp.setattr(integration, "_phase_connect", _connect)
         entry = MockConfigEntry(
-            domain=DOMAIN, version=25, unique_id=BLID, title=title,
+            domain=DOMAIN, version=25, unique_id=self.blid, title=title,
             data=data, options=options or {},
         )
         entry.add_to_hass(self.hass)
@@ -202,7 +206,7 @@ class Replay:
         assert await self.hass.config_entries.async_setup(entry.entry_id)
         await self.hass.async_block_till_done()
         self.vacuum_entity_id = er.async_get(self.hass).async_get_or_create(
-            "vacuum", DOMAIN, BLID, config_entry=entry,
+            "vacuum", DOMAIN, self.blid, config_entry=entry,
         ).entity_id
         self.entry = entry
         return entry
@@ -211,7 +215,7 @@ class Replay:
         """One state message, as the read loop hands it to roombapy."""
         assert self.client is not None
         payload = json.dumps({"state": {"reported": reported}}).encode()
-        self.client._handle_message(TOPIC, payload)
+        self.client._handle_message(f"$aws/things/{self.blid}/shadow/update", payload)
 
     async def at(self, seconds: float, reported: dict[str, Any]) -> None:
         """Move the clock to `seconds` after the start, then send."""

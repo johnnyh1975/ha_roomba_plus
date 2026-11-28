@@ -265,17 +265,18 @@ Target: a Roomba+ vacuum.
 
 Returns data, always: call it with `response_variable`.
 
-| Field | Required | What it is | Example |
-|---|---|---|---|
-| `entity_id` | Yes | **Robot.** Vacuum entity of the robot. |  |
+Target: a Roomba+ vacuum.
+
+No fields.
 
 ## `roomba_plus.mission_recording_start`
 
 **Start mission recording.** Records what a Classic robot reports during a mission, so the mission can be replayed as a test. Kept in memory only; robot ids, addresses and map ids are replaced, positions relative to the dock are kept. Stops by itself after the given time.
 
+Target: a Roomba+ vacuum.
+
 | Field | Required | What it is | Example |
 |---|---|---|---|
-| `entity_id` | Yes | **Robot.** Vacuum entity of the robot. |  |
 | `minutes` |  | **Minutes.** How long to record before it stops by itself. |  |
 
 ## `roomba_plus.mission_recording_stop`
@@ -284,9 +285,9 @@ Returns data, always: call it with `response_variable`.
 
 Returns data when you ask for it with `response_variable`.
 
-| Field | Required | What it is | Example |
-|---|---|---|---|
-| `entity_id` | Yes | **Robot.** Vacuum entity of the robot. |  |
+Target: a Roomba+ vacuum.
+
+No fields.
 
 ## `roomba_plus.plan_clean`
 

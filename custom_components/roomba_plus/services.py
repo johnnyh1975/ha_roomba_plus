@@ -1894,49 +1894,82 @@ async def async_handle_debug_capture_get(call: ServiceCall) -> dict[str, Any]:
 
 # ── 4.7.0 — mission recording (mission_recorder.py) ─────────────────────────
 
-def _recording_of(call: ServiceCall, service: str) -> mission_recorder.MissionRecording:
-    """The robot's recording, or a validation error if there is none."""
-    entry = _query_entry(call, service)
-    recording = mission_recorder.recordings(call.hass).get(entry.entry_id)
-    if recording is None:
-        raise ServiceValidationError(
-            f"{service}: nothing recorded for {call.data['entity_id']}",
-            translation_domain=DOMAIN, translation_key="no_mission_recording",
-            translation_placeholders={"entity_id": str(call.data["entity_id"])},
-        )
-    return recording
+def _recording_entries(call: ServiceCall) -> list[tuple[str, Any]]:
+    """(entity id, loaded entry) for every robot the call targets."""
+    found: list[tuple[str, Any]] = []
+    for entity_id in call.data["entity_id"]:
+        entry = _resolve_config_entry_from_entity(call.hass, entity_id, call.service)
+        if entry.domain != DOMAIN:
+            raise ServiceValidationError(
+                f"{call.service}: {entity_id} is not a Roomba+ vacuum",
+                translation_domain=DOMAIN, translation_key="not_a_roomba_plus_vacuum",
+                translation_placeholders={"entity_id": str(entity_id)},
+            )
+        if getattr(entry, "runtime_data", None) is None:
+            raise ServiceValidationError(
+                f"{call.service}: {entity_id} is not loaded",
+                translation_domain=DOMAIN, translation_key="config_entry_not_found",
+                translation_placeholders={"entity_id": str(entity_id)},
+            )
+        if all(entry is not other for _, other in found):
+            found.append((entity_id, entry))
+    return found
+
+
+def _recordings_of(call: ServiceCall) -> list[tuple[str, mission_recorder.MissionRecording]]:
+    """Each targeted robot's recording, or an error naming the first without one."""
+    kept = mission_recorder.recordings(call.hass)
+    found = []
+    for entity_id, entry in _recording_entries(call):
+        recording = kept.get(entry.entry_id)
+        if recording is None:
+            raise ServiceValidationError(
+                f"{call.service}: nothing recorded for {entity_id}",
+                translation_domain=DOMAIN, translation_key="no_mission_recording",
+                translation_placeholders={"entity_id": str(entity_id)},
+            )
+        found.append((entity_id, recording))
+    return found
 
 
 async def async_handle_mission_recording_start(call: ServiceCall) -> None:
-    """roomba_plus.mission_recording_start: record what the robot reports."""
-    entry = _query_entry(call, SERVICE_MISSION_RECORDING_START)
-    if getattr(entry.runtime_data, "roomba", None) is None:
-        raise ServiceValidationError(
-            f"mission_recording_start: {call.data['entity_id']} is not a Classic robot",
-            translation_domain=DOMAIN, translation_key="mission_recording_classic_only",
-            translation_placeholders={"entity_id": str(call.data["entity_id"])},
-        )
+    """roomba_plus.mission_recording_start: record what each robot reports.
+
+    Every target is checked before any recording starts, so a call that
+    names a Prime robot among Classic ones starts none of them.
+    """
+    targets = _recording_entries(call)
+    for entity_id, entry in targets:
+        if getattr(entry.runtime_data, "roomba", None) is None:
+            raise ServiceValidationError(
+                f"mission_recording_start: {entity_id} is not a Classic robot",
+                translation_domain=DOMAIN, translation_key="mission_recording_classic_only",
+                translation_placeholders={"entity_id": str(entity_id)},
+            )
     minutes = int(call.data.get("minutes", mission_recorder.DEFAULT_MINUTES))
     integration = await async_get_integration(call.hass, DOMAIN)
-    mission_recorder.async_start(
-        call.hass, entry, minutes, str(integration.version or "") or None,
-    )
-    robot_logger(_LOGGER, entry).info(
-        "Mission recording started for %d minutes; kept in memory until "
-        "roomba_plus.mission_recording_get.", minutes,
-    )
+    version = str(integration.version or "") or None
+    for _entity_id, entry in targets:
+        mission_recorder.async_start(call.hass, entry, minutes, version)
+        robot_logger(_LOGGER, entry).info(
+            "Mission recording started for %d minutes; kept in memory until "
+            "roomba_plus.mission_recording_get.", minutes,
+        )
 
 
 async def async_handle_mission_recording_stop(call: ServiceCall) -> dict[str, Any]:
-    """roomba_plus.mission_recording_stop: stop, and return what was recorded."""
-    recording = _recording_of(call, SERVICE_MISSION_RECORDING_STOP)
-    recording.stop()
-    return recording.report()
+    """roomba_plus.mission_recording_stop: stop, and return what was
+    recorded, keyed by the vacuum entity."""
+    found = _recordings_of(call)
+    for _entity_id, recording in found:
+        recording.stop()
+    return {entity_id: recording.report() for entity_id, recording in found}
 
 
 async def async_handle_mission_recording_get(call: ServiceCall) -> dict[str, Any]:
-    """roomba_plus.mission_recording_get: what was recorded so far."""
-    return _recording_of(call, SERVICE_MISSION_RECORDING_GET).report()
+    """roomba_plus.mission_recording_get: what was recorded so far, keyed
+    by the vacuum entity."""
+    return {entity_id: recording.report() for entity_id, recording in _recordings_of(call)}
 
 
 async def async_handle_retry_missed_rooms(call: ServiceCall) -> None:
@@ -2713,7 +2746,7 @@ def async_register_services(hass: HomeAssistant) -> None:
             SERVICE_MISSION_RECORDING_START,
             async_handle_mission_recording_start,
             schema=vol.Schema({
-                vol.Required("entity_id"): cv.entity_id,
+                vol.Required("entity_id"): cv.entity_ids,
                 vol.Optional("minutes", default=mission_recorder.DEFAULT_MINUTES): vol.All(
                     vol.Coerce(int), vol.Range(min=1, max=mission_recorder.MAX_MINUTES),
                 ),
@@ -2724,7 +2757,7 @@ def async_register_services(hass: HomeAssistant) -> None:
             DOMAIN,
             SERVICE_MISSION_RECORDING_STOP,
             async_handle_mission_recording_stop,
-            schema=vol.Schema({vol.Required("entity_id"): cv.entity_id}),
+            schema=vol.Schema({vol.Required("entity_id"): cv.entity_ids}),
             supports_response=SupportsResponse.OPTIONAL,
         )
     if not hass.services.has_service(DOMAIN, SERVICE_MISSION_RECORDING_GET):
@@ -2732,7 +2765,7 @@ def async_register_services(hass: HomeAssistant) -> None:
             DOMAIN,
             SERVICE_MISSION_RECORDING_GET,
             async_handle_mission_recording_get,
-            schema=vol.Schema({vol.Required("entity_id"): cv.entity_id}),
+            schema=vol.Schema({vol.Required("entity_id"): cv.entity_ids}),
             supports_response=SupportsResponse.ONLY,
         )
 

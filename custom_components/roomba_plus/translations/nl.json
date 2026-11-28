@@ -2395,10 +2395,6 @@
       "name": "Missie-opname starten",
       "description": "Neemt op wat een Classic-robot tijdens een missie meldt, zodat de missie als test kan worden afgespeeld. Alleen in het geheugen; robot-id's, adressen en kaart-id's worden vervangen, posities ten opzichte van het dock blijven behouden. Stopt vanzelf na de opgegeven tijd.",
       "fields": {
-        "entity_id": {
-          "name": "Robot",
-          "description": "Stofzuigerentiteit van de robot."
-        },
         "minutes": {
           "name": "Minuten",
           "description": "Hoe lang er wordt opgenomen voordat het vanzelf stopt."
@@ -2407,23 +2403,11 @@
     },
     "mission_recording_stop": {
       "name": "Missie-opname stoppen",
-      "description": "Stopt de missie-opname; geeft het opgenomene terug als om een antwoord wordt gevraagd.",
-      "fields": {
-        "entity_id": {
-          "name": "Robot",
-          "description": "Stofzuigerentiteit van de robot."
-        }
-      }
+      "description": "Stopt de missie-opname; geeft het opgenomene terug als om een antwoord wordt gevraagd."
     },
     "mission_recording_get": {
       "name": "Missie-opname ophalen",
-      "description": "Geeft de missie-opname tot nu toe terug, klaar om aan een issue toe te voegen.",
-      "fields": {
-        "entity_id": {
-          "name": "Robot",
-          "description": "Stofzuigerentiteit van de robot."
-        }
-      }
+      "description": "Geeft de missie-opname tot nu toe terug, klaar om aan een issue toe te voegen."
     },
     "get_rooms": {
       "name": "Ruimtes ophalen",

@@ -2395,10 +2395,6 @@
       "name": "Avvia registrazione missione",
       "description": "Registra ciò che un robot Classic segnala durante una missione, così che la missione possa essere riprodotta come test. Solo in memoria; ID del robot, indirizzi e ID delle mappe vengono sostituiti, le posizioni rispetto alla base restano. Si ferma da sola dopo il tempo indicato.",
       "fields": {
-        "entity_id": {
-          "name": "Robot",
-          "description": "Entità aspirapolvere del robot."
-        },
         "minutes": {
           "name": "Minuti",
           "description": "Per quanto registrare prima che si fermi da sola."
@@ -2407,23 +2403,11 @@
     },
     "mission_recording_stop": {
       "name": "Ferma registrazione missione",
-      "description": "Ferma la registrazione della missione; restituisce quanto registrato se viene richiesta una risposta.",
-      "fields": {
-        "entity_id": {
-          "name": "Robot",
-          "description": "Entità aspirapolvere del robot."
-        }
-      }
+      "description": "Ferma la registrazione della missione; restituisce quanto registrato se viene richiesta una risposta."
     },
     "mission_recording_get": {
       "name": "Ottieni registrazione missione",
-      "description": "Restituisce la registrazione della missione finora, pronta da allegare a una segnalazione.",
-      "fields": {
-        "entity_id": {
-          "name": "Robot",
-          "description": "Entità aspirapolvere del robot."
-        }
-      }
+      "description": "Restituisce la registrazione della missione finora, pronta da allegare a una segnalazione."
     },
     "get_rooms": {
       "name": "Ottieni stanze",

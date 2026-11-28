@@ -2395,10 +2395,6 @@
       "name": "Rozpocznij nagrywanie misji",
       "description": "Nagrywa to, co robot Classic zgłasza podczas misji, aby misję można było odtworzyć jako test. Tylko w pamięci; identyfikatory robota, adresy i identyfikatory map są zastępowane, pozycje względem stacji pozostają. Kończy się samo po podanym czasie.",
       "fields": {
-        "entity_id": {
-          "name": "Robot",
-          "description": "Encja odkurzacza robota."
-        },
         "minutes": {
           "name": "Minuty",
           "description": "Jak długo nagrywać, zanim nagrywanie zakończy się samo."
@@ -2407,23 +2403,11 @@
     },
     "mission_recording_stop": {
       "name": "Zatrzymaj nagrywanie misji",
-      "description": "Zatrzymuje nagrywanie misji; na żądanie zwraca to, co zostało nagrane.",
-      "fields": {
-        "entity_id": {
-          "name": "Robot",
-          "description": "Encja odkurzacza robota."
-        }
-      }
+      "description": "Zatrzymuje nagrywanie misji; na żądanie zwraca to, co zostało nagrane."
     },
     "mission_recording_get": {
       "name": "Pobierz nagranie misji",
-      "description": "Zwraca dotychczasowe nagranie misji, gotowe do dołączenia do zgłoszenia.",
-      "fields": {
-        "entity_id": {
-          "name": "Robot",
-          "description": "Encja odkurzacza robota."
-        }
-      }
+      "description": "Zwraca dotychczasowe nagranie misji, gotowe do dołączenia do zgłoszenia."
     },
     "get_rooms": {
       "name": "Pobierz pomieszczenia",

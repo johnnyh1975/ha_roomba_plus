@@ -2395,10 +2395,6 @@
       "name": "Iniciar grabación de misión",
       "description": "Graba lo que un robot Classic informa durante una misión, para que la misión pueda reproducirse como prueba. Solo en memoria; los identificadores del robot, las direcciones y los identificadores de mapa se sustituyen, las posiciones relativas a la base se conservan. Se detiene sola tras el tiempo indicado.",
       "fields": {
-        "entity_id": {
-          "name": "Robot",
-          "description": "Entidad aspiradora del robot."
-        },
         "minutes": {
           "name": "Minutos",
           "description": "Cuánto tiempo grabar antes de que se detenga sola."
@@ -2407,23 +2403,11 @@
     },
     "mission_recording_stop": {
       "name": "Detener grabación de misión",
-      "description": "Detiene la grabación de misión; devuelve lo grabado si se pide una respuesta.",
-      "fields": {
-        "entity_id": {
-          "name": "Robot",
-          "description": "Entidad aspiradora del robot."
-        }
-      }
+      "description": "Detiene la grabación de misión; devuelve lo grabado si se pide una respuesta."
     },
     "mission_recording_get": {
       "name": "Obtener grabación de misión",
-      "description": "Devuelve la grabación de misión hasta ahora, lista para adjuntar a una incidencia.",
-      "fields": {
-        "entity_id": {
-          "name": "Robot",
-          "description": "Entidad aspiradora del robot."
-        }
-      }
+      "description": "Devuelve la grabación de misión hasta ahora, lista para adjuntar a una incidencia."
     },
     "get_rooms": {
       "name": "Obtener habitaciones",

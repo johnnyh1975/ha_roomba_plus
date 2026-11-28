@@ -112,12 +112,18 @@ async def _robot(hass, monkeypatch) -> Replay:
     return replay
 
 
-async def _call(hass, action: str, entity_id: str, **data: Any) -> Any:
+async def _call(hass, action: str, entity_id: str | list[str], **data: Any) -> Any:
+    """The action as a script calls it, by target. One robot's recording
+    back, or all of them for a list."""
     response = action != "mission_recording_start"
-    return await hass.services.async_call(
-        DOMAIN, action, {"entity_id": entity_id, **data}, blocking=True,
+    result = await hass.services.async_call(
+        DOMAIN, action, data, target={"entity_id": entity_id}, blocking=True,
         return_response=response,
     )
+    if response and isinstance(entity_id, str):
+        assert list(result) == [entity_id]
+        return result[entity_id]
+    return result
 
 
 class TestTheRooms:
@@ -244,6 +250,58 @@ class TestTheActions:
         with pytest.raises(ServiceValidationError) as err:
             await _call(hass, "mission_recording_start", entity_id)
         assert err.value.translation_key == "mission_recording_classic_only"
+        await robot.unload()
+
+    @pytest.mark.asyncio
+    async def test_one_call_records_two_robots_each_on_its_own(
+        self, hass, monkeypatch, enable_custom_integrations,
+    ):
+        first = await _robot(hass, monkeypatch)
+        second = Replay(hass, monkeypatch, blid="FEDCBA9876543210", host="192.0.2.11")
+        await second.setup({"name": "Second", "cap": {"pose": 1}, "batPct": 50}, title="Second")
+        both = [first.vacuum_entity_id, second.vacuum_entity_id]
+        await _call(hass, "mission_recording_start", both)
+        first.send({"batPct": 99})
+        second.send({"batPct": 49})
+        await hass.async_block_till_done()
+        got = await _call(hass, "mission_recording_stop", both)
+        assert {e: [m["reported"] for m in r["messages"]] for e, r in got.items()} == {
+            first.vacuum_entity_id: [{"batPct": 99}],
+            second.vacuum_entity_id: [{"batPct": 49}],
+        }
+        await second.unload()
+        await first.unload()
+
+    @pytest.mark.asyncio
+    async def test_a_prime_robot_among_the_targets_starts_none(
+        self, hass, monkeypatch, enable_custom_integrations,
+    ):
+        robot = await _robot(hass, monkeypatch)
+        prime = MockConfigEntry(domain=DOMAIN, title="Prime", unique_id="prime")
+        prime.add_to_hass(hass)
+        prime.mock_state(hass, ConfigEntryState.LOADED)
+        prime.runtime_data = SimpleNamespace(roomba=None)
+        entity_id = er.async_get(hass).async_get_or_create(
+            "vacuum", DOMAIN, "prime", config_entry=prime,
+        ).entity_id
+        with pytest.raises(ServiceValidationError):
+            await _call(hass, "mission_recording_start", [robot.vacuum_entity_id, entity_id])
+        assert mr.recordings(hass) == {}
+        await robot.unload()
+
+    @pytest.mark.asyncio
+    async def test_another_integrations_vacuum_is_refused(
+        self, hass, monkeypatch, enable_custom_integrations,
+    ):
+        robot = await _robot(hass, monkeypatch)
+        other = MockConfigEntry(domain="other_vacuum", title="Other")
+        other.add_to_hass(hass)
+        entity_id = er.async_get(hass).async_get_or_create(
+            "vacuum", "other_vacuum", "x", config_entry=other,
+        ).entity_id
+        with pytest.raises(ServiceValidationError) as err:
+            await _call(hass, "mission_recording_start", entity_id)
+        assert err.value.translation_key == "not_a_roomba_plus_vacuum"
         await robot.unload()
 
     @pytest.mark.asyncio

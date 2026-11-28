@@ -2395,10 +2395,6 @@
       "name": "Missionsaufzeichnung starten",
       "description": "Zeichnet auf, was ein Classic-Roboter während einer Mission meldet, damit die Mission als Test nachgespielt werden kann. Nur im Speicher; Roboter-IDs, Adressen und Karten-IDs werden ersetzt, Positionen relativ zur Ladestation bleiben erhalten. Endet von selbst nach der angegebenen Zeit.",
       "fields": {
-        "entity_id": {
-          "name": "Roboter",
-          "description": "Staubsauger-Entität des Roboters."
-        },
         "minutes": {
           "name": "Minuten",
           "description": "Wie lange aufgezeichnet wird, bevor es von selbst endet."
@@ -2407,23 +2403,11 @@
     },
     "mission_recording_stop": {
       "name": "Missionsaufzeichnung beenden",
-      "description": "Beendet die Missionsaufzeichnung; gibt auf Wunsch das Aufgezeichnete zurück.",
-      "fields": {
-        "entity_id": {
-          "name": "Roboter",
-          "description": "Staubsauger-Entität des Roboters."
-        }
-      }
+      "description": "Beendet die Missionsaufzeichnung; gibt auf Wunsch das Aufgezeichnete zurück."
     },
     "mission_recording_get": {
       "name": "Missionsaufzeichnung abrufen",
-      "description": "Gibt die bisherige Missionsaufzeichnung zurück, fertig zum Anhängen an ein Issue.",
-      "fields": {
-        "entity_id": {
-          "name": "Roboter",
-          "description": "Staubsauger-Entität des Roboters."
-        }
-      }
+      "description": "Gibt die bisherige Missionsaufzeichnung zurück, fertig zum Anhängen an ein Issue."
     },
     "get_rooms": {
       "name": "Räume abrufen",
