@@ -42,6 +42,7 @@ from homeassistant.components.switch import SwitchEntity
 
 from .entity import IRobotEntity
 from .structural_failures import record_failure, record_success
+from .robot_log import robot_logger
 
 if TYPE_CHECKING:
     from .models import RoombaConfigEntry
@@ -617,7 +618,7 @@ class PrimeScheduleSwitch(IRobotEntity, SwitchEntity):
             # Never write a container list built from a read that failed:
             # update_schedules() replaces the whole list, so a partial or
             # stale one deletes schedules.
-            _LOGGER.warning(
+            robot_logger(_LOGGER, self._config_entry).warning(
                 "roomba_plus: could not read schedules before writing -- "
                 "schedule %s not changed", self._schedule_id,
             )
@@ -647,7 +648,7 @@ class PrimeScheduleSwitch(IRobotEntity, SwitchEntity):
                 # Deleted in the app since this switch was created.
                 # Writing the list back unchanged would be pointless, and
                 # writing without it would delete it a second time.
-                _LOGGER.warning(
+                robot_logger(_LOGGER, self._config_entry).warning(
                     "roomba_plus: schedule %s no longer exists on the robot",
                     self._schedule_id,
                 )

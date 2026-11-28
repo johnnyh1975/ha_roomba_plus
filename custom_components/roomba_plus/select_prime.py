@@ -54,6 +54,7 @@ from .prime_room_map import SIGNAL_PRIME_ROOM_NAMES
 from .room_cleaning import ZID_PREFIX
 from .structural_failures import record_failure, record_success
 from .const import DOMAIN
+from .robot_log import robot_logger
 
 if TYPE_CHECKING:
     from .models import RoombaConfigEntry
@@ -856,7 +857,7 @@ class PrimeSettingSelect(IRobotEntity, SelectEntity):
             None,
         )
         if wire_value is None:
-            _LOGGER.warning(
+            robot_logger(_LOGGER, self._config_entry).warning(
                 "roomba_plus: %r is not a known option for %s",
                 option, self.entity_description.key,
             )

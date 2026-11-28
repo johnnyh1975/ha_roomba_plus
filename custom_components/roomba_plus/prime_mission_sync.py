@@ -54,6 +54,7 @@ from .mission_result import note_last_error
 from . import mission_battery
 from .room_times import region_visits, visit_learning
 from .structural_failures import record_failure, record_success
+from .robot_log import robot_logger
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -732,7 +733,7 @@ async def _async_sync_locked(
         try:
             await store.async_save(_hass_of(config_entry), config_entry.entry_id)
         except Exception:  # noqa: BLE001
-            _LOGGER.warning(
+            robot_logger(_LOGGER, config_entry).warning(
                 "roomba_plus: could not persist %d new mission record(s); they "
                 "will be re-read from the cloud next time",
                 added, exc_info=True,

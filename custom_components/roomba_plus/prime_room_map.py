@@ -35,6 +35,7 @@ import dataclasses
 import logging
 from .prime_coordinator import prime_region_names_from_command
 from .structural_failures import record_failure, record_success
+from .robot_log import robot_logger
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -188,7 +189,7 @@ async def async_build_prime_room_polygons(
             room_cleaning_preferences(getattr(map_data, "rooms_metadata", None))
         )
     except Exception:  # noqa: BLE001
-        _LOGGER.warning(
+        robot_logger(_LOGGER, config_entry).warning(
             "roomba_plus: could not read room geometry for map %s", p2map_id,
             exc_info=True,
         )

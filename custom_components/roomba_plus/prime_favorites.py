@@ -14,6 +14,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from .structural_failures import record_failure, record_success
+from .robot_log import robot_logger
 
 if TYPE_CHECKING:
     from .models import RoombaConfigEntry
@@ -179,7 +180,7 @@ async def async_favorites_attribute(
         )
     entry_id = getattr(config_entry, "entry_id", "")
     if unusable and _UNUSABLE_WARNED.get(entry_id) != (unusable, total):
-        _LOGGER.warning(
+        robot_logger(_LOGGER, config_entry).warning(
             "Roomba+ Prime: %d of %d favourite(s) carry no usable id and were "
             "not offered as buttons. Enable debug logging for roombapy_prime "
             "to see which",

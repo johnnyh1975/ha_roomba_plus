@@ -140,6 +140,7 @@ from .mission_map import (
     render_mission_map_png,
 )
 from .models import ConnectionType, MapCapability, RoombaConfigEntry
+from .robot_log import robot_logger
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -3910,7 +3911,7 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                 paths=paths,
             )
         except Exception:  # noqa: BLE001
-            _LOGGER.warning(
+            robot_logger(_LOGGER, self._config_entry).warning(
                 "Roomba+ room segmentation after the mission failed; the "
                 "rooms stay as they were", exc_info=True,
             )
@@ -4031,7 +4032,7 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         try:
             data = await store.async_load()
         except Exception as exc:  # noqa: BLE001
-            _LOGGER.warning("Map: failed to load stored state: %s", exc)
+            robot_logger(_LOGGER, self._config_entry).warning("Map: failed to load stored state: %s", exc)
             return
 
         if not data:
@@ -4067,7 +4068,7 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
                 self._renderer.point_count,
             )
         else:
-            _LOGGER.warning("Map: stored state was incompatible, starting blank")
+            robot_logger(_LOGGER, self._config_entry).warning("Map: stored state was incompatible, starting blank")
 
     # ── Mission checkpoint (v2.8.2) ──────────────────────────────────────────
     #
@@ -4095,7 +4096,7 @@ class RoombaMapImage(IRobotEntity, ImageEntity):
         try:
             data = await store.async_load()
         except Exception as exc:  # noqa: BLE001
-            _LOGGER.warning("Map: failed to load mission checkpoint: %s", exc)
+            robot_logger(_LOGGER, self._config_entry).warning("Map: failed to load mission checkpoint: %s", exc)
             return
         if data:
             self._pending_checkpoint = data

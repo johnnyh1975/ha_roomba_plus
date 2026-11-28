@@ -162,6 +162,7 @@ from .prime_coordinator import (
 )
 from . import cloud_errors, mqtt_session
 from .cloud_account import async_acquire, async_release
+from .robot_log import robot_logger
 
 from roombapy_prime import (
     AuthCredentialsError,
@@ -958,7 +959,7 @@ async def _phase_cloud(ctx: _SetupContext) -> None:
                         hass, config_entry.entry_id
                     )
         except exceptions.ConfigEntryAuthFailed:
-            _LOGGER.warning(
+            robot_logger(_LOGGER, config_entry).warning(
                 "Roomba+ cloud: authentication failed for %s — "
                 "check iRobot credentials in integration options",
                 config_entry.data[CONF_BLID],
@@ -1079,7 +1080,7 @@ async def _phase_cloud(ctx: _SetupContext) -> None:
                     ctx.mission_archive, ctx.mission_store
                 )
         except Exception:  # noqa: BLE001
-            _LOGGER.warning(
+            robot_logger(_LOGGER, config_entry).warning(
                 "L5-ARC/L3-ARC: archive seeding failed — continuing setup "
                 "without archive-based baselines (will retry next restart)",
                 exc_info=True,
@@ -2057,7 +2058,7 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
         if prime_maintenance_store.seed_care(care_reminders_enabled(config_entry.options)):
             await prime_maintenance_store.async_save(hass, config_entry.entry_id)
     except Exception:  # noqa: BLE001
-        _LOGGER.warning(
+        robot_logger(_LOGGER, config_entry).warning(
             "Roomba+ Prime: could not load maintenance store; maintenance dates "
             "will start empty",
             exc_info=True,
@@ -2106,7 +2107,7 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
     try:
         await prime_profile_store.async_load(hass, config_entry.entry_id)
     except Exception:  # noqa: BLE001
-        _LOGGER.warning(
+        robot_logger(_LOGGER, config_entry).warning(
             "Roomba+ Prime: could not load robot profile store; mission "
             "statistics will start empty",
             exc_info=True,
@@ -2116,7 +2117,7 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
     try:
         await prime_timer_store.async_load(hass, config_entry.entry_id)
     except Exception:  # noqa: BLE001
-        _LOGGER.warning(
+        robot_logger(_LOGGER, config_entry).warning(
             "Roomba+ Prime: could not load mission timer store; progress will "
             "start empty",
             exc_info=True,
@@ -2156,7 +2157,7 @@ async def _async_setup_entry_prime(hass: HomeAssistant, config_entry: RoombaConf
         # unreadable store must not stop the robot from being set up --
         # an empty store degrades some sensors, a raised exception costs
         # the user their whole integration.
-        _LOGGER.warning(
+        robot_logger(_LOGGER, config_entry).warning(
             "Roomba+ Prime: could not load mission history store; statistics "
             "sensors will start empty",
             exc_info=True,
@@ -2492,6 +2493,12 @@ async def async_unload_entry(
         # Classic has done this since v3.3.0, found in its own bug hunt.
         # The Prime path was written later and did not inherit it: the
         # short CLOUD_ONLY branch returns before that code is reached.
+        path_turn = getattr(config_entry.runtime_data, "path_turn", None)
+        if isinstance(path_turn, PathTurnLearner):
+            try:
+                await path_turn.async_flush()
+            except Exception:  # noqa: BLE001 — unload must never fail on this
+                _LOGGER.debug("Path turn unload flush failed", exc_info=True)
         mts = config_entry.runtime_data.mission_timer_store
         if mts is not None:
             try:
@@ -2890,7 +2897,7 @@ async def async_remove_entry(
             await Store(hass, 1, key).async_remove()
             removed += 1
         except Exception:  # noqa: BLE001 — one failure must not block the rest
-            _LOGGER.warning(
+            robot_logger(_LOGGER, config_entry).warning(
                 "Roomba+ removal: failed to delete storage for %s (key=%s)",
                 label, key, exc_info=True,
             )

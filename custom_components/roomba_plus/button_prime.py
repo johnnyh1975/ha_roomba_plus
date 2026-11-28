@@ -48,6 +48,7 @@ from .prime_favorites import (  # noqa: F401
     _raw_favorite_is_for,
     async_favorites_attribute,
 )
+from .robot_log import robot_logger
 
 if TYPE_CHECKING:
     from .models import RoombaConfigEntry
@@ -135,7 +136,7 @@ class PrimeFavoriteButton(IRobotEntity, ButtonEntity):
             self.hass, self._config_entry, "favorite",
             lambda: async_run_favorite(self._config_entry, self._favorite_id),
         ):
-            _LOGGER.warning(
+            robot_logger(_LOGGER, self._config_entry).warning(
                 "roomba_plus: favorite %s could not be run -- deleted in the "
                 "iRobot app, or carrying no commands",
                 self._favorite_id,

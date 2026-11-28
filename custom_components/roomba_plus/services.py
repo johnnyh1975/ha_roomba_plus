@@ -100,6 +100,7 @@ from .debug_capture import get_capture as get_debug_capture
 from .mission_result import named_rooms, rooms_to_retry
 from .models import ConnectionType, RoombaConfigEntry, RoombaData
 from .prime_coordinator import prime_current_state
+from .robot_log import robot_logger
 
 if TYPE_CHECKING:
     pass
@@ -433,7 +434,7 @@ async def _async_warn_if_swallowed(
         try:
             await resend()
         except Exception as exc:  # noqa: BLE001 - background task
-            _LOGGER.warning("%s: sending it again failed: %s", what, exc)
+            robot_logger(_LOGGER, entry).warning("%s: sending it again failed: %s", what, exc)
             return
         await _async_warn_if_swallowed(hass, entry, what, before, None, resent=True)
         return
@@ -482,7 +483,7 @@ async def _async_warn_if_swallowed(
             "acting on commands; pressing CLEAN on the robot, or restarting "
             "it, clears that."
         )
-    _LOGGER.warning(
+    robot_logger(_LOGGER, entry).warning(
         "%s was accepted by the robot but no mission started within %ds%s "
         "(phase=%r, notReady=%r, error=%r).%s%s",
         what,
@@ -1857,7 +1858,7 @@ async def async_handle_reset_robot_profile(call: ServiceCall) -> None:
         data: RoombaData = config_entry.runtime_data
         rps = getattr(data, "robot_profile_store", None)
         if rps is None:
-            _LOGGER.warning("reset_robot_profile: RobotProfileStore not available for %s", eid)
+            robot_logger(_LOGGER, config_entry).warning("reset_robot_profile: RobotProfileStore not available for %s", eid)
             continue
 
         await rps.async_reset(call.hass, config_entry.entry_id)
@@ -2342,7 +2343,7 @@ async def async_handle_set_quiet_hours(call: ServiceCall) -> None:
             ).to_json()
 
         await robot.set_dnd_settings(household, body)
-        _LOGGER.warning(
+        robot_logger(_LOGGER, entry).warning(
             "Roomba+: wrote quiet hours %s for household %s. The robot "
             "accepting this setting is not the same as honouring it -- one "
             "Prime robot has been seen cleaning inside its own window. Keep "

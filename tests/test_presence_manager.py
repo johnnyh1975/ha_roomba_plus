@@ -97,6 +97,7 @@ class _FakeTask:
 class _FakeBus:
     def __init__(self):
         self.fired: list[str] = []
+        self.payloads: list = []
         self._listeners: list = []
 
     def async_listen(self, event_type, callback):
@@ -105,6 +106,7 @@ class _FakeBus:
 
     def async_fire(self, event_type, data):
         self.fired.append(event_type)
+        self.payloads.append((event_type, data))
 
 
 class _FakeHass:
@@ -160,6 +162,8 @@ class _FakeRuntimeData:
 class _FakeEntry(EntryTasksViaHass):
     def __init__(self, options: dict, sched_hold=False, phase="charge"):
         self.options = options
+        self.entry_id = "e1"
+        self.title = "Upstairs"
         self.runtime_data = _FakeRuntimeData(sched_hold=sched_hold, phase=phase)
 
 
@@ -320,6 +324,8 @@ class TestHandleAllAway:
         await manager._away_delay(0)
         from custom_components.roomba_plus.const import EVENT_ALL_AWAY
         assert EVENT_ALL_AWAY in hass.bus.fired
+        # Which robot (4.6.13): one manager per robot, the events came alike.
+        assert (EVENT_ALL_AWAY, {"entry_id": "e1", "name": "Upstairs"}) in hass.bus.payloads
 
     @pytest.mark.asyncio
     async def test_cancelled_delay_does_not_set_hold(self):
@@ -400,6 +406,9 @@ class TestHandleSomeoneHome:
         await manager._handle_someone_home()
         from custom_components.roomba_plus.const import EVENT_PERSON_DETECTED_DURING_CLEAN
         assert EVENT_PERSON_DETECTED_DURING_CLEAN in hass.bus.fired
+        assert (
+            EVENT_PERSON_DETECTED_DURING_CLEAN, {"entry_id": "e1", "name": "Upstairs"}
+        ) in hass.bus.payloads
 
     @pytest.mark.asyncio
     async def test_explicit_null_clean_mission_status_does_not_raise(self):
@@ -1768,3 +1777,13 @@ class TestTheAwayDelayEndsWithTheEntry:
 
         assert task.done()
         acted.assert_not_awaited()
+
+
+class TestTheLogNamesTheRobot:
+    """4.6.13: with several robots a warning has to say which one."""
+
+    def test_no_presence_entities_names_the_robot(self, caplog):
+        manager, _hass = _make_manager({}, options={"presence_entities": []})
+        with caplog.at_level("WARNING"):
+            manager.start()
+        assert "Upstairs: PresenceManager: no presence entities configured" in caplog.text

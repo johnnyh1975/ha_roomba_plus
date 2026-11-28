@@ -42,6 +42,7 @@ from .const import (
     EVENT_START_BLOCKED as _EVENT_START_BLOCKED,
     EVENT_START_TIMEOUT as _EVENT_START_TIMEOUT,
 )
+from .robot_log import robot_logger
 
 if TYPE_CHECKING:
     from .models import RoombaConfigEntry
@@ -254,7 +255,7 @@ class BlockingManager:
         except asyncio.CancelledError:
             return  # Task was cancelled by cancel_queue() — no event
         if self.is_queued:
-            _LOGGER.warning(
+            robot_logger(_LOGGER, self._entry).warning(
                 "BlockingManager: queue timed out after %d s — "
                 "sensors still active: %s",
                 seconds,

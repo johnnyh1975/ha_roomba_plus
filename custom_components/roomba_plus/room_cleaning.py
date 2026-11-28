@@ -66,6 +66,7 @@ from .structural_failures import record_failure, record_success
 from .zone_naming import map_room_label
 from .models import ConnectionType, MapCapability
 from .cloud_coordinator import committed_pmapv_id
+from .robot_log import robot_logger
 
 if TYPE_CHECKING:
     from .cloud_coordinator import IrobotCloudCoordinator
@@ -1783,7 +1784,7 @@ class PrimeRoomCleaning(RoomCleaningBackend):
             {"map_id": p2map_id, "region_ids": room_ids}, ok=bool(_ok),
         )
         if _ok is False:
-            _LOGGER.warning(
+            robot_logger(_LOGGER, self._config_entry).warning(
                 "Roomba+: region command publication was not confirmed; "
                 "delivery to the robot is unknown",
             )
@@ -2242,7 +2243,7 @@ class ClassicRoomCleaning(RoomCleaningBackend):
                 if owner is None:
                     rooms[name] = handed_out.get(rid, rid)
                 elif owner not in (rid, handed_out.get(rid, rid)):
-                    _LOGGER.warning(
+                    robot_logger(_LOGGER, self._config_entry).warning(
                         "clean_room: the name '%s' given to region %s under "
                         "Zone management already belongs to region %s; "
                         "it keeps resolving to region %s",
@@ -2801,7 +2802,7 @@ class ClassicRoomCleaning(RoomCleaningBackend):
                     by_map.setdefault(candidate, []).append(seg_id[len(marker):])
                     break
             else:
-                _LOGGER.warning(
+                robot_logger(_LOGGER, self._config_entry).warning(
                     "roomba_plus: segment %s does not name a map this robot "
                     "has, and was not cleaned. Re-map that area in Home "
                     "Assistant -- a map retrain renumbers everything",
@@ -2905,7 +2906,7 @@ class ClassicRoomCleaning(RoomCleaningBackend):
                             stale_rid, current_id, label,
                         )
                     else:
-                        _LOGGER.warning(
+                        robot_logger(_LOGGER, self._config_entry).warning(
                             "async_clean_segments: stale region %s could not be "
                             "auto-healed (label=%r, not in current map) — skipping. "
                             "Re-map vacuum segments to areas in HA to fix permanently.",
@@ -2968,7 +2969,7 @@ class ClassicRoomCleaning(RoomCleaningBackend):
             _segment_map,
         )
         if user_pmapv_id is None:
-            _LOGGER.warning(
+            robot_logger(_LOGGER, self._config_entry).warning(
                 "async_clean_segments: user_pmapv_id not found in cloud or "
                 "state.pmaps for pmap %s — sending command without version ID",
                 active_pmap_id,

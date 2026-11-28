@@ -53,6 +53,7 @@ from .const import (
     EVENT_ALL_AWAY,
     EVENT_PERSON_DETECTED_DURING_CLEAN,
 )
+from .robot_log import robot_logger
 
 if TYPE_CHECKING:
     from .models import RoombaConfigEntry
@@ -143,7 +144,7 @@ class PresenceManager:
         """
         person_ids: list[str] = self._entry.options.get(CONF_PRESENCE_ENTITIES, [])
         if not person_ids:
-            _LOGGER.warning(
+            robot_logger(_LOGGER, self._entry).warning(
                 "PresenceManager: no presence entities configured — inactive"
             )
             return
@@ -269,7 +270,12 @@ class PresenceManager:
             self._did_unfreeze = True  # remember we performed the unfreeze
         else:
             # always_ask: fire event and let user automation handle it
-            self._hass.bus.async_fire(EVENT_ALL_AWAY, {})
+            self._hass.bus.async_fire(EVENT_ALL_AWAY, self._robot())
+
+    def _robot(self) -> dict[str, Any]:
+        """Which robot an event is about (4.6.13). Each robot has its own
+        manager, so with two robots these events came twice, alike."""
+        return {"entry_id": self._entry.entry_id, "name": getattr(self._entry, "title", None)}
 
     # ── An unreachable robot (4.3.6) ──────────────────────────────────────────
 
@@ -408,7 +414,7 @@ class PresenceManager:
             # Fire event if a clean is actively running
             phase = (state.get("cleanMissionStatus") or {}).get("phase", "")
             if phase in _ACTIVE_CLEANING_PHASES:
-                self._hass.bus.async_fire(EVENT_PERSON_DETECTED_DURING_CLEAN, {})
+                self._hass.bus.async_fire(EVENT_PERSON_DETECTED_DURING_CLEAN, self._robot())
 
     async def _set_schedules_paused(self, paused: bool) -> None:
         """Pauses or resumes the robot's schedules, either generation.
@@ -542,7 +548,7 @@ class PresenceManager:
         # The real test is whether a due entry fires.
         state = roomba.master_state.get("state", {}).get("reported", {})
         if "schedHold" not in state:
-            _LOGGER.warning(
+            robot_logger(_LOGGER, self._entry).warning(
                 "PresenceManager: schedHold not in robot state — cannot write"
             )
             return

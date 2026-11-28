@@ -67,6 +67,7 @@ from .care_guides import (
 from .care_guides import guide_id as care_guide_id
 from .geometry_utils import raw_pose_mm_to_map
 from .parts_catalog import help_url_for
+from .robot_log import robot_logger
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -228,7 +229,7 @@ class SmartZoneNamingRepairFlow(RepairsFlow):
                 if not token:
                     continue
                 if "=" not in token:
-                    _LOGGER.warning(
+                    robot_logger(_LOGGER, self._config_entry).warning(
                         "SmartZoneNamingRepairFlow: skipping malformed token %r "
                         "(expected 'id=Name' format)",
                         token,

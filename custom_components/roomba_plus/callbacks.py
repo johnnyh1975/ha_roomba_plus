@@ -66,6 +66,7 @@ if TYPE_CHECKING:
 
 from .structural_failures import record_failure, record_success
 from .room_cleaning import CommandRegionNames, region_names_across_maps, region_names_for_command
+from .robot_log import robot_logger
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -850,7 +851,7 @@ async def async_record_mission(
         # Fallback: wall-clock at recording time (duration will be ~0).
         # Should not be reached after the closure fix — log for diagnostics.
         started_at = now
-        _LOGGER.warning(
+        robot_logger(_LOGGER, entry).warning(
             "MissionStore: mission end without a known start time — "
             "duration 0 if it is recorded"
         )
@@ -4024,7 +4025,7 @@ async def _async_update_gs_smart_coverage(
             changed = True
             continue
         except Exception as exc:  # noqa: BLE001 — one bad mission must not abort the batch
-            _LOGGER.warning(
+            robot_logger(_LOGGER, entry).warning(
                 "GS-SMART-COVERAGE: fetch failed for nMssn=%s — %s",
                 record_nmssn, exc,
             )

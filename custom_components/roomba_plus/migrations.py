@@ -26,6 +26,7 @@ from homeassistant.core import HomeAssistant
 
 from .const import CONF_FLOOR, DOMAIN
 from .models import RoombaConfigEntry
+from .robot_log import robot_logger
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -305,7 +306,7 @@ async def async_migrate_entry(
                             break
 
                 if device_prefix is None:
-                    _LOGGER.warning(
+                    robot_logger(_LOGGER, config_entry).warning(
                         "Roomba+: could not compute correct entity_id for %s "
                         "(unique_id=%s) — skipping slug fix",
                         wrong_entry.entity_id, uid,
@@ -460,7 +461,7 @@ async def async_migrate_entry(
                         break
 
             if not device_prefix:
-                _LOGGER.warning(
+                robot_logger(_LOGGER, config_entry).warning(
                     "Roomba+: v13 migration — could not compute prefix for %s "
                     "(uid=%s) — skipping",
                     entry_er.entity_id, uid,
@@ -580,7 +581,7 @@ async def async_migrate_entry(
                         break
 
             if not device_prefix:
-                _LOGGER.warning(
+                robot_logger(_LOGGER, config_entry).warning(
                     "Roomba+: v14 migration — could not compute prefix for %s "
                     "(uid=%s) — skipping",
                     entry_er.entity_id, uid,
@@ -693,7 +694,7 @@ async def async_migrate_entry(
                 # Derive correct entity_id from device name
                 device = device_reg.async_get(target_er.device_id) if target_er.device_id else None
                 if device is None:
-                    _LOGGER.warning(
+                    robot_logger(_LOGGER, config_entry).warning(
                         "Roomba+: v15 — no device for %s (uid=%s) — skip", eid, target_uid
                     )
                     continue
@@ -701,7 +702,7 @@ async def async_migrate_entry(
                 device_name = device.name_by_user or device.name or ""
                 device_slug = _slugify(device_name)
                 if not device_slug:
-                    _LOGGER.warning(
+                    robot_logger(_LOGGER, config_entry).warning(
                         "Roomba+: v15 — empty device slug for %s — skip", eid
                     )
                     continue
@@ -800,13 +801,13 @@ async def async_migrate_entry(
 
                 device = device_reg_16.async_get(target_er.device_id) if target_er.device_id else None
                 if device is None:
-                    _LOGGER.warning("Roomba+: v16 — no device for %s — skip", eid)
+                    robot_logger(_LOGGER, config_entry).warning("Roomba+: v16 — no device for %s — skip", eid)
                     continue
 
                 device_name = device.name_by_user or device.name or ""
                 device_slug = _slugify_16(device_name)
                 if not device_slug:
-                    _LOGGER.warning("Roomba+: v16 — empty device slug for %s — skip", eid)
+                    robot_logger(_LOGGER, config_entry).warning("Roomba+: v16 — empty device slug for %s — skip", eid)
                     continue
 
                 correct_eid = f"sensor.{device_slug}{expected_suffix}"
@@ -906,7 +907,7 @@ async def async_migrate_entry(
                 # Derive correct entity_id from device name
                 device = device_reg_17.async_get(entry_er.device_id) if entry_er.device_id else None
                 if device is None:
-                    _LOGGER.warning(
+                    robot_logger(_LOGGER, config_entry).warning(
                         "Roomba+: v17 — no device for %s — skip", eid
                     )
                     break
@@ -914,7 +915,7 @@ async def async_migrate_entry(
                 device_name = device.name_by_user or device.name or ""
                 device_slug = _slugify_17(device_name)
                 if not device_slug:
-                    _LOGGER.warning(
+                    robot_logger(_LOGGER, config_entry).warning(
                         "Roomba+: v17 — empty device slug for %s — skip", eid
                     )
                     break
@@ -1403,7 +1404,7 @@ async def async_migrate_entry(
             # Match HA's own entity_id generation: name_by_user overrides name.
             device_name = (device.name_by_user or device.name or "") if device else ""
             if not device_name:
-                _LOGGER.warning(
+                robot_logger(_LOGGER, config_entry).warning(
                     "Roomba+: cannot rename FavoriteButton %s — device name unknown",
                     eid,
                 )
@@ -1415,7 +1416,7 @@ async def async_migrate_entry(
 
             # Avoid collision — skip if target already taken
             if entity_reg.async_get(new_eid) is not None:
-                _LOGGER.warning(
+                robot_logger(_LOGGER, config_entry).warning(
                     "Roomba+: target entity_id %s already exists — skipping rename of %s",
                     new_eid, eid,
                 )

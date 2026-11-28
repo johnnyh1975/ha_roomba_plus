@@ -64,6 +64,7 @@ from .const import (
 )
 from .entity import IRobotEntity
 from .models import ConnectionType, RoombaConfigEntry
+from .robot_log import robot_logger
 
 _LOGGER = logging.getLogger(__name__)
 PARALLEL_UPDATES = 0
@@ -912,7 +913,7 @@ class RepeatLastMissionButton(IRobotEntity, ButtonEntity):
     async def async_press(self) -> None:
         last = self.vacuum_state.get("lastCommand", {})
         if not last:
-            _LOGGER.warning("RepeatLastMission: no lastCommand in state")
+            robot_logger(_LOGGER, self._config_entry).warning("RepeatLastMission: no lastCommand in state")
             raise ServiceValidationError(
                 translation_domain=DOMAIN,
                 translation_key="no_last_mission",
@@ -969,7 +970,7 @@ def _use_current_map_version(
     if fresh:
         params["user_pmapv_id"] = fresh
     elif params.get("user_pmapv_id"):
-        _LOGGER.warning(
+        robot_logger(_LOGGER, config_entry).warning(
             "%s: no current version for map %s; sending the saved one, "
             "which the robot refuses if the map has changed since",
             sender, pmap_id,
@@ -1204,7 +1205,7 @@ class SmartZoneButton(IRobotEntity, ButtonEntity):
                     region_id = extract_region_id(regions[0]) or None
 
         if not region_id or not pmap_id:
-            _LOGGER.warning(
+            robot_logger(_LOGGER, self._config_entry).warning(
                 "SmartZoneButton: no region/pmap available — run a zone mission first"
             )
             raise ServiceValidationError(
@@ -1224,7 +1225,7 @@ class SmartZoneButton(IRobotEntity, ButtonEntity):
             "cleanMissionStatus", {}
         ).get("notReady", 0)
         if not_ready == MAP_UPDATING_NOT_READY:
-            _LOGGER.warning(
+            robot_logger(_LOGGER, self._config_entry).warning(
                 "SmartZoneButton: robot is updating Smart Map (notReady=%d) — "
                 "wait for map update to complete before starting a zone clean",
                 not_ready,
@@ -1323,7 +1324,7 @@ async def async_run_classic_favorite(
             # real app sample data expresses multi-region cleaning as one
             # entry with a nested `regions` array, so a second entry is
             # unconfirmed territory rather than a normal case.
-            _LOGGER.warning(
+            robot_logger(_LOGGER, config_entry).warning(
                 "run_favorite: favourite %s has %d command definitions -- "
                 "only the first is sent", favorite_id, len(command_defs),
             )

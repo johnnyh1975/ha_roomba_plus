@@ -93,6 +93,7 @@ from .room_cleaning import (
     raise_if_prime_start_blocked,
     region_names_across_maps,
 )
+from .robot_log import robot_logger
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -586,7 +587,9 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
         try:
             activity = PHASE_TO_ACTIVITY[phase]
         except KeyError:
-            _LOGGER.warning("Unknown Roomba phase: %r — reporting ERROR", phase)
+            _LOGGER.warning(
+                "%s: unknown Roomba phase %r, reporting ERROR", self._config_entry.title, phase
+            )
             return VacuumActivity.ERROR
 
         # If a cycle is active but we appear idle/docked, we are actually paused
@@ -1860,7 +1863,7 @@ class IRobotVacuum(IRobotEntity, StateVacuumEntity):
             if fresh:
                 user_pmapv_id = fresh
             else:
-                _LOGGER.warning(
+                robot_logger(_LOGGER, self._config_entry).warning(
                     "_build_region_command: no version for pmap %s in the cloud "
                     "or live state — "
                     "map may have been retrained",
