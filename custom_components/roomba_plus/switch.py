@@ -22,7 +22,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.restore_state import RestoreEntity
 
-from . import roomba_reported_state
+from .reported_state import roomba_reported_state
 from .entity import IRobotEntity
 from .models import ConnectionType, RoombaConfigEntry
 from .const import DOMAIN

@@ -1123,8 +1123,14 @@ class TestClassicShapedReadsOnPrime:
         #
         # DECIDED: Prime reaches it, and has its fallback in place: the
         # read is `roomba_reported_state() or prime_reported_state()`.
-        assert count == 40, (
-            f"{count} call sites, expected 40 — a new one needs a decision "
+        # 41 with repairs._smberr_text() (4.6.13), the SMBus count for the
+        # dock and battery-contact repairs.
+        #
+        # DECIDED: no Prime entry reaches it. Both checks run from the
+        # Classic mission callbacks; and if one did, the empty state
+        # gives "–", which is what the text shows for "not reported".
+        assert count == 41, (
+            f"{count} call sites, expected 41 — a new one needs a decision "
             "about whether a Prime entry reaches it, and a Prime fallback "
             "if it does. Four of the 39 are inside the fallback helpers "
             "themselves, which read Classic first on purpose."

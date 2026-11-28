@@ -17,7 +17,7 @@ from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from . import roomba_reported_state
+from .reported_state import roomba_reported_state
 from .const import (
     CLEAN_MODE_LABELS,
     DOMAIN,

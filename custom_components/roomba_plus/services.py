@@ -101,6 +101,7 @@ from .mission_result import named_rooms, rooms_to_retry
 from .models import ConnectionType, RoombaConfigEntry, RoombaData
 from .prime_coordinator import prime_current_state
 from .robot_log import robot_logger
+from .reported_state import roomba_reported_state
 
 if TYPE_CHECKING:
     pass
@@ -271,8 +272,6 @@ def _mission_snapshot(entry: Any) -> dict[str, Any] | None:
     roomba = getattr(getattr(entry, "runtime_data", None), "roomba", None)
     if roomba is not None:
         try:
-            from . import roomba_reported_state  # noqa: PLC0415
-
             last = roomba_reported_state(roomba).get("lastCommand") or {}
         except Exception:  # noqa: BLE001
             last = {}

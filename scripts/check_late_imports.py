@@ -59,29 +59,25 @@ NON_CYCLE_REASONS: dict[str, str] = {
         "which is what this table exists to stop."
     ),
     "__init__ -> sensor_rooms": (
-        "INDIRECT CYCLE. `sensor_rooms` imports `entity`, which imports "
-        "the package -- so a module-level import here fails with 57 "
-        "collection errors. Same shape as callbacks -> sensor_rooms "
-        "below: the direct-import test cannot see it."
+        "NO CYCLE SINCE 4.6.13. Until then this was an indirect cycle "
+        "through the package, which held `roomba_reported_state`; the "
+        "helper is in the leaf module `reported_state` now. Stays late "
+        "so the package does not load the sensor helpers at import, for "
+        "a path that runs after a mission."
     ),
     "callbacks -> sensor_rooms": (
-        "A REAL CYCLE THIS CHECK CANNOT SEE. `sensor_rooms` does not "
-        "import `callbacks` directly, so the direct-import test below "
-        "clears it -- but it imports the package, which imports "
-        "`callbacks`. Moving this to module level produced 63 collection "
-        "errors: `cannot import name 'roomba_reported_state' from "
-        "partially initialized module`. "
-        "Worth knowing when reading this file's own output: 'the "
-        "imported module does not import back' means DIRECTLY, and an "
-        "indirect cycle looks exactly like a lazy import with no reason."
+        "NO CYCLE SINCE 4.6.13. Until then this was an indirect cycle "
+        "through the package, which held `roomba_reported_state`; the "
+        "helper is in the leaf module `reported_state` now. Stays late "
+        "so the package does not load the sensor helpers at import, for "
+        "a path that runs after a mission."
     ),
     "mission_queries -> sensor_rooms": (
-        "INDIRECT CYCLE, the one callbacks -> sensor_rooms has. "
-        "`sensor_rooms` imports `entity`, which imports the package, "
-        "which imports `blocking_manager` -> `services` -> "
-        "`mission_queries`. At module level the package fails to import "
-        "(`roomba_reported_state` from a partially initialized module), "
-        "tried in 4.6.0."
+        "NO CYCLE SINCE 4.6.13. Until then this was an indirect cycle "
+        "through the package, which held `roomba_reported_state`; the "
+        "helper is in the leaf module `reported_state` now. Stays late "
+        "so the package does not load the sensor helpers at import, for "
+        "a path that runs after a mission."
     ),
     "image -> map_renderer": (
         "pulls in PIL through the renderer. Deferred so a Home Assistant "
@@ -195,9 +191,7 @@ def _module_level_imports(tree: ast.AST, local: set[str]) -> set[str]:
     found: set[str] = set()
 
     def _add(node: ast.ImportFrom) -> None:
-        module = (node.module or "").lstrip(".").split(".")[0]
-        if module in local:
-            found.add(module)
+        found.update(_targets(node, local))
 
     for node in tree.body:
         if isinstance(node, ast.ImportFrom):
@@ -221,19 +215,53 @@ def _late_imports(path: Path, local: set[str]) -> set[str]:
             continue
         if "PLC0415" not in lines[node.lineno - 1]:
             continue
-        module = (node.module or "").lstrip(".").split(".")[0]
-        if module in local:
-            found.add(module)
+        found.update(_targets(node, local))
     return found
+
+
+def _targets(node: ast.ImportFrom, local: set[str]) -> set[str]:
+    """The package modules one `from ... import ...` loads.
+
+    `from . import name` loads `name` if it is a module, and the package
+    itself (`__init__`) otherwise. Missing that second case hid a cycle
+    through 33 modules whose hub was one helper in `__init__.py`
+    (independent review, 28.11.).
+    """
+    if node.level and not node.module:
+        return {a.name if a.name in local else "__init__" for a in node.names} & local
+    module = (node.module or "").lstrip(".").split(".")[0]
+    return {module} if module in local else set()
+
+
+def _runtime_imports(tree: ast.AST, local: set[str]) -> set[str]:
+    """Project imports at module level that run, i.e. not under TYPE_CHECKING."""
+    found: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, ast.ImportFrom):
+            found.update(_targets(node, local))
+    return found
+
+
+def _reaches(start: str, goal: str, edges: dict[str, set[str]]) -> bool:
+    seen, todo = {start}, [start]
+    while todo:
+        for nxt in edges.get(todo.pop(), set()):
+            if nxt == goal:
+                return True
+            if nxt not in seen:
+                seen.add(nxt)
+                todo.append(nxt)
+    return False
 
 
 def main() -> int:
     local = {p.stem for p in PACKAGE.glob("*.py")}
     top_level: dict[str, set[str]] = {}
+    runtime: dict[str, set[str]] = {}
     for path in PACKAGE.glob("*.py"):
-        top_level[path.stem] = _module_level_imports(
-            ast.parse(path.read_text(encoding="utf-8")), local
-        )
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        top_level[path.stem] = _module_level_imports(tree, local)
+        runtime[path.stem] = _runtime_imports(tree, local)
 
     real_cycles: list[str] = []
     unexplained: list[str] = []
@@ -242,7 +270,9 @@ def main() -> int:
     for path in sorted(PACKAGE.glob("*.py")):
         for target in sorted(_late_imports(path, local)):
             key = f"{path.stem} -> {target}"
-            if path.stem in top_level.get(target, set()):
+            # A CYCLE, DIRECT OR NOT (4.6.13): the imported module imports
+            # this one back, or reaches it through the imports that run.
+            if path.stem in top_level.get(target, set()) or _reaches(target, path.stem, runtime):
                 real_cycles.append(key)
             elif key in NON_CYCLE_REASONS:
                 explained += 1

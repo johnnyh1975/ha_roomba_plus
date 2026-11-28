@@ -56,7 +56,7 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from .zone_naming import map_room_label, room_display_name
-from . import roomba_reported_state
+from .reported_state import roomba_reported_state
 from .const import (
     MISSION_SCOPE_ROOMS,
     mission_scope,

@@ -59,6 +59,7 @@ from .cloud_coordinator import (
     umf_user_turn_rad,
 )
 from .room_cleaning import resolve_user_pmapv_id
+from .reported_state import roomba_reported_state
 
 _CLOUD_REDACT = DIAG_REDACT_KEYS | {"irobot_username", "irobot_password"}
 
@@ -1818,7 +1819,6 @@ async def _build_diagnostics(
     # Lazy import avoids circular dependency: diagnostics.py is imported by HA's
     # platform loader while __init__.py is still initialising.  By the time this
     # function is actually called, __init__.py is fully loaded.
-    from . import roomba_reported_state  # noqa: PLC0415
 
     # AN ENTRY THAT FAILED SETUP HAS NO runtime_data (#265): the download
     # raised AttributeError exactly when it was wanted. What the entry

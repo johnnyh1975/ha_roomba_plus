@@ -2601,7 +2601,7 @@ class TestASwallowedCommandIsReported:
         entry = MagicMock()
         entry.runtime_data.roomba = MagicMock()
         with patch(
-            "custom_components.roomba_plus.roomba_reported_state",
+            "custom_components.roomba_plus.command_watch.roomba_reported_state",
             return_value={"cleanMissionStatus": status},
         ), patch(
             "custom_components.roomba_plus.services."
@@ -2775,7 +2775,10 @@ class TestASwallowedCommandIsReported:
         }
         caplog.set_level(logging.INFO)
         with patch(
-            "custom_components.roomba_plus.roomba_reported_state",
+            "custom_components.roomba_plus.services.roomba_reported_state",
+            return_value=after,
+        ), patch(
+            "custom_components.roomba_plus.command_watch.roomba_reported_state",
             return_value=after,
         ), patch(
             "custom_components.roomba_plus.services._SWALLOWED_COMMAND_GRACE_SEC", 0,
@@ -2799,7 +2802,7 @@ class TestASwallowedCommandIsReported:
         entry = MagicMock()
         entry.runtime_data.region_starts_in_open_cycle = deque(maxlen=10)
         with patch(
-            "custom_components.roomba_plus.roomba_reported_state",
+            "custom_components.roomba_plus.command_watch.roomba_reported_state",
             return_value={"cleanMissionStatus": {"cycle": "clean", "phase": "run"}},
         ), patch(
             "custom_components.roomba_plus.services._SWALLOWED_COMMAND_GRACE_SEC", 0,
@@ -2818,14 +2821,19 @@ class TestASwallowedCommandIsReported:
             "pose": {"point": {"x": 1, "y": 2}},
         }
         with patch(
-            "custom_components.roomba_plus.roomba_reported_state", return_value=reported,
+            "custom_components.roomba_plus.services.roomba_reported_state", return_value=reported,
+        ), patch(
+            "custom_components.roomba_plus.command_watch.roomba_reported_state", return_value=reported,
         ):
             snap = _mission_snapshot(MagicMock())
         assert snap["phase"] == "stop"
         assert snap["lastCommand"] == {"command": "pause", "initiator": "rmtApp", "time": 5}
         assert "pose" not in snap
         with patch(
-            "custom_components.roomba_plus.roomba_reported_state",
+            "custom_components.roomba_plus.services.roomba_reported_state",
+            side_effect=RuntimeError,
+        ), patch(
+            "custom_components.roomba_plus.command_watch.roomba_reported_state",
             side_effect=RuntimeError,
         ):
             assert _mission_snapshot(MagicMock()) is None
@@ -2908,7 +2916,7 @@ class TestASwallowedCommandIsReported:
 
         entry = MagicMock()
         with patch(
-            "custom_components.roomba_plus.roomba_reported_state",
+            "custom_components.roomba_plus.command_watch.roomba_reported_state",
             side_effect=RuntimeError("no state"),
         ), patch(
             "custom_components.roomba_plus.services."

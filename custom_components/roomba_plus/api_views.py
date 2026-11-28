@@ -44,6 +44,7 @@ from .mission_store import MissionStore
 from .models import ConnectionType
 from .room_cleaning import region_names_across_maps
 from .prime_parts import prime_parts_due
+from .reported_state import roomba_reported_state
 
 if TYPE_CHECKING:
     from .models import RoombaData
@@ -1155,15 +1156,6 @@ class HouseholdSummaryView(RoombaPlusView):
                 # list's own rule instead.
                 maintenance_due = bool(prime_parts_due(entry))
             elif data.maintenance_store is not None:
-                # Local import — api_views.py is imported eagerly by
-                # __init__.py at module level (unlike platform modules
-                # such as switch.py/binary_sensor.py, which HA loads
-                # later), so a top-level `from . import
-                # roomba_reported_state` here creates a genuine circular
-                # import. Deferred import resolves it: by the time
-                # get() actually runs (at request time), __init__.py has
-                # long since finished initializing.
-                from . import roomba_reported_state
                 vac_state = roomba_reported_state(data.roomba)
                 maintenance_due = bool(
                     data.maintenance_store.due_items(vac_state, entry.options)

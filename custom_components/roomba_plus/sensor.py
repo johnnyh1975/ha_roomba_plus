@@ -57,7 +57,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers import issue_registry as ir  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
 from homeassistant.util import dt as dt_util  # noqa: F401 — SENSOR-SPLIT facade re-export, see test_sensor_module_split.py
 
-from . import roomba_reported_state
+from .reported_state import roomba_reported_state
 from .entity_cleanup import async_remove_stale_entities
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 

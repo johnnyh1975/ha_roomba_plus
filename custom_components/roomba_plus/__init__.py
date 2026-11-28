@@ -161,6 +161,7 @@ from .prime_coordinator import (
     note_prime_firmware,
 )
 from . import cloud_errors, mqtt_session
+from .reported_state import roomba_reported_state  # re-exported, see the module
 from .cloud_account import async_acquire, async_release
 from .robot_log import robot_logger
 
@@ -1743,8 +1744,8 @@ async def _async_fetch_prime_time_estimates(config_entry: RoombaConfigEntry) -> 
         # REMEMBER THEM. This response is fetched once and held in
         # memory; nothing survived a restart or a day where the cloud
         # returned less than it had before.
-        # LATE: `sensor_rooms` imports `entity`, which imports the
-        # package -- a module-level import here is a genuine cycle.
+        # LATE: no cycle since 4.6.13 (see scripts/check_late_imports.py);
+        # the sensor helpers are loaded when this runs, not at import.
         from .sensor_rooms import (  # noqa: PLC0415
             remember_confident_estimates,
         )
@@ -2762,27 +2763,6 @@ def _async_register_views(hass: HomeAssistant) -> None:
     # 4.2.19 -- the map the naming forms show
     hass.http.register_view(NamingMapView())
     hass.data["_roomba_plus_view_registered"] = True
-
-
-def roomba_reported_state(roomba: RoombaClient | None) -> dict[str, Any]:
-    """Return the 'reported' sub-dict from master_state.
-
-    Uses ``or {}`` rather than a dict default so that an explicit JSON null
-    (``{"state": null}``) — which a sparse or initial MQTT frame can produce —
-    is coerced to an empty dict instead of raising AttributeError. A dict
-    default (``.get("state", {})``) only guards against a *missing* key, not a
-    present-but-null value.
-
-    NEW (V4/Prime): roomba is None for CLOUD_ONLY entries -- returns {}
-    rather than crashing, same reasoning as RoombaData.roomba_reported_state()
-    (models.py): honest "no data available", not a fabricated guess. Every
-    one of this function's 59+ call sites across the integration goes
-    through here, so this single guard is what keeps all of them safe for
-    a Prime entity without touching each call site individually.
-    """
-    if roomba is None:
-        return {}
-    return (roomba.master_state.get("state") or {}).get("reported") or {}
 
 
 # ── Exceptions ────────────────────────────────────────────────────────────────

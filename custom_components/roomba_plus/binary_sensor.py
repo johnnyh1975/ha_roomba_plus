@@ -28,7 +28,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.util import dt as dt_util
 
-from . import roomba_reported_state
+from .reported_state import roomba_reported_state
 from .geometry_utils import pose_point_to_map_mm
 from .const import (
     lifetime_hours,

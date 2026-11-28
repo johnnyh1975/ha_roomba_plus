@@ -3361,7 +3361,7 @@ class TestAStartIsWatched:
         v.vacuum.send_command = AsyncMock()
         reported = {"cleanMissionStatus": {"cycle": cycle, "phase": "charge"}}
         with patch(
-            "custom_components.roomba_plus.roomba_reported_state", return_value=reported,
+            "custom_components.roomba_plus.command_watch.roomba_reported_state", return_value=reported,
         ), patch(
             "custom_components.roomba_plus.vacuum.watch_for_swallowed_command"
         ) as watch:

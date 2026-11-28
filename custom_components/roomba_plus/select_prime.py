@@ -55,6 +55,7 @@ from .room_cleaning import ZID_PREFIX
 from .structural_failures import record_failure, record_success
 from .const import DOMAIN
 from .robot_log import robot_logger
+from .reported_state import roomba_reported_state
 
 if TYPE_CHECKING:
     from .models import RoombaConfigEntry
@@ -1196,7 +1197,6 @@ class PrimeCleaningModeSelect(IRobotEntity, RestoreEntity, SelectEntity):
         )
         shadows = getattr(coordinator, "data", None)
         if not isinstance(shadows, dict):
-            from . import roomba_reported_state  # noqa: PLC0415
 
             roomba = getattr(self._config_entry.runtime_data, "roomba", None)
             state = roomba_reported_state(roomba) if roomba is not None else None

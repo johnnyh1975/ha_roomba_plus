@@ -47,7 +47,7 @@ from homeassistant.components.device_tracker import SourceType, TrackerEntity
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from . import roomba_reported_state
+from .reported_state import roomba_reported_state
 from .const import DOCK_TASK_PHASES, MISSION_END_PHASES, POSE_POINT_CM_TO_MM
 from .geometry_utils import pose_point_to_map_mm, raw_pose_mm_to_map
 from .live_position import LivePositionStream

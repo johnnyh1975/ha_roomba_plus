@@ -29,7 +29,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
 from homeassistant.util.unit_system import METRIC_SYSTEM
 
-from . import roomba_reported_state
+from .reported_state import roomba_reported_state
 from .prime_commands import _send_confirmed
 from .prime_favorites import _raw_favorite_is_for
 from .care_guides import guide_id, guide_link

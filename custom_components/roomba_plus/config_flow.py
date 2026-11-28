@@ -60,7 +60,8 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.service_info.dhcp import DhcpServiceInfo
 from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 
-from . import CannotConnect, async_connect_or_timeout, async_disconnect_or_timeout, roomba_reported_state
+from . import CannotConnect, _warm_tls_context, async_connect_or_timeout, async_disconnect_or_timeout
+from .reported_state import roomba_reported_state
 from . import cloud_errors, mqtt_session
 from .cloud_account import async_login, async_offer, async_peek
 from .entity_cleanup import (
@@ -495,8 +496,6 @@ async def validate_input(
     # TLS context, which loads the system certificates. Setup warms it in
     # an executor; the flow did not, and Home Assistant logged the
     # blocking call on every reconfigure.
-    from . import _warm_tls_context  # noqa: PLC0415
-
     await hass.async_add_executor_job(_warm_tls_context)
     # A validation the flow gives up on must not leave the robot held for
     # the next try (#265); see `mqtt_session`.

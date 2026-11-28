@@ -429,6 +429,42 @@ class TestDelaySaveGuard:
         assert guard.main() == 0
 
 
+class TestLateImportGuardSeesIndirectCycles:
+    """The guard saw only direct back-imports and missed `from . import
+    name`, so a cycle through 33 modules with one helper in `__init__`
+    as its hub looked like late imports without a reason (independent
+    review, 28.11.)."""
+
+    def test_a_cycle_through_a_third_module_is_a_cycle(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        guard = _load("check_late_imports")
+        (tmp_path / "alpha.py").write_text(
+            "def work():\n    from .beta import helper  # noqa: PLC0415\n    return helper()\n",
+            encoding="utf-8",
+        )
+        (tmp_path / "beta.py").write_text("from .gamma import x\n\n\ndef helper():\n    return x\n", encoding="utf-8")
+        (tmp_path / "gamma.py").write_text("from .alpha import work\n\nx = 1\n", encoding="utf-8")
+        monkeypatch.setattr(guard, "PACKAGE", tmp_path)
+        monkeypatch.setattr(guard, "NON_CYCLE_REASONS", {})
+        assert guard.main() == 0
+
+    def test_an_import_from_the_package_is_an_import_of_init(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        guard = _load("check_late_imports")
+        (tmp_path / "__init__.py").write_text("from .alpha import work\n\n\ndef helper():\n    return 1\n", encoding="utf-8")
+        (tmp_path / "alpha.py").write_text(
+            "def work():\n    from . import helper  # noqa: PLC0415\n    return helper()\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(guard, "PACKAGE", tmp_path)
+        monkeypatch.setattr(guard, "NON_CYCLE_REASONS", {})
+        assert guard.main() == 0
+        (tmp_path / "__init__.py").write_text("def helper():\n    return 1\n", encoding="utf-8")
+        assert guard.main() == 1
+
+
 class TestServiceSchemaGuard:
     """A field documented in services.yaml but absent from the schema.
 

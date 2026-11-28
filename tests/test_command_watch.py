@@ -16,7 +16,7 @@ def _classic_entry(reported):
     entry.runtime_data.connection_type = ConnectionType.LOCAL_PUSH
     entry.runtime_data.frozen_state = cw.FrozenStateDetector()
     return entry, patch(
-        "custom_components.roomba_plus.roomba_reported_state", return_value=reported,
+        "custom_components.roomba_plus.command_watch.roomba_reported_state", return_value=reported,
     )
 
 
@@ -66,7 +66,7 @@ class TestTheMissionStatusOfBothGenerations:
         assert cw.mission_status(_prime_entry(None)) is None
         entry, _ = _classic_entry({})
         with patch(
-            "custom_components.roomba_plus.roomba_reported_state",
+            "custom_components.roomba_plus.command_watch.roomba_reported_state",
             side_effect=RuntimeError,
         ):
             assert cw.mission_status(entry) is None

@@ -1920,12 +1920,8 @@ def _update_room_progress(
                                 # of them and the log could not say
                                 # which, so the next step could not
                                 # be chosen either.
-                                # LATE ON PURPOSE: `sensor_rooms`
-                                # reaches back into the package,
-                                # so importing it at module level
-                                # is a genuine circular import --
-                                # confirmed by 63 collection
-                                # errors when it was tried.
+                                # LATE: no cycle since 4.6.13
+                                # (scripts/check_late_imports.py).
                                 from .sensor_rooms import (  # noqa: PLC0415
                                     why_no_room_estimates,
                                 )

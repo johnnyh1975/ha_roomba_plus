@@ -44,7 +44,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from . import roomba_reported_state
+from .reported_state import roomba_reported_state
 from . import cloud_errors
 from .entity_cleanup import async_remove_stale_entities
 from .command_record import record_command

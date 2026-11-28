@@ -13,7 +13,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import Entity
 
-from . import roomba_reported_state
+from .reported_state import roomba_reported_state
 from .availability import is_locally_available, local_availability_signal
 from .const import (
     DOMAIN,

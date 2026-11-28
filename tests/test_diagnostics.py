@@ -60,7 +60,7 @@ async def _run_diag(reported: dict) -> dict:
     # diagnostics.py imports roomba_reported_state lazily from the package,
     # so the patch goes on the package, not on a second copy of __init__.py.
     with patch(
-        "custom_components.roomba_plus.roomba_reported_state",
+        "custom_components.roomba_plus.diagnostics.roomba_reported_state",
         side_effect=lambda r: r.master_state["state"]["reported"],
     ):
         return await async_get_config_entry_diagnostics(hass, entry)
@@ -2557,7 +2557,7 @@ class TestTheCloudMapVersionsAreVisible:
         hass = MagicMock()
         hass.config_entries.async_entries.return_value = []
         with patch(
-            "custom_components.roomba_plus.roomba_reported_state",
+            "custom_components.roomba_plus.diagnostics.roomba_reported_state",
             side_effect=lambda r: r.master_state["state"]["reported"],
         ):
             return await async_get_config_entry_diagnostics(hass, entry)
@@ -2917,7 +2917,7 @@ class TestTheTrajectoryOnlyWithDebugLogging:
         logger.setLevel(level)
         try:
             with patch(
-                "custom_components.roomba_plus.roomba_reported_state",
+                "custom_components.roomba_plus.diagnostics.roomba_reported_state",
                 side_effect=lambda r: r.master_state["state"]["reported"],
             ):
                 return (await async_get_config_entry_diagnostics(hass, entry))["map"]
@@ -2957,7 +2957,7 @@ class TestTheLayoutInTheDiagnostics:
         hass = MagicMock()
         hass.config_entries.async_entries.return_value = []
         with patch(
-            "custom_components.roomba_plus.roomba_reported_state",
+            "custom_components.roomba_plus.diagnostics.roomba_reported_state",
             side_effect=lambda r: r.master_state["state"]["reported"],
         ):
             diag = await async_get_config_entry_diagnostics(hass, entry)

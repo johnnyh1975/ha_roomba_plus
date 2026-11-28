@@ -35,6 +35,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .const import EVENT_COMMAND_NOT_DELIVERED, EVENT_STATE_FROZEN
+from .reported_state import roomba_reported_state
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -64,7 +65,6 @@ def mission_status(entry: Any) -> dict[str, Any] | None:
         return None
     try:
         if getattr(data, "roomba", None) is not None:
-            from . import roomba_reported_state  # noqa: PLC0415
 
             reported = roomba_reported_state(data.roomba)
             status = dict(reported.get("cleanMissionStatus") or {})

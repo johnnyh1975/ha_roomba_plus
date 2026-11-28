@@ -68,6 +68,7 @@ from .care_guides import guide_id as care_guide_id
 from .geometry_utils import raw_pose_mm_to_map
 from .parts_catalog import help_url_for
 from .robot_log import robot_logger
+from .reported_state import roomba_reported_state
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -248,7 +249,6 @@ class SmartZoneNamingRepairFlow(RepairsFlow):
             #   3. pmaps[0] key as last resort
             # Must be resolved before the parsed/pmap_id checks below so
             # that pmap_id is always bound (fixes UnboundLocalError).
-            from . import roomba_reported_state  # noqa: PLC0415
             _state: dict[str, Any] = {}
             try:
                 runtime = self._config_entry.runtime_data
@@ -386,7 +386,6 @@ class SmartZoneNamingRepairFlow(RepairsFlow):
         """
         region_ids: set[str] = set()
         try:
-            from . import roomba_reported_state
             from .const import extract_region_id
             runtime = self._config_entry.runtime_data
             if not (runtime and runtime.roomba):
