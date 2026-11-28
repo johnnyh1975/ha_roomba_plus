@@ -266,6 +266,10 @@ class ThonnoRun:
         self.replay.send(THONNO_COMMAND)
         return entry
 
+    async def setup_from(self, recording: dict[str, Any]) -> Any:
+        """From a recording alone: no command and no rooms given here."""
+        return await self.replay.setup_from(recording)
+
     async def at(self, seconds: float, reported: dict[str, Any]) -> None:
         await self.replay.at(seconds, reported)
         mts = self.replay.entry.runtime_data.mission_timer_store

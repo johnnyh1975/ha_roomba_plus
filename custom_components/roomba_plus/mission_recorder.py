@@ -20,6 +20,12 @@ POSITIONS ARE KEPT, because room tracking cannot be replayed without
 them. They are millimetres from the dock with no map and no origin
 attached (decided 28.11.), and only recorded on an explicit start.
 
+THE ROOMS, WITHOUT THEIR NAMES. On a robot with a Smart Map the room
+course runs on the cloud's rooms: which region ids the map has and how
+long each takes. A message names the regions by id only, so a recording
+without them could not be replayed. Each room is kept by id, map
+placeholder, type and the cloud's time estimates -- never by name.
+
 Kept in memory, never written or sent. Classic robots in 4.7.0b1; Prime
 follows.
 """
@@ -74,6 +80,7 @@ class MissionRecording:
         self._maps: dict[str, str] = {}
         self.header: dict[str, Any] = {}
         self.initial: dict[str, Any] = {}
+        self.rooms: list[dict[str, Any]] = []
         self.messages: list[dict[str, Any]] = []
         self.dropped = 0
         self.started_at: datetime | None = None
@@ -127,6 +134,29 @@ class MissionRecording:
             k: self._clean(v, k) for k, v in reported.items() if k in REPORTED_KEYS
         }
 
+    def clean_rooms(self, regions: Any) -> list[dict[str, Any]]:
+        """The cloud's rooms of the active map, without their names.
+
+        After `clean_reported` on the first state, so a map id already
+        seen in `pmaps` gets the same placeholder here.
+        """
+        out: list[dict[str, Any]] = []
+        for region in regions or ():
+            if not isinstance(region, dict) or not region.get("id"):
+                continue
+            pmap = region.get("pmap_id")
+            estimates = region.get("time_estimates")
+            out.append({
+                "id": str(region["id"]),
+                "pmap_id": self._map(str(pmap)) if pmap else None,
+                "region_type": str(region.get("region_type") or "default"),
+                "time_estimates": {
+                    k: v for k, v in (estimates or {}).items()
+                    if k in ("one_pass_sec", "two_pass_sec") and (v is None or isinstance(v, int))
+                } if isinstance(estimates, dict) else {},
+            })
+        return out
+
     # ── recording ───────────────────────────────────────────────────────────
 
     def add(self, decoded: Any) -> None:
@@ -149,10 +179,12 @@ class MissionRecording:
     def start(
         self, hass: HomeAssistant, roomba: Any, header: dict[str, Any],
         reported: dict[str, Any], minutes: int,
+        rooms: list[dict[str, Any]] | None = None,
     ) -> None:
         """Listen to the robot's messages, for `minutes` at most."""
         self.header = header
         self.initial = self.clean_reported(reported)
+        self.rooms = self.clean_rooms(rooms)
         self.started_at = dt_util.utcnow()
         self._t0 = time.monotonic()
         self._unsub_message = roomba.register_on_message_callback(self.add)
@@ -187,6 +219,7 @@ class MissionRecording:
             "stopped_at": _iso(self.stopped_at),
             "robot": dict(self.header),
             "initial": dict(self.initial),
+            "rooms": [dict(r) for r in self.rooms],
             "message_count": len(self.messages),
             "dropped_messages": self.dropped,
             "messages": list(self.messages),
@@ -230,7 +263,11 @@ def async_start(
     blid = getattr(data, "blid", None)
     recording = MissionRecording((blid,) if isinstance(blid, str) and blid else ())
     reported = roomba_reported_state(data.roomba)
-    recording.start(hass, data.roomba, _header(entry, reported, version), reported, minutes)
+    cloud = getattr(data, "cloud_coordinator", None)
+    rooms = list(getattr(cloud, "regions", None) or [])
+    recording.start(
+        hass, data.roomba, _header(entry, reported, version), reported, minutes, rooms,
+    )
     found[entry.entry_id] = recording
     return recording
 

@@ -120,6 +120,22 @@ async def _call(hass, action: str, entity_id: str, **data: Any) -> Any:
     )
 
 
+class TestTheRooms:
+    def test_rooms_are_kept_by_id_and_estimate_without_their_names(self):
+        rec = mr.MissionRecording(())
+        rec.clean_reported({"pmaps": [{"AbCdEfGhIjKlMnOpQrStUv": "v"}]})
+        rooms = rec.clean_rooms([
+            {"id": "7", "name": "Anna's room", "region_type": "bedroom",
+             "pmap_id": "AbCdEfGhIjKlMnOpQrStUv",
+             "time_estimates": {"one_pass_sec": 600, "two_pass_sec": None}},
+            {"id": "", "name": "no id"}, "not a room",
+        ])
+        assert rooms == [{
+            "id": "7", "pmap_id": "map-1", "region_type": "bedroom",
+            "time_estimates": {"one_pass_sec": 600, "two_pass_sec": None},
+        }]
+
+
 class TestTheActions:
     @pytest.mark.asyncio
     async def test_a_recording_keeps_what_arrives_with_its_time(
@@ -265,8 +281,12 @@ class TestARecordingReplaysToTheSameMission:
         await hass.async_block_till_done()
         caplog.clear()
 
+        # From the recording alone: its first state carries the start
+        # command, its rooms the map -- ids and estimates, no names.
+        assert {r["id"] for r in recording["rooms"]} == {"1", "2", "3"}
+        assert "Cucina" not in str(recording)
         second = ThonnoRun(Replay(hass, monkeypatch), monkeypatch, caplog)
-        await second.setup()
+        await second.setup_from(recording)
         for message in recording["messages"]:
             await second.at(float(message["t"]), message["reported"])
 

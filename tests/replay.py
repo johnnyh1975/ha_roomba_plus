@@ -96,22 +96,33 @@ def _install_clock(monkeypatch: pytest.MonkeyPatch, clock: ReplayClock) -> None:
                 monkeypatch.setattr(module, attr, clock.time)
 
 
-def smart_map(pmap_id: str, rooms: list[tuple[str, str, int | None]]) -> list[dict[str, Any]]:
-    """One cloud Smart Map: `(region id, name, one-pass seconds)` per room.
+Seconds = int | dict[str, int | None] | None
+
+
+def smart_map(pmap_id: str, rooms: list[tuple[str, str, Seconds]]) -> list[dict[str, Any]]:
+    """One cloud Smart Map: `(region id, name, seconds)` per room.
 
     The shape of `tests/fixtures/irobot_pmaps_i3plus.json`, cut to what the
-    mission course reads. A room without seconds has no estimate the cloud
-    is confident in.
+    mission course reads. Seconds are the one-pass estimate, or a recording's
+    `{"one_pass_sec": ..., "two_pass_sec": ...}`; a room without them has no
+    estimate the cloud is confident in.
     """
     regions = []
     for rid, name, seconds in rooms:
         region: dict[str, Any] = {"id": rid, "name": name, "region_type": "default"}
-        if seconds is not None:
-            region["time_estimates"] = [{
-                "confidence": "GOOD_CONFIDENCE",
-                "params": {"noAutoPasses": True, "twoPass": False},
-                "estimate": seconds,
-            }]
+        if isinstance(seconds, int):
+            seconds = {"one_pass_sec": seconds}
+        estimates = []
+        for key, two_pass in (("one_pass_sec", False), ("two_pass_sec", True)):
+            value = (seconds or {}).get(key)
+            if isinstance(value, int):
+                estimates.append({
+                    "confidence": "GOOD_CONFIDENCE",
+                    "params": {"noAutoPasses": True, "twoPass": two_pass},
+                    "estimate": value,
+                })
+        if estimates:
+            region["time_estimates"] = estimates
         regions.append(region)
     return [{
         "pmap_id": pmap_id,
@@ -208,6 +219,25 @@ class Replay:
         self.clock.elapsed = seconds
         self.send(reported)
         await self.hass.async_block_till_done()
+
+    async def setup_from(self, recording: dict[str, Any]) -> MockConfigEntry:
+        """Set the robot up as it was when the recording started.
+
+        Its first state is the recording's `initial`. Its rooms, if the
+        recording has any, are a cloud map with the recorded ids and
+        estimates; the names are made up from the ids, since a recording
+        has none (the room course matches rooms by id and estimates by
+        the cloud's own name, so any consistent name will do).
+        """
+        assert recording.get("format") == 1, recording.get("format")
+        rooms = recording.get("rooms") or []
+        pmaps = None
+        if rooms:
+            pmaps = smart_map(
+                str(rooms[0].get("pmap_id") or "map-1"),
+                [(r["id"], f"Room {r['id']}", r.get("time_estimates")) for r in rooms],
+            )
+        return await self.setup(recording["initial"], cloud_pmaps=pmaps)
 
     async def play(self, recording: dict[str, Any]) -> None:
         """A recording from `mission_recording_get`, message by message."""
